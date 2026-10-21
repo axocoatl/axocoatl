@@ -48,9 +48,18 @@ unset AXOCOATL_DATA_DIR AXOCOATL_CONFIG AXOCOATL_TOKEN AXOCOATL_SOCKET_PATH \
 # AXOCOATL_INSTALL_TTY in place of /dev/tty, for tests).
 export AXOCOATL_INSTALL_TTY="$work/no-terminal"
 
-# --- The Node suites.
-if node --test "$script_dir"/*.test.mjs >"$work/node-tests.log" 2>&1; then
-  pass "node --test scripts/release-gate/*.test.mjs ($(grep -c '^ok ' "$work/node-tests.log") passed)"
+# --- The Node suites. The TAP reporter's summary has "# pass N" (Node 20, 22
+# and 24 checked); the default reporter differs by version, and Node 24's
+# prints no "ok" lines. A summary with no pass count, or 0, fails the step
+# rather than report a wrong count.
+if node --test --test-reporter=tap "$script_dir"/*.test.mjs >"$work/node-tests.log" 2>&1; then
+  node_passed=$(sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p' "$work/node-tests.log" | tail -n 1)
+  if [ "${node_passed:-0}" -gt 0 ]; then
+    pass "node --test scripts/release-gate/*.test.mjs ($node_passed passed)"
+  else
+    cat "$work/node-tests.log" >&2
+    fail "node --test scripts/release-gate/*.test.mjs: no passed test in the summary"
+  fi
 else
   cat "$work/node-tests.log" >&2
   fail "node --test scripts/release-gate/*.test.mjs"

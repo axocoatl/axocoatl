@@ -459,6 +459,14 @@ path_expect_new_shells_find() {
       "$shell_path" "$flags" 'echo "PATH=$PATH"; command -v axocoatl' </dev/null 2>/dev/null)"
     path_expect_once "a new '$shell_name $flags'" "$shell_out" "$@"
   done
+  # fish_add_path without --path saves the directory in the universal
+  # fish_user_paths (fish_variables), where it outlives the line.
+  if [ "$shell_name" = fish ]; then
+    fish_variables="${P_XDG_CONFIG_HOME:-$case_home/.config}/fish/fish_variables"
+    if [ -f "$fish_variables" ] && grep -F 'fish_user_paths' "$fish_variables" >/dev/null; then
+      fail "$name: fish saved a universal fish_user_paths: $(cat "$fish_variables")"
+    fi
+  fi
 }
 
 # path_expect_once WHAT OUTPUT FILE...: OUTPUT (a PATH=... line, then what
@@ -483,7 +491,7 @@ path_expect_once() {
 # not a login shell, for ~/.bashrc next to a ~/.profile that adds it).
 path_line_for() {
   case "$1" in
-    fish) printf '%s' 'fish_add_path "$HOME/.local/bin"' ;;
+    fish) printf '%s' 'fish_add_path --path "$HOME/.local/bin"' ;;
     bash-nonlogin) printf '%s' 'shopt -q login_shell || case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' ;;
     *) printf '%s' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' ;;
   esac
@@ -501,6 +509,13 @@ path_line_for() {
 #                 loads nvm)
 #   bash-profile-reads-profile  ubuntu's files and a .bash_profile that
 #                 reads .profile
+#   bash-profile-reads-profile-quoted  the same, with `. "$HOME"/.profile`
+#   bash-profile-reads-profile-full-path  the same, with
+#                 `source '<home>/.profile'`
+#   bash-profile-reads-profile-elsewhere  the same, with a .bash_profile that
+#                 reads .profile only on another OS
+#   ubuntu-elsewhere  ubuntu's files with the ~/.local/bin lines in .profile
+#                 only for another OS
 #   arch          a .bash_profile that reads .bashrc, and a .bashrc that
 #                 does nothing more in a non-interactive shell (Arch's skel)
 #   fedora        a .bash_profile that reads .bashrc, and a .bashrc that adds
@@ -509,7 +524,7 @@ seed_home() {
   seed_dir="$work_dir/$1/${P_HOME_NAME:-home}"
   mkdir -p "$seed_dir"
   case "$2" in
-    ubuntu | reads-bashrc | runner | bash-profile-reads-profile)
+    ubuntu | reads-bashrc | runner | bash-profile-reads-profile*)
       printf '%s\n' '# like Ubuntu: bash reads .bashrc' \
         'if [ -n "$BASH_VERSION" ]; then' \
         '    if [ -f "$HOME/.bashrc" ]; then' \
@@ -525,6 +540,19 @@ seed_home() {
       fi
       printf '%s\n' '# like Ubuntu: nothing more for a non-interactive shell' \
         'case $- in' '    *i*) ;;' '      *) return;;' 'esac' >"$seed_dir/.bashrc"
+      ;;
+    ubuntu-elsewhere)
+      printf '%s\n' 'if [ -n "$BASH_VERSION" ]; then' \
+        '    if [ -f "$HOME/.bashrc" ]; then' \
+        '	. "$HOME/.bashrc"' \
+        '    fi' \
+        'fi' \
+        'if [ "$(uname)" = SunOS ]; then' \
+        'if [ -d "$HOME/.local/bin" ] ; then' \
+        '    PATH="$HOME/.local/bin:$PATH"' \
+        'fi' \
+        'fi' >"$seed_dir/.profile"
+      printf '%s\n' 'case $- in' '    *i*) ;;' '      *) return;;' 'esac' >"$seed_dir/.bashrc"
       ;;
     arch)
       printf '%s\n' '[[ -f ~/.bashrc ]] && . ~/.bashrc' >"$seed_dir/.bash_profile"
@@ -544,6 +572,15 @@ seed_home() {
     bash-profile-reads-profile)
       printf '%s\n' '[ -f "$HOME/.profile" ] && . "$HOME/.profile"' >"$seed_dir/.bash_profile"
       ;;
+    bash-profile-reads-profile-quoted)
+      printf '%s\n' '. "$HOME"/.profile' >"$seed_dir/.bash_profile"
+      ;;
+    bash-profile-reads-profile-full-path)
+      printf "source '%s/.profile'\n" "$seed_dir" >"$seed_dir/.bash_profile"
+      ;;
+    bash-profile-reads-profile-elsewhere)
+      printf '%s\n' '[ "$(uname)" = SunOS ] && . ~/.profile' >"$seed_dir/.bash_profile"
+      ;;
   esac
 }
 
@@ -562,6 +599,88 @@ reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
   P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
 }
+
+# Reading startup files: the installer's adds_to_path and reads_dot_profile
+# on startup files a user may have. A file counts as adding ~/.local/bin only
+# with the installer's own line or Debian's and Ubuntu's lines, at its top
+# level; counting one that only seems to would leave new terminals without
+# axocoatl. A bash login file counts as reading ~/.profile only when it does
+# so in every login shell.
+install_helpers="$work_dir/install-helpers.sh"
+sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
+grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \
+  || fail "could not take adds_to_path and reads_dot_profile from install.sh"
+startup_home="$work_dir/startup home"
+mkdir -p "$startup_home"
+startup_count=0
+# startup_expect FUNCTION yes|no WHAT CONTENT [FILE]: FUNCTION on a FILE
+# (default .profile) in the home directory that holds CONTENT.
+startup_expect() {
+  startup_count=$((startup_count + 1))
+  startup_file="$startup_home/${5:-.profile}"
+  printf '%s\n' "$4" >"$startup_file"
+  if (HOME="$startup_home" dest="$startup_home/.local/bin" && . "$install_helpers" && "$1" "$startup_file"); then
+    startup_got=yes
+  else
+    startup_got=no
+  fi
+  [ "$startup_got" = "$2" ] || fail "$1 says $startup_got, not $2, for $3: $4"
+}
+stanza='if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi'
+guarded="$(path_line_for zsh)"
+os_block() { printf 'if [ "$(uname)" = SunOS ]; then\n%s\nfi' "$1"; }
+startup_expect adds_to_path yes "Ubuntu's lines" "$stanza"
+startup_expect adds_to_path yes "the installer's line" "$(printf '# Added by the Axocoatl installer\n%s' "$guarded")"
+startup_expect adds_to_path yes "the installer's ~/.bashrc line" "shopt -q login_shell || $guarded"
+startup_expect adds_to_path yes "a 1.5.0 release candidate's line" 'export PATH="$HOME/.local/bin:$PATH"'
+startup_expect adds_to_path yes "the installer's line with the full path" \
+  "case \":\$PATH:\" in *\":$startup_home/.local/bin:\"*) ;; *) export PATH=\"$startup_home/.local/bin:\$PATH\" ;; esac"
+startup_expect adds_to_path yes "the installer's line after Ubuntu's ~/.bashrc stop" "$(printf 'case $- in\n  *i*) ;;\n  *) return;;\nesac\n%s' "$guarded")"
+startup_expect adds_to_path yes "the installer's line after a function and a conda block" \
+  "$(printf 'f() {\n  if true; then :; fi\n}\n# >>> conda initialize >>>\nif [ $? -eq 0 ]; then\n  :\nelse\n  export PATH="/opt/conda/bin:$PATH"\nfi\n# <<< conda initialize <<<\n%s' "$guarded")"
+startup_expect adds_to_path yes "the installer's line after a keyword that starts no command" \
+  "$(printf '%s\n' "zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s" \
+    'case $x in a) if true; then :; fi;; esac' "$guarded")" .zshrc
+startup_expect adds_to_path yes "fish's line" 'fish_add_path --path "$HOME/.local/bin"' config.fish
+startup_expect adds_to_path yes "a 1.5.0 release candidate's fish line" 'fish_add_path "$HOME/.local/bin"' config.fish
+startup_expect adds_to_path yes "fish's line after an if block" \
+  "$(printf 'if status is-interactive\nend\nif test -n x\nelse if test -n y\nend\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "a subdirectory" 'export PATH="$HOME/.local/bin/scripts:$PATH"'
+startup_expect adds_to_path no "a line that takes it out of PATH" 'export PATH="${PATH#$HOME/.local/bin:}"'
+startup_expect adds_to_path no "PATH in a comment" 'if [ -d "$HOME/.local/bin" ]; then echo has-local-bin; fi  # PATH'
+startup_expect adds_to_path no "the installer's line in a comment" "# $guarded"
+startup_expect adds_to_path no "a line for another OS" '[ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"'
+startup_expect adds_to_path no "the installer's line in a block for another OS" "$(os_block "  $guarded")"
+startup_expect adds_to_path no "Ubuntu's lines in a block for another OS" "$(os_block "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a function" "$(printf 'f() {\n%s\n}' "$stanza")"
+startup_expect adds_to_path no "the installer's line in a loop" "$(printf 'for d in a; do\n%s\ndone' "$guarded")"
+startup_expect adds_to_path no "the installer's line in a group for another OS" \
+  "$(printf '[ "$(uname)" = SunOS ] && {\n%s\n}' "$guarded")"
+startup_expect adds_to_path no "Ubuntu's lines in a case" "$(printf 'case $(uname) in\nSunOS)\n%s\n;;\nesac' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a return" "$(printf '[ -n "$PS1" ] || return\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a here-document" "$(printf 'cat <<EOF\nfi\nEOF\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines for a subdirectory" 'if [ -d "$HOME/.local/bin/x" ] ; then
+    PATH="$HOME/.local/bin/x:$PATH"
+fi'
+startup_expect adds_to_path no "Fedora's ~/.bashrc lines" 'if ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]
+then
+    PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+fi'
+startup_expect adds_to_path no "fish's line for another OS" \
+  "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
+  ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
+  '[[ -r "$HOME/.profile" ]] && source "$HOME/.profile"' 'test -f ~/.profile && . ~/.profile' \
+  'if [ -f ~/.profile ]; then . ~/.profile; fi' "$(printf 'if [ -f "$HOME/.profile" ]; then\n    . "$HOME/.profile"\nfi')"; do
+  startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
+done
+for reads in '# . ~/.profile' '. ~/.profile.local' '. "~/.profile"' ". '\$HOME/.profile'" '. ~/x/.profile' \
+  '[ "$(uname)" = SunOS ] && . ~/.profile' "emulate sh -c '. ~/.profile'" "$(os_block '  . ~/.profile')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nelse\n  . ~/.profile\nfi')" "$(printf '[ -n "$PS1" ] || return\n. ~/.profile')"; do
+  startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
+done
 
 # A stock Mac in a pipe with no terminal: ~/.local/bin, the persistent line
 # printed for ~/.zprofile, nothing written, and the next command a full path.
@@ -605,6 +724,36 @@ path_expect_no_prompt
 [ "$(grep -c -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/.zprofile")" -eq 1 ] \
   || fail "$name added the PATH line again"
 path_expect_next_runs
+
+# A ~/.zprofile that only seems to add ~/.local/bin does not count: a
+# subdirectory, a line that takes it out of PATH, PATH only in a comment,
+# and a line or a block for another OS. Each gets the line, and a new login
+# shell finds axocoatl, with ~/.local/bin on PATH once.
+fake_number=0
+while IFS= read -r fake_line <&3; do
+  [ -n "$fake_line" ] || continue
+  fake_number=$((fake_number + 1))
+  reset_path_case
+  P_TTY=''
+  name="path-mac-zprofile-seems-$fake_number"
+  mkdir -p "$work_dir/$name/home"
+  printf '%s\n' "$fake_line" | sed 's/  *NEWLINE  */\
+/g' >"$work_dir/$name/home/.zprofile"
+  run_path_case "$name"
+  path_expect_status 0
+  path_refuse_text 'already adds'
+  grep -F '~/.local/bin is not on your PATH. Add it in ~/.zprofile? [Y/n]' "$case_tty" >/dev/null \
+    || fail "$name ($fake_line) did not ask about ~/.zprofile: $(cat "$case_tty")"
+  path_expect_text "added to ~/.zprofile:  $(path_line_for zsh)"
+  path_expect_new_shells_find zsh "$case_home/.zprofile"
+done 3<<'SEEMS'
+export PATH="$HOME/.local/bin/scripts:$PATH"
+export PATH="${PATH#$HOME/.local/bin:}"
+if [ -d "$HOME/.local/bin" ]; then echo has-local-bin >/dev/null; fi  # PATH
+[ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"
+if [ "$(uname)" = SunOS ]; then  NEWLINE  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac  NEWLINE  fi
+SEEMS
+[ "$fake_number" = 5 ] || fail "ran $fake_number of the 5 look-alike ~/.zprofile cases"
 
 # Answering no changes nothing and prints the line instead.
 reset_path_case
@@ -729,6 +878,48 @@ grep -F 'Add it in ~/.bashrc? [Y/n]' "$case_tty" >/dev/null \
 P_LINE="$(path_line_for bash-nonlogin)"
 path_expect_new_shells_find bash "$case_home/.bashrc"
 
+# The same with `. "$HOME"/.profile` and with ~/.profile's full path in
+# ~/.bash_profile: an interactive login shell (bash -ilc, as SSH starts)
+# reads ~/.bash_profile, ~/.profile, ~/.bashrc and ~/.profile's own lines, and
+# lists ~/.local/bin once.
+for layout in bash-profile-reads-profile-quoted bash-profile-reads-profile-full-path; do
+  reset_path_case
+  P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+  seed_home "path-linux-$layout" "$layout"
+  run_path_case "path-linux-$layout"
+  path_expect_status 0
+  path_expect_text '~/.profile already adds ~/.local/bin to PATH in a new login'
+  grep -F 'Add it in ~/.bashrc? [Y/n]' "$case_tty" >/dev/null \
+    || fail "$name did not ask about ~/.bashrc alone: $(cat "$case_tty")"
+  [ "$(installer_lines "$case_home/.bash_profile")" = 0 ] || fail "$name wrote ~/.bash_profile, which reads ~/.profile"
+  P_LINE="$(path_line_for bash-nonlogin)"
+  path_expect_new_shells_find bash "$case_home/.bashrc"
+done
+
+# A ~/.bash_profile that reads ~/.profile only on another OS: a login shell
+# here reads ~/.bash_profile alone, so it gets the line too.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+seed_home path-linux-bash-profile-elsewhere bash-profile-reads-profile-elsewhere
+run_path_case path-linux-bash-profile-elsewhere
+path_expect_status 0
+path_refuse_text 'already adds'
+grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
+
+# A ~/.profile whose ~/.local/bin lines are only for another OS: it does not
+# count, and gets the line with ~/.bashrc.
+reset_path_case
+P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+seed_home path-linux-bash-ubuntu-elsewhere ubuntu-elsewhere
+run_path_case path-linux-bash-ubuntu-elsewhere
+path_expect_status 0
+path_refuse_text 'already adds'
+grep -F 'Add it in ~/.bashrc and ~/.profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.profile in its question: $(cat "$case_tty")"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.profile"
+
 # A ~/.profile that reads ~/.bashrc and does not add ~/.local/bin: the line
 # goes into both, and a login shell, which reads both, lists it once.
 reset_path_case
@@ -812,18 +1003,19 @@ grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null 
   || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
 path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
 
-# Fedora's files: ~/.bashrc adds ~/.local/bin itself and gets no line;
-# ~/.bash_profile gets one.
+# Fedora's files: ~/.bashrc adds ~/.local/bin itself, in its own way, which
+# the installer does not take as adding it; both files get the line, which
+# does nothing after Fedora's, and every new shell lists ~/.local/bin once.
 reset_path_case
 P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
 seed_home path-linux-bash-fedora fedora
 run_path_case path-linux-bash-fedora
 path_expect_status 0
-path_expect_text '~/.bashrc already adds ~/.local/bin to PATH'
-grep -F 'Add it in ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
-  || fail "$name did not ask about ~/.bash_profile alone: $(cat "$case_tty")"
-[ "$(installer_lines "$case_home/.bashrc")" = 0 ] || fail "$name wrote ~/.bashrc, which adds ~/.local/bin already"
-path_expect_new_shells_find bash "$case_home/.bash_profile"
+path_refuse_text 'already adds'
+grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
+  || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
+grep -F 'PATH="$HOME/.local/bin:$HOME/bin:$PATH"' "$case_home/.bashrc" >/dev/null || fail "$name lost Fedora's ~/.bashrc"
+path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
 
 # Any other shell next to Ubuntu's ~/.profile, which adds ~/.local/bin: it
 # says so, and adds nothing.
@@ -907,6 +1099,33 @@ grep -F "Add it in $P_XDG_CONFIG_HOME/fish/config.fish? [Y/n]" "$case_tty" >/dev
   || fail "$name did not name \$XDG_CONFIG_HOME/fish/config.fish in its question: $(cat "$case_tty")"
 [ ! -e "$case_home/.config/fish/config.fish" ] || fail "$name wrote ~/.config/fish/config.fish next to XDG_CONFIG_HOME"
 path_expect_new_shells_find fish "$P_XDG_CONFIG_HOME/fish/config.fish"
+
+# fish with a fish_add_path only for another OS: it does not count.
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
+name=path-fish-elsewhere
+mkdir -p "$work_dir/$name/home/.config/fish"
+printf '%s\n' 'if test (uname) = SunOS' '    fish_add_path --path "$HOME/.local/bin"' 'end' \
+  >"$work_dir/$name/home/.config/fish/config.fish"
+run_path_case "$name"
+path_expect_status 0
+path_refuse_text 'already adds'
+path_expect_text "added to ~/.config/fish/config.fish:  $(path_line_for fish)"
+path_expect_new_shells_find fish "$case_home/.config/fish/config.fish"
+
+# The line a 1.5.0 release candidate wrote for fish counts: nothing is asked
+# or added.
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
+name=path-fish-release-candidate-line
+mkdir -p "$work_dir/$name/home/.config/fish"
+printf '\n# Added by the Axocoatl installer\n%s\n' 'fish_add_path "$HOME/.local/bin"' \
+  >"$work_dir/$name/home/.config/fish/config.fish"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text '~/.config/fish/config.fish already adds ~/.local/bin to PATH; new terminals find axocoatl'
+path_expect_no_prompt
+[ "$(installer_lines "$case_home/.config/fish/config.fish")" = 1 ] || fail "$name added a line to config.fish again"
 
 # Any other shell reads ~/.profile.
 reset_path_case
@@ -1047,4 +1266,4 @@ path_expect_text 'checksum mismatch'
 
 shells_note="new shells started: ${real_shells:-none}"
 [ -z "$missing_shells" ] || shells_note="$shells_note; not installed here, startup files read with sh instead: $missing_shells"
-echo "Installer regression contract: PASS ($case_count local simulations; $shells_note)"
+echo "Installer regression contract: PASS ($case_count local simulations, $startup_count startup files read; $shells_note)"

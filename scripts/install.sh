@@ -9,8 +9,9 @@
 # ~/.zprofile for zsh on Linux; for bash the login file that exists, else
 # ~/.bash_profile on macOS and ~/.profile on Linux, and on Linux ~/.bashrc
 # too; fish's config.fish; ~/.profile otherwise). The line adds the directory
-# only when PATH does not have it, and a file that already adds it (such as
-# Ubuntu's ~/.profile) gets none; then the ~/.bashrc line skips login shells.
+# only when PATH does not have it. A file that has this installer's line, or
+# the lines Debian's and Ubuntu's ~/.profile use to add ~/.local/bin, gets
+# none; next to such a ~/.profile the ~/.bashrc line skips login shells.
 # Without a terminal (or when the answer is end of input) it only prints that
 # line. In a GitHub Actions step it adds the directory to $GITHUB_PATH
 # instead, for the job's later steps.
@@ -73,49 +74,182 @@ shell_word() {
   esac
 }
 
-# Whether startup file $1 already puts the install directory ($dest) on PATH:
-# a line that is not a comment names the directory ($HOME/..., ${HOME}/...,
-# ~/... or its full path) and sets PATH (or zsh's path, or fish_add_path).
-# Ubuntu's and Debian's ~/.profile have one for ~/.local/bin; so does a line
-# an earlier installer wrote.
+# The lines that put directory expression $1 ($HOME/... or a full path) on
+# PATH: first on PATH for this shell; the same only when PATH does not have it
+# yet, for startup files; and fish's, which changes only PATH (without --path,
+# fish_add_path also saves the directory in the universal fish_user_paths,
+# which outlives the line).
+# shellcheck disable=SC2016
+export_line() { printf 'export PATH="%s:$PATH"' "$1"; }
+# shellcheck disable=SC2016
+guarded_line() { printf 'case ":$PATH:" in *":%s:"*) ;; *) export PATH="%s:$PATH" ;; esac' "$1" "$1"; }
+fish_line() { printf 'fish_add_path --path "%s"' "$1"; }
+# Before the ~/.bashrc line next to a ~/.profile that adds the directory.
+nonlogin_prefix='shopt -q login_shell || '
+
+# Every line this installer writes, or a 1.5.0 release candidate wrote, for
+# directory expression $1, one per line.
+own_lines() {
+  export_line "$1"
+  echo
+  guarded_line "$1"
+  echo
+  printf '%s' "$nonlogin_prefix"
+  guarded_line "$1"
+  echo
+  printf 'fish_add_path "%s"\n' "$1"
+  fish_line "$1"
+}
+
+# Awk functions for the checks below, which read a startup file the way the
+# shell runs it. track(text) keeps depth, the number of blocks a line is in
+# (sh, bash and zsh: if, case, for, while, until, select and { }; fish: if,
+# for, while, function, switch and begin, closed by end), so that a line
+# counts only at the top level of the file, where it runs whenever the file
+# is read, and not inside an OS check, a function or a loop. It sets ended
+# after a return or an exit anywhere, branched after an else or elif in a
+# top-level block, and lost after a here-document (<<) or a block that closes
+# more than it opened. It splits a line into words at blanks, makes ;, & and |
+# words of their own, stops at a word that starts with #, and counts a keyword
+# only where a command starts (first, after ; & | and after then, do, else,
+# a case pattern and the like), so that `zstyle ... for more` opens nothing.
+# It is not a shell parser: a keyword in a quoted string can still miscount,
+# but what the checks look for is exact, and counts only at depth 0.
+# swap(s, from, to) replaces every from in s with to.
+startup_awk='
+BEGIN { depth = 0; ended = 0; branched = 0; lost = 0 }
+function swap(s, from, to,    at, out) {
+  if (from == "") return s
+  out = ""
+  while ((at = index(s, from)) > 0) {
+    out = out substr(s, 1, at - 1) to
+    s = substr(s, at + length(from))
+  }
+  return out s
+}
+function track(text,    count, k, w, words, command) {
+  gsub(/[;&|]+/, " ; ", text)
+  count = split(text, words, "[ \t]+")
+  command = 1
+  for (k = 1; k <= count; k++) {
+    w = words[k]
+    if (w == "") continue
+    if (substr(w, 1, 1) == "#") break
+    if (index(w, "<<") > 0) lost = 1
+    if (w == "return" || w == "exit") ended = 1
+    if (w == ";") { command = 1; continue }
+    if (fish) {
+      if (command && (w == "if" || w == "for" || w == "while" || w == "function" || w == "switch" || w == "begin")) depth++
+      else if (command && w == "end") depth--
+      command = command && (w == "and" || w == "or" || w == "not" || w == "begin")
+      continue
+    }
+    if (command && (w == "if" || w == "case" || w == "for" || w == "while" || w == "until" || w == "select" || w == "{")) depth++
+    else if (command && (w == "fi" || w == "esac" || w == "done" || w == "}")) depth--
+    else if (w == "{" && k == count) depth++
+    if (command && (w == "else" || w == "elif") && depth == 1) branched = 1
+    command = (command && (w == "then" || w == "do" || w == "else" || w == "elif" || w == "if" ||
+      w == "while" || w == "until" || w == "!" || w == "{" || w == "(" || w == "time")) || w ~ /\)$/
+  }
+  if (depth < 0) lost = 1
+}
+'
+
+# Whether startup file $1 surely puts the install directory ($dest) on PATH:
+# at its top level it has a line this installer writes (or a 1.5.0 release
+# candidate wrote), or, with no return or exit before them, the lines
+# Debian's and Ubuntu's ~/.profile use:
+#   if [ -d "$HOME/.local/bin" ] ; then
+#       PATH="$HOME/.local/bin:$PATH"
+#   fi
+# Anything else (a subdirectory, a line that takes the directory out of PATH
+# or names it only in a comment, a line behind an OS check) does not count:
+# the line this installer adds does nothing when PATH has the directory, so
+# adding one too many costs nothing, while counting a file wrongly would leave
+# new terminals without axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
     "$HOME"/*) dest_rel="${dest#"$HOME"/}" ;;
     *) dest_rel="" ;;
   esac
-  awk -v abs="$dest" -v rel="$dest_rel" '
-    # Whether text holds name, followed by an end of the directory name.
-    function names(text, name,    at, next_char) {
-      while ((at = index(text, name)) > 0) {
-        next_char = substr(text, at + length(name), 1)
-        if (next_char == "" || next_char !~ /[A-Za-z0-9_.-]/) return 1
-        text = substr(text, at + 1)
+  case "$1" in
+    *.fish) scan_syntax='fish' ;;
+    *) scan_syntax='sh' ;;
+  esac
+  scan_dir="$dest" scan_rel="$dest_rel" scan_syntax="$scan_syntax" \
+  scan_lines="$(own_lines @DIR@)" awk "$startup_awk"'
+    BEGIN {
+      stanza = 0
+      found = 0
+      fish = (ENVIRON["scan_syntax"] == "fish")
+      n = split(ENVIRON["scan_lines"], list, "\n")
+      for (i = 1; i <= n; i++) own[list[i]] = 1
+    }
+    # The line with each way of writing the directory as @DIR@.
+    function dir(s) {
+      s = swap(s, ENVIRON["scan_dir"], "@DIR@")
+      if (ENVIRON["scan_rel"] != "") {
+        s = swap(s, "$HOME/" ENVIRON["scan_rel"], "@DIR@")
+        s = swap(s, "${HOME}/" ENVIRON["scan_rel"], "@DIR@")
       }
-      return 0
+      return s
     }
     {
-      line = $0
+      raw = dir($0)
+      line = raw
       sub(/^[ \t]+/, "", line)
-      if (substr(line, 1, 1) == "#") next
-      if (line !~ /PATH|path\+?=|fish_add_path|fish_user_paths/) next
-      if (names(line, abs)) { found = 1; exit }
-      if (rel != "" && (names(line, "$HOME/" rel) || names(line, "${HOME}/" rel) || names(line, "~/" rel))) { found = 1; exit }
+      sub(/[ \t]+$/, "", line)
+      if (depth == 0 && !lost && (line in own)) { found = 1; exit }
+      if (stanza == 2 && raw ~ /^fi[ \t]*$/ && !ended && !lost) { found = 1; exit }
+      if (stanza == 1 && line ~ /^(export[ \t]+)?PATH="?@DIR@:\$\{?PATH\}?"?$/) stanza = 2
+      else stanza = 0
+      if (stanza == 0 && depth == 0 && !ended && !lost &&
+        raw ~ /^if[ \t]+\[[ \t]+-d[ \t]+"?@DIR@"?[ \t]+\][ \t]*;[ \t]*then[ \t]*$/) stanza = 1
+      track(line)
     }
     END { exit !found }
   ' "$1" 2>/dev/null
 }
 
 # Whether bash login file $1 (~/.bash_profile or ~/.bash_login) reads
-# ~/.profile with `.` or `source`.
+# ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile, with
+# double quotes around all or part of it, or its full path), at its top level
+# with no return or exit before: `. FILE` or `source FILE`, alone, after
+# `[ -f FILE ] &&` (or [[ ]], test, -r, -e, -s), or in the then branch of
+# `if [ -f FILE ]; then`.
 reads_dot_profile() {
   [ -f "$1" ] || return 1
-  awk '
+  scan_profile="$HOME/.profile" awk "$startup_awk"'
+    BEGIN {
+      p = "(~|\\$HOME)/\\.profile"
+      src = "(\\.|source)[ \t]+" p
+      exists = "(\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]|\\[\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]\\]|test[ \t]+-[efrs][ \t]+" p ")"
+      tail = "[ \t]*;?[ \t]*(#.*)?$"
+      alone = "^" src tail
+      guarded = "^" exists "[ \t]*&&[ \t]*" src tail
+      one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" tail
+      open_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then" tail
+      abs = ENVIRON["scan_profile"]
+      opened = 0
+      found = 0
+    }
     {
-      line = $0
+      line = swap($0, "'\''" abs "'\''", "$HOME/.profile")
+      line = swap(line, abs, "$HOME/.profile")
+      line = swap(line, "${HOME}", "$HOME")
+      # A quoted ~ is not the home directory; other double quotes go.
+      gsub(/["'\'']~/, "@QUOTED@", line)
+      gsub(/"/, "", line)
       sub(/^[ \t]+/, "", line)
-      if (substr(line, 1, 1) == "#") next
-      if (line ~ /(^|[^A-Za-z0-9_])(\.|source)[ \t]+["'\'']?(~|\$HOME|\$\{HOME\})\/\.profile(["'\'' \t;]|$)/) { found = 1; exit }
+      sub(/[ \t]+$/, "", line)
+      if (!ended && !lost) {
+        if (depth == 0 && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
+        if (depth == 1 && opened && !branched && line ~ alone) { found = 1; exit }
+      }
+      was = depth
+      track(line)
+      if (was == 0 && depth == 1) { opened = (line ~ open_if); branched = 0 }
     }
     END { exit !found }
   ' "$1" 2>/dev/null
@@ -140,8 +274,8 @@ choose_profiles() {
   esac
   user_shell="${SHELL:-}"
   user_shell="${user_shell##*/}"
-  now_line="export PATH=\"${dir_expr}:\$PATH\""
-  path_line="case \":\$PATH:\" in *\":${dir_expr}:\"*) ;; *) ${now_line} ;; esac"
+  now_line="$(export_line "$dir_expr")"
+  path_line="$(guarded_line "$dir_expr")"
   login_covers=""
   case "$user_shell" in
     zsh)
@@ -179,7 +313,7 @@ ${ZDOTDIR:-$HOME}/.zprofile"
           # only in a shell that is not a login shell (a new terminal
           # window whose session started before ~/.local/bin existed).
           profiles="$HOME/.bashrc"
-          path_line="shopt -q login_shell || ${path_line}"
+          path_line="${nonlogin_prefix}${path_line}"
         else
           profiles="$HOME/.bashrc
 ${login_file}"
@@ -188,9 +322,10 @@ ${login_file}"
       ;;
     fish)
       # fish reads config.fish in every shell, login or not, and
-      # fish_add_path adds nothing PATH already has.
+      # fish_add_path adds nothing PATH already has; with --path it changes
+      # only this shell's PATH and saves nothing (fish 3.2 or later).
       profiles="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
-      path_line="fish_add_path \"${dir_expr}\""
+      path_line="$(fish_line "$dir_expr")"
       now_line=$path_line
       ;;
     *)
