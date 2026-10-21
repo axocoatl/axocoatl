@@ -93,6 +93,33 @@ WebKit on x86_64. Set `AXOCOATL_E2E_BINARY` to select a binary other
 than `target/debug/axocoatl`; `npm run test:no-build` deliberately skips the
 Cargo build and uses that selected or default binary as-is.
 
+On Linux, Playwright's WebKit loads everything through one network process
+that uses the system's libsoup, and that process sometimes crashes when a
+reload or a navigation cancels requests that are still in flight: libsoup
+logs `soup_session_feature_request_queued: assertion
+'SOUP_IS_SESSION_FEATURE (feature)' failed` or glibc logs
+`malloc_consolidate(): unaligned fastbin chunk detected`, and the process dies
+of SIGSEGV or SIGABRT. WebKit starts a new one without telling Playwright. A
+load that was under way fails with "WebKit encountered an internal error" or
+never ends, and the cookies of every context, which only the old process
+held, are gone, so a journey that had signed in goes on signed out.
+
+Measured with Playwright 1.60's WebKit on Ubuntu 24.04 (libsoup 3.4.4), the
+journeys of `local-api-token.test.mjs` hit this when they reloaded or left a
+workbench that had just connected and was still loading: the loopback IP
+journey failed in 6 of 200 runs and the "once signed in" journey in 12 of
+440 (it then served its other website with `page.route`, which makes
+Playwright intercept every request of the page), each time with a crash of
+the network process, and CI's WebKit leg failed once on each journey with
+the same symptoms. Waiting (with Playwright's `networkidle`) until the
+workbench had no request in flight before each reload or navigation away,
+the same journeys passed 200 of 200 and 100 of 100 runs with no crash. So
+these journeys call `waitForSettledWorkbench` first, and serve another
+website from a real server on `[::1]`, a site that is neither `127.0.0.1`
+nor `localhost`, instead of from a route. The crash is WebKit's and can
+still happen elsewhere: a journey that fails in WebKit on Linux with
+"internal error" or with its sign-in cookie gone may be this crash.
+
 Journeys a new user takes first (the folder picker and Workspace scope, Source
 Control's commit identity, Team and budget's suggested limits, the readiness
 checklist) run once per browser engine from `browserEngines()`: Chromium always,
