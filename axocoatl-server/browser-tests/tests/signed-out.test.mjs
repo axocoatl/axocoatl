@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
-import { browserEngines, launchTestDaemon } from '../support/daemon.mjs';
+import {
+  browserEngines, launchTestDaemon, trackRequests, waitForNoRequestsInFlight,
+} from '../support/daemon.mjs';
 
 // What the workbench shell does when its own API answers 401, in every
 // engine (Chromium, and WebKit when it is installed).
@@ -178,13 +180,21 @@ for (const engine of engines) {
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
+      const requests = trackRequests(page);
       await page.goto(runtime.signInUrl);
       await page.waitForFunction(connected);
+      // Clear the cookies of a workbench that has finished loading: a request
+      // it is still making would get the 401 before this journey's own.
+      await waitForNoRequestsInFlight(requests, 'The workbench');
       const loads = documentLoads(page);
-      await context.clearCookies();
       const signInPage = page.waitForResponse((response) => response.request().isNavigationRequest()
         && new URL(response.url()).pathname === '/' && response.status() === 401);
-      await page.evaluate(() => { fetch('/api/agents'); });
+      await context.clearCookies();
+      // A request of the shell's own may still get the 401 first and start
+      // the reload; that reload is the one this journey asserts.
+      await page.evaluate(() => { fetch('/api/agents'); }).catch((error) => {
+        if (!/Execution context was destroyed/.test(error.message)) throw error;
+      });
       await signInPage;
       await page.waitForLoadState('load');
       await page.waitForTimeout(2_000);
