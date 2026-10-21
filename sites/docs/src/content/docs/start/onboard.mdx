@@ -156,9 +156,17 @@ On **Linux and WSL2**:
   `--allow-sudo`. A range that is in the files but that Podman has not picked up yet
   needs only `podman system migrate`, which stops your running containers. When only
   one of the files is short, only it gets a range. When the files leave no free range
-  from 100000 up, onboarding names none and asks you to choose one. If `newuidmap` or
-  `newgidmap` is missing (Debian and Ubuntu: package `uidmap`), onboarding offers `sudo
-  apt-get install -y uidmap && podman system migrate` instead. With `CONTAINER_HOST`,
+  from 100000 up, onboarding names none and asks you to choose one. Rootless Podman maps
+  a range with `newuidmap` and `newgidmap`, which it looks up on `PATH` only. When one is
+  missing or may not map (neither setuid nor given file capabilities), Podman maps only
+  your own id, or, with a range in the files, `podman info` fails with `command required
+  for rootless mode with multiple IDs: exec: "newuidmap": executable file not found in
+  $PATH` and a message to run `podman system migrate`, which alone changes nothing.
+  Onboarding then offers the package that ships them, then `podman system migrate`:
+  `sudo apt-get install -y uidmap` on Debian and Ubuntu (Podman only recommends it),
+  `sudo dnf install -y shadow-utils` on Fedora and RHEL, `sudo pacman -S --noconfirm
+  shadow` on Arch; elsewhere, or for a helper that is there but may not map, it says
+  what to install or reinstall. Doctor names the same fix on its Podman line. With `CONTAINER_HOST`,
   `CONTAINER_CONNECTION` or a remote connection, this computer's files are not read and
   nothing is run: the range belongs where that Podman runs.
 - Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
@@ -231,10 +239,15 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
    Ollama's temporary files:
    `Pull qwen3-coder:30b (18.6 GB) and gpt-oss:20b (13.8 GB)? Needs 35.6 GB free; 412.0 GB
    free here.` A model too large for this computer's memory is named in that question,
-   and Enter does not pull it; `--yes` pulls it only with `--pull`. Its step left says
-   to choose a smaller model with `axocoatl onboard --update` (which, at a terminal, asks
-   again for a configured model that is too large) or a hosted writer and reviewer with
-   `axocoatl onboard --update --writer openrouter` (or `claude-code`, or `codex`). With
+   and Enter does not pull it; `--yes` pulls it only with `--pull`. Its step left names
+   `axocoatl onboard` with the writer you chose, so it does not ask again who writes: a
+   smaller model with `axocoatl onboard --replace --writer ollama`, or a hosted writer and
+   reviewer with `axocoatl onboard --replace --writer openrouter` (or `--writer
+   claude-code`, or `--writer codex`); for Claude Code and Codex, a smaller reviewer, or
+   `--reviewer openrouter:openai/gpt-oss-120b`. It says `--replace`, which backs the
+   configuration up and writes the team for the new models, when an Agent in the
+   configuration runs the model: `--update` keeps a configuration's Agents and changes
+   only `run.models`, so it would leave them on it. Otherwise it says `--update`. With
    `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
    step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
@@ -333,13 +346,16 @@ after it, written to `server.port` (`--port` chooses one).
 
 Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor), without loading
 again the models Step 3 just loaded, and says exactly what is ready. A `·` marks a
-writer you have not set up, which is optional, not a failure:
+writer you have not set up, which is optional, not a failure; its command builds the
+writer's image and signs in, and leaves the configuration as it is (`axocoatl onboard
+--update --writer claude-code` would also record Claude Code as this setup's writer and
+drop `run.models.writer`):
 
 ```text
 Ready for: axocoatl run fix, workbench Sessions
   ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
-  · axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update --writer claude-code`)
-  · axocoatl run fix-codex (not set up: run `axocoatl onboard --update --writer codex`)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
   ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
 Ready: yes
 ```
@@ -515,7 +531,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
 | Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
 | Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |
-| Models | OpenRouter and other hosted-provider keys present (not checked with the provider) | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
+| Models | OpenRouter and other hosted-provider keys present (not checked with the provider): a key in the file, or the stored secret `api_key_secret` names. Without `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and changes nothing else | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
 | Writers | Claude Code and Codex: sandbox image built and credential stored (for Codex, the credential the setup names); the `claude`, `codex` and `gh` CLIs (`gh` signed in, for `--keep pr`); the names of stored credentials | FAIL for the writer the configuration names (its `# Writer:` comment); WARN for one partly set up |
 | Daemon | Configuration valid; data directory writable and owned; a running daemon and its version against the CLI's; the Always-On Service's program; the configured port when no daemon runs; webhooks | FAIL for the configuration and data directory; otherwise WARN |
 

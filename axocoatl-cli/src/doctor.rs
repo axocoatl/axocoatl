@@ -153,8 +153,8 @@ pub(crate) struct Environment {
     /// The connection `CONTAINER_HOST` or `CONTAINER_CONNECTION` selects
     /// for it.
     pub(crate) podman_connection: ConnectionOverride,
-    /// `/`, where the user's subordinate id files and `newuidmap` are read
-    /// (a test's directory instead).
+    /// `/`, where the user's subordinate id files are read (a test's
+    /// directory instead).
     pub(crate) id_root: PathBuf,
     /// The data directory, when it is not the one the configuration selects
     /// (tests).
@@ -164,19 +164,32 @@ pub(crate) struct Environment {
 }
 
 /// For tests of the `axocoatl` binary: a directory that stands in for `/`
-/// where doctor reads `etc/subuid`, `etc/subgid`, `etc/nsswitch.conf` and
-/// `usr/bin/newuidmap` (and `newgidmap`), so a test does not depend on the
-/// user ranges of the computer running it. Not documented; it changes
-/// nothing but where doctor reads those files.
+/// where doctor reads `etc/subuid`, `etc/subgid` and `etc/nsswitch.conf`,
+/// so a test does not depend on the user ranges of the computer running it.
+/// Not documented, and read only in debug builds (`cargo test` builds the
+/// binary it runs that way): a release build always reads `/`.
+#[cfg(debug_assertions)]
 const ID_ROOT_VARIABLE: &str = "AXOCOATL_TEST_ID_ROOT";
+
+/// [`ID_ROOT_VARIABLE`], when it is an absolute path in a debug build.
+#[cfg(debug_assertions)]
+fn test_id_root() -> Option<PathBuf> {
+    std::env::var_os(ID_ROOT_VARIABLE)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+/// A release build reads no test root.
+#[cfg(not(debug_assertions))]
+fn test_id_root() -> Option<PathBuf> {
+    None
+}
 
 impl Environment {
     pub(crate) async fn current() -> Result<Self, String> {
         let host = crate::onboard::host::Host::from_env(None)?;
-        let id_root = std::env::var_os(ID_ROOT_VARIABLE)
-            .map(PathBuf::from)
-            .filter(|root| root.is_absolute())
-            .unwrap_or_else(|| host.root.clone());
+        let id_root = test_id_root().unwrap_or_else(|| host.root.clone());
+        let podman_connection = host.podman_connection.clone();
         let os = if host.macos {
             Os::MacOs {
                 version: None,
@@ -208,7 +221,7 @@ impl Environment {
             contexts_read: BTreeMap::new(),
             socket_path: axocoatl_daemon::ipc::default_socket_path(),
             podman: "podman".to_string(),
-            podman_connection: ConnectionOverride::from_env(),
+            podman_connection,
             id_root,
             data_dir: None,
             landlock_abi: detect::landlock_abi(),
@@ -262,13 +275,14 @@ pub(crate) fn podman_install_route(
     }
 }
 
-/// Linux, when Podman runs on this computer ([`PodmanReport::runs_here`]):
+/// Record whether `os` runs Podman in a machine, and on Linux, when Podman
+/// runs on this computer ([`PodmanReport::runs_here`]):
 /// add to `report` what `/etc/subuid` and `/etc/subgid` (under `root`) give
-/// `user`, this process's user, and whether `newuidmap` and `newgidmap` (on
-/// the host's `PATH`, else under `root`) can map them. Nothing is read on
-/// macOS, whose machine has its own, nor for a Podman reached through
-/// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection: this
-/// computer's files do not govern it, so its own `podman info` decides.
+/// `user`, this process's user, and whether `newuidmap` and `newgidmap` on
+/// the host's `PATH` can map them. Nothing is read on macOS, whose machine
+/// has its own, nor for a Podman reached through `CONTAINER_HOST`,
+/// `CONTAINER_CONNECTION` or a remote connection: this computer's files do
+/// not govern it, so its own `podman info` decides.
 ///
 /// [`PodmanReport::runs_here`]: podman_report::PodmanReport::runs_here
 pub(crate) fn read_id_ranges(
@@ -280,6 +294,7 @@ pub(crate) fn read_id_ranges(
 ) {
     report.subordinate_ids = None;
     report.id_map_tools = None;
+    report.machine_platform = os.is_macos();
     if os.is_macos() || !report.runs_here() {
         return;
     }
@@ -295,15 +310,16 @@ pub(crate) fn read_id_ranges(
         }
     };
     report.subordinate_ids = podman_report::read_subordinate_ids(root, user, uid);
-    report.id_map_tools = Some(id_map_tools(host, root, os));
+    report.id_map_tools = Some(id_map_tools(host, os));
 }
 
-/// `newuidmap` and `newgidmap` as rootless Podman finds them (on `PATH`,
-/// else in `usr/bin` under `root`), and the command that installs them on
-/// this distribution.
+/// `newuidmap` and `newgidmap` as rootless Podman finds them: on `PATH`
+/// only (the host's, which the Podman that onboarding, doctor and the
+/// daemon run inherits), as Podman's `exec.LookPath` looks them up, so a
+/// helper in `/usr/bin` that is not on `PATH` counts as missing, as it does
+/// for Podman. With the command that installs them on this distribution.
 pub(crate) fn id_map_tools(
     host: &crate::onboard::host::Host,
-    root: &Path,
     os: &Os,
 ) -> podman_report::IdMapTools {
     let mut tools = podman_report::IdMapTools {
@@ -318,11 +334,7 @@ pub(crate) fn id_map_tools(
         ..Default::default()
     };
     for name in ["newuidmap", "newgidmap"] {
-        let found = host.find(name).or_else(|| {
-            Some(root.join("usr/bin").join(name))
-                .filter(|path| crate::onboard::host::is_executable(path))
-        });
-        match found {
+        match host.find_on_path(name) {
             None => tools.missing.push(name.to_string()),
             Some(path) if !may_map_ids(&path) => {
                 tools.unprivileged.push(path.display().to_string())
@@ -333,7 +345,7 @@ pub(crate) fn id_map_tools(
     tools
 }
 
-/// `path` may map another user's ids: it is setuid, or (Fedora, Arch) has
+/// `path` may map another user's ids: it is setuid, or (Fedora, RHEL) has
 /// file capabilities (`security.capability`). The owner is not checked: a
 /// setuid helper is root's.
 fn may_map_ids(path: &Path) -> bool {
@@ -345,6 +357,8 @@ fn may_map_ids(path: &Path) -> bool {
             return true;
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -462,61 +476,184 @@ fn ollama_models(
     models
 }
 
+/// How `axocoatl onboard` changes the Ollama model `model` of a
+/// configuration without asking again who writes, or switching the writer.
+/// `axocoatl onboard --update` keeps the Agents a configuration has and
+/// changes only `run.models` (and the providers and port), so while an
+/// Agent runs `model` the command is `--replace`, which backs the file up
+/// and writes the team for the new models. The writer is always named
+/// (`--writer`), so Step 1 is not asked again and `--yes` does not choose
+/// another; with `--replace`, which keeps nothing, a writer model that
+/// stays is named too.
+struct ModelChange {
+    /// `--update` or `--replace`.
+    mode: &'static str,
+    /// Why `--replace`, for the end of the fix.
+    why: String,
+    /// `model` is `run.models.reviewer` and not the writer's.
+    reviewer_only: bool,
+    /// Who writes, from the `# Writer:` comment or `run.models.writer`;
+    /// `None` when the configuration does not say (one not written by
+    /// onboarding, without `run.models.writer`).
+    writer: Option<String>,
+    /// ` --writer W`, with ` --writer-model SPEC` when `--replace` would
+    /// otherwise forget a writer model that stays.
+    flags: String,
+}
+
+impl ModelChange {
+    fn new(
+        model: &str,
+        config: &axocoatl_config::AxocoatlConfig,
+        run: &onboard_config::RunModels,
+        writer: Option<&str>,
+    ) -> Self {
+        let runs = |spec: &Option<String>| {
+            spec.as_deref()
+                .and_then(|spec| ModelRef::parse(spec).ok())
+                .is_some_and(|spec| spec.provider == Provider::Ollama && spec.model == model)
+        };
+        let agents = agent_ollama_models(config).any(|(agent, _)| agent == model);
+        let reviewer_only = runs(&run.reviewer) && !runs(&run.writer);
+        let (mode, why) = if agents {
+            (
+                "--replace",
+                format!(
+                    " (`--update` would keep the Agents that run {model}; `--replace` backs this \
+                     configuration up first)"
+                ),
+            )
+        } else {
+            ("--update", String::new())
+        };
+        let writer = writer
+            .filter(|writer| matches!(*writer, "claude-code" | "codex" | "ollama" | "openrouter"))
+            .map(str::to_string);
+        let mut flags = writer
+            .as_deref()
+            .map(|writer| format!(" --writer {writer}"))
+            .unwrap_or_default();
+        // The writer's own model stays when only the reviewer (or, for an
+        // OpenRouter writer, an Agent's local model) moves.
+        let keeps_writer_model = agents
+            && !runs(&run.writer)
+            && (reviewer_only || writer.as_deref() == Some("openrouter"));
+        if let (true, Some(writer), Some(spec)) =
+            (keeps_writer_model, writer.as_deref(), run.writer.as_deref())
+        {
+            if spec.starts_with(&format!("{writer}:")) {
+                flags.push_str(&format!(
+                    " --writer-model {}",
+                    crate::onboard::host::shell_quote(spec)
+                ));
+            }
+        }
+        Self {
+            mode,
+            why,
+            reviewer_only,
+            writer,
+            flags,
+        }
+    }
+
+    /// `axocoatl onboard MODE FLAGS` and `extra`, in backticks.
+    fn command(&self, extra: &str) -> String {
+        format!("`axocoatl onboard {}{}{extra}`", self.mode, self.flags)
+    }
+}
+
+/// What doctor says to do about a configured Ollama model, for its role.
+struct ModelFixes {
+    /// It is too large for this computer ([`too_large_fix`]).
+    too_large: String,
+    /// Its context could not be read ([`unreadable_model_fix`]).
+    unreadable: String,
+}
+
+/// When the configuration does not say who writes: name the model to
+/// change, or the writer to write a new configuration for.
+fn unknown_writer_fix(model: &str, what: &str) -> String {
+    format!(
+        "{what} in place of {model} in this configuration, or write a new one with `axocoatl \
+         onboard --replace --writer claude-code|codex|ollama|openrouter` (it backs this one up \
+         first)"
+    )
+}
+
 /// The fix for `model`, configured on Ollama and too large for this
 /// computer: a smaller model, or OpenRouter, for the role it has. A model
 /// that is only the reviewer (`run.models.reviewer` and not the writer, as
 /// onboarding sets up Claude Code, Codex, or a local writer with a hosted
-/// reviewer) moves the reviewer, never the writer. `axocoatl onboard
-/// --update` keeps the Agents a configuration has and changes only
-/// `run.models`, so while an Agent runs `model` the command is `--replace`
-/// (which backs the file up and writes the team for the new models), with
-/// the writer named again since nothing is kept.
+/// reviewer) moves the reviewer, never the writer ([`ModelChange`]).
 fn too_large_fix(
     model: &str,
     config: &axocoatl_config::AxocoatlConfig,
     run: &onboard_config::RunModels,
     writer: Option<&str>,
 ) -> String {
-    let runs = |spec: &Option<String>| {
-        spec.as_deref()
-            .and_then(|spec| ModelRef::parse(spec).ok())
-            .is_some_and(|spec| spec.provider == Provider::Ollama && spec.model == model)
-    };
-    let agents = agent_ollama_models(config).any(|(agent, _)| agent == model);
-    let (mode, why) = if agents {
-        (
-            "--replace",
-            format!(
-                " (`--update` would keep the Agents that run {model}; `--replace` backs this \
-                 configuration up first)"
-            ),
-        )
-    } else {
-        ("--update", String::new())
-    };
-    if runs(&run.reviewer) && !runs(&run.writer) {
-        // `--update` keeps the writer; `--replace` asks for it again.
-        let writer = match (agents, writer) {
-            (false, _) => String::new(),
-            (true, Some(writer @ ("claude-code" | "codex"))) => format!(" --writer {writer}"),
-            (true, Some("ollama")) => match &run.writer {
-                Some(spec) => format!(" --writer ollama --writer-model {spec}"),
-                None => " --writer ollama".to_string(),
-            },
-            (true, _) => String::new(),
-        };
-        format!(
-            "Use OpenRouter for the reviewer (`axocoatl onboard {mode}{writer} --reviewer \
-             openrouter:{}`), or choose a smaller reviewer (`axocoatl onboard \
-             {mode}{writer}`){why}",
-            crate::onboard::openrouter::DEFAULT_REVIEWER
-        )
-    } else {
-        format!(
-            "Choose a smaller model (`axocoatl onboard {mode}`), or use OpenRouter for it \
-             (`axocoatl onboard {mode} --writer openrouter`){why}"
-        )
+    let change = ModelChange::new(model, config, run, writer);
+    let hosted = format!(
+        " --reviewer openrouter:{}",
+        crate::onboard::openrouter::DEFAULT_REVIEWER
+    );
+    let why = &change.why;
+    match change.writer.as_deref() {
+        None => unknown_writer_fix(model, "Name a smaller model (or an OpenRouter one)"),
+        // An OpenRouter writer's reviewer runs on OpenRouter too
+        // (onboarding offers no local one with it).
+        Some("openrouter") if change.reviewer_only => format!(
+            "Use OpenRouter for the reviewer ({}){why}",
+            change.command(&hosted)
+        ),
+        Some("openrouter") => format!("Use OpenRouter for it ({}){why}", change.command("")),
+        Some(_) if change.reviewer_only => format!(
+            "Use OpenRouter for the reviewer ({}), or choose a smaller reviewer ({}){why}",
+            change.command(&hosted),
+            change.command("")
+        ),
+        Some("ollama") => format!(
+            "Choose a smaller model ({}), or use OpenRouter for it (`axocoatl onboard {} --writer \
+             openrouter`){why}",
+            change.command(""),
+            change.mode
+        ),
+        // Claude Code or Codex: the Agents run on the reviewer's model.
+        Some(_) => format!(
+            "Choose a smaller model ({}), or use OpenRouter for it ({}){why}",
+            change.command(""),
+            change.command(&hosted)
+        ),
     }
+}
+
+/// The fix for `model` when its context could not be read: check it, or
+/// choose another for its role ([`ModelChange`]).
+fn unreadable_model_fix(
+    model: &str,
+    config: &axocoatl_config::AxocoatlConfig,
+    run: &onboard_config::RunModels,
+    writer: Option<&str>,
+) -> String {
+    let change = ModelChange::new(model, config, run, writer);
+    let another = match change.writer.as_deref() {
+        None => {
+            return format!(
+                "Check the model with `ollama run {model}`, or {}",
+                unknown_writer_fix(model, "name another model")
+            )
+        }
+        Some(_) if change.reviewer_only => "choose another reviewer",
+        // An Agent's local model under an OpenRouter writer: `--replace`
+        // puts the team on OpenRouter.
+        Some("openrouter") => "use OpenRouter for it",
+        Some(_) => "choose another",
+    };
+    format!(
+        "Check the model with `ollama run {model}`, or {another} ({}){}",
+        change.command(""),
+        change.why
+    )
 }
 
 /// Collect the report for `config_path`.
@@ -670,6 +807,13 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         }
     }
 
+    // The data directory: its secret store holds keys `api_key_secret`
+    // names, and the writers' sign-ins and images.
+    let data_dir = match &env.data_dir {
+        Some(data_dir) => Some(data_dir.clone()),
+        None => crate::configure_data_dir(config_path).ok(),
+    };
+
     // ── Models ──
     if let Some(config) = &config {
         if let Some(ollama) = &config.providers.ollama {
@@ -704,18 +848,22 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 ),
                 cli_version,
             };
-            let too_large: BTreeMap<String, String> = wanted
+            let fixes: BTreeMap<String, ModelFixes> = wanted
                 .keys()
                 .map(|model| {
-                    let fix = too_large_fix(model, config, &run, chosen_writer.as_deref());
-                    (model.clone(), fix)
+                    let writer = chosen_writer.as_deref();
+                    let fixes = ModelFixes {
+                        too_large: too_large_fix(model, config, &run, writer),
+                        unreadable: unreadable_model_fix(model, config, &run, writer),
+                    };
+                    (model.clone(), fixes)
                 })
                 .collect();
             let server_ready = check_ollama(
                 &ollama.base_url,
                 &host,
                 &wanted,
-                &too_large,
+                &fixes,
                 env,
                 &mut sections.models,
                 &mut model_states,
@@ -738,32 +886,35 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 .into_iter()
                 .flatten()
                 .any(|spec| spec.starts_with("openrouter:"));
-        let key_present =
-            |key: &str| !(key.is_empty() || key.contains("your-key") || key.starts_with("${"));
         if let Some(openrouter) = &config.providers.openrouter {
-            if key_present(openrouter.api_key.expose_secret()) {
-                openrouter_ready = true;
-                sections
-                    .models
-                    .push(Item::ok("OpenRouter", "OpenRouter API key present"));
-            } else if uses_openrouter {
-                sections.models.push(Item::fail(
+            match provider_key("OpenRouter", openrouter, data_dir.as_deref()) {
+                Ok(line) => {
+                    openrouter_ready = true;
+                    sections.models.push(Item::ok("OpenRouter", line));
+                }
+                Err((line, hint)) if uses_openrouter => sections.models.push(Item::fail(
                     "OpenRouter",
-                    "OpenRouter API key not set, and an Agent or run default uses OpenRouter",
-                    crate::missing_provider_key_hint("OpenRouter"),
-                ));
-            } else {
-                sections.models.push(Item::warn(
-                    "OpenRouter",
-                    "OpenRouter API key not set",
-                    Some(crate::missing_provider_key_hint("OpenRouter")),
-                ));
+                    format!("{line}, and an Agent or run default uses OpenRouter"),
+                    hint,
+                )),
+                Err((line, hint)) => {
+                    sections
+                        .models
+                        .push(Item::warn("OpenRouter", line, Some(hint)))
+                }
             }
         } else if uses_openrouter {
+            // The browser sign-in adds `providers.openrouter` and changes
+            // nothing else in the file: not the writer, not the models.
             sections.models.push(Item::fail(
                 "OpenRouter",
                 "an Agent or run default uses OpenRouter, which is not configured",
-                "Run `axocoatl onboard --update --writer openrouter`",
+                format!(
+                    "Run `{}`: it signs you in to OpenRouter in the browser, stores the key it \
+                     issues and adds providers.openrouter to this configuration, changing nothing \
+                     else in it",
+                    connect_openrouter_command(config_path)
+                ),
             ));
         }
         for (name, credentials) in [
@@ -775,24 +926,15 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             if let Some(credentials) = credentials {
                 sections
                     .models
-                    .push(if key_present(credentials.api_key.expose_secret()) {
-                        Item::ok(name, format!("{name} API key present"))
-                    } else {
-                        Item::warn(
-                            name,
-                            format!("{name} API key not set"),
-                            Some(crate::missing_provider_key_hint(name)),
-                        )
+                    .push(match provider_key(name, credentials, data_dir.as_deref()) {
+                        Ok(line) => Item::ok(name, line),
+                        Err((line, hint)) => Item::warn(name, line, Some(hint)),
                     });
             }
         }
     }
 
     // ── Writers ──
-    let data_dir = match &env.data_dir {
-        Some(data_dir) => Some(data_dir.clone()),
-        None => crate::configure_data_dir(config_path).ok(),
-    };
     let mut secrets = BTreeSet::new();
     let mut images = BTreeSet::new();
     if let Some(data_dir) = data_dir.as_ref().filter(|dir| dir.is_dir()) {
@@ -811,6 +953,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             recipe: "claude-code",
             credentials: &[axocoatl_daemon::external_agent::claude_code::CLAUDE_CODE_SECRET],
             connect: "axocoatl connect claude-code",
+            set_up: "axocoatl recipe build claude-code && axocoatl connect claude-code",
             chosen: chosen_writer.as_deref() == Some("claude-code"),
         },
         images.contains("claude-code"),
@@ -842,6 +985,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             recipe: "codex",
             credentials: &codex_credentials,
             connect: codex_connect,
+            // Codex's sign-in builds its image the first time.
+            set_up: codex_connect,
             chosen: chosen_writer.as_deref() == Some("codex"),
         },
         images.contains("codex"),
@@ -1084,11 +1229,14 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     if native_writer {
         let mut problems: Vec<String> = sandbox_blocker.iter().cloned().collect();
         match run.writer.as_deref() {
-            None => problems.push(
+            // Only an Ollama or OpenRouter writer gets here: `--update`
+            // with that writer asks for its model and writes it to
+            // `run.models.writer`.
+            None => problems.push(format!(
                 "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl onboard \
-                 --update --writer ollama`"
-                    .to_string(),
-            ),
+                 --update --writer {}`",
+                chosen_writer.as_deref().unwrap_or("ollama")
+            )),
             Some(spec) => problems.extend(model_ok(spec).err()),
         }
         problems.extend(reviewer_problem());
@@ -1155,6 +1303,46 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         sections,
         ready_for,
         steps_left,
+    }
+}
+
+/// Whether the key of the provider `name` (OpenRouter, OpenAI, …) is
+/// there: the secret `api_key_secret` names, stored in `data_dir`'s secret
+/// store (where `axocoatl connect openrouter` keeps OpenRouter's key; the
+/// daemon reads it when it starts), else a value in `api_key` (written in
+/// the file, or from a `${VARIABLE}` that is set). `Ok` with the line, or
+/// the line and what stores the key.
+fn provider_key(
+    name: &str,
+    credentials: &axocoatl_config::ProviderCredentials,
+    data_dir: Option<&Path>,
+) -> Result<String, (String, String)> {
+    if let Some(line) = data_dir.and_then(|data_dir| {
+        crate::connect_cmd::openrouter::doctor_key_line(name, credentials, data_dir)
+    }) {
+        return line;
+    }
+    let key = credentials.api_key.expose_secret();
+    if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
+        Err((
+            format!("{name} API key not set"),
+            crate::missing_provider_key_hint(name),
+        ))
+    } else {
+        Ok(format!("{name} API key present"))
+    }
+}
+
+/// `axocoatl connect openrouter`, with `--config` when doctor checks
+/// another configuration than the default one.
+fn connect_openrouter_command(config_path: &Path) -> String {
+    if config_path == crate::default_config_path_for_clap() {
+        "axocoatl connect openrouter".to_string()
+    } else {
+        format!(
+            "axocoatl connect openrouter --config {}",
+            crate::onboard::host::shell_quote(&config_path.display().to_string())
+        )
     }
 }
 
@@ -1237,6 +1425,11 @@ struct WriterPath<'a> {
     /// The credentials it runs with (any one of them).
     credentials: &'a [&'a str],
     connect: &'a str,
+    /// The commands that set it up from nothing (the image and the
+    /// sign-in), which leave the configuration as it is. (`axocoatl onboard
+    /// --update --writer …` would also rewrite `run`: it records that
+    /// writer and drops `run.models.writer`.)
+    set_up: &'a str,
     /// The configuration says this is the writer (onboarding chose it), so
     /// what it lacks fails instead of warning.
     chosen: bool,
@@ -1262,6 +1455,7 @@ fn writer_items(
         recipe,
         credentials,
         connect,
+        set_up,
         chosen,
     } = *path;
     let credential = credentials
@@ -1272,14 +1466,12 @@ fn writer_items(
     if !started && !chosen {
         items.push(Item::ok(
             name,
-            format!("not set up (`axocoatl onboard --update --writer {recipe}` sets it up)"),
+            format!("not set up (`{set_up}` sets it up, and leaves your configuration as it is)"),
         ));
         return WriterState {
             set_up_started: false,
             chosen,
-            missing: vec![format!(
-                "not set up: run `axocoatl onboard --update --writer {recipe}`"
-            )],
+            missing: vec![format!("not set up: run `{set_up}`")],
         };
     }
     let lacking = |detail: String, fix: String| {
@@ -1321,12 +1513,12 @@ fn writer_items(
 }
 
 /// The Ollama server and each model; returns whether the server is ready.
-/// `too_large`: each model's fix when it is too large for this computer.
+/// `fixes`: each model's fixes for its role.
 async fn check_ollama(
     base_url: &str,
     host: &OllamaHost,
     wanted: &BTreeMap<String, bool>,
-    too_large: &BTreeMap<String, String>,
+    fixes: &BTreeMap<String, ModelFixes>,
     env: &Environment,
     items: &mut Vec<Item>,
     states: &mut BTreeMap<String, ModelState>,
@@ -1391,7 +1583,10 @@ async fn check_ollama(
                         "{model} is not pulled, and at {size} it is too large for this \
                          computer's {gb} GB"
                     ),
-                    too_large.get(model).cloned().unwrap_or_default(),
+                    fixes
+                        .get(model)
+                        .map(|fixes| fixes.too_large.clone())
+                        .unwrap_or_default(),
                 ),
                 // Another tag of the same model does not count (Ollama
                 // reads an untagged name as `:latest`): the hint names it
@@ -1444,7 +1639,7 @@ async fn check_ollama(
                     ollama_setup::size_text(size),
                     axocoatl_isolation::host::memory_gb(memory)
                 ));
-                fix = too_large.get(model).cloned();
+                fix = fixes.get(model).map(|fixes| fixes.too_large.clone());
             }
         }
         let mut model_ok = true;
@@ -1485,11 +1680,7 @@ async fn check_ollama(
                     model_ok = false;
                     why = error.clone();
                     parts.push(format!("its context could not be read: {error}"));
-                    fix = Some(
-                        "Check the model with `ollama run`, or choose another (`axocoatl onboard \
-                         --update`)"
-                            .to_string(),
-                    );
+                    fix = fixes.get(model).map(|fixes| fixes.unreadable.clone());
                 }
             }
         }
@@ -1687,17 +1878,33 @@ mod tests {
              ollama:qwen3-coder:30b`) (`--update` would keep the Agents that run gpt-oss:20b; \
              `--replace` backs this configuration up first)"
         );
-        // The writer (Lead) model keeps the writer's fix.
+        // The writer (Lead) model keeps the writer's fix, naming the
+        // writer so `--replace` does not ask Step 1 again.
         assert_eq!(
             too_large_fix("qwen3-coder:30b", &config, &run, Some("ollama")),
-            "Choose a smaller model (`axocoatl onboard --replace`), or use OpenRouter for it \
-             (`axocoatl onboard --replace --writer openrouter`) (`--update` would keep the \
-             Agents that run qwen3-coder:30b; `--replace` backs this configuration up first)"
+            "Choose a smaller model (`axocoatl onboard --replace --writer ollama`), or use \
+             OpenRouter for it (`axocoatl onboard --replace --writer openrouter`) (`--update` \
+             would keep the Agents that run qwen3-coder:30b; `--replace` backs this \
+             configuration up first)"
+        );
+        assert_eq!(
+            unreadable_model_fix("qwen3-coder:30b", &config, &run, Some("ollama")),
+            "Check the model with `ollama run qwen3-coder:30b`, or choose another (`axocoatl \
+             onboard --replace --writer ollama`) (`--update` would keep the Agents that run \
+             qwen3-coder:30b; `--replace` backs this configuration up first)"
+        );
+        assert_eq!(
+            unreadable_model_fix("gpt-oss:20b", &config, &run, Some("ollama")),
+            "Check the model with `ollama run gpt-oss:20b`, or choose another reviewer \
+             (`axocoatl onboard --replace --writer ollama --writer-model ollama:qwen3-coder:30b`) \
+             (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
+             configuration up first)"
         );
     }
 
     /// A reviewer named only in `run.models` (no Agent runs it): `--update`
-    /// changes it, and keeps the writer.
+    /// changes it, and keeps the OpenRouter writer, whose reviewer runs on
+    /// OpenRouter too.
     #[test]
     fn a_too_large_reviewer_no_agent_runs_is_updated() {
         let text = "agents:\n  - id: lead\n    name: Lead\n    provider: openrouter\n    model: \
@@ -1708,10 +1915,156 @@ mod tests {
         let (config, run) = parsed(text);
         assert_eq!(
             too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter")),
-            "Use OpenRouter for the reviewer (`axocoatl onboard --update --reviewer \
-             openrouter:openai/gpt-oss-120b`), or choose a smaller reviewer (`axocoatl onboard \
-             --update`)"
+            "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer openrouter \
+             --reviewer openrouter:openai/gpt-oss-120b`)"
         );
+    }
+
+    /// A configuration with an OpenRouter writer, or none onboarding
+    /// recorded: the command never asks Step 1 again nor switches the
+    /// writer. `--replace` keeps the OpenRouter writer's model, and with no
+    /// writer known the person is told to name one.
+    #[test]
+    fn a_too_large_model_keeps_an_openrouter_or_unknown_writer() {
+        // Hand-edited: the OpenRouter setup's Reviewer Agent on a local model.
+        let hosted = ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder");
+        let local = ModelRef::new(Provider::Ollama, "gpt-oss:20b");
+        let text = onboard_config::render(&plan(
+            "openrouter",
+            Some(hosted),
+            ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
+        ))
+        .replace(
+            "provider: openrouter\n    model: \"openai/gpt-oss-120b\"",
+            "provider: ollama\n    model: \"gpt-oss:20b\"",
+        );
+        let (config, run) = parsed(&text);
+        assert!(ollama_models(&config, &run).contains_key("gpt-oss:20b"));
+        let fix = too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"));
+        assert_eq!(
+            fix,
+            "Use OpenRouter for it (`axocoatl onboard --replace --writer openrouter \
+             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents that \
+             run gpt-oss:20b; `--replace` backs this configuration up first)"
+        );
+        // That command writes the team on OpenRouter: no Ollama model is left.
+        let (config, run) = parsed(&onboard_config::render(&plan(
+            "openrouter",
+            Some(ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder")),
+            ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
+        )));
+        assert!(ollama_models(&config, &run).is_empty());
+
+        // An OpenRouter writer whose run reviewer and Reviewer Agent are
+        // local (hand-edited): the reviewer moves, the writer model stays.
+        let (config, run) = parsed(&onboard_config::render(&plan(
+            "openrouter",
+            Some(ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder")),
+            local,
+        )));
+        assert_eq!(
+            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter")),
+            "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer openrouter \
+             --writer-model openrouter:qwen/qwen3-coder --reviewer openrouter:openai/gpt-oss-120b`) \
+             (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
+             configuration up first)"
+        );
+
+        // No `# Writer:` comment and no run.models.writer: who writes is not
+        // known, so no command that would ask or guess it.
+        let text = "agents:\n  - id: lead\n    name: Lead\n    provider: ollama\n    model: \
+                    \"gpt-oss:20b\"\nproviders:\n  ollama:\n    base_url: \
+                    \"http://localhost:11434\"\nrun:\n  models:\n    reviewer: \
+                    \"ollama:gpt-oss:20b\"\n";
+        let (config, run) = parsed(text);
+        assert_eq!(onboard_config::writer_marker(text), None);
+        let expected = "Name a smaller model (or an OpenRouter one) in place of gpt-oss:20b in \
+                        this configuration, or write a new one with `axocoatl onboard --replace \
+                        --writer claude-code|codex|ollama|openrouter` (it backs this one up first)";
+        assert_eq!(too_large_fix("gpt-oss:20b", &config, &run, None), expected);
+        assert!(
+            unreadable_model_fix("gpt-oss:20b", &config, &run, None).starts_with(
+                "Check the model with `ollama run gpt-oss:20b`, or name another model in place \
+                 of gpt-oss:20b in this configuration"
+            )
+        );
+        // No comment, but run.models.writer says Ollama writes (doctor's
+        // chosen writer): named, with its model, which `--replace` keeps.
+        let text = text.replace(
+            "    reviewer: \"ollama:gpt-oss:20b\"\n",
+            "    writer: \"ollama:qwen3-coder:30b\"\n    reviewer: \"ollama:gpt-oss:20b\"\n",
+        );
+        let (config, run) = parsed(&text);
+        assert!(
+            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama")).starts_with(
+                "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
+             --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`)"
+            )
+        );
+
+        // A Claude Code setup with an Agent on a local model that is not the
+        // reviewer (hand-edited): the writer stays Claude Code.
+        let (config, run) = parsed(
+            &onboard_config::render(&plan(
+                "claude-code",
+                None,
+                ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
+            ))
+            .replacen(
+                "provider: openrouter\n    model: \"openai/gpt-oss-120b\"",
+                "provider: ollama\n    model: \"qwen3-coder:30b\"",
+                1,
+            ),
+        );
+        assert_eq!(
+            too_large_fix("qwen3-coder:30b", &config, &run, Some("claude-code")),
+            "Choose a smaller model (`axocoatl onboard --replace --writer claude-code`), or use \
+             OpenRouter for it (`axocoatl onboard --replace --writer claude-code --reviewer \
+             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents that run \
+             qwen3-coder:30b; `--replace` backs this configuration up first)"
+        );
+    }
+
+    /// Linux: a helper with file capabilities (Fedora 42 and RHEL 9 ship
+    /// newuidmap with `cap_setuid=ep`, as `rpm -q --filecaps shadow-utils`
+    /// shows) may map ids, as a setuid one may; a plain one may not.
+    /// Writing `security.capability` needs CAP_SETFCAP, so without it the
+    /// test says it was skipped.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_helper_with_file_capabilities_may_map_ids() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("newuidmap");
+        std::fs::write(&path, "").unwrap();
+        assert!(!may_map_ids(&path));
+        // What `setcap cap_setuid=ep` writes: VFS_CAP_REVISION_2 with the
+        // effective flag, then CAP_SETUID (7) permitted, nothing
+        // inheritable, and the empty upper words.
+        let mut value = Vec::new();
+        for word in [0x0200_0001u32, 1 << 7, 0, 0, 0] {
+            value.extend_from_slice(&word.to_le_bytes());
+        }
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: both strings are NUL-terminated and `value` is valid for
+        // its length.
+        let written = unsafe {
+            libc::setxattr(
+                name.as_ptr(),
+                c"security.capability".as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+            )
+        };
+        if written != 0 {
+            eprintln!(
+                "skipped: writing security.capability needs CAP_SETFCAP ({})",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        assert!(may_map_ids(&path));
     }
 
     fn item(name: &str, status: Status) -> Item {
@@ -1754,7 +2107,8 @@ mod tests {
                 RunPath {
                     command: "axocoatl run fix-claude-code".into(),
                     ok: false,
-                    detail: "not set up: run `axocoatl onboard --update --writer claude-code`"
+                    detail: "not set up: run `axocoatl recipe build claude-code && axocoatl \
+                             connect claude-code`"
                         .into(),
                     set_up: false,
                 },
@@ -1799,8 +2153,8 @@ mod tests {
         // An optional writer nothing of is set up is neutral, not a failure.
         assert!(
             ready.contains(
-                "  · axocoatl run fix-claude-code (not set up: run `axocoatl onboard --update \
-                 --writer claude-code`)"
+                "  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build \
+                 claude-code && axocoatl connect claude-code`)"
             ),
             "{ready}"
         );
@@ -1820,9 +2174,11 @@ mod tests {
         assert_eq!(
             line(
                 "Codex",
-                "not set up (`axocoatl onboard --update --writer codex` sets it up)"
+                "not set up (`axocoatl connect codex` sets it up, and leaves your configuration \
+                 as it is)"
             ),
-            "Codex: not set up (`axocoatl onboard --update --writer codex` sets it up)"
+            "Codex: not set up (`axocoatl connect codex` sets it up, and leaves your \
+             configuration as it is)"
         );
         assert_eq!(line("Landlock", "Landlock ABI 6"), "Landlock ABI 6");
         assert_eq!(
@@ -1970,6 +2326,7 @@ mod tests {
                 recipe: "codex",
                 credentials: &["codex-chatgpt", "codex-openai"],
                 connect: "axocoatl connect codex",
+                set_up: "axocoatl connect codex",
                 chosen,
             },
             image,
@@ -1985,10 +2342,15 @@ mod tests {
         assert!(!state.set_up_started);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].status, Status::Ok);
+        // The commands that set it up without rewriting the configuration
+        // (`onboard --update --writer codex` would also make it the writer
+        // and drop run.models.writer).
         assert_eq!(
             items[0].line(),
-            "Codex: not set up (`axocoatl onboard --update --writer codex` sets it up)"
+            "Codex: not set up (`axocoatl connect codex` sets it up, and leaves your \
+             configuration as it is)"
         );
+        assert_eq!(state.missing, ["not set up: run `axocoatl connect codex`"]);
         let (state, items) = writer(true, &[], false);
         assert!(state.set_up_started);
         assert_eq!(

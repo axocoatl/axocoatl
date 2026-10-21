@@ -3,7 +3,9 @@
 //! Podman stands in for a ready rootless runtime, and on Linux doctor reads
 //! the user's subordinate id ranges from a test directory that gives the
 //! test user one (`AXOCOATL_TEST_ID_ROOT`), not from this computer's
-//! `/etc/subuid`, so only Ollama decides.
+//! `/etc/subuid`, so only Ollama decides. Only a debug build of axocoatl
+//! (what `cargo test` builds) reads that variable, so on Linux these tests
+//! are ignored under `cargo test --release`.
 
 use std::path::Path;
 use std::process::Command;
@@ -210,6 +212,10 @@ server:
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
     // What an Ollama server started without OLLAMA_NO_CLOUD reports.
     let server = ollama(
@@ -238,6 +244,10 @@ async fn doctor_fails_an_ollama_server_with_cloud_models_enabled() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_passes_a_cloud_disabled_audited_server() {
     let server = ollama(
         json!({"version": AUDITED_OLLAMA_VERSION}),
@@ -275,6 +285,10 @@ async fn doctor_passes_a_cloud_disabled_audited_server() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_fails_a_server_without_cloud_status_or_the_audited_version() {
     let server = ollama(json!({"version": "0.12.3"}), None).await;
     let root = tempfile::tempdir().unwrap();
@@ -296,6 +310,10 @@ async fn doctor_fails_a_server_without_cloud_status_or_the_audited_version() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_refuses_ollama_0_20_6_and_says_why() {
     let server = ollama(
         json!({"version": "0.20.6"}),
@@ -323,6 +341,10 @@ async fn doctor_refuses_ollama_0_20_6_and_says_why() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
     let server = ollama_showing(
         json!({"version": AUDITED_OLLAMA_VERSION}),
@@ -346,6 +368,10 @@ async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_fails_a_model_without_tools_for_an_agent_with_tools() {
     let server = ollama_showing(
         json!({"version": AUDITED_OLLAMA_VERSION}),
@@ -366,6 +392,10 @@ async fn doctor_fails_a_model_without_tools_for_an_agent_with_tools() {
 /// same model does not count as pulled: doctor fails it and names the tag
 /// that is installed, instead of passing a model Session start then refuses.
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_fails_an_untagged_model_that_only_another_tag_satisfies() {
     let server = ollama(
         json!({"version": AUDITED_OLLAMA_VERSION}),
@@ -396,6 +426,10 @@ async fn doctor_fails_an_untagged_model_that_only_another_tag_satisfies() {
 /// A newer Ollama minor passes doctor with a warning once the contract
 /// probes pass on the model; it is no longer refused.
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_warns_about_a_newer_minor_and_passes_it_through_the_probes() {
     let server = ollama(
         json!({"version": "0.41.0"}),
@@ -422,6 +456,10 @@ async fn doctor_warns_about_a_newer_minor_and_passes_it_through_the_probes() {
 /// files are not judged and its `podman info` (a range) decides.
 #[cfg(target_os = "linux")]
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", not(debug_assertions)),
+    ignore = "AXOCOATL_TEST_ID_ROOT is read only by a debug build of axocoatl"
+)]
 async fn doctor_reads_the_test_id_root_and_not_for_a_podman_elsewhere() {
     let server = ollama(
         json!({"version": AUDITED_OLLAMA_VERSION}),

@@ -135,6 +135,12 @@ pub struct PodmanReport {
     /// Linux, when Podman runs here: whether `newuidmap` and `newgidmap`
     /// can map a range (`None`: not checked).
     pub id_map_tools: Option<IdMapTools>,
+    /// This computer runs Podman's containers in a machine (macOS,
+    /// Windows), so unsetting `CONTAINER_HOST` or `CONTAINER_CONNECTION`
+    /// selects the default machine, not a Podman on this computer. Set from
+    /// the build target; onboarding and doctor set it from the platform
+    /// they detected.
+    pub machine_platform: bool,
 }
 
 impl PodmanReport {
@@ -149,6 +155,7 @@ impl PodmanReport {
             connection: ConnectionOverride::default(),
             subordinate_ids: None,
             id_map_tools: None,
+            machine_platform: cfg!(any(target_os = "macos", target_os = "windows")),
         }
     }
 
@@ -174,6 +181,16 @@ impl PodmanReport {
         match &self.subordinate_ids {
             Some(ids) => ids.free,
             None => Some(DEFAULT_SUBORDINATE_RANGE),
+        }
+    }
+
+    /// Podman runs here and `podman info` failed because `newuidmap` or
+    /// `newgidmap` cannot map the user's range ([`id_map_tools_failure`]):
+    /// what the error says about them.
+    fn id_map_failure(&self) -> Option<IdMapTools> {
+        match &self.readiness {
+            PodmanReadiness::Unavailable(error) if self.runs_here() => id_map_tools_failure(error),
+            _ => None,
         }
     }
 
@@ -613,13 +630,18 @@ pub fn read_subordinate_ids(root: &Path, user: &str, uid: Option<u32>) -> Option
 }
 
 /// Linux: `newuidmap` and `newgidmap`, the setuid (or file-capability)
-/// helpers rootless Podman maps a range of subordinate ids with. Without
-/// them Podman maps only the user's own id, whatever `/etc/subuid` and
-/// `/etc/subgid` give it, and `podman system migrate` does not change that.
-/// Debian and Ubuntu ship them in `uidmap`, which Podman only recommends.
+/// helpers rootless Podman maps a range of subordinate ids with. Podman
+/// looks them up on `PATH` only (Go's `exec.LookPath`). Without them it
+/// cannot map the range `/etc/subuid` and `/etc/subgid` give the user: a
+/// pause process started before the range was added keeps mapping only the
+/// user's own id, and a new one fails (`podman info`: `command required for
+/// rootless mode with multiple IDs: exec: "newuidmap": executable file not
+/// found in $PATH`), so `podman system migrate` alone never fixes it.
+/// Debian and Ubuntu ship them in `uidmap`, which Podman only recommends;
+/// Fedora and RHEL in `shadow-utils`; Arch in `shadow`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IdMapTools {
-    /// The helpers found neither on `PATH` nor in `/usr/bin`.
+    /// The helpers not found on `PATH`.
     pub missing: Vec<String>,
     /// The paths of helpers found that are neither setuid nor given file
     /// capabilities, so they cannot map other ids.
@@ -663,20 +685,107 @@ impl IdMapTools {
     fn manual(&self) -> Option<String> {
         if !self.unprivileged.is_empty() {
             Some(format!(
-                "Reinstall the package that provides {} so it is setuid root again (Debian and \
-                 Ubuntu: uidmap)",
+                "Reinstall the package that provides {} so that it is setuid root or has its \
+                 file capabilities again ({ID_MAP_PACKAGES})",
                 self.unprivileged.join(" and ")
             ))
         } else if self.install.is_none() {
-            Some(
-                "Install newuidmap and newgidmap from your distribution (Debian and Ubuntu: the \
-                 uidmap package)"
-                    .to_string(),
-            )
+            Some(format!(
+                "Install newuidmap and newgidmap from your distribution ({ID_MAP_PACKAGES})"
+            ))
         } else {
             None
         }
     }
+
+    /// Add what `other` found missing or unable to map, keeping the order.
+    fn merge(&mut self, other: IdMapTools) {
+        for name in other.missing {
+            if !self.missing.contains(&name) {
+                self.missing.push(name);
+            }
+        }
+        self.missing
+            .sort_by_key(|name| name.as_str() != "newuidmap");
+        for path in other.unprivileged {
+            if !self.unprivileged.contains(&path) {
+                self.unprivileged.push(path);
+            }
+        }
+    }
+}
+
+/// The packages that ship `newuidmap` and `newgidmap`, as `dpkg -S`, `rpm
+/// -qf` (Fedora 42, RHEL 9) and `pacman -Qo` name them. openSUSE moved them
+/// between packages across releases, so it is not named.
+pub const ID_MAP_PACKAGES: &str = "Debian and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; \
+                                   Arch: shadow";
+
+/// What a failed `podman info` (`error`) says about `newuidmap` and
+/// `newgidmap`: with a range in `/etc/subuid` and `/etc/subgid`, a new
+/// rootless pause process needs them, and Podman (4.9.3, as tested) fails
+/// with `command required for rootless mode with multiple IDs: exec:
+/// "newuidmap": executable file not found in $PATH` for one not on `PATH`
+/// (the first of the two it lacks), or `cannot set up namespace using
+/// "/usr/bin/newuidmap": should have setuid or have filecaps setuid` for one
+/// that may not map. `None` for any other error.
+pub fn id_map_tools_failure(error: &str) -> Option<IdMapTools> {
+    let mut tools = IdMapTools::default();
+    for name in ["newuidmap", "newgidmap"] {
+        if error.contains(&format!("exec: \"{name}\": executable file not found")) {
+            tools.missing.push(name.to_string());
+        }
+    }
+    for marker in [
+        "cannot set up namespace using \"",
+        "cannot setup namespace using \"",
+    ] {
+        for (index, _) in error.match_indices(marker) {
+            let Some((path, after)) = error[index + marker.len()..].split_once('"') else {
+                continue;
+            };
+            let refused = [
+                ": should have setuid or have filecaps setuid",
+                ": should have setgid or have filecaps setgid",
+            ]
+            .iter()
+            .any(|reason| after.starts_with(reason));
+            if refused && !tools.unprivileged.iter().any(|known| known == path) {
+                tools.unprivileged.push(path.to_string());
+            }
+        }
+    }
+    (!tools.usable()).then_some(tools)
+}
+
+/// What to do about a Podman readiness `error` that names `newuidmap` or
+/// `newgidmap` ([`id_map_tools_failure`]), for the workbench's readiness
+/// item and the daemon's refusals, which do not know this computer's
+/// package manager: `axocoatl doctor` names the exact command. `None` for
+/// any other error.
+pub fn id_map_tools_hint(error: &str) -> Option<String> {
+    let tools = id_map_tools_failure(error)?;
+    Some(format!(
+        "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and group \
+         IDs, and {}: install (or reinstall) them ({ID_MAP_PACKAGES}), then run `podman system \
+         migrate`; `axocoatl doctor` names the command for this computer",
+        tools.describe()
+    ))
+}
+
+/// The part of a failed `podman info` that names the helper, as Podman
+/// wrote it, for the finding.
+fn id_map_failure_reason(error: &str) -> Option<&str> {
+    let start = [
+        "command required for rootless mode",
+        "cannot set up namespace using",
+        "cannot setup namespace using",
+    ]
+    .iter()
+    .filter_map(|marker| error.find(marker))
+    .min()?;
+    let rest = &error[start..];
+    Some(rest.lines().next().unwrap_or(rest).trim_end())
 }
 
 /// What is wrong with the user's subordinate ids for rootless Podman.
@@ -691,19 +800,21 @@ pub enum IdRangeProblem {
     /// id (it started before the range was added): `podman system migrate`
     /// restarts it.
     NotApplied,
-    /// `podman info` maps only the user's own id because `newuidmap` or
-    /// `newgidmap` is missing or cannot map: installing them (then `podman
-    /// system migrate`) fixes it, not migrate alone.
+    /// `newuidmap` or `newgidmap` is missing or cannot map, so `podman info`
+    /// maps only the user's own id (a pause process started before the
+    /// range was added) or fails: installing them (then `podman system
+    /// migrate`) fixes it, not migrate alone.
     NoIdMapTools,
     /// Podman does not run here ([`PodmanReport::runs_here`]) and its
     /// `podman info` maps only one id: the range is missing where it runs,
-    /// and nothing on this computer fixes it.
+    /// and onboarding changes nothing for it.
     Elsewhere,
 }
 
 /// The problem with the user's subordinate ids in `report`, if any. Rootful
 /// Podman needs no range. For a Podman reached elsewhere only its `podman
-/// info` decides, as before Axocoatl read the files.
+/// info` decides, as before Axocoatl read the files. A Podman here whose
+/// `podman info` fails for want of `newuidmap` or `newgidmap` has one too.
 pub fn id_range_problem(report: &PodmanReport) -> Option<IdRangeProblem> {
     if report.readiness == PodmanReadiness::NotInstalled || report.rootless() == Some(false) {
         return None;
@@ -712,11 +823,7 @@ pub fn id_range_problem(report: &PodmanReport) -> Option<IdRangeProblem> {
     if !report.runs_here() {
         return single_mapping.then_some(IdRangeProblem::Elsewhere);
     }
-    let no_tools = single_mapping
-        && report
-            .id_map_tools
-            .as_ref()
-            .is_some_and(|tools| !tools.usable());
+    let no_tools = tools_unusable(report).is_some();
     match &report.subordinate_ids {
         Some(ids) if !ids.enough() => Some(IdRangeProblem::Missing),
         _ if no_tools => Some(IdRangeProblem::NoIdMapTools),
@@ -795,12 +902,18 @@ fn usermod_args(report: &PodmanReport, user: &str) -> Option<Vec<String>> {
     Some(args)
 }
 
-/// The helpers are missing or cannot map, while `podman info` maps one id.
-fn tools_unusable(report: &PodmanReport) -> Option<&IdMapTools> {
-    report
-        .id_map_tools
-        .as_ref()
-        .filter(|tools| report.single_mapping() && !tools.usable())
+/// The helpers are missing or cannot map, while `podman info` maps one id
+/// or fails for want of them: what `PATH` and Podman's error say of them.
+fn tools_unusable(report: &PodmanReport) -> Option<IdMapTools> {
+    let failure = report.id_map_failure();
+    if failure.is_none() && !report.single_mapping() {
+        return None;
+    }
+    let mut tools = report.id_map_tools.clone().unwrap_or_default();
+    if let Some(failure) = failure {
+        tools.merge(failure);
+    }
+    (!tools.usable()).then_some(tools)
 }
 
 /// The fix for `problem` on this computer: `None` for
@@ -824,22 +937,34 @@ pub fn local_fix(
         IdRangeProblem::Elsewhere => return None,
         IdRangeProblem::NotApplied => {}
         IdRangeProblem::NoIdMapTools => {
-            if let Some(found) = &report.id_map_tools {
-                tools(&mut fix, found);
-            }
+            let found = tools_unusable(report)
+                .or_else(|| report.id_map_tools.clone())
+                .unwrap_or_default();
+            tools(&mut fix, &found);
         }
         IdRangeProblem::Missing => {
             if let Some(found) = tools_unusable(report) {
-                tools(&mut fix, found);
+                tools(&mut fix, &found);
             }
             match usermod_args(report, user) {
                 Some(args) => fix.usermod = Some(args),
                 None => {
+                    // Only the file (or files) that is short gets a range.
+                    let (uids, gids) = match &report.subordinate_ids {
+                        Some(ids) => (!ids.uids_enough(), !ids.gids_enough()),
+                        None => (true, true),
+                    };
+                    let mut options = String::new();
+                    if uids {
+                        options.push_str(" --add-subuids FIRST-LAST");
+                    }
+                    if gids {
+                        options.push_str(" --add-subgids FIRST-LAST");
+                    }
                     let choose = format!(
                         "Choose {MIN_SUBORDINATE_IDS} IDs that no line of /etc/subuid or \
                          /etc/subgid uses (none is free from 100000 up to 4294967294 here) and \
-                         add them: sudo usermod --add-subuids FIRST-LAST --add-subgids \
-                         FIRST-LAST {user}"
+                         add them: sudo usermod{options} {user}"
                     );
                     fix.manual = Some(match fix.manual.take() {
                         Some(manual) => format!("{manual}; {}", lowercase_first(&choose)),
@@ -860,10 +985,12 @@ fn lowercase_first(text: &str) -> String {
     }
 }
 
-/// Where Podman runs when it does not run here, and how to use the one
-/// here instead (`None` when nothing names it).
-fn elsewhere(report: &PodmanReport) -> (String, Option<&'static str>) {
-    match &report.connection {
+/// The failing finding for a Podman that does not run here and maps one
+/// id: where it runs, and what to do there (in words: onboarding changes
+/// nothing for it, and Podman refuses `podman system migrate` through an
+/// override).
+fn elsewhere_finding(report: &PodmanReport) -> Finding {
+    let (reached, variable) = match &report.connection {
         ConnectionOverride::Host(host) => (
             format!("reached through CONTAINER_HOST={host}"),
             Some("CONTAINER_HOST"),
@@ -879,35 +1006,62 @@ fn elsewhere(report: &PodmanReport) -> (String, Option<&'static str>) {
                 None,
             ),
         },
-    }
+    };
+    let detail = format!(
+        "Podman {reached} runs rootless with only one user ID mapped: the user it runs as has no \
+         range of subordinate user and group IDs where that Podman runs, or that Podman has not \
+         picked one up, so it cannot unpack images or start Sessions"
+    );
+    let unset = |name: &str| {
+        if report.machine_platform {
+            format!(". Or unset {name} to use your default Podman machine")
+        } else {
+            format!(". Or unset {name} to use your own rootless Podman on this computer")
+        }
+    };
+    let fix = match report.machine_in_use() {
+        // A machine on this computer: its own files, reached with
+        // `podman machine ssh`.
+        Some(machine) => format!(
+            "In the machine (`{}`), give the user Podman runs as a range of subordinate user and \
+             group IDs with `sudo usermod --add-subuids` and `--add-subgids` (a range no line of \
+             the machine's /etc/subuid or /etc/subgid uses), then restart the machine (`{} && \
+             {}`){}",
+            machine_command("ssh", Some(&machine.name)),
+            machine_command("stop", Some(&machine.name)),
+            machine_command("start", Some(&machine.name)),
+            variable.map(unset).unwrap_or_default()
+        ),
+        None => {
+            let socket = match &report.connection {
+                ConnectionOverride::Host(host) if host.starts_with("unix://") => {
+                    " (a unix:// socket is on this computer, but the Podman behind it may run as \
+                     another user, or be the host's when this shell runs in a toolbox or \
+                     distrobox container)"
+                }
+                _ => "",
+            };
+            format!(
+                "Where that Podman runs{socket}, give the user it runs as a range of subordinate \
+                 user and group IDs (`usermod --add-subuids` and `--add-subgids`, as root there, \
+                 with a range no other user there has), then restart that Podman as that user; \
+                 onboarding changes nothing for it{}",
+                variable.map(unset).unwrap_or_default()
+            )
+        }
+    };
+    Finding::new(Level::Fail, "User ID ranges", detail, Some(fix))
 }
 
 /// The failing finding for `problem` in `report`, for `user`.
 pub fn id_range_finding(report: &PodmanReport, user: &str, problem: &IdRangeProblem) -> Finding {
     const EFFECT: &str = "so rootless Podman cannot unpack images or start Sessions";
     let Some(fix) = local_fix(report, user, problem) else {
-        let (reached, unset) = elsewhere(report);
-        return Finding::new(
-            Level::Fail,
-            "User ID ranges",
-            format!(
-                "Podman {reached} runs rootless with only one user ID mapped: the user it runs as \
-                 there has no range of subordinate user and group IDs, or that Podman has not \
-                 picked one up, so it cannot unpack images or start Sessions"
-            ),
-            Some(format!(
-                "Give the user Podman runs as a range of subordinate user and group IDs where it \
-                 runs (`usermod --add-subuids` and `--add-subgids`, with a range no other user \
-                 there has), then restart that Podman; nothing on this computer changes it{}",
-                unset
-                    .map(|name| format!(
-                        ". Or unset {name} to use rootless Podman on this computer"
-                    ))
-                    .unwrap_or_default()
-            )),
-        );
+        return elsewhere_finding(report);
     };
-    let tools_too = tools_unusable(report)
+    let unusable = tools_unusable(report);
+    let tools_too = unusable
+        .as_ref()
         .map(|tools| format!(", and {}", tools.describe()))
         .unwrap_or_default();
     let detail = match (problem, &report.subordinate_ids) {
@@ -918,15 +1072,26 @@ pub fn id_range_finding(report: &PodmanReport, user: &str, problem: &IdRangeProb
             "Rootless Podman has no range of subordinate user and group IDs for {user}{tools_too}, \
              {EFFECT}"
         ),
-        (IdRangeProblem::NoIdMapTools, _) => format!(
-            "{}, so rootless Podman maps only {user}'s own user ID, whatever /etc/subuid and \
-             /etc/subgid give, and cannot unpack images or start Sessions",
-            report
-                .id_map_tools
+        (IdRangeProblem::NoIdMapTools, _) => {
+            let tools = unusable
                 .as_ref()
+                .or(report.id_map_tools.as_ref())
                 .map(IdMapTools::describe)
-                .unwrap_or_default()
-        ),
+                .unwrap_or_default();
+            match report.id_map_failure().and(match &report.readiness {
+                PodmanReadiness::Unavailable(error) => id_map_failure_reason(error),
+                _ => None,
+            }) {
+                Some(reason) => format!(
+                    "Rootless Podman cannot map the subordinate user and group IDs {user} has: \
+                     {tools}, so `podman info` fails ({reason}) and no Session can start"
+                ),
+                None => format!(
+                    "{tools}, so rootless Podman maps only {user}'s own user ID, whatever \
+                     /etc/subuid and /etc/subgid give, and cannot unpack images or start Sessions"
+                ),
+            }
+        }
         (IdRangeProblem::NotApplied | IdRangeProblem::Elsewhere, _) => format!(
             "/etc/subuid and /etc/subgid give {user} a range, but rootless Podman still runs \
              without it (it started before the range was added), {EFFECT}"
@@ -1034,6 +1199,13 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
         "Run `axocoatl onboard` (it asks first), or: {} && {MACHINE_START_COMMAND}",
         platform.spec.init_command()
     );
+    let id_problem = id_range_problem(report);
+    // `podman info` failed here for want of newuidmap or newgidmap: the
+    // Podman line says so and carries the fix (no second line for it).
+    let id_failure = id_problem
+        .as_ref()
+        .filter(|_| report.id_map_failure().is_some())
+        .map(|problem| id_range_finding(report, &platform.user, problem));
     let mut list = Vec::new();
     match &report.readiness {
         PodmanReadiness::NotInstalled => {
@@ -1062,23 +1234,34 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
             ),
             None,
         )),
-        PodmanReadiness::Unavailable(error) => list.push(Finding::new(
-            Level::Fail,
-            "Podman",
-            format!(
-                "Podman {version} does not answer: {}",
-                error.lines().next().unwrap_or_default()
-            ),
-            Some(if platform.machine {
+        PodmanReadiness::Unavailable(error) => list.push(match &id_failure {
+            Some(finding) => Finding::new(
+                Level::Fail,
+                "Podman",
                 format!(
-                    "Check `podman machine list` and `podman system connection list`; start the \
-                     machine with `{}`",
-                    machine_command("start", report.machine_in_use().map(|m| m.name.as_str()))
-                )
-            } else {
-                "Run `podman info` to see why it fails".to_string()
-            }),
-        )),
+                    "Podman {version} does not answer: {}",
+                    lowercase_first(&finding.detail)
+                ),
+                finding.fix.clone(),
+            ),
+            None => Finding::new(
+                Level::Fail,
+                "Podman",
+                format!(
+                    "Podman {version} does not answer: {}",
+                    error.lines().next().unwrap_or_default()
+                ),
+                Some(if platform.machine {
+                    format!(
+                        "Check `podman machine list` and `podman system connection list`; start \
+                         the machine with `{}`",
+                        machine_command("start", report.machine_in_use().map(|m| m.name.as_str()))
+                    )
+                } else {
+                    "Run `podman info` to see why it fails".to_string()
+                }),
+            ),
+        }),
         PodmanReadiness::Ready => {
             let runtime = report.runtime.clone().unwrap_or_default();
             let mut parts = Vec::new();
@@ -1179,8 +1362,8 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
         ));
     }
 
-    if let Some(problem) = id_range_problem(report) {
-        list.push(id_range_finding(report, &platform.user, &problem));
+    if let (Some(problem), None) = (&id_problem, &id_failure) {
+        list.push(id_range_finding(report, &platform.user, problem));
     }
     if let Some(runtime) = &report.runtime {
         if !platform.machine && runtime.selinux == Some(true) {
@@ -1283,6 +1466,7 @@ mod tests {
             connection: ConnectionOverride::None,
             subordinate_ids: None,
             id_map_tools: None,
+            machine_platform: true,
         }
     }
 
@@ -1506,6 +1690,7 @@ mod tests {
             connection: ConnectionOverride::None,
             subordinate_ids: None,
             id_map_tools: None,
+            machine_platform: false,
         };
         let mut linux = platform(false);
         linux.too_old_note =
@@ -1561,6 +1746,7 @@ mod tests {
             connection: ConnectionOverride::None,
             subordinate_ids: ids,
             id_map_tools: None,
+            machine_platform: false,
         }
     }
 
@@ -1774,6 +1960,39 @@ mod tests {
              --add-subgids FIRST-LAST alex, then: podman system migrate"
         );
         assert_eq!(ranges_finding(&report).unwrap().fix, Some(fix.text()));
+        // Only /etc/subgid is short: the command adds a group range alone.
+        let ids = parse_subordinate_ids(
+            "alex:1000:65536\nx:100000:18446744073709551615\n",
+            "",
+            "alex",
+            None,
+        );
+        assert_eq!(
+            (ids.uids_enough(), ids.gids_enough(), ids.free),
+            (true, false, None)
+        );
+        let report = linux_report(LINUX_INFO, Some(ids));
+        let fix = local_fix(&report, "alex", &IdRangeProblem::Missing).unwrap();
+        assert_eq!(
+            fix.text(),
+            "Choose 65536 IDs that no line of /etc/subuid or /etc/subgid uses (none is free from \
+             100000 up to 4294967294 here) and add them: sudo usermod --add-subgids FIRST-LAST \
+             alex, then: podman system migrate"
+        );
+        // And only /etc/subuid.
+        let ids = parse_subordinate_ids(
+            "x:100000:18446744073709551615\n",
+            "alex:1000:65536\n",
+            "alex",
+            None,
+        );
+        let report = linux_report(LINUX_INFO, Some(ids));
+        assert!(local_fix(&report, "alex", &IdRangeProblem::Missing)
+            .unwrap()
+            .text()
+            .ends_with(
+                "add them: sudo usermod --add-subuids FIRST-LAST alex, then: podman system migrate"
+            ));
         // Not read (SSSD): the default range, as before.
         let unread = linux_report(SINGLE_INFO, None);
         assert_eq!(
@@ -1813,15 +2032,38 @@ mod tests {
             assert!(ranges.detail.contains(&variable), "{}", ranges.detail);
             assert!(!fix.contains("system migrate"), "{fix}");
             assert!(!fix.contains("sudo") && !fix.contains("alex"), "{fix}");
+            // Not "nothing on this computer changes it": a unix:// socket
+            // may be this computer's (another user's Podman).
+            assert!(!fix.contains("nothing on this computer"), "{fix}");
+            assert!(
+                fix.starts_with("Where that Podman runs")
+                    && fix.contains("onboarding changes nothing"),
+                "{fix}"
+            );
+            assert_eq!(
+                fix.contains("a unix:// socket is on this computer"),
+                matches!(&connection, ConnectionOverride::Host(host) if host.starts_with("unix://")),
+                "{fix}"
+            );
+            // Unsetting the variable selects this computer's own Podman on
+            // Linux, and the default machine on macOS.
+            let name = variable.split('=').next().unwrap();
             assert!(
                 fix.ends_with(&format!(
-                    "Or unset {} to use rootless Podman on this computer",
-                    variable.split('=').next().unwrap()
+                    "Or unset {name} to use your own rootless Podman on this computer"
                 )),
                 "{fix}"
             );
             let failure = id_failure_fix(&report, "alex");
             assert_eq!(failure, fix);
+            report.machine_platform = true;
+            let fix = ranges_finding(&report).unwrap().fix.unwrap();
+            assert!(
+                fix.ends_with(&format!(
+                    "Or unset {name} to use your default Podman machine"
+                )),
+                "{fix}"
+            );
         }
         // podman-remote, or a default remote connection, without either
         // variable: `podman info` says the service is remote.
@@ -1852,7 +2094,228 @@ mod tests {
             "{}",
             ranges.detail
         );
-        assert!(!ranges.fix.unwrap().contains("migrate"));
+        // The machine is fixed from this computer, inside it.
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "In the machine (`podman machine ssh`), give the user Podman runs as a range of \
+                 subordinate user and group IDs with `sudo usermod --add-subuids` and \
+                 `--add-subgids` (a range no line of the machine's /etc/subuid or /etc/subgid \
+                 uses), then restart the machine (`podman machine stop && podman machine start`)"
+            )
+        );
+        // A machine CONTAINER_CONNECTION names: that machine, by name, or
+        // the default machine once it is unset.
+        mac.machines.push(MachineInfo {
+            name: "dev".to_string(),
+            ..MachineInfo::default()
+        });
+        mac.connection = ConnectionOverride::Connection("dev".to_string());
+        let fix = findings(&mac, &platform(true))
+            .into_iter()
+            .find(|f| f.name == "User ID ranges")
+            .and_then(|f| f.fix)
+            .unwrap();
+        assert!(
+            fix.starts_with("In the machine (`podman machine ssh dev`)")
+                && fix.contains("(`podman machine stop dev && podman machine start dev`)")
+                && fix.ends_with(
+                    ". Or unset CONTAINER_CONNECTION to use your default Podman machine"
+                ),
+            "{fix}"
+        );
+    }
+
+    /// What Podman 4.9.3 prints when `newuidmap` or `newgidmap` cannot map a
+    /// range: not on PATH (the first of the two it lacks), or neither
+    /// setuid nor given file capabilities. Other errors are not taken for it.
+    #[test]
+    fn podman_info_failures_for_the_id_map_tools_are_recognised() {
+        let missing = "OCI container setup failed: podman info failed: Error: command required \
+                       for rootless mode with multiple IDs: exec: \"newuidmap\": executable file \
+                       not found in $PATH";
+        let tools = id_map_tools_failure(missing).unwrap();
+        assert_eq!(tools.missing, ["newuidmap"]);
+        assert!(tools.unprivileged.is_empty());
+        assert_eq!(
+            id_map_failure_reason(missing),
+            Some(
+                "command required for rootless mode with multiple IDs: exec: \"newuidmap\": \
+                 executable file not found in $PATH"
+            )
+        );
+        // After `podman system migrate` without the helpers.
+        let migrated = "Error: invalid internal status, try resetting the pause process with \
+                        \"podman system migrate\": command required for rootless mode with \
+                        multiple IDs: exec: \"newgidmap\": executable file not found in $PATH";
+        assert_eq!(
+            id_map_tools_failure(migrated).unwrap().missing,
+            ["newgidmap"]
+        );
+        for (error, path) in [
+            (
+                "Error: cannot set up namespace using \"/usr/bin/newuidmap\": should have setuid \
+                 or have filecaps setuid: exit status 1",
+                "/usr/bin/newuidmap",
+            ),
+            (
+                "Error: cannot setup namespace using \"/home/a/bin/newgidmap\": should have \
+                 setgid or have filecaps setgid: exit status 1",
+                "/home/a/bin/newgidmap",
+            ),
+        ] {
+            let tools = id_map_tools_failure(error).unwrap();
+            assert!(tools.missing.is_empty());
+            assert_eq!(tools.unprivileged, [path]);
+        }
+        for other in [
+            "Error: cannot set up namespace using \"/usr/bin/newuidmap\": exit status 1",
+            "Cannot connect to Podman. Please verify your connection",
+            "newuidmap: write to uid_map failed: Operation not permitted",
+            "",
+        ] {
+            assert_eq!(id_map_tools_failure(other), None, "{other}");
+            assert_eq!(id_map_tools_hint(other), None, "{other}");
+        }
+        let hint = id_map_tools_hint(missing).unwrap();
+        assert_eq!(
+            hint,
+            "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and group \
+             IDs, and newuidmap is not installed: install (or reinstall) them (Debian and Ubuntu: \
+             uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run `podman system \
+             migrate`; `axocoatl doctor` names the command for this computer"
+        );
+    }
+
+    /// The usual shape on Debian and Ubuntu without `uidmap`: the files give
+    /// the user a range, and a new pause process fails instead of mapping
+    /// one id, so `podman info` fails. Doctor's Podman line says why and
+    /// carries the install fix (no second line); `podman system migrate`
+    /// alone, which Podman's own message suggests, is never the fix.
+    #[test]
+    fn a_podman_info_that_fails_for_want_of_newuidmap_gets_the_install_fix() {
+        let error = "OCI container setup failed: podman info failed: Error: command required for \
+                     rootless mode with multiple IDs: exec: \"newuidmap\": executable file not \
+                     found in $PATH";
+        let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let tools = IdMapTools {
+            missing: vec!["newuidmap".to_string(), "newgidmap".to_string()],
+            unprivileged: Vec::new(),
+            install: Some("sudo apt-get install -y uidmap".to_string()),
+        };
+        let mut report = linux_report(SINGLE_INFO, Some(ok));
+        report.readiness = PodmanReadiness::Unavailable(error.to_string());
+        report.runtime = None;
+        report.id_map_tools = Some(tools.clone());
+        assert_eq!(
+            id_range_problem(&report),
+            Some(IdRangeProblem::NoIdMapTools)
+        );
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert_eq!(
+            fix.commands(),
+            ["sudo apt-get install -y uidmap", "podman system migrate"]
+        );
+        let list = findings(&report, &platform(false));
+        assert!(!list.iter().any(|f| f.name == "User ID ranges"), "{list:?}");
+        let podman = list.iter().find(|f| f.name == "Podman").unwrap();
+        assert_eq!(podman.level, Level::Fail);
+        assert_eq!(
+            podman.detail,
+            "Podman 4.9.3 does not answer: rootless Podman cannot map the subordinate user and \
+             group IDs alex has: newuidmap and newgidmap are not installed, so `podman info` \
+             fails (command required for rootless mode with multiple IDs: exec: \"newuidmap\": \
+             executable file not found in $PATH) and no Session can start"
+        );
+        assert_eq!(
+            podman.fix.as_deref(),
+            Some("sudo apt-get install -y uidmap && podman system migrate")
+        );
+
+        // Not read on PATH (no id_map_tools): what the error says, and no
+        // package known, so the fix is in words.
+        report.id_map_tools = None;
+        let podman = findings(&report, &platform(false))
+            .into_iter()
+            .find(|f| f.name == "Podman")
+            .unwrap();
+        assert!(
+            podman
+                .detail
+                .contains("alex has: newuidmap is not installed, so"),
+            "{}",
+            podman.detail
+        );
+        assert_eq!(
+            podman.fix.as_deref(),
+            Some(
+                "Install newuidmap and newgidmap from your distribution (Debian and Ubuntu: \
+                 uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then: podman system migrate"
+            )
+        );
+
+        // A helper that is there but may not map: reinstalled, in words.
+        report.readiness = PodmanReadiness::Unavailable(
+            "Error: cannot set up namespace using \"/usr/bin/newuidmap\": should have setuid or \
+             have filecaps setuid: exit status 1"
+                .to_string(),
+        );
+        report.id_map_tools = Some(IdMapTools {
+            install: tools.install.clone(),
+            ..IdMapTools::default()
+        });
+        assert_eq!(
+            findings(&report, &platform(false))
+                .into_iter()
+                .find(|f| f.name == "Podman")
+                .and_then(|f| f.fix),
+            Some(
+                "Reinstall the package that provides /usr/bin/newuidmap so that it is setuid root \
+                 or has its file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
+                 shadow-utils; Arch: shadow), then: podman system migrate"
+                    .to_string()
+            )
+        );
+
+        // A range too small as well: one fix installs, adds and migrates.
+        report.readiness = PodmanReadiness::Unavailable(error.to_string());
+        report.id_map_tools = Some(tools.clone());
+        report.subordinate_ids = Some(parse_subordinate_ids(
+            "alex:100000:1000\n",
+            "alex:100000:1000\n",
+            "alex",
+            None,
+        ));
+        assert_eq!(id_range_problem(&report), Some(IdRangeProblem::Missing));
+        let podman = findings(&report, &platform(false))
+            .into_iter()
+            .find(|f| f.name == "Podman")
+            .unwrap();
+        assert_eq!(
+            podman.fix.as_deref(),
+            Some(
+                "sudo apt-get install -y uidmap && sudo usermod --add-subuids 101000-166535 \
+                 --add-subgids 101000-166535 alex && podman system migrate"
+            )
+        );
+
+        // Another error, or the same through CONTAINER_HOST: not this.
+        report.subordinate_ids = Some(parse_subordinate_ids(
+            "alex:100000:65536\n",
+            "alex:100000:65536\n",
+            "alex",
+            None,
+        ));
+        report.readiness = PodmanReadiness::Unavailable("Cannot connect to Podman".to_string());
+        assert_eq!(id_range_problem(&report), None);
+        let podman = findings(&report, &platform(false)).remove(0);
+        assert_eq!(
+            podman.fix.as_deref(),
+            Some("Run `podman info` to see why it fails")
+        );
+        report.readiness = PodmanReadiness::Unavailable(error.to_string());
+        report.connection = ConnectionOverride::Host("unix:///run/user/2000/podman.sock".into());
+        assert_eq!(id_range_problem(&report), None);
     }
 
     /// `podman info` maps one id while the files give a range: when
@@ -1897,14 +2360,16 @@ mod tests {
         assert!(ranges
             .detail
             .starts_with("/usr/bin/newuidmap is neither setuid nor given file capabilities"));
+        // Fedora and RHEL give the helpers file capabilities, not setuid.
         assert_eq!(
             ranges.fix.as_deref(),
             Some(
-                "Reinstall the package that provides /usr/bin/newuidmap so it is setuid root \
-                 again (Debian and Ubuntu: uidmap), then: podman system migrate"
+                "Reinstall the package that provides /usr/bin/newuidmap so that it is setuid root \
+                 or has its file capabilities again (Debian and Ubuntu: uidmap; Fedora and RHEL: \
+                 shadow-utils; Arch: shadow), then: podman system migrate"
             )
         );
-        // No known package manager: in words.
+        // No known package manager (openSUSE among them): in words.
         report.id_map_tools = Some(IdMapTools {
             install: None,
             ..tools.clone()
@@ -1912,8 +2377,8 @@ mod tests {
         assert_eq!(
             ranges_finding(&report).unwrap().fix.as_deref(),
             Some(
-                "Install newuidmap and newgidmap from your distribution (Debian and Ubuntu: the \
-                 uidmap package), then: podman system migrate"
+                "Install newuidmap and newgidmap from your distribution (Debian and Ubuntu: \
+                 uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then: podman system migrate"
             )
         );
 

@@ -186,6 +186,10 @@ pub(crate) struct Host {
     pub(crate) exe: PathBuf,
     pub(crate) macos: bool,
     pub(crate) log: Option<Arc<Log>>,
+    /// The Podman connection `CONTAINER_CONNECTION` or `CONTAINER_HOST`
+    /// selects in this process's environment (a test's, given instead):
+    /// what onboarding reads Podman through.
+    pub(crate) podman_connection: axocoatl_isolation::podman::ConnectionOverride,
 }
 
 impl Host {
@@ -219,6 +223,7 @@ impl Host {
                 .map_err(|error| format!("cannot find this axocoatl executable: {error}"))?,
             macos,
             log,
+            podman_connection: axocoatl_isolation::podman::ConnectionOverride::from_env(),
         })
     }
 
@@ -706,7 +711,9 @@ pub(crate) mod testing {
 
         /// A host whose PATH holds only the shims: a program without a
         /// shim is not installed. The shims themselves find `cat`, `sleep`
-        /// and the like in the system directories.
+        /// and the like in the system directories. Neither
+        /// `CONTAINER_HOST` nor `CONTAINER_CONNECTION` is read from the
+        /// environment running the tests.
         pub(crate) fn host(&self, macos: bool) -> Host {
             Host {
                 path: self.dir.path().as_os_str().to_owned(),
@@ -716,6 +723,7 @@ pub(crate) mod testing {
                 exe: self.dir.path().join("axocoatl"),
                 macos,
                 log: None,
+                podman_connection: axocoatl_isolation::podman::ConnectionOverride::None,
             }
         }
     }

@@ -86,9 +86,12 @@ fn podman_state(shims: &Shims, files: &[&str]) {
     }
 }
 
+/// What the shim Podman reports, with no `CONTAINER_HOST` or
+/// `CONTAINER_CONNECTION`, whatever the environment running the tests sets.
 async fn podman_report(shims: &Shims) -> PodmanReport {
-    axocoatl_isolation::podman_report::inspect_with(
+    axocoatl_isolation::podman_report::inspect_through(
         &shims.dir.path().join("podman").display().to_string(),
+        ConnectionOverride::None,
     )
     .await
 }
@@ -886,21 +889,23 @@ async fn doctor_fails_a_missing_subuid_range_on_linux() {
     );
 }
 
-/// [`podman_shim`] whose `podman info` maps only the user's own id while
-/// `stale` exists beside it; `podman system migrate` removes it once a
-/// setuid `newuidmap` is on PATH (rootless Podman maps a range only through
-/// it).
+/// [`podman_shim`] as Podman 4.9.3 behaves for a user whose files give a
+/// range: while `stale` exists beside it (a pause process started before
+/// the range was added), `podman info` maps only the user's own id; once
+/// `podman system migrate` removes it, a new pause process needs a setuid
+/// `newuidmap` on PATH, and without one `podman info` fails with Podman's
+/// own message (exit 125), as seen live on Ubuntu 24.04.
 fn stale_podman(shims: &Shims) {
     podman_shim(shims);
     let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
     let script = script
         .replace(
             r#"if [ -f "$D/rootful" ]; then"#,
-            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ -f "$D/rootful" ]; then"#,
+            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ ! -e "$D/newuidmap" ]; then echo 'Error: command required for rootless mode with multiple IDs: exec: "newuidmap": executable file not found in $PATH' >&2; exit 125; elif [ ! -u "$D/newuidmap" ]; then echo "Error: cannot set up namespace using \"$D/newuidmap\": should have setuid or have filecaps setuid: exit status 1" >&2; exit 125; elif [ -f "$D/rootful" ]; then"#,
         )
         .replace(
             r#""system migrate") ;;"#,
-            r#""system migrate") [ -u "$D/newuidmap" ] && rm -f "$D/stale"; true ;;"#,
+            r#""system migrate") rm -f "$D/stale" ;;"#,
         );
     std::fs::write(shims.dir.path().join("podman"), script).unwrap();
 }
@@ -1051,6 +1056,333 @@ esac"#,
     }
 }
 
+/// The usual shape on Debian and Ubuntu without `uidmap` (Podman only
+/// recommends it): /etc/subuid gives alex a range, so a new rootless pause
+/// process needs newuidmap and `podman info` fails, with a message that
+/// says to run `podman system migrate` (which alone changes nothing).
+/// Onboarding offers to install uidmap instead of a step to read `podman
+/// info`: under --yes only with --allow-sudo, and --plan shows it once.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_podman_info_failing_without_newuidmap_installs_uidmap() {
+    for (mode, allow_sudo) in [(Mode::Yes, false), (Mode::Yes, true), (Mode::Plan, false)] {
+        let shims = Shims::new();
+        shims.id_map_tools(None);
+        stale_podman(&shims);
+        let sudo = format!(
+            r#"case "$*" in
+  "apt-get install -y uidmap") for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done ;;
+  *) exit 1 ;;
+esac"#,
+            dir = shims.dir.path().display()
+        );
+        let mut o = linux_sandbox(
+            &shims,
+            &sudo,
+            OnboardArgs {
+                allow_sudo,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        o.ui = Ui::new(mode, allow_sudo, None);
+        let PodmanReadiness::Unavailable(error) = &o.facts.podman.readiness else {
+            panic!("{:?}", o.facts.podman.readiness);
+        };
+        assert!(
+            error.contains("exec: \"newuidmap\": executable file not found in $PATH"),
+            "{error}"
+        );
+        assert_eq!(
+            axocoatl_isolation::podman_report::id_range_problem(&o.facts.podman),
+            Some(axocoatl_isolation::podman_report::IdRangeProblem::NoIdMapTools)
+        );
+        let ready = sandbox::run(&mut o).await;
+        let calls = shims.calls();
+        let output = o.ui.output();
+        match (mode, allow_sudo) {
+            (Mode::Yes, true) => {
+                assert!(ready, "{:?}\n{output}", o.steps);
+                let position = |wanted: &str| {
+                    calls
+                        .iter()
+                        .position(|call| call.starts_with(wanted))
+                        .unwrap_or_else(|| panic!("{wanted}: {calls:?}"))
+                };
+                assert!(
+                    position("sudo apt-get install -y uidmap") < position("podman system migrate")
+                        && position("podman system migrate") < position("podman run"),
+                    "{calls:?}"
+                );
+                assert!(o.steps.is_empty(), "{:?}", o.steps);
+            }
+            (Mode::Yes, false) => {
+                assert!(!ready);
+                assert_eq!(
+                    o.steps,
+                    [
+                        "Rootless Podman cannot map the subordinate user and group IDs alex has: \
+                      newuidmap and newgidmap are not installed, so `podman info` fails (command \
+                      required for rootless mode with multiple IDs: exec: \"newuidmap\": \
+                      executable file not found in $PATH) and no Session can start: sudo \
+                      apt-get install -y uidmap && podman system migrate"
+                    ]
+                );
+                assert!(
+                    !calls
+                        .iter()
+                        .any(|call| call.starts_with("sudo") || call.contains("system migrate")),
+                    "{calls:?}"
+                );
+                assert!(
+                    !output.contains("check `podman system connection list`"),
+                    "{output}"
+                );
+            }
+            _ => {
+                assert!(ready, "{:?}\n{output}", o.steps);
+                assert!(
+                    calls.iter().all(|call| !call.starts_with("sudo")),
+                    "{calls:?}"
+                );
+                assert_eq!(
+                    output
+                        .matches("would run: sudo apt-get install -y uidmap")
+                        .count(),
+                    1,
+                    "{output}"
+                );
+            }
+        }
+    }
+}
+
+/// `podman system migrate` without the helpers, as Podman's own message
+/// suggests: the stale pause process goes, and the next `podman info`
+/// fails. Doctor's Podman line then names the install, once, and no
+/// second "User ID ranges" line repeats it.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
+    let shims = Shims::new();
+    shims.id_map_tools(None);
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let env = crate::doctor::Environment {
+        os: ubuntu(),
+        host: shims.host(false),
+        ..doctor_env(&shims)
+    };
+    let config_path = shims.home.path().join("config.yaml");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert!(!report.ready);
+    let podman = &report.sections.sandbox[0];
+    assert_eq!(podman.name, "Podman");
+    assert_eq!(podman.status, crate::doctor::Status::Fail);
+    assert!(
+        podman.detail.starts_with(
+            "Podman 5.8.2 does not answer: rootless Podman cannot map the subordinate user and \
+             group IDs alex has: newuidmap and newgidmap are not installed"
+        ),
+        "{podman:?}"
+    );
+    assert_eq!(
+        podman.fix.as_deref(),
+        Some("sudo apt-get install -y uidmap && podman system migrate")
+    );
+    assert!(
+        !report
+            .sections
+            .sandbox
+            .iter()
+            .any(|item| item.name == "User ID ranges"),
+        "{:?}",
+        report.sections.sandbox
+    );
+    assert_eq!(
+        report
+            .steps_left
+            .iter()
+            .filter(|step| step.contains("apt-get install -y uidmap"))
+            .count(),
+        1,
+        "{:?}",
+        report.steps_left
+    );
+    // A newuidmap that is there but not setuid: reinstalled, in words.
+    shims.id_map_tools(Some(0o755));
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let podman = &report.sections.sandbox[0];
+    assert!(
+        podman.detail.contains("cannot set up namespace using"),
+        "{podman:?}"
+    );
+    assert!(
+        podman
+            .fix
+            .as_deref()
+            .unwrap()
+            .starts_with("Reinstall the package that provides"),
+        "{podman:?}"
+    );
+}
+
+/// Doctor looks for newuidmap and newgidmap on PATH only, as Podman does
+/// (`exec.LookPath`): setuid helpers in the root's usr/bin that are not on
+/// PATH are missing for Podman, and so for doctor.
+#[cfg(unix)]
+#[test]
+fn doctor_looks_for_the_id_map_tools_on_path_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let shims = Shims::new();
+    shims.id_map_tools(None);
+    let bin = shims.root.path().join("usr/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["newuidmap", "newgidmap"] {
+        std::fs::write(bin.join(name), "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o4755)).unwrap();
+    }
+    let tools = crate::doctor::id_map_tools(&shims.host(false), &ubuntu());
+    assert_eq!(tools.missing, ["newuidmap", "newgidmap"]);
+    assert_eq!(
+        tools.install.as_deref(),
+        Some("sudo apt-get install -y uidmap")
+    );
+    shims.id_map_tools(Some(0o4755));
+    assert!(crate::doctor::id_map_tools(&shims.host(false), &ubuntu()).usable());
+    shims.id_map_tools(Some(0o755));
+    let tools = crate::doctor::id_map_tools(&shims.host(false), &ubuntu());
+    assert_eq!(tools.unprivileged.len(), 2, "{tools:?}");
+    // Fedora and RHEL ship them in shadow-utils (`rpm -qf`), Arch in
+    // shadow; openSUSE moved them between packages, so none is named.
+    for (os_release, install) in [
+        (
+            "ID=fedora\nVERSION_ID=42\n",
+            Some("sudo dnf install -y shadow-utils"),
+        ),
+        (
+            "ID=\"rhel\"\nVERSION_ID=\"9.8\"\n",
+            Some("sudo dnf install -y shadow-utils"),
+        ),
+        ("ID=arch\n", Some("sudo pacman -S --noconfirm shadow")),
+        (
+            "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+            None,
+        ),
+    ] {
+        let os = Os::Linux {
+            release: OsRelease::parse(os_release),
+            wsl: None,
+            systemd: true,
+        };
+        assert_eq!(
+            crate::doctor::id_map_tools(&shims.host(false), &os)
+                .install
+                .as_deref(),
+            install,
+            "{os_release}"
+        );
+    }
+}
+
+/// Step 3's steps left for a model too large for this computer, or whose
+/// context Ollama keeps too small, name `axocoatl onboard` with the writer
+/// (so Step 1 is not asked again, nor the writer switched), and
+/// `--replace` when the configuration this run writes has an Agent on the
+/// model: `--update` keeps a configuration's Agents and changes only
+/// `run.models`.
+#[cfg(unix)]
+#[tokio::test]
+async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents() {
+    let shims = Shims::new();
+    let found = facts(
+        ubuntu(),
+        12,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        found,
+        OnboardArgs::default(),
+    );
+    let because = " (--replace backs up the configuration and writes the team for the new \
+                   models; --update would keep the Agents that run gpt-oss:20b)";
+    // No configuration yet: this run writes the team, which runs it.
+    assert_eq!(o.kept.agent_models, None);
+    assert_eq!(
+        ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::ClaudeCode),
+        format!(
+            "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not \
+             pulled: choose a smaller reviewer with `axocoatl onboard --replace --writer \
+             claude-code`, or OpenRouter for the reviewer with `axocoatl onboard --replace \
+             --writer claude-code --reviewer openrouter:openai/gpt-oss-120b`{because}"
+        )
+    );
+    assert_eq!(
+        ollama::hosted_instead(
+            &o,
+            &[("gpt-oss:20b".to_string(), 4096)],
+            WriterChoice::Ollama
+        ),
+        format!("for these models (`axocoatl onboard --replace --writer openrouter`){because}")
+    );
+    assert_eq!(
+        ollama::hosted_instead(
+            &o,
+            &[("gpt-oss:20b".to_string(), 4096)],
+            WriterChoice::Codex
+        ),
+        format!(
+            "for the reviewer (`axocoatl onboard --replace --writer codex --reviewer \
+             openrouter:openai/gpt-oss-120b`){because}"
+        )
+    );
+    // A model that fits is only pulled.
+    assert_eq!(
+        ollama::pull_step(
+            &o,
+            "qwen3:4b",
+            " once Ollama is ready",
+            WriterChoice::Ollama
+        ),
+        "Pull qwen3:4b once Ollama is ready: ollama pull qwen3:4b"
+    );
+
+    // "Update this setup" of a configuration whose Agents run other
+    // models: it keeps them, and run.models is all that names this one.
+    let hosted = "agents:\n  - id: lead\n    name: Lead\n    provider: openrouter\n    model: \
+                  \"qwen/qwen3-coder\"\nrun:\n  models:\n    reviewer: \"ollama:gpt-oss:20b\"\n";
+    o.kept = Kept::from_config(hosted);
+    assert_eq!(o.kept.agent_models, Some(Vec::new()));
+    assert_eq!(
+        ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::Codex),
+        "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not pulled: \
+         choose a smaller reviewer with `axocoatl onboard --update --writer codex`, or \
+         OpenRouter for the reviewer with `axocoatl onboard --update --writer codex --reviewer \
+         openrouter:openai/gpt-oss-120b`"
+    );
+    // Kept Agents that run it: --replace. An Agent without a model runs
+    // providers.ollama.model, as doctor reads it.
+    let local = "agents:\n  - id: lead\n    name: Lead\n    provider: ollama\nproviders:\n  \
+                 ollama:\n    base_url: \"http://localhost:11434\"\n    model: \"gpt-oss:20b\"\n";
+    o.kept = Kept::from_config(local);
+    assert_eq!(o.kept.agent_models, Some(vec!["gpt-oss:20b".to_string()]));
+    assert!(
+        ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::Ollama).contains(
+            "choose a smaller model with `axocoatl onboard --replace --writer ollama`, or a \
+             hosted writer and reviewer with `axocoatl onboard --replace --writer openrouter`"
+        )
+    );
+    // A configuration without Agents gets onboarding's team.
+    o.kept = Kept::from_config("agents: []\n");
+    assert_eq!(o.kept.agent_models, None);
+}
+
 /// Only /etc/subgid lacks alex's range: onboarding adds a group range and
 /// no user range.
 #[cfg(unix)]
@@ -1180,7 +1512,10 @@ async fn doctor_judges_a_podman_reached_elsewhere_by_its_podman_info() {
         !fix.contains("migrate") && !fix.contains("sudo") && !fix.contains("alex"),
         "{fix}"
     );
-    assert!(fix.ends_with("Or unset CONTAINER_HOST to use rootless Podman on this computer"));
+    assert!(
+        fix.ends_with("Or unset CONTAINER_HOST to use your own rootless Podman on this computer"),
+        "{fix}"
+    );
 }
 
 /// Ubuntu 22.04's Podman 3.4.4 is refused by name, before any install.
@@ -2987,10 +3322,98 @@ async fn doctor_fails_a_chosen_claude_code_writer_that_cannot_run() {
         .find(|path| path.command == "axocoatl run fix-codex")
         .unwrap();
     assert!(!codex_path.ok);
+    // Codex's sign-in builds its image the first time, and neither changes
+    // the configuration (`onboard --update --writer codex` would make it the
+    // writer here).
     assert_eq!(
         codex_path.detail,
-        "not set up: run `axocoatl onboard --update --writer codex`"
+        "not set up: run `axocoatl connect codex`"
     );
+}
+
+/// "OpenRouter is not configured": the fix is the browser sign-in, which
+/// adds providers.openrouter and changes nothing else (not `onboard
+/// --update --writer openrouter`, which would also switch the writer).
+/// Doctor then reads the key that sign-in stores (`api_key_secret`) as
+/// present; a named secret that is not stored says how to store it.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_names_connect_openrouter_and_reads_the_key_it_stores() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let home = shims.home.path();
+    let config_path = home.join("config.yaml");
+    let agents = "agents:\n  - id: lead\n    name: Lead\n    provider: openrouter\n    model: \
+                  \"qwen/qwen3-coder\"\n    tools: [read_file]\n";
+    let server = format!("server:\n  port: {}\n", free_port());
+    std::fs::write(&config_path, format!("{agents}{server}")).unwrap();
+    let env = doctor_env(&shims);
+    let openrouter = |report: &crate::doctor::Report| {
+        report
+            .sections
+            .models
+            .iter()
+            .find(|item| item.name == "OpenRouter")
+            .cloned()
+            .unwrap_or_else(|| panic!("{:?}", report.sections.models))
+    };
+    let item = openrouter(&crate::doctor::collect(&config_path, &env).await);
+    assert_eq!(item.status, crate::doctor::Status::Fail);
+    assert_eq!(
+        item.fix,
+        Some(format!(
+            "Run `axocoatl connect openrouter --config {}`: it signs you in to OpenRouter in the \
+             browser, stores the key it issues and adds providers.openrouter to this \
+             configuration, changing nothing else in it",
+            crate::onboard::host::shell_quote(&config_path.display().to_string())
+        ))
+    );
+    // What that command writes: the secret's name, never the key.
+    let connected = format!(
+        "{agents}providers:\n{}{server}",
+        crate::connect_cmd::openrouter::provider_yaml("openrouter")
+    );
+    std::fs::write(&config_path, &connected).unwrap();
+    let item = openrouter(&crate::doctor::collect(&config_path, &env).await);
+    assert_eq!(item.status, crate::doctor::Status::Fail);
+    assert_eq!(
+        item.detail,
+        "OpenRouter API key secret openrouter is not stored, and an Agent or run default uses \
+         OpenRouter"
+    );
+    assert_eq!(
+        item.fix.as_deref(),
+        Some(
+            "Run `axocoatl connect openrouter`, which signs you in to OpenRouter in the browser \
+             and stores the key it issues without showing it"
+        )
+    );
+    let data_dir = env.data_dir.as_deref().unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(data_dir).unwrap();
+        std::fs::set_permissions(data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    axocoatl_daemon::secret_store::set_secret(data_dir, "openrouter", b"sk-or-v1-0123456789abcdef")
+        .unwrap();
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let item = openrouter(&report);
+    assert_eq!(item.status, crate::doctor::Status::Ok, "{item:?}");
+    assert_eq!(
+        item.detail,
+        "OpenRouter API key present (secret openrouter, never shown)"
+    );
+    assert!(
+        report
+            .ready_for
+            .iter()
+            .any(|path| path.command == "workbench Sessions" && path.ok),
+        "{:?}",
+        report.ready_for
+    );
+    // The file is as the sign-in left it.
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), connected);
 }
 
 /// With E2B for workbench Sessions, `axocoatl run` still needs Podman:

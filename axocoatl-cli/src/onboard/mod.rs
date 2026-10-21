@@ -392,6 +392,11 @@ pub(crate) struct Kept {
     pub(crate) codex_credential: Option<String>,
     /// `providers.openrouter.api_key` as written: a key, or `${NAME}`.
     pub(crate) openrouter_key: Option<zeroize::Zeroizing<String>>,
+    /// The Ollama models the existing configuration's Agents run, which
+    /// "Update this setup" keeps (`config::update` writes onboarding's team
+    /// only where there are no Agents). `None` when this run writes that
+    /// team: no configuration, Replace, or one without Agents.
+    pub(crate) agent_models: Option<Vec<String>>,
 }
 
 impl Kept {
@@ -411,8 +416,36 @@ impl Kept {
                         Provider::OpenRouter => WriterChoice::Openrouter,
                     })
             });
-        let openrouter_key = config::read_existing(text)
-            .ok()
+        let existing = config::read_existing(text).ok();
+        let agent_models = existing
+            .as_ref()
+            .filter(|existing| !existing.agents.is_empty())
+            .map(|existing| {
+                // As doctor reads them: an Agent without a model runs
+                // providers.ollama.model, else llama3.2.
+                let default_model = existing
+                    .providers
+                    .as_ref()
+                    .and_then(|providers| providers.ollama.as_ref())
+                    .and_then(|ollama| ollama.model.clone())
+                    .unwrap_or_else(|| "llama3.2".to_string());
+                existing
+                    .agents
+                    .iter()
+                    .filter(|agent| {
+                        agent.get("provider").and_then(serde_json::Value::as_str) == Some("ollama")
+                    })
+                    .map(|agent| {
+                        agent
+                            .get("model")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| default_model.clone())
+                    })
+                    .collect()
+            });
+        let openrouter_key = existing
             .and_then(|existing| existing.providers?.openrouter)
             .and_then(|openrouter| {
                 openrouter
@@ -427,11 +460,38 @@ impl Kept {
             reviewer: run.reviewer,
             codex_credential: marker.and_then(|marker| marker.credential),
             openrouter_key,
+            agent_models,
         }
     }
 }
 
 impl Onboarding {
+    /// How `axocoatl onboard` runs again to put other models in place of
+    /// `models`, and why: `--replace` when the configuration this run
+    /// writes has an Agent on one of them (onboarding's own team, or an
+    /// Agent "Update this setup" keeps), since `--update` keeps the Agents
+    /// and changes only `run.models`; else `--update`.
+    pub(crate) fn model_change(&self, models: &[&str]) -> (&'static str, String) {
+        let agents_run = match &self.kept.agent_models {
+            None => true,
+            Some(kept) => models
+                .iter()
+                .any(|model| kept.iter().any(|kept| kept == model)),
+        };
+        if agents_run {
+            (
+                "--replace",
+                format!(
+                    " (--replace backs up the configuration and writes the team for the new \
+                     models; --update would keep the Agents that run {})",
+                    models.join(" and ")
+                ),
+            )
+        } else {
+            ("--update", String::new())
+        }
+    }
+
     /// Record a step left (and print it).
     pub(crate) fn step_left(&mut self, text: impl Into<String>) {
         let text = text.into();
@@ -862,7 +922,7 @@ fn item_key(section: &str, item: &crate::doctor::Item) -> Option<String> {
 /// with, unless `--writer-model` or `--reviewer` names others or they do not
 /// fit the writer chosen now. At a terminal, a local model too large for
 /// this computer's memory (as `doctor` judges it) is asked again instead:
-/// `doctor`'s fix for it is `axocoatl onboard --update`.
+/// `doctor`'s fix for one no Agent runs is `axocoatl onboard --update`.
 fn keep_models(o: &mut Onboarding, writer: WriterChoice) {
     let kept = o.kept.clone();
     let writer_provider = match writer {

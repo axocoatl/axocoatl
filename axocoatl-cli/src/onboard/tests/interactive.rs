@@ -175,11 +175,17 @@ async fn a_12_gb_computer_is_not_offered_models_that_do_not_fit() {
         shims.calls()
     );
     assert_eq!(o.steps.len(), 2, "{:?}", o.steps);
-    assert!(
-        o.steps[0].starts_with(
-            "qwen3-coder:30b (18.6 GB) is too large for this computer's 12 GB, so it was not \
-             pulled: choose a smaller model with `axocoatl onboard --update`"
-        ),
+    // This run writes the team, whose Agents run the model: `--replace`
+    // (`--update` would keep them), with the writer named so Step 1 is not
+    // asked again.
+    assert_eq!(
+        o.steps[0],
+        "qwen3-coder:30b (18.6 GB) is too large for this computer's 12 GB, so it was not \
+         pulled: choose a smaller model with `axocoatl onboard --replace --writer ollama`, or a \
+         hosted writer and reviewer with `axocoatl onboard --replace --writer openrouter` (or \
+         `--writer claude-code`, or `--writer codex`) (--replace backs up the configuration and \
+         writes the team for the new models; --update would keep the Agents that run \
+         qwen3-coder:30b)",
         "{:?}",
         o.steps
     );
@@ -687,9 +693,10 @@ async fn doctor_does_not_tell_a_small_computer_to_pull_a_model_too_large_for_it(
             // Agents: `--replace` is the command that moves them.
             assert_eq!(
                 fix,
-                "Choose a smaller model (`axocoatl onboard --replace`), or use OpenRouter for it \
-                 (`axocoatl onboard --replace --writer openrouter`) (`--update` would keep the \
-                 Agents that run qwen3-coder:30b; `--replace` backs this configuration up first)"
+                "Choose a smaller model (`axocoatl onboard --replace --writer ollama`), or use \
+                 OpenRouter for it (`axocoatl onboard --replace --writer openrouter`) (`--update` \
+                 would keep the Agents that run qwen3-coder:30b; `--replace` backs this \
+                 configuration up first)"
             );
             assert!(!fix.contains("ollama pull"), "{fix}");
         } else {

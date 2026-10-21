@@ -668,7 +668,6 @@ pub(crate) fn next_lines(models: &[(String, ModelRow)], hint: &WriterHint) -> Ve
 /// name: OpenRouter, OpenAI, …) when it is a stored secret, or OpenRouter's
 /// when it has none: `Ok` for a pass, `Err((line, hint))` for a warning.
 /// `None` leaves the check to doctor's own.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn doctor_key_line(
     name: &str,
     credentials: &axocoatl_config::ProviderCredentials,
@@ -701,7 +700,6 @@ pub(crate) fn doctor_key_line(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn capitalized(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
