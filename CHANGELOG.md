@@ -736,6 +736,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     workbench then shows "This browser is signed out" (see Fixed). Signing in again does
     not help until localhost's data is removed in Safari > Settings > Privacy > Manage
     Website Data.
+  - The same cookies with `Path=/` sign that browser out of the workbench entirely: the
+    sign-in cookie stays off every request, so the workbench shows the sign-in page.
+    Signing in again works until the Preview's code writes the cookies again; remove
+    localhost's data in Safari's settings and close that Preview.
   - The same cookies with `Path=/ws` keep the workbench's live connection from opening:
     the status bar keeps saying it is reconnecting.
   - A cookie that is not ASCII or a forged `axocoatl-token-<port>` no longer signs the

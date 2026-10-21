@@ -263,6 +263,13 @@ can therefore:
   does not help while those cookies stay, and they stay until they expire or
   you remove them: remove localhost's data in Safari > Settings > Privacy >
   Manage Website Data, then open the sign-in link again (`axocoatl url`).
+- Sign that browser out of the workbench entirely, with the same cookies for
+  `Path=/`: the token cookie then stays off every request, `/` included, so
+  the open workbench page and a new one both get the sign-in page, not the
+  signed-out message. Opening the sign-in link again signs back in, until the
+  Preview's code writes the cookies again. Remove localhost's data in Safari >
+  Settings > Privacy > Manage Website Data, close that Preview, then open the
+  sign-in link again.
 - Keep the workbench's live connection from opening, with the same cookies
   for `Path=/ws`. The workbench loads and its API answers, but live updates
   stop and the status bar says the live connection is reconnecting. Removing

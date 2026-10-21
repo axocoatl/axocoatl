@@ -532,6 +532,10 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
     workbench's API until localhost's data is removed in Safari's settings.
     The workbench then says "This browser is signed out" instead of reloading
     without end.
+  - With `Path=/` they sign that browser out of the workbench entirely (the
+    sign-in page, not the signed-out message) until the cookies are removed
+    and that Preview is closed; signing in again works until it writes them
+    again. No journey asserts this case yet.
   - With `Path=/ws` they keep its live connection from opening.
 
   The macOS WebKit journeys assert this. The person on the
