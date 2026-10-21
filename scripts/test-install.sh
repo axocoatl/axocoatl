@@ -442,7 +442,7 @@ path_expect_new_shells_find() {
     case " $missing_shells " in *" $shell_name "*) ;; *) missing_shells="$missing_shells${missing_shells:+ }$shell_name" ;; esac
     [ "$shell_name" = fish ] && return 0
     for profile_file in "$@"; do
-      shell_out="$(env -i HOME="$case_home" PATH=/usr/bin:/bin /bin/sh -c '. "$1" >/dev/null 2>&1; echo "PATH=$PATH"; command -v axocoatl' sh "$profile_file")"
+      shell_out="$(env -i HOME="$case_home" PATH=/usr/bin:/bin /bin/sh -c '. "$1" >/dev/null 2>&1; echo "PATH=$PATH"; command -v axocoatl' sh "$profile_file")" || true
       path_expect_once "$profile_file read with sh" "$shell_out" "$@"
     done
     return 0
@@ -456,7 +456,7 @@ path_expect_new_shells_find() {
   for flags in $flag_sets; do
     shell_out="$(env -i HOME="$case_home" PATH=/usr/bin:/bin TERM=dumb \
       ${P_XDG_CONFIG_HOME:+"XDG_CONFIG_HOME=$P_XDG_CONFIG_HOME"} \
-      "$shell_path" "$flags" 'echo "PATH=$PATH"; command -v axocoatl' </dev/null 2>/dev/null)"
+      "$shell_path" "$flags" 'echo "PATH=$PATH"; command -v axocoatl' </dev/null 2>/dev/null)" || true
     path_expect_once "a new '$shell_name $flags'" "$shell_out" "$@"
   done
   # fish_add_path without --path saves the directory in the universal
@@ -595,17 +595,43 @@ path_expect_no_prompt() {
   fi
 }
 
+# path_reinstall_twice COUNT FILE...: install twice more over path case
+# $name's home directory, as it is, from a shell without the install
+# directory on PATH and with the same terminal answer (y in every caller).
+# Neither install asks or adds a line, and each FILE (relative to the home
+# directory) keeps COUNT installer lines.
+path_reinstall_twice() {
+  again_count=$1
+  shift
+  for again in 2 3; do
+    run_path_case "$name"
+    path_expect_status 0
+    path_expect_text 'to PATH; new terminals find axocoatl'
+    path_expect_no_prompt
+    path_refuse_text 'added to'
+    for again_file in "$@"; do
+      again_lines="$(installer_lines "$case_home/$again_file")"
+      [ "$again_lines" = "$again_count" ] \
+        || fail "$name, install $again: ~/$again_file has $again_lines installer lines, not $again_count: $(cat "$case_home/$again_file")"
+    done
+  done
+}
+
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
   P_GITHUB_PATH=no P_PODMAN=no P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
 }
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
-# on startup files a user may have. A file counts as adding ~/.local/bin only
-# with the installer's own line or Debian's and Ubuntu's lines, at its top
-# level; counting one that only seems to would leave new terminals without
-# axocoatl. A bash login file counts as reading ~/.profile only when it does
-# so in every login shell.
+# on startup files a user may have. A file counts as adding ~/.local/bin when
+# it has one of the installer's own lines anywhere (so that no construct makes
+# a reinstall add the line again), or Debian's and Ubuntu's lines where they
+# surely run: at the top level, not after a line that ends in &&, ||, | or \,
+# not in a string, a function, a subshell or a block for another OS, and not
+# after a return, an exec or anything the reader cannot follow. Counting a
+# file that only seems to add it would leave new terminals without axocoatl;
+# an extra line is harmless. A bash login file counts as reading ~/.profile
+# by the same rule.
 install_helpers="$work_dir/install-helpers.sh"
 sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
 grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \
@@ -630,37 +656,88 @@ stanza='if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
 fi'
 guarded="$(path_line_for zsh)"
+nonlogin="$(path_line_for bash-nonlogin)"
+unguarded='export PATH="$HOME/.local/bin:$PATH"'
 os_block() { printf 'if [ "$(uname)" = SunOS ]; then\n%s\nfi' "$1"; }
-startup_expect adds_to_path yes "Ubuntu's lines" "$stanza"
+# Constructs that a line reader can lose track in, each valid zsh; the
+# second, third, fifth, sixth (bash 4 or later) and last are valid bash too.
+zsh_function='mkcd() { mkdir -p "$1" && cd "$1" }'
+here_string='read -r word <<< "a b"'
+arithmetic='shifted=$((1 << 2))'
+zsh_short_for='for f (a b) print -r -- $f'
+here_document="$(printf 'cat >/dev/null <<EOF\nfi\nesac\nEOF')"
+unbalanced='one=$(case a in a) echo 1;; esac)'
+zsh_short_if='if [[ -n x ]] { : }'
+c_for='for ((i = 0; i < 1; i++)); do :; done'
+
+# The installer's own lines count wherever they are.
 startup_expect adds_to_path yes "the installer's line" "$(printf '# Added by the Axocoatl installer\n%s' "$guarded")"
-startup_expect adds_to_path yes "the installer's ~/.bashrc line" "shopt -q login_shell || $guarded"
-startup_expect adds_to_path yes "a 1.5.0 release candidate's line" 'export PATH="$HOME/.local/bin:$PATH"'
+startup_expect adds_to_path yes "the installer's ~/.bashrc line" "$nonlogin"
+startup_expect adds_to_path yes "the unguarded line (1.4.0 and earlier printed it; unreleased 1.5.0 builds wrote it)" "$unguarded"
+startup_expect adds_to_path yes "the unguarded line with the full path, as 1.4.0 printed it" \
+  "export PATH=\"$startup_home/.local/bin:\$PATH\""
 startup_expect adds_to_path yes "the installer's line with the full path" \
   "case \":\$PATH:\" in *\":$startup_home/.local/bin:\"*) ;; *) export PATH=\"$startup_home/.local/bin:\$PATH\" ;; esac"
-startup_expect adds_to_path yes "the installer's line after Ubuntu's ~/.bashrc stop" "$(printf 'case $- in\n  *i*) ;;\n  *) return;;\nesac\n%s' "$guarded")"
+startup_expect adds_to_path yes "the installer's line after Ubuntu's ~/.bashrc stop" "$(printf 'case $- in\n  *i*) ;;\n  *) return;;\nesac\n%s' "$nonlogin")" .bashrc
 startup_expect adds_to_path yes "the installer's line after a function and a conda block" \
   "$(printf 'f() {\n  if true; then :; fi\n}\n# >>> conda initialize >>>\nif [ $? -eq 0 ]; then\n  :\nelse\n  export PATH="/opt/conda/bin:$PATH"\nfi\n# <<< conda initialize <<<\n%s' "$guarded")"
-startup_expect adds_to_path yes "the installer's line after a keyword that starts no command" \
-  "$(printf '%s\n' "zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s" \
-    'case $x in a) if true; then :; fi;; esac' "$guarded")" .zshrc
-startup_expect adds_to_path yes "fish's line" 'fish_add_path --path "$HOME/.local/bin"' config.fish
-startup_expect adds_to_path yes "a 1.5.0 release candidate's fish line" 'fish_add_path "$HOME/.local/bin"' config.fish
-startup_expect adds_to_path yes "fish's line after an if block" \
-  "$(printf 'if status is-interactive\nend\nif test -n x\nelse if test -n y\nend\n%s' "$(path_line_for fish)")" config.fish
+for construct in "$zsh_function" "$here_string" "$arithmetic" "$zsh_short_for" "$here_document" "$unbalanced" "$zsh_short_if" \
+  "$c_for" 'fi' '}' 'if true; then'; do
+  for own in "$guarded" "$nonlogin" "$unguarded"; do
+    startup_expect adds_to_path yes "the installer's line after $construct" "$(printf '%s\n\n# Added by the Axocoatl installer\n%s' "$construct" "$own")" .zshrc
+  done
+done
+startup_expect adds_to_path yes "the installer's line in a block for another OS (taken at the user's word)" "$(os_block "  $guarded")"
+startup_expect adds_to_path yes "the installer's line in a loop" "$(printf 'for d in a; do\n%s\ndone' "$guarded")"
+startup_expect adds_to_path yes "the installer's line after a line that ends in &&" "$(printf '[ "$(uname)" = SunOS ] &&\n  %s' "$unguarded")"
+startup_expect adds_to_path yes "fish's line" "$(path_line_for fish)" config.fish
+startup_expect adds_to_path yes "the fish line unreleased 1.5.0 builds wrote" 'fish_add_path "$HOME/.local/bin"' config.fish
+startup_expect adds_to_path yes "the unguarded line in fish" "$unguarded" config.fish
+startup_expect adds_to_path yes "fish's line after blocks" \
+  "$(printf 'function mkcd; mkdir -p $argv; and cd $argv; end\nif status is-interactive\nend\nif test -n x\nelse if test -n y\nend\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path yes "fish's line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "the installer's sh line in fish" "$guarded" config.fish
+startup_expect adds_to_path no "fish's line in zsh" "$(path_line_for fish)" .zprofile
 startup_expect adds_to_path no "a subdirectory" 'export PATH="$HOME/.local/bin/scripts:$PATH"'
 startup_expect adds_to_path no "a line that takes it out of PATH" 'export PATH="${PATH#$HOME/.local/bin:}"'
 startup_expect adds_to_path no "PATH in a comment" 'if [ -d "$HOME/.local/bin" ]; then echo has-local-bin; fi  # PATH'
 startup_expect adds_to_path no "the installer's line in a comment" "# $guarded"
+startup_expect adds_to_path no "the installer's line with more on its line" "$guarded # mine"
 startup_expect adds_to_path no "a line for another OS" '[ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"'
-startup_expect adds_to_path no "the installer's line in a block for another OS" "$(os_block "  $guarded")"
+
+# Debian's and Ubuntu's lines count only where they surely run.
+startup_expect adds_to_path yes "Ubuntu's lines" "$stanza"
+startup_expect adds_to_path yes "Ubuntu's lines after a keyword that starts no command" \
+  "$(printf '%s\n' "zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s" \
+    'case $x in a) if true; then :; fi;; esac' "$stanza")" .zshrc
+for construct in "$here_string" "$arithmetic" 'function f { :; }' 'g(){ :; }' "$(printf 'plugins=(\n  git\n)')" \
+  "$(printf "note='a\nb'")" 'eval "$(/opt/homebrew/bin/brew shellenv)"'; do
+  startup_expect adds_to_path yes "Ubuntu's lines after $construct" "$(printf '%s\n%s' "$construct" "$stanza")"
+done
 startup_expect adds_to_path no "Ubuntu's lines in a block for another OS" "$(os_block "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines in a function" "$(printf 'f() {\n%s\n}' "$stanza")"
-startup_expect adds_to_path no "the installer's line in a loop" "$(printf 'for d in a; do\n%s\ndone' "$guarded")"
-startup_expect adds_to_path no "the installer's line in a group for another OS" \
-  "$(printf '[ "$(uname)" = SunOS ] && {\n%s\n}' "$guarded")"
+startup_expect adds_to_path no "Ubuntu's lines in f(){" "$(printf 'f(){\n%s\n}' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a block for another OS after f(){ :; }" "$(os_block "$(printf '  f(){ :; }\n%s' "$stanza")")"
+startup_expect adds_to_path no "Ubuntu's lines in a block for another OS after function f { :; }" \
+  "$(os_block "$(printf '  function f { :; }\n%s' "$stanza")")"
+startup_expect adds_to_path no "Ubuntu's lines in a block for another OS after f() { :; }" \
+  "$(os_block "$(printf '  f() { :; }\n%s' "$stanza")")"
+startup_expect adds_to_path no "Ubuntu's lines in a loop" "$(printf 'for d in a; do\n%s\ndone' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a subshell" "$(printf '(\n%s\n)' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a group for another OS" "$(printf '[ "$(uname)" = SunOS ] && {\n%s\n}' "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines in a case" "$(printf 'case $(uname) in\nSunOS)\n%s\n;;\nesac' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a line that ends in &&" "$(printf '[ "$(uname)" = SunOS ] &&\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a line that ends in ||" "$(printf '[ "$(uname)" = Linux ] ||\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a line that ends in |" "$(printf 'true |\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a line that ends in \\" "$(printf '[ "$(uname)" = SunOS ] && \\\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a line that ends in an open quote" "$(printf "note='\n%s\n'" "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines after a return" "$(printf '[ -n "$PS1" ] || return\n%s' "$stanza")"
-startup_expect adds_to_path no "Ubuntu's lines after a here-document" "$(printf 'cat <<EOF\nfi\nEOF\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after an exec" "$(printf 'exec zsh\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a here-document" "$(printf '%s\n%s' "$here_document" "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a block the reader cannot balance" "$(printf '%s\n%s' "$zsh_function" "$stanza")" .zshrc
+startup_expect adds_to_path no "Ubuntu's lines after a construct the reader cannot follow" "$(printf '%s\n%s' "$unbalanced" "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a C-style for" "$(printf '%s\n%s' "$c_for" "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a syntax error (a line that starts with |)" "$(printf '| true\n%s' "$stanza")"
 startup_expect adds_to_path no "Ubuntu's lines for a subdirectory" 'if [ -d "$HOME/.local/bin/x" ] ; then
     PATH="$HOME/.local/bin/x:$PATH"
 fi'
@@ -668,17 +745,27 @@ startup_expect adds_to_path no "Fedora's ~/.bashrc lines" 'if ! [[ "$PATH" =~ "$
 then
     PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 fi'
-startup_expect adds_to_path no "fish's line for another OS" \
-  "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "Ubuntu's lines in fish" "$stanza" config.fish
+
 for reads in '. ~/.profile' 'source ~/.profile' '. "$HOME/.profile"' '. "$HOME"/.profile' '. "${HOME}"/.profile' \
   ". '$startup_home/.profile'" "source \"$startup_home/.profile\"" '[ -f ~/.profile ] && . ~/.profile' \
   '[[ -r "$HOME/.profile" ]] && source "$HOME/.profile"' 'test -f ~/.profile && . ~/.profile' \
-  'if [ -f ~/.profile ]; then . ~/.profile; fi' "$(printf 'if [ -f "$HOME/.profile" ]; then\n    . "$HOME/.profile"\nfi')"; do
+  'if [ -f ~/.profile ]; then . ~/.profile; fi' "$(printf 'if [ -f "$HOME/.profile" ]; then\n    . "$HOME/.profile"\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  f(){ :; }\n  . ~/.profile\nfi')" "$(printf '%s\n. ~/.profile' "$here_string")" \
+  "$(printf '%s\n. ~/.profile' "$arithmetic")" "$(printf '[[ -f ~/.bashrc ]] && . ~/.bashrc\n. ~/.profile')"; do
   startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
 done
 for reads in '# . ~/.profile' '. ~/.profile.local' '. "~/.profile"' ". '\$HOME/.profile'" '. ~/x/.profile' \
   '[ "$(uname)" = SunOS ] && . ~/.profile' "emulate sh -c '. ~/.profile'" "$(os_block '  . ~/.profile')" \
-  "$(printf 'if [ -f ~/.profile ]; then\n  :\nelse\n  . ~/.profile\nfi')" "$(printf '[ -n "$PS1" ] || return\n. ~/.profile')"; do
+  "$(printf 'if [ -f ~/.profile ]; then\n  :\nelse\n  . ~/.profile\nfi')" "$(printf '[ -n "$PS1" ] || return\n. ~/.profile')" \
+  "$(printf '[ "$(uname)" = SunOS ] &&\n  . ~/.profile')" "$(printf '[ "$(uname)" = Linux ] ||\n  . ~/.profile')" \
+  "$(printf 'true |\n  . ~/.profile')" "$(printf ': \\\n. ~/.profile')" "$(printf '[ "$(uname)" = SunOS ] && \\\n  . ~/.profile')" \
+  "$(printf "note='\n. ~/.profile\n'")" "$(printf 'load(){\n  . ~/.profile\n}')" "$(printf 'function load {\n  . ~/.profile\n}')" \
+  "$(os_block "$(printf '  f(){ :; }\n  . ~/.profile')")" "$(os_block "$(printf '  function f { :; }\n  . ~/.profile')")" \
+  "$(os_block "$(printf '  f() { :; }\n  . ~/.profile')")" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  f(){ :; }\nelse\n  . ~/.profile\nfi')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  false &&\n  . ~/.profile\nfi')" "$(printf '(\n. ~/.profile\n)')" \
+  "$(printf 'exec zsh\n. ~/.profile')" "$(printf '%s\n. ~/.profile' "$here_document")"; do
   startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
 done
 
@@ -724,10 +811,13 @@ path_expect_no_prompt
 [ "$(grep -c -F 'export PATH="$HOME/.local/bin:$PATH"' "$case_home/.zprofile")" -eq 1 ] \
   || fail "$name added the PATH line again"
 path_expect_next_runs
+path_reinstall_twice 1 .zprofile
 
 # A ~/.zprofile that only seems to add ~/.local/bin does not count: a
-# subdirectory, a line that takes it out of PATH, PATH only in a comment,
-# and a line or a block for another OS. Each gets the line, and a new login
+# subdirectory, a line that takes it out of PATH, PATH only in a comment, a
+# line for another OS, and Debian's lines where they do not surely run (for
+# another OS, after a line that ends in && or \, in a function, or after a
+# function inside a block for another OS). Each gets the line, and a new login
 # shell finds axocoatl, with ~/.local/bin on PATH once.
 fake_number=0
 while IFS= read -r fake_line <&3; do
@@ -751,9 +841,96 @@ export PATH="$HOME/.local/bin/scripts:$PATH"
 export PATH="${PATH#$HOME/.local/bin:}"
 if [ -d "$HOME/.local/bin" ]; then echo has-local-bin >/dev/null; fi  # PATH
 [ "$(uname)" = SunOS ] && export PATH="$HOME/.local/bin:$PATH"
-if [ "$(uname)" = SunOS ]; then  NEWLINE  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac  NEWLINE  fi
+if [ "$(uname)" = SunOS ]; then  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi  NEWLINE  fi
+[ "$(uname)" = SunOS ] &&  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi
+[ "$(uname)" = SunOS ] && \  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi
+f(){  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi  NEWLINE  }
+if [ "$(uname)" = SunOS ]; then  NEWLINE  f(){ :; }  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi  NEWLINE  fi
+if [ "$(uname)" = SunOS ]; then  NEWLINE  function f { :; }  NEWLINE  if [ -d "$HOME/.local/bin" ] ; then  NEWLINE  PATH="$HOME/.local/bin:$PATH"  NEWLINE  fi  NEWLINE  fi
 SEEMS
-[ "$fake_number" = 5 ] || fail "ran $fake_number of the 5 look-alike ~/.zprofile cases"
+[ "$fake_number" = 10 ] || fail "ran $fake_number of the 10 look-alike ~/.zprofile cases"
+
+# Installing again never adds the line again, whatever comes before it in
+# the file: here constructs a line reader can lose track in, each valid zsh
+# (a function whose } follows a command, a here-string, an arithmetic shift,
+# zsh's short for and if, a here-document, a case in $( )). The first install
+# adds the line, two more add nothing, and a new login shell finds axocoatl
+# with ~/.local/bin on PATH once.
+again_number=0
+while IFS= read -r again_text <&3; do
+  [ -n "$again_text" ] || continue
+  again_number=$((again_number + 1))
+  reset_path_case
+  P_TTY='y'
+  name="path-mac-zprofile-reinstall-$again_number"
+  mkdir -p "$work_dir/$name/home"
+  printf '%s\n' "$again_text" | sed 's/  *NEWLINE  */\
+/g' >"$work_dir/$name/home/.zprofile"
+  run_path_case "$name"
+  path_expect_status 0
+  path_expect_text "added to ~/.zprofile:  $(path_line_for zsh)"
+  path_reinstall_twice 1 .zprofile
+  path_expect_new_shells_find zsh "$case_home/.zprofile"
+done 3<<'CONSTRUCTS'
+mkcd() { mkdir -p "$1" && cd "$1" }
+read -r word <<< "a b"
+shifted=$((1 << 2))
+for f (a b) print -r -- $f >/dev/null
+if [[ -n x ]] { : }
+cat >/dev/null <<EOF  NEWLINE  fi  NEWLINE  esac  NEWLINE  EOF
+one=$(case a in a) echo 1;; esac)
+CONSTRUCTS
+[ "$again_number" = 7 ] || fail "ran $again_number of the 7 reinstall ~/.zprofile cases"
+
+# The same on Linux for a zsh user whose ~/.zshrc starts with such a function:
+# ~/.zshrc and ~/.zprofile each get the line once.
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/zsh P_TTY='y'
+name=path-linux-zshrc-reinstall
+mkdir -p "$work_dir/$name/home"
+printf '%s\n' 'mkcd() { mkdir -p "$1" && cd "$1" }' 'read -r word <<< "a b"' >"$work_dir/$name/home/.zshrc"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text "added to ~/.zshrc and ~/.zprofile:  $(path_line_for zsh)"
+path_reinstall_twice 1 .zshrc .zprofile
+path_expect_new_shells_find zsh "$case_home/.zshrc" "$case_home/.zprofile"
+
+# bash on Linux next to Ubuntu's files, with such constructs in ~/.bashrc
+# (valid bash, 3.2 included, so a C-style for instead of a case in $( )):
+# ~/.bashrc gets its line once, and ~/.profile none.
+again_number=0
+for again_text in 'read -r word <<< "a b"' 'shifted=$((1 << 2))' "$(printf 'cat >/dev/null <<EOF\nfi\nEOF')" \
+  'for ((i = 0; i < 1; i++)); do :; done'; do
+  again_number=$((again_number + 1))
+  reset_path_case
+  P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
+  name="path-linux-bashrc-reinstall-$again_number"
+  seed_home "$name" ubuntu
+  printf '%s\n' "$again_text" >>"$work_dir/$name/home/.bashrc"
+  run_path_case "$name"
+  path_expect_status 0
+  path_expect_text "added to ~/.bashrc:  $(path_line_for bash-nonlogin)"
+  path_reinstall_twice 1 .bashrc
+  [ "$(installer_lines "$case_home/.profile")" = 0 ] || fail "$name wrote ~/.profile"
+  P_LINE="$(path_line_for bash-nonlogin)"
+  path_expect_new_shells_find bash "$case_home/.bashrc"
+done
+
+# The line installers up to 1.4.0 printed for the user to add, with the full
+# path, counts: nothing is asked or added, on three installs.
+reset_path_case
+P_TTY='y'
+name=path-mac-1-4-line
+mkdir -p "$work_dir/$name/home"
+printf 'export PATH="%s:$PATH"\n' "$work_dir/$name/home/.local/bin" >"$work_dir/$name/home/.zprofile"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text '~/.zprofile already adds ~/.local/bin to PATH; new terminals find axocoatl'
+path_expect_no_prompt
+path_reinstall_twice 0 .zprofile
+[ "$(wc -l <"$case_home/.zprofile" | tr -d ' ')" = 1 ] || fail "$name changed ~/.zprofile: $(cat "$case_home/.zprofile")"
+P_LINE="export PATH=\"$case_home/.local/bin:\$PATH\""
+path_expect_new_shells_find zsh "$case_home/.zprofile"
 
 # Answering no changes nothing and prints the line instead.
 reset_path_case
@@ -848,6 +1025,8 @@ path_expect_text '~/.profile and ~/.bashrc already add ~/.local/bin to PATH; new
 path_expect_no_prompt
 cmp -s "$linux_bash_home/.bashrc" "$case_home/.bashrc" || fail "$name changed ~/.bashrc again"
 cmp -s "$linux_bash_home/.profile" "$case_home/.profile" || fail "$name changed ~/.profile"
+path_reinstall_twice 1 .bashrc
+[ "$(installer_lines "$case_home/.profile")" = 0 ] || fail "$name wrote ~/.profile"
 
 # No terminal on Ubuntu: it says ~/.profile has it and prints the ~/.bashrc
 # line; added as told, every new shell lists ~/.local/bin once.
@@ -949,8 +1128,8 @@ path_expect_text "added to ~/.profile:  $(path_line_for bash)"
 [ "$(installer_lines "$case_home/.bashrc")" = 1 ] || fail "$name added a line to ~/.bashrc again"
 path_expect_new_shells_find bash "$case_home/.profile"
 
-# Ubuntu's files with the line an earlier installer wrote to ~/.bashrc: it
-# counts, and nothing is added.
+# Ubuntu's files with the unguarded line that unreleased 1.5.0 builds wrote
+# to ~/.bashrc: it counts, and nothing is added, then or on two more installs.
 reset_path_case
 P_OS=Linux P_SHELL=/bin/bash P_TTY='y'
 seed_home path-linux-bash-ubuntu-old-line ubuntu
@@ -962,6 +1141,7 @@ path_expect_text '~/.profile and ~/.bashrc already add ~/.local/bin to PATH; new
 path_expect_no_prompt
 [ "$(installer_lines "$case_home/.bashrc")" = 1 ] || fail "$name added a line to ~/.bashrc again"
 [ "$(installer_lines "$case_home/.profile")" = 0 ] || fail "$name wrote ~/.profile"
+path_reinstall_twice 1 .bashrc
 
 # GitHub's Ubuntu runner images: a ~/.bash_profile that reads neither
 # ~/.profile nor ~/.bashrc, so a login shell reads only it.
@@ -1100,24 +1280,26 @@ grep -F "Add it in $P_XDG_CONFIG_HOME/fish/config.fish? [Y/n]" "$case_tty" >/dev
 [ ! -e "$case_home/.config/fish/config.fish" ] || fail "$name wrote ~/.config/fish/config.fish next to XDG_CONFIG_HOME"
 path_expect_new_shells_find fish "$P_XDG_CONFIG_HOME/fish/config.fish"
 
-# fish with a fish_add_path only for another OS: it does not count.
+# fish with functions and blocks before the line: the first install adds it,
+# and two more add nothing.
 reset_path_case
 P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
-name=path-fish-elsewhere
+name=path-fish-reinstall
 mkdir -p "$work_dir/$name/home/.config/fish"
-printf '%s\n' 'if test (uname) = SunOS' '    fish_add_path --path "$HOME/.local/bin"' 'end' \
+printf '%s\n' 'function mkcd' '    mkdir -p $argv; and cd $argv' 'end' 'if status is-interactive' \
+  '    switch (uname)' '        case SunOS' '            set -g on_sunos 1' '    end' 'end' \
   >"$work_dir/$name/home/.config/fish/config.fish"
 run_path_case "$name"
 path_expect_status 0
-path_refuse_text 'already adds'
 path_expect_text "added to ~/.config/fish/config.fish:  $(path_line_for fish)"
+path_reinstall_twice 1 .config/fish/config.fish
 path_expect_new_shells_find fish "$case_home/.config/fish/config.fish"
 
-# The line a 1.5.0 release candidate wrote for fish counts: nothing is asked
-# or added.
+# The fish line unreleased 1.5.0 builds wrote (without --path) counts:
+# nothing is asked or added, then or on two more installs.
 reset_path_case
 P_OS=Linux P_SHELL=/usr/bin/fish P_TTY='y'
-name=path-fish-release-candidate-line
+name=path-fish-unreleased-line
 mkdir -p "$work_dir/$name/home/.config/fish"
 printf '\n# Added by the Axocoatl installer\n%s\n' 'fish_add_path "$HOME/.local/bin"' \
   >"$work_dir/$name/home/.config/fish/config.fish"
@@ -1126,6 +1308,7 @@ path_expect_status 0
 path_expect_text '~/.config/fish/config.fish already adds ~/.local/bin to PATH; new terminals find axocoatl'
 path_expect_no_prompt
 [ "$(installer_lines "$case_home/.config/fish/config.fish")" = 1 ] || fail "$name added a line to config.fish again"
+path_reinstall_twice 1 .config/fish/config.fish
 
 # Any other shell reads ~/.profile.
 reset_path_case

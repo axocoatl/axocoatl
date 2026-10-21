@@ -9,9 +9,10 @@
 # ~/.zprofile for zsh on Linux; for bash the login file that exists, else
 # ~/.bash_profile on macOS and ~/.profile on Linux, and on Linux ~/.bashrc
 # too; fish's config.fish; ~/.profile otherwise). The line adds the directory
-# only when PATH does not have it. A file that has this installer's line, or
-# the lines Debian's and Ubuntu's ~/.profile use to add ~/.local/bin, gets
-# none; next to such a ~/.profile the ~/.bashrc line skips login shells.
+# only when PATH does not have it. A file gets none when it has one of this
+# installer's own lines anywhere, or the lines Debian's and Ubuntu's
+# ~/.profile use to add ~/.local/bin where they surely run (adds_to_path);
+# next to such a ~/.profile the ~/.bashrc line skips login shells.
 # Without a terminal (or when the answer is end of input) it only prints that
 # line. In a GitHub Actions step it adds the directory to $GITHUB_PATH
 # instead, for the job's later steps.
@@ -87,37 +88,62 @@ fish_line() { printf 'fish_add_path --path "%s"' "$1"; }
 # Before the ~/.bashrc line next to a ~/.profile that adds the directory.
 nonlogin_prefix='shopt -q login_shell || '
 
-# Every line this installer writes, or a 1.5.0 release candidate wrote, for
-# directory expression $1, one per line.
-own_lines() {
-  export_line "$1"
-  echo
+# The installer's own lines for directory expression $1, one per line: for
+# sh, bash and zsh files the guarded line, the same after the ~/.bashrc
+# prefix, and the unguarded export line, which installers up to 1.4.0 printed
+# for the user to add (with the full path) and unreleased 1.5.0 builds wrote
+# (with $HOME); for fish's config.fish the fish line, the one without --path
+# that unreleased 1.5.0 builds wrote, and the export line, which fish runs
+# too.
+own_sh_lines() {
   guarded_line "$1"
   echo
   printf '%s' "$nonlogin_prefix"
   guarded_line "$1"
   echo
-  printf 'fish_add_path "%s"\n' "$1"
+  export_line "$1"
+}
+own_fish_lines() {
   fish_line "$1"
+  echo
+  printf 'fish_add_path "%s"\n' "$1"
+  export_line "$1"
 }
 
-# Awk functions for the checks below, which read a startup file the way the
-# shell runs it. track(text) keeps depth, the number of blocks a line is in
-# (sh, bash and zsh: if, case, for, while, until, select and { }; fish: if,
-# for, while, function, switch and begin, closed by end), so that a line
-# counts only at the top level of the file, where it runs whenever the file
-# is read, and not inside an OS check, a function or a loop. It sets ended
-# after a return or an exit anywhere, branched after an else or elif in a
-# top-level block, and lost after a here-document (<<) or a block that closes
-# more than it opened. It splits a line into words at blanks, makes ;, & and |
-# words of their own, stops at a word that starts with #, and counts a keyword
-# only where a command starts (first, after ; & | and after then, do, else,
-# a case pattern and the like), so that `zstyle ... for more` opens nothing.
-# It is not a shell parser: a keyword in a quoted string can still miscount,
-# but what the checks look for is exact, and counts only at depth 0.
-# swap(s, from, to) replaces every from in s with to.
+# Awk functions for reading an sh, bash or zsh startup file, for the checks
+# below. Call sure() before a line and track(line) after it. sure() is true
+# only when all of these hold for that line:
+#   - no block is open: if, case, for, while, until, select, { } or ( ),
+#     which covers function bodies too;
+#   - no quote, $( ), ${ }, backquote or ( ) inside a word (a=( ... )) is
+#     open;
+#   - the line before did not end in &&, ||, |, |&, \, ! or a function header
+#     still waiting for its body, and no [[ ]] is open;
+#   - no return, exit, exec or logout came before it, anywhere (ended);
+#   - the reader did not lose track (lost) before it, at a here-document, a
+#     closing word that does not match the open block (fi in a { }, } in an
+#     if), a redirection without a target, an operator where a command
+#     should start (a line that starts with |), or a construct it does not
+#     follow (( where no command starts, as in for ((...)) and zsh's
+#     for f (...); zsh's foreach and repeat; coproc).
+# It splits words much as the shell does, with quotes, backslashes and
+# comments, and takes a keyword only where a command starts. Where it cannot
+# tell, it errs toward a line not counting: it opens a block for any word
+# that ends in {, but closes one only at a } where a command starts, so after
+# zsh's `f() { cmd }` no later line counts. What it does not know: a command
+# that stops the shell another way (a sourced file that exits, set -e and a
+# failing command), and a syntax error it does not notice, after which the
+# shell stops reading the file. It also sets branched after an else or elif
+# of a block at the top level. swap(s, from, to) replaces every from in s
+# with to, and trim(s) removes leading and trailing blanks.
+# shellcheck disable=SC2016
 startup_awk='
-BEGIN { depth = 0; ended = 0; branched = 0; lost = 0 }
+BEGIN {
+  sq = sprintf("%c", 39)
+  nctx = 0; nblk = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
+  testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
+  prevcmd = 0; word = ""; inword = 0; last = ""
+}
 function swap(s, from, to,    at, out) {
   if (from == "") return s
   out = ""
@@ -127,44 +153,214 @@ function swap(s, from, to,    at, out) {
   }
   return out s
 }
-function track(text,    count, k, w, words, command) {
-  gsub(/[;&|]+/, " ; ", text)
-  count = split(text, words, "[ \t]+")
-  command = 1
-  for (k = 1; k <= count; k++) {
-    w = words[k]
-    if (w == "") continue
-    if (substr(w, 1, 1) == "#") break
-    if (index(w, "<<") > 0) lost = 1
-    if (w == "return" || w == "exit") ended = 1
-    if (w == ";") { command = 1; continue }
-    if (fish) {
-      if (command && (w == "if" || w == "for" || w == "while" || w == "function" || w == "switch" || w == "begin")) depth++
-      else if (command && w == "end") depth--
-      command = command && (w == "and" || w == "or" || w == "not" || w == "begin")
+function trim(s) {
+  sub(/^[ \t]+/, "", s)
+  sub(/[ \t]+$/, "", s)
+  return s
+}
+function sure() {
+  return !lost && !ended && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
+}
+function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m }
+function shut(kind, m) {
+  if (nblk && blk[nblk] == kind && (m == "" || mode[nblk] == m)) nblk--
+  else lost = 1
+}
+function tok_word(w,    k, m, opens) {
+  prevcmd = 0
+  afterfname = 0
+  last = w
+  if (fnparen) { lost = 1; return }
+  if (redir) { redir = 0; return }
+  if (w == "return" || w == "exit" || w == "exec" || w == "logout") ended = 1
+  if (testmode) { if (w == "]]") { testmode = 0; cmd = 0 } return }
+  k = nblk ? blk[nblk] : ""
+  m = nblk ? mode[nblk] : ""
+  if (k == "case" && m == "head") { if (w == "in") mode[nblk] = "pat"; return }
+  if (k == "case" && m == "pat") { if (w == "esac") { nblk--; cmd = 0 } return }
+  if (k == "loop" && m == "head") { if (w == "do") { mode[nblk] = "body"; cmd = 1 } return }
+  opens = (substr(w, length(w)) == "{")
+  if (fname) {
+    fname = 0
+    cmd = 1
+    if (opens) { push("{", ""); return }
+    pending = 1
+    if (w !~ /\)$/) afterfname = 1
+    return
+  }
+  if (opens) { push("{", ""); cmd = 1; pending = 0; return }
+  if (!cmd) return
+  pending = 0
+  if (w == "if") { push("if", ""); return }
+  if (w == "then") { if (k != "if") lost = 1; return }
+  if (w == "elif" || w == "else") { if (k != "if") lost = 1; else if (nblk == 1) branched = 1; return }
+  if (w == "fi") { shut("if", ""); cmd = 0; return }
+  if (w == "case") { push("case", "head"); cmd = 0; return }
+  if (w == "for" || w == "select") { push("loop", "head"); cmd = 0; return }
+  if (w == "while" || w == "until") { push("loop", "cond"); return }
+  if (w == "do") { if (k == "loop" && m == "cond") mode[nblk] = "body"; else lost = 1; return }
+  if (w == "done") { shut("loop", "body"); cmd = 0; return }
+  if (w == "esac") { shut("case", "cmd"); cmd = 0; return }
+  if (w == "}") { shut("{", ""); cmd = 0; return }
+  if (w == "[[") { testmode = 1; cmd = 0; return }
+  if (w == "function") { fname = 1; cmd = 0; return }
+  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect") return
+  if (w == "foreach" || w == "repeat" || w == "coproc" || w == "end") { lost = 1; return }
+  if (w ~ /\(\)$/ && w !~ /=/) { pending = 1; return }
+  cmd = 0
+  prevcmd = 1
+}
+function tok_op(o,    k, m, wasprev, wasafter) {
+  wasprev = prevcmd; prevcmd = 0
+  wasafter = afterfname; afterfname = 0
+  last = o
+  if (redir) { redir = 0; lost = 1 }
+  if (testmode) return
+  if (o == "<<" || o == "<<-") { lost = 1; return }
+  if (o == "<" || o == ">" || o == ">>" || o == "<>" || o == ">|" || o == "&>" || o == "&>>" || o == ">&" || o == "<&" || o == "<<<") { redir = 1; return }
+  if (o == ")" && fnparen) { fnparen = 0; pending = 1; cmd = 1; return }
+  if (fnparen) { lost = 1; return }
+  if (o == "(" && (wasprev || wasafter)) { fnparen = 1; return }
+  k = nblk ? blk[nblk] : ""
+  m = nblk ? mode[nblk] : ""
+  if (k == "case" && m == "pat") {
+    if (o == ")") { mode[nblk] = "cmd"; cmd = 1 }
+    else if (o != "(" && o != "|") lost = 1
+    return
+  }
+  if (k == "case" && m == "head") { lost = 1; return }
+  if (k == "loop" && m == "head") { if (o != ";") lost = 1; return }
+  if (o == ";;" || o == ";&" || o == ";;&" || o == ";|") {
+    if (k == "case" && m == "cmd") { mode[nblk] = "pat"; cmd = 0 } else lost = 1
+    return
+  }
+  if (o == "(") { if (cmd) { push("(", ""); pending = 0 } else lost = 1; return }
+  if (o == ")") { shut("(", ""); cmd = 0; return }
+  if (cmd) lost = 1
+  cmd = 1
+}
+function newline(    k, m) {
+  if (redir || fnparen || fname) lost = 1
+  redir = 0
+  fnparen = 0
+  fname = 0
+  cont = 0
+  if (testmode) { cont = 1; return }
+  if (last == "&&" || last == "||" || last == "|" || last == "|&" || last == "!" || last == "time") { cont = 1; return }
+  if (pending || afterfname) cont = 1
+  k = nblk ? blk[nblk] : ""
+  m = nblk ? mode[nblk] : ""
+  last = ""
+  if (k == "case" && m != "cmd") return
+  if (k == "loop" && m == "head") return
+  cmd = 1
+}
+function open_ctx(t, n) { nctx++; ctx[nctx] = t; par[nctx] = n }
+function shut_ctx(c) { nctx--; if (!nctx) word = word c }
+function track(s,    i, n, c, t, two, three, op, bs) {
+  n = length(s)
+  bs = 0
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (nctx) {
+      t = ctx[nctx]
+      if (t == "S") { if (c == sq) shut_ctx(c); continue }
+      if (c == "\\") { i++; continue }
+      if (t == "E") { if (c == sq) shut_ctx(c); continue }
+      if (t == "B") { if (c == "`") shut_ctx(c); continue }
+      if (t == "D" || t == "V") {
+        if (t == "D" && c == "\"") { shut_ctx(c); continue }
+        if (t == "V" && c == "}") { shut_ctx(c); continue }
+        if (t == "V" && c == "\"") { open_ctx("D", 0); continue }
+        if (c == "`") { open_ctx("B", 0); continue }
+        if (c == "$" && substr(s, i + 1, 1) == "{") { open_ctx("V", 0); i++; continue }
+        if (c == "$" && substr(s, i + 1, 2) == "((") { open_ctx("R", 2); i += 2; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { open_ctx("C", 1); i++; continue }
+        continue
+      }
+      # C ($( )), R ($(( ))) and P (( ) in a word) end at their closing ).
+      if (c == sq && t != "R") { open_ctx("S", 0); continue }
+      if (c == "\"") { open_ctx("D", 0); continue }
+      if (c == "`") { open_ctx("B", 0); continue }
+      if (c == "$" && substr(s, i + 1, 1) == "{") { open_ctx("V", 0); i++; continue }
+      if (c == "$" && substr(s, i + 1, 2) == "((") { open_ctx("R", 2); i += 2; continue }
+      if (c == "$" && substr(s, i + 1, 1) == "(") { open_ctx("C", 1); i++; continue }
+      if (c == "(") { par[nctx]++; continue }
+      if (c == ")") {
+        if (--par[nctx] == 0) shut_ctx(c)
+        continue
+      }
+      if (t == "C" && substr(s, i, 3) == "<<<") { i += 2; continue }
+      if (t == "C" && substr(s, i, 2) == "<<") lost = 1
+      if (t == "C" && c == "#" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(]/)) i = n
       continue
     }
-    if (command && (w == "if" || w == "case" || w == "for" || w == "while" || w == "until" || w == "select" || w == "{")) depth++
-    else if (command && (w == "fi" || w == "esac" || w == "done" || w == "}")) depth--
-    else if (w == "{" && k == count) depth++
-    if (command && (w == "else" || w == "elif") && depth == 1) branched = 1
-    command = (command && (w == "then" || w == "do" || w == "else" || w == "elif" || w == "if" ||
-      w == "while" || w == "until" || w == "!" || w == "{" || w == "(" || w == "time")) || w ~ /\)$/
+    if (c == "\\") {
+      if (i == n) { bs = 1; break }
+      word = word substr(s, i, 2); inword = 1; i++
+      continue
+    }
+    if (c == "#" && !inword) break
+    if (c == " " || c == "\t") {
+      if (inword) { tok_word(word); word = ""; inword = 0 }
+      continue
+    }
+    if (c == sq) { open_ctx("S", 0); word = word c; inword = 1; continue }
+    if (c == "\"") { open_ctx("D", 0); word = word c; inword = 1; continue }
+    if (c == "`") { open_ctx("B", 0); word = word c; inword = 1; continue }
+    if (c == "$") {
+      two = substr(s, i + 1, 1)
+      if (two == sq) { open_ctx("E", 0); word = word "$" sq; inword = 1; i++; continue }
+      if (two == "{") { open_ctx("V", 0); word = word "${"; inword = 1; i++; continue }
+      if (substr(s, i + 1, 2) == "((") { open_ctx("R", 2); word = word "$(("; inword = 1; i += 2; continue }
+      if (two == "(") { open_ctx("C", 1); word = word "$("; inword = 1; i++; continue }
+      word = word c; inword = 1
+      continue
+    }
+    if (c == "(" && inword) { open_ctx("P", 1); word = word c; continue }
+    if ((c == "<" || c == ">") && substr(s, i + 1, 1) == "(") {
+      open_ctx("P", 1); word = word c "("; inword = 1; i++
+      continue
+    }
+    if (index(";&|<>()", c)) {
+      if (inword) { tok_word(word); word = ""; inword = 0 }
+      three = substr(s, i, 3)
+      two = substr(s, i, 2)
+      if (three == ";;&" || three == "<<<" || three == "<<-" || three == "&>>") op = three
+      else if (two == ";;" || two == ";&" || two == ";|" || two == "&&" || two == "||" || two == "|&" || two == ">>" || two == "<<" || two == "<>" || two == ">|" || two == "&>" || two == ">&" || two == "<&") op = two
+      else op = c
+      i += length(op) - 1
+      tok_op(op)
+      continue
+    }
+    word = word c; inword = 1
   }
-  if (depth < 0) lost = 1
+  if (nctx) return
+  if (inword) { tok_word(word); word = ""; inword = 0 }
+  if (bs) { cont = 1; return }
+  newline()
 }
 '
 
-# Whether startup file $1 surely puts the install directory ($dest) on PATH:
-# at its top level it has a line this installer writes (or a 1.5.0 release
-# candidate wrote), or, with no return or exit before them, the lines
-# Debian's and Ubuntu's ~/.profile use:
-#   if [ -d "$HOME/.local/bin" ] ; then
-#       PATH="$HOME/.local/bin:$PATH"
-#   fi
-# Anything else (a subdirectory, a line that takes the directory out of PATH
-# or names it only in a comment, a line behind an OS check) does not count:
-# the line this installer adds does nothing when PATH has the directory, so
+# Whether startup file $1 counts as putting the install directory ($dest) on
+# PATH, so that it gets no line. The directory may be written $HOME/...,
+# ${HOME}/... (not in fish) or as its full path. It counts when either holds:
+#   - one of its lines, without leading and trailing blanks, is one of the
+#     installer's own lines for its shell (own_sh_lines for a file that does
+#     not end in .fish, own_fish_lines for one that does), anywhere in the
+#     file, at any depth. The installer appends its line at the end of the
+#     file, at the top level; counting it wherever it is means no construct
+#     before it can make a reinstall add it again. A user who moved it into a
+#     block (an OS check, a function) is taken at their word.
+#   - in a file that does not end in .fish, it has the three lines Debian's
+#     and Ubuntu's ~/.profile use, starting on a line sure() is true for:
+#       if [ -d "$HOME/.local/bin" ] ; then
+#           PATH="$HOME/.local/bin:$PATH"
+#       fi
+# Nothing else counts: not a subdirectory, a line that takes the directory
+# out of PATH or names it in a comment, an own line with more on its line,
+# nor Debian's lines in a block, after a line that ends in && or \, or after
+# a return. The installer's line does nothing when PATH has the directory, so
 # adding one too many costs nothing, while counting a file wrongly would leave
 # new terminals without axocoatl.
 adds_to_path() {
@@ -174,11 +370,11 @@ adds_to_path() {
     *) dest_rel="" ;;
   esac
   case "$1" in
-    *.fish) scan_syntax='fish' ;;
-    *) scan_syntax='sh' ;;
+    *.fish) scan_syntax='fish' scan_lines="$(own_fish_lines @DIR@)" ;;
+    *) scan_syntax='sh' scan_lines="$(own_sh_lines @DIR@)" ;;
   esac
   scan_dir="$dest" scan_rel="$dest_rel" scan_syntax="$scan_syntax" \
-  scan_lines="$(own_lines @DIR@)" awk "$startup_awk"'
+  scan_lines="$scan_lines" awk "$startup_awk"'
     BEGIN {
       stanza = 0
       found = 0
@@ -191,33 +387,33 @@ adds_to_path() {
       s = swap(s, ENVIRON["scan_dir"], "@DIR@")
       if (ENVIRON["scan_rel"] != "") {
         s = swap(s, "$HOME/" ENVIRON["scan_rel"], "@DIR@")
-        s = swap(s, "${HOME}/" ENVIRON["scan_rel"], "@DIR@")
+        if (!fish) s = swap(s, "${HOME}/" ENVIRON["scan_rel"], "@DIR@")
       }
       return s
     }
     {
-      raw = dir($0)
-      line = raw
-      sub(/^[ \t]+/, "", line)
-      sub(/[ \t]+$/, "", line)
-      if (depth == 0 && !lost && (line in own)) { found = 1; exit }
-      if (stanza == 2 && raw ~ /^fi[ \t]*$/ && !ended && !lost) { found = 1; exit }
+      line = trim(dir($0))
+      if (line in own) { found = 1; exit }
+      if (fish) next
+      if (stanza == 2 && line == "fi" && !lost && !ended) { found = 1; exit }
       if (stanza == 1 && line ~ /^(export[ \t]+)?PATH="?@DIR@:\$\{?PATH\}?"?$/) stanza = 2
       else stanza = 0
-      if (stanza == 0 && depth == 0 && !ended && !lost &&
-        raw ~ /^if[ \t]+\[[ \t]+-d[ \t]+"?@DIR@"?[ \t]+\][ \t]*;[ \t]*then[ \t]*$/) stanza = 1
-      track(line)
+      if (stanza == 0 && sure() && line ~ /^if[ \t]+\[[ \t]+-d[ \t]+"?@DIR@"?[ \t]+\][ \t]*;[ \t]*then$/) stanza = 1
+      track($0)
     }
     END { exit !found }
   ' "$1" 2>/dev/null
 }
 
-# Whether bash login file $1 (~/.bash_profile or ~/.bash_login) reads
-# ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile, with
-# double quotes around all or part of it, or its full path), at its top level
-# with no return or exit before: `. FILE` or `source FILE`, alone, after
-# `[ -f FILE ] &&` (or [[ ]], test, -r, -e, -s), or in the then branch of
-# `if [ -f FILE ]; then`.
+# Whether bash login file $1 (~/.bash_profile or ~/.bash_login) counts as
+# reading ~/.profile (written ~/.profile, $HOME/.profile, ${HOME}/.profile,
+# with double quotes around all or part of it, or its full path). It does
+# with `. FILE` or `source FILE` alone, after `[ -f FILE ] &&` (or [[ ]],
+# test, -r, -e, -s), or as `if [ -f FILE ]; then . FILE; fi`, on a line
+# sure() is true for; or with `. FILE` alone in the then branch of a
+# multi-line `if [ -f FILE ]; then` that starts on such a line, before any
+# else or elif, on a line for which sure() would be true but for that one
+# open if (not after a line that ends in && or \, nor inside another block).
 reads_dot_profile() {
   [ -f "$1" ] || return 1
   scan_profile="$HOME/.profile" awk "$startup_awk"'
@@ -235,21 +431,22 @@ reads_dot_profile() {
       found = 0
     }
     {
-      line = swap($0, "'\''" abs "'\''", "$HOME/.profile")
+      line = swap($0, sq abs sq, "$HOME/.profile")
       line = swap(line, abs, "$HOME/.profile")
       line = swap(line, "${HOME}", "$HOME")
       # A quoted ~ is not the home directory; other double quotes go.
-      gsub(/["'\'']~/, "@QUOTED@", line)
+      gsub("[\"" sq "]~", "@QUOTED@", line)
       gsub(/"/, "", line)
-      sub(/^[ \t]+/, "", line)
-      sub(/[ \t]+$/, "", line)
-      if (!ended && !lost) {
-        if (depth == 0 && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
-        if (depth == 1 && opened && !branched && line ~ alone) { found = 1; exit }
-      }
-      was = depth
-      track(line)
-      if (was == 0 && depth == 1) { opened = (line ~ open_if); branched = 0 }
+      line = trim(line)
+      top = sure()
+      in_then = opened && !branched && nblk == 1 && blk[1] == "if"
+      in_then = in_then && !lost && !ended && !nctx && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
+      if (top && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
+      if (in_then && line ~ alone) { found = 1; exit }
+      was = nblk
+      track($0)
+      if (top && was == 0 && nblk == 1) { opened = (line ~ open_if); branched = 0 }
+      if (nblk == 0) opened = 0
     }
     END { exit !found }
   ' "$1" 2>/dev/null
