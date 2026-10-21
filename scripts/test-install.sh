@@ -720,6 +720,25 @@ startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if t
 startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'exec zsh\n%s' "$(path_line_for fish)")" config.fish
+# No fish line counts after a return, exit or exec where a command starts:
+# also after &&, ||, & or |, and after and, or, not or !. A line that ends in
+# &&, || or | goes on on the next line, past blank lines and comments, and so
+# does one with a comment after them; one that ends in \ goes on on the next
+# line only. An escaped ; separates no commands, and a block that starts
+# after && or | is a block.
+fish_line="$(path_line_for fish)"
+for fish_before in 'status is-login || return' 'status is-interactive || exit' 'not status is-interactive && return' \
+  'status is-login || exec bash' '! status is-interactive && return' 'not not return' 'true & return' \
+  'status is-login ||' 'status is-login &&' 'echo x |' "echo a \\" \
+  "$(printf 'status is-login ||\n# a comment')" 'status is-login || # a comment'; do
+  startup_expect adds_to_path no "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
+done
+startup_expect adds_to_path no "fish's unmarked line after || and a blank line" "$(printf 'status is-login ||\n\n%s' "$fish_line")" config.fish
+for fish_before in "$(printf 'true && begin\n  :\nend')" "$(printf 'cat /dev/null | while read -l x\n  :\nend')" \
+  'echo a\;end'; do
+  startup_expect adds_to_path yes "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
+done
+startup_expect adds_to_path yes "fish's unmarked line after a line ending in \\ and a blank line" "$(printf 'echo a \\\n\n%s' "$fish_line")" config.fish
 startup_expect adds_to_path yes "fish's unmarked line after a block word in quotes" "$(printf 'echo "begin"\n%s' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "fish's unmarked line in a block with a quoted end" \
   "$(printf 'if test -n x\n  echo "x; end"\n  %s\nend' "$(path_line_for fish)")" config.fish

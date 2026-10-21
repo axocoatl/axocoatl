@@ -395,8 +395,10 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
 #     printed for the user to add, or a fish line) is on a line where the
 #     installer can tell nothing before it keeps it from running: sure() for
 #     sh, bash and zsh; for fish, outside any block (if, for, while,
-#     function, switch, begin ... end), before any return, exit or exec, and
-#     not after a line ending in \;
+#     function, switch, begin ... end), before any return, exit or exec
+#     (where a command starts: also after &&, ||, and, or, not), before any
+#     line fish_track does not follow, and not on a line that goes on from
+#     one ending in \, &&, || or |;
 #   - in a file that does not end in .fish, it has the three lines Debian's
 #     and Ubuntu's ~/.profile use, starting on a line sure() is true for:
 #       if [ -d "$HOME/.local/bin" ] ; then
@@ -409,9 +411,10 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
 # startup_awk comment lists (set -e and a failing command, a sourced file
 # that exits, a syntax error, a later line that takes the directory out of
 # PATH again), so in such a file a line can count that does not run. The
-# installer's line does nothing when PATH has the directory, so adding one
-# too many costs nothing, while counting a file wrongly would leave new
-# terminals without axocoatl.
+# installer's line does nothing when PATH has the directory, so one line too
+# many costs at most a second listing of it (where a later line adds it
+# whether or not PATH has it, as Debian's lines do), while counting a file
+# wrongly would leave new terminals without axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
@@ -431,27 +434,43 @@ adds_to_path() {
       stanza = 0
       found = 0
       prev = ""
-      fdepth = 0; fended = 0; flost = 0; fcont = 0
+      fdepth = 0; fended = 0; flost = 0; fcont = 0; fop = 0
       fish = (ENVIRON["scan_syntax"] == "fish")
       n = split(ENVIRON["scan_lines"], list, "\n")
       for (i = 1; i <= n; i++) own[list[i]] = 1
       n = split(ENVIRON["scan_anywhere"], list, "\n")
       for (i = 1; i <= n; i++) if (list[i] != "") anywhere[list[i]] = 1
     }
-    # fish: blocks open with if, for, while, function, switch or begin where
-    # a command starts and close with end; return, exit and exec end the
-    # file. A line with a quote or a # that names one of those words anywhere
-    # is not followed (flost), so nothing after it counts.
-    function fish_track(s,    parts, k, w, m) {
+    # fish: a command starts at the start of a line and after a ;, & or |
+    # (so also after && and ||) that is not written with a backslash, and
+    # its first word is the one after any and, or, not, !, command or
+    # builtin. Blocks open with if, for, while, function, switch or begin
+    # where a command starts and close with end. After a return, exit or
+    # exec where a command starts (status is-login || return, not
+    # status is-interactive && exit), even in a block, no line counts
+    # (fended). A line with a quote or a # that names one of those words
+    # anywhere is not followed (flost), so nothing after it counts.
+    function fish_track(s,    i, n, c, nparts, part, k, w) {
       if (s ~ /^#/) return
-      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)]|$)/) {
+      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(&|])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)&|]|$)/) {
         flost = 1
         return
       }
-      m = split(s, parts, ";")
-      for (k = 1; k <= m; k++) {
-        w = trim(parts[k])
-        sub(/^(and|or|not|command|builtin)[ \t]+/, "", w)
+      nparts = 1
+      part[1] = ""
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") { part[nparts] = part[nparts] substr(s, i, 2); i++ }
+        else if (c == ";" || c == "&" || c == "|") part[++nparts] = ""
+        else part[nparts] = part[nparts] c
+      }
+      for (k = 1; k <= nparts; k++) {
+        w = trim(part[k])
+        while (w ~ /^(and|or|not|!|command|builtin)([ \t]|$)/) {
+          sub(/^[^ \t]+/, "", w)
+          w = trim(w)
+        }
         sub(/[ \t].*/, "", w)
         if (w ~ /^(if|for|while|function|switch|begin)$/) fdepth++
         else if (w == "end") { if (fdepth > 0) fdepth--; else flost = 1 }
@@ -476,7 +495,13 @@ adds_to_path() {
       if (fish) {
         if (line in own && !fdepth && !fended && !flost && !fcont) { found = 1; exit }
         fish_track(line)
-        fcont = (line ~ /\\$/)
+        # fish goes on on the next line after a \, and after a &&, || or |
+        # (also one that a comment follows) past blank and comment lines.
+        if (line == "" || line ~ /^#/) fcont = fop
+        else {
+          fop = (line ~ /(&&|\|)[ \t]*(\\|#.*)?$/)
+          fcont = fop || line ~ /\\$/
+        }
         prev = line
         next
       }
