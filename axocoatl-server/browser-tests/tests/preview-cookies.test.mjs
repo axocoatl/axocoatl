@@ -24,9 +24,11 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 //   cookies on (on an upgrade, those that are visible ASCII);
 // - an app's Set-Cookie with Domain=localhost stays host-only on its own
 //   Preview origin, because the proxy removes Domain.
-// Other cookies such a page can set do sign Safari out: about 52 large ones
-// with Path=/api (signed-out.test.mjs) or Path=/ws, and about 1,000 at once
-// shortly after a sign-in (operate/security.mdx).
+// Other cookies such a page can set do harm in Safari (signed-out.test.mjs):
+// about 52 large ones with Path=/api sign it out of the API, and with
+// Path=/ws keep the live connection from opening. About 1,000 at once,
+// seconds after a sign-in with no workbench page open, sign it out
+// (operate/security.mdx).
 // It needs Podman and the curated node:20-slim image, and is skipped when
 // that image is not on the machine, rather than pulling it. CI pulls the
 // image and sets AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1, which makes a missing

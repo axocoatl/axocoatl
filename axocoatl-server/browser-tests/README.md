@@ -146,8 +146,9 @@ it too is skipped, not pulled, when that image is not on the machine, unless
 `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`, which makes a missing image a failure.
 The product-browser legs of `ci.yml` and the release gate in `release.yml`
 pull that image, pinned to its index by digest, tag it
-`docker.io/library/node:20-slim` and set that variable, so there the journey
-runs on the runner's rootless Podman. A cold embedding cache can require downloading
+`docker.io/library/node:20-slim` and set that variable, so there a missing
+image fails the journey instead of skipping it; the Session then runs on the
+runner's rootless Podman. A cold embedding cache can require downloading
 the pinned local embedding model. The harness starts only a fresh loopback Axocoatl daemon; its
 Sessions remain at environment review, while controlled browser responses mock
 the Preview and failure paths called out below.
