@@ -8,4 +8,5 @@
 #
 #   ed25519 <base64 public key> axocoatl@<host> <short id>
 #
-# No key is listed yet, so no release can pass the gate until one is.
+# The gate Mac's key (an Apple M5 Pro, 48 GB), made on 2026-10-21:
+ed25519 O668TTUWxJS9WgH8y9ji7F4uVzse9zeQN5nH/aYB3qs= axocoatl@Mac-11.lan 55371c0d1106a8f9
