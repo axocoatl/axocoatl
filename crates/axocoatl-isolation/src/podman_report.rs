@@ -684,9 +684,14 @@ impl IdMapTools {
     /// does it: a helper that cannot map, or no known package.
     fn manual(&self) -> Option<String> {
         if !self.unprivileged.is_empty() {
+            let (they, are, have, their) = if self.unprivileged.len() == 1 {
+                ("it", "is", "has", "its")
+            } else {
+                ("they", "are", "have", "their")
+            };
             Some(format!(
-                "Reinstall the package that provides {} so that it is setuid root or has its \
-                 file capabilities again ({ID_MAP_PACKAGES})",
+                "Reinstall the package that provides {} so that {they} {are} setuid root or \
+                 {have} {their} file capabilities again ({ID_MAP_PACKAGES})",
                 self.unprivileged.join(" and ")
             ))
         } else if self.install.is_none() {
@@ -2369,6 +2374,19 @@ mod tests {
                  shadow-utils; Arch: shadow), then: podman system migrate"
             )
         );
+        // Both: "they".
+        report.id_map_tools = Some(IdMapTools {
+            missing: Vec::new(),
+            unprivileged: vec![
+                "/usr/bin/newuidmap".to_string(),
+                "/usr/bin/newgidmap".to_string(),
+            ],
+            install: tools.install.clone(),
+        });
+        assert!(ranges_finding(&report).unwrap().fix.unwrap().starts_with(
+            "Reinstall the package that provides /usr/bin/newuidmap and /usr/bin/newgidmap so \
+                 that they are setuid root or have their file capabilities again"
+        ));
         // No known package manager (openSUSE among them): in words.
         report.id_map_tools = Some(IdMapTools {
             install: None,
