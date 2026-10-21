@@ -226,9 +226,9 @@ Whether a page on a Preview origin may set a cookie for the parent domain,
 and so does WebKit on Linux. **Safari on macOS accepts it** when a Preview page
 that runs top-level sets it from script (`document.cookie`), and then sends it
 to the workbench at `localhost` (on every port) and to the Preview of every
-other Session. An app's server cannot do the same: the Preview proxies remove
-`Domain` from each `Set-Cookie` they forward, so Safari keeps those cookies
-host-only on the Preview origin that set them. A Preview runs top-level when
+other Session. An app's server cannot do the same through the Preview
+proxies: they remove `Domain` from each `Set-Cookie` they forward, so Safari
+keeps those cookies host-only on the Preview origin that set them. A Preview runs top-level when
 you choose **Open full preview**, or in a window it opens itself: the Preview
 frame allows popups, so its code can open its own address in a new window when
 you click in it. Embedded in the workbench, Safari gives a Preview no cookies
@@ -252,24 +252,40 @@ can therefore:
 - Send the workbench `axocoatl-token-<port>-signed-in=1`. While that browser is
   signed out, each navigation you start then passes through the retry page once
   before the sign-in page.
-- Sign out a browser that signed in a few seconds earlier, by writing about
-  1,000 cookies at once. WebKit then dropped every cookie the browser held,
-  and the workbench answered with the sign-in page. This needs no
-  `Domain=localhost`: 1,000 host-only cookies did the same, so any page open in
-  Safari can do it. With 20 seconds between the sign-in and the cookies the
-  sign-in survived, and 300 cookies changed nothing. Open the sign-in link
-  again (`axocoatl url`) to sign back in.
+- Sign the workbench out of its API. Safari sends at most about 200 KB of
+  cookies with a request, puts the cookies with the longest path first, and
+  leaves out each one that no longer fits. About 52 cookies for `localhost`
+  with `Path=/api` (51 of 4,000 bytes, then smaller ones that fill what is
+  left) leave the token cookie off every API request, while `/` still gets
+  it, so the API answers 401. The workbench page then reloads once and shows
+  "This browser is signed out" with what to do; it reloads at most once a
+  minute, where it used to reload without end. Opening the sign-in link again
+  does not help while those cookies stay, and they stay until they expire or
+  you remove them: remove localhost's data in Safari > Settings > Privacy >
+  Manage Website Data, then open the sign-in link again (`axocoatl url`).
+- Keep the workbench's live connection from opening, with the same cookies
+  for `Path=/ws`. The workbench loads and its API answers, but live updates
+  stop and the status bar says the live connection is reconnecting. Removing
+  localhost's data and signing in again restores it.
+- Sign out a browser that signed in a few seconds earlier and has no
+  workbench page open, by writing about 1,000 cookies at once. WebKit then
+  dropped every cookie the browser held, and the workbench answered with the
+  sign-in page. This needs no `Domain=localhost`: 1,000 host-only cookies of a
+  page on `127.0.0.1` did the same, so any page open in Safari can do it. With
+  the workbench page still open, or 20 seconds between the sign-in and the
+  cookies, the sign-in survived, and 300 cookies changed nothing. Open the
+  sign-in link again (`axocoatl url`) to sign back in.
 
 It cannot:
 
 - Sign in or use the API. A forged `axocoatl-token-<port>` cookie never matches
   the token, and the signed-in cookie is never a credential.
-- Sign the workbench out with the cookies it sets, short of the flood above.
-  The daemon reads the `Cookie` header as bytes, so the token cookie stays
-  readable beside a cookie that is not ASCII (Safari sends `é` as the byte
-  0xE9), beside a forged `axocoatl-token-<port>` sent before or after it, and
-  beside 40 cookies of 1 KB: the workbench reloads, connects, and its API
-  answers. Safari refuses a cookie that holds a control character.
+- Sign the workbench out with a cookie that is not ASCII, a forged
+  `axocoatl-token-<port>` sent before or after the real one, or 40 cookies of
+  1 KB. The daemon reads the `Cookie` header as bytes, so the token cookie
+  stays readable beside them (Safari sends `é` as the byte 0xE9): the
+  workbench reloads, connects, and its API answers. Safari refuses a cookie
+  that holds a control character other than tab.
 - Read the workbench's cookies. They are host-only on `localhost` and HttpOnly,
   so Safari never sends them to a Preview origin. Safari does send a forged
   `axocoatl-token-*` cookie there; the Preview proxies strip every
