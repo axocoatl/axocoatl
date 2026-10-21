@@ -2864,6 +2864,63 @@ async fn enter_leaves_an_existing_ollama_configuration_alone() {
         .any(|call| call.starts_with("brew services")));
 }
 
+/// Doctor on a 16 GB computer with a Claude Code setup whose local
+/// reviewer, gpt-oss:20b, is not pulled: too large to pull here, so the fix
+/// moves the reviewer to OpenRouter and keeps Claude Code (it used to say
+/// `--writer openrouter`).
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_moves_a_too_large_reviewer_not_the_claude_code_writer() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    let config_path = shims.home.path().join("config.yaml");
+    let reviewer = config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b");
+    std::fs::write(
+        &config_path,
+        config::render(&config::ConfigPlan {
+            ollama_base_url: Some(ollama.url()),
+            openrouter_key: None,
+            lead: reviewer.clone(),
+            reviewer: reviewer.clone(),
+            run_writer: None,
+            run_reviewer: Some(reviewer),
+            port: free_port(),
+            note: "Claude Code writes".into(),
+            writer: "claude-code",
+            codex_credential: None,
+        }),
+    )
+    .unwrap();
+    let env = crate::doctor::Environment {
+        memory_bytes: Some(16 * GIB),
+        ..doctor_env(&shims)
+    };
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let item = report
+        .sections
+        .models
+        .iter()
+        .find(|item| item.name == "Model gpt-oss:20b")
+        .unwrap_or_else(|| panic!("{:?}", report.sections.models));
+    assert_eq!(item.status, crate::doctor::Status::Fail);
+    assert_eq!(
+        item.detail,
+        "gpt-oss:20b is not pulled, and at 13.8 GB it is too large for this computer's 16 GB"
+    );
+    assert_eq!(
+        item.fix.as_deref(),
+        Some(
+            "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer claude-code \
+             --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller reviewer (`axocoatl \
+             onboard --replace --writer claude-code`) (`--update` would keep the Agents that run \
+             gpt-oss:20b; `--replace` backs this configuration up first)"
+        )
+    );
+}
+
 /// Doctor knows which writer the setup chose: a Claude Code setup without
 /// its image or its sign-in is not ready, and no `axocoatl run fix` line
 /// tells it to switch to a local writer.

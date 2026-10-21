@@ -26,7 +26,7 @@ pub(crate) mod config;
 pub(crate) mod detect;
 pub(crate) mod host;
 mod ollama;
-mod openrouter;
+pub(crate) mod openrouter;
 mod sandbox;
 pub(crate) mod smoke;
 pub(crate) mod ui;
