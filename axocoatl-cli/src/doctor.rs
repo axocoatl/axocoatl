@@ -219,32 +219,25 @@ impl Environment {
 }
 
 /// How to install Podman here; `homebrew`: Homebrew is installed (macOS),
-/// so onboarding can install Podman with it.
+/// so onboarding can install Podman with it. The words are the workbench
+/// readiness item's ([`axocoatl_isolation::podman::install_fix`]).
 pub(crate) fn podman_install_fix(os: &Os, homebrew: bool) -> String {
+    axocoatl_isolation::podman::install_fix(&podman_install_route(os, homebrew))
+}
+
+/// What onboarding does about a missing Podman on `os`, as its install step
+/// decides it.
+pub(crate) fn podman_install_route(
+    os: &Os,
+    homebrew: bool,
+) -> axocoatl_isolation::podman::InstallRoute {
+    use axocoatl_isolation::podman::InstallRoute;
     match os {
-        Os::MacOs {
-            apple_silicon: false,
-            ..
-        } => "Podman 6 no longer supports Intel Macs and Homebrew refuses it: install the Podman \
-              5.8 amd64 package from https://github.com/containers/podman/releases (Axocoatl has \
-              not been tested on Intel Macs), then run `axocoatl onboard`"
-            .to_string(),
-        Os::MacOs { .. } if homebrew => {
-            "Run `axocoatl onboard` (it installs Podman after asking), or: brew install podman"
-                .to_string()
-        }
-        Os::MacOs { .. } => "Install Podman with the installer from https://podman.io (or \
-                             install Homebrew and run `brew install podman`), then run \
-                             `axocoatl onboard`"
-            .to_string(),
+        Os::MacOs { apple_silicon, .. } => InstallRoute::for_mac(*apple_silicon, homebrew),
+        Os::Linux { release, .. } if release.podman_too_old() => InstallRoute::LinuxTooOld,
         Os::Linux { release, .. } => match release.package_manager() {
-            Some(manager) => format!(
-                "Run `axocoatl onboard` (it installs Podman after asking), or: {}",
-                manager.install(&["podman"]).display()
-            ),
-            None => "Install Podman 4.9 or later (https://podman.io/docs/installation), then run \
-                     `axocoatl onboard`"
-                .to_string(),
+            Some(manager) => InstallRoute::LinuxPackage(manager.install(&["podman"]).display()),
+            None => InstallRoute::LinuxOther,
         },
     }
 }
@@ -1621,8 +1614,54 @@ mod tests {
         };
         for homebrew in [true, false] {
             let fix = podman_install_fix(&ubuntu, homebrew);
-            assert!(fix.ends_with("sudo apt-get install -y podman"), "{fix}");
+            assert!(fix.ends_with("`sudo apt-get install -y podman`"), "{fix}");
             assert!(!fix.contains("brew"), "{fix}");
+        }
+        // Onboarding refuses Ubuntu 22.04's Podman, so doctor does not say it
+        // installs it there.
+        let jammy = Os::Linux {
+            release: detect::OsRelease::parse("ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"22.04\"\n"),
+            wsl: None,
+            systemd: true,
+        };
+        let fix = podman_install_fix(&jammy, false);
+        assert!(fix.contains("use Ubuntu 24.04 or newer"), "{fix}");
+        assert!(!fix.contains("it installs Podman"), "{fix}");
+    }
+
+    /// The daemon decides the route from `/etc/os-release` itself
+    /// (`InstallRoute::for_linux`, for the workbench's readiness item); it
+    /// must decide what onboarding and doctor decide.
+    #[test]
+    fn the_daemon_reads_the_same_podman_install_route_as_onboarding() {
+        for os_release in [
+            "ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\n",
+            "ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"22.04\"\n",
+            "ID=ubuntu\nVERSION_ID=\"20.04\"\n",
+            "ID=debian\nVERSION_ID=\"13\"\n",
+            "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=\"22\"\n",
+            "ID=pop\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=\"24.04\"\n",
+            "ID=fedora\nVERSION_ID=42\n",
+            "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\nVERSION_ID=\"9.4\"\n",
+            "ID=centos\n",
+            "ID=arch\n",
+            "ID=manjaro\nID_LIKE=arch\n",
+            "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+            "ID=\"sles\"\nVERSION_ID=\"15.6\"\n",
+            "ID=nixos\n",
+            "ID=alpine\n",
+            "",
+        ] {
+            let os = Os::Linux {
+                release: detect::OsRelease::parse(os_release),
+                wsl: None,
+                systemd: true,
+            };
+            assert_eq!(
+                podman_install_route(&os, false),
+                axocoatl_isolation::podman::InstallRoute::for_linux(os_release),
+                "{os_release}"
+            );
         }
     }
 

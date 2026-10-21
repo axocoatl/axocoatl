@@ -95,10 +95,10 @@ async fn image_present_with(program: &str, image: &str) -> Result<bool, String> 
         .output()
         .await
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => {
-                "podman is not installed: run `axocoatl onboard` (it installs Podman after asking)"
-                    .to_string()
-            }
+            std::io::ErrorKind::NotFound => format!(
+                "podman is not installed. {}",
+                axocoatl_isolation::podman::manual_install_hint()
+            ),
             _ => format!("running podman: {error}"),
         })?;
     match output.status.code() {

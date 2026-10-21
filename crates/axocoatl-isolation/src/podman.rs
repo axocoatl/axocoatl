@@ -49,7 +49,7 @@ impl PodmanReadiness {
         match self {
             PodmanReadiness::Ready => "podman ready".to_string(),
             PodmanReadiness::NotInstalled => {
-                format!("podman not installed — {}", manual_install_hint())
+                format!("podman not installed. {}", manual_install_hint())
             }
             PodmanReadiness::MachineMissing => format!(
                 "podman installed, but no VM — run `axocoatl onboard`, or: {}",
@@ -420,7 +420,7 @@ fn ready_action(readiness: PodmanReadiness) -> ReadyAction {
             machine_create_hint()
         )),
         PodmanReadiness::NotInstalled => ReadyAction::Fail(format!(
-            "podman is required for local Session isolation but is not installed. Axocoatl will not install host software automatically; {}",
+            "podman is required for local Session isolation but is not installed. Axocoatl will not install host software automatically. {}",
             manual_install_hint()
         )),
         PodmanReadiness::Unavailable(error) => ReadyAction::Fail(format!(
@@ -491,33 +491,161 @@ async fn machine_start(
     }
 }
 
-/// The exact command to install podman on the current OS.
+/// How to install Podman on this computer: [`install_fix`] for
+/// [`InstallRoute::detect`].
 pub fn manual_install_hint() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        "run `axocoatl onboard` (it asks before installing), or install it, e.g.: sudo apt-get \
-         install -y podman  (or dnf/pacman/zypper)"
-            .to_string()
+    install_fix(&InstallRoute::detect())
+}
+
+/// How Podman gets onto a computer, which decides what `axocoatl onboard`
+/// can do about a missing Podman. `axocoatl doctor`, onboarding, the
+/// workbench's first screen and the daemon's refusals all print
+/// [`install_fix`] for it, so none of them says onboarding installs Podman
+/// where it cannot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallRoute {
+    /// macOS on Apple silicon with Homebrew: onboarding runs
+    /// `brew install podman` after asking.
+    MacHomebrew,
+    /// macOS on Apple silicon without Homebrew: onboarding installs nothing
+    /// and points to Podman's installer.
+    MacInstaller,
+    /// macOS on Intel, which Podman 6 and Homebrew's Podman no longer
+    /// support: onboarding installs nothing.
+    IntelMac,
+    /// Linux whose package manager onboarding knows: onboarding runs this
+    /// command after asking.
+    LinuxPackage(String),
+    /// Ubuntu 22.04 or older, whose Podman (3.4.4 on 22.04) Axocoatl
+    /// cannot use: onboarding installs nothing.
+    LinuxTooOld,
+    /// Linux whose package manager onboarding does not know.
+    LinuxOther,
+    /// Windows, which is not a release target.
+    Windows,
+}
+
+impl InstallRoute {
+    /// This computer's route, from what the daemon can see: the processor
+    /// and Homebrew (`brew` on `PATH`, in `/opt/homebrew/bin` or in
+    /// `/usr/local/bin`, where onboarding looks) on macOS, and
+    /// `/etc/os-release` on Linux.
+    pub fn detect() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            let homebrew = command_exists_on_path("brew")
+                || ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+                    .iter()
+                    .any(|path| is_executable_file(std::path::Path::new(path)));
+            Self::for_mac(std::env::consts::ARCH == "aarch64", homebrew)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self::for_linux(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            Self::Windows
+        }
     }
-    #[cfg(target_os = "macos")]
-    {
-        format!(
-            "run `axocoatl onboard` (it asks before installing), or install it: brew install \
-             podman && {}",
+
+    /// The route on a Mac: `apple_silicon`, and whether Homebrew is installed.
+    pub fn for_mac(apple_silicon: bool, homebrew: bool) -> Self {
+        match (apple_silicon, homebrew) {
+            (false, _) => Self::IntelMac,
+            (true, true) => Self::MacHomebrew,
+            (true, false) => Self::MacInstaller,
+        }
+    }
+
+    /// The route on Linux, from the text of `/etc/os-release`: the package
+    /// manager of the distribution or the one it is like (`ID`, `ID_LIKE`),
+    /// and Ubuntu's `VERSION_ID`. Onboarding decides the same way.
+    pub fn for_linux(os_release: &str) -> Self {
+        let mut id = String::new();
+        let mut id_like = Vec::new();
+        let mut version_id = String::new();
+        for line in os_release.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            match key.trim() {
+                "ID" => id = value.to_ascii_lowercase(),
+                "ID_LIKE" => {
+                    id_like = value
+                        .split_whitespace()
+                        .map(str::to_ascii_lowercase)
+                        .collect()
+                }
+                "VERSION_ID" => version_id = value.to_string(),
+                _ => {}
+            }
+        }
+        let is = |family: &str| id == family || id_like.iter().any(|like| like == family);
+        let ubuntu_major = version_id
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u32>().ok());
+        if id == "ubuntu" && ubuntu_major.is_some_and(|major| major <= 22) {
+            return Self::LinuxTooOld;
+        }
+        let command = if is("debian") || is("ubuntu") {
+            "sudo apt-get install -y podman"
+        } else if is("fedora") || is("rhel") || is("centos") {
+            "sudo dnf install -y podman"
+        } else if is("arch") {
+            "sudo pacman -S --noconfirm podman"
+        } else if is("suse") || id.starts_with("opensuse") || is("sles") {
+            "sudo zypper install -y podman"
+        } else {
+            return Self::LinuxOther;
+        };
+        Self::LinuxPackage(command.to_string())
+    }
+}
+
+/// What to do about a missing Podman on `route`: `axocoatl onboard` once,
+/// saying whether it installs Podman there, and the command or installer to
+/// use instead. Commands are in backticks; there is no final period.
+pub fn install_fix(route: &InstallRoute) -> String {
+    match route {
+        InstallRoute::MacHomebrew => {
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`"
+                .to_string()
+        }
+        InstallRoute::MacInstaller => "Install Podman with the installer from https://podman.io \
+                                       (or install Homebrew and run `brew install podman`), then \
+                                       run `axocoatl onboard`"
+            .to_string(),
+        InstallRoute::IntelMac => "Podman 6 no longer supports Intel Macs and Homebrew refuses \
+                                   it: install the Podman 5.8 amd64 package from \
+                                   https://github.com/containers/podman/releases (Axocoatl has not \
+                                   been tested on Intel Macs), then run `axocoatl onboard`"
+            .to_string(),
+        InstallRoute::LinuxPackage(command) => {
+            format!("Run `axocoatl onboard` (it installs Podman after asking), or: `{command}`")
+        }
+        InstallRoute::LinuxTooOld => "This Ubuntu's Podman is too old (22.04 ships 3.4.4; \
+                                      Axocoatl runs need 4.3 or later, 4.9 tested): use Ubuntu \
+                                      24.04 or newer"
+            .to_string(),
+        InstallRoute::LinuxOther => "Install Podman 4.9 or later \
+                                     (https://podman.io/docs/installation), then run `axocoatl \
+                                     onboard`"
+            .to_string(),
+        InstallRoute::Windows => format!(
+            "Install Podman (`winget install RedHat.Podman`), then: `{}`",
             machine_create_hint()
-        )
+        ),
     }
-    #[cfg(target_os = "windows")]
-    {
-        format!(
-            "install it: winget install RedHat.Podman, then: {}",
-            machine_create_hint()
-        )
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        "install podman — see https://podman.io/docs/installation".to_string()
-    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 // ── The machine Axocoatl creates ────────────────────────────────────────
@@ -685,9 +813,75 @@ mod tests {
         };
         assert!(message.contains(&hint), "{message}");
         assert!(message.contains("axocoatl onboard"), "{message}");
-        if cfg!(target_os = "macos") {
-            assert!(manual_install_hint().contains(&hint));
+        // An install hint that goes on to the machine prints the sized one.
+        let windows = install_fix(&InstallRoute::Windows);
+        assert!(windows.contains(&hint), "{windows}");
+    }
+
+    /// The fix for a missing Podman says `axocoatl onboard` once, claims it
+    /// installs Podman only where it does (Homebrew on Apple silicon, a
+    /// package manager onboarding knows), and otherwise names what to
+    /// install.
+    #[test]
+    fn the_install_fix_follows_what_onboarding_can_do_here() {
+        let fix = |route: InstallRoute| install_fix(&route);
+        assert_eq!(
+            fix(InstallRoute::for_mac(true, true)),
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`"
+        );
+        assert_eq!(
+            fix(InstallRoute::for_mac(true, false)),
+            "Install Podman with the installer from https://podman.io (or install Homebrew and \
+             run `brew install podman`), then run `axocoatl onboard`"
+        );
+        for homebrew in [true, false] {
+            let intel = fix(InstallRoute::for_mac(false, homebrew));
+            assert!(intel.starts_with("Podman 6 no longer supports Intel Macs"));
+            assert!(!intel.contains("brew install"), "{intel}");
         }
+        let ubuntu =
+            "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\n";
+        assert_eq!(
+            fix(InstallRoute::for_linux(ubuntu)),
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get install \
+             -y podman`"
+        );
+        assert_eq!(
+            InstallRoute::for_linux("ID=debian\nVERSION_ID=\"12\"\n"),
+            InstallRoute::LinuxPackage("sudo apt-get install -y podman".into())
+        );
+        assert_eq!(
+            InstallRoute::for_linux("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"),
+            InstallRoute::LinuxPackage("sudo dnf install -y podman".into())
+        );
+        assert_eq!(
+            InstallRoute::for_linux("ID=arch\n"),
+            InstallRoute::LinuxPackage("sudo pacman -S --noconfirm podman".into())
+        );
+        assert_eq!(
+            InstallRoute::for_linux("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
+            InstallRoute::LinuxPackage("sudo zypper install -y podman".into())
+        );
+        let jammy = InstallRoute::for_linux("ID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"22.04\"\n");
+        assert_eq!(jammy, InstallRoute::LinuxTooOld);
+        assert!(!fix(jammy).contains("axocoatl onboard` (it installs"));
+        let other = fix(InstallRoute::for_linux("ID=nixos\n"));
+        assert!(other.starts_with("Install Podman 4.9 or later"), "{other}");
+        for route in [
+            InstallRoute::MacHomebrew,
+            InstallRoute::MacInstaller,
+            InstallRoute::IntelMac,
+            InstallRoute::LinuxPackage("sudo apt-get install -y podman".into()),
+            InstallRoute::LinuxTooOld,
+            InstallRoute::LinuxOther,
+            InstallRoute::Windows,
+        ] {
+            let text = fix(route);
+            assert!(text.matches("axocoatl onboard").count() <= 1, "{text}");
+            assert!(!text.ends_with('.'), "{text}");
+            assert!(!text.contains("  "), "{text}");
+        }
+        assert_eq!(manual_install_hint(), install_fix(&InstallRoute::detect()));
     }
 
     #[cfg(unix)]
