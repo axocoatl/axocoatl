@@ -425,6 +425,7 @@ path_expect_next_runs() {
 # that shell reads.
 real_shells=""
 missing_shells=""
+unreadable_with_sh=""
 path_expect_new_shells_find() {
   shell_name=$1
   shift
@@ -442,6 +443,13 @@ path_expect_new_shells_find() {
     case " $missing_shells " in *" $shell_name "*) ;; *) missing_shells="$missing_shells${missing_shells:+ }$shell_name" ;; esac
     [ "$shell_name" = fish ] && return 0
     for profile_file in "$@"; do
+      # A file in that shell's own syntax (zsh's or bash's `function f { }`)
+      # may not parse as sh, which stops reading it at the error; such a file
+      # was checked for the line above, and is not read with sh.
+      if ! /bin/sh -n "$profile_file" >/dev/null 2>&1; then
+        case " $unreadable_with_sh " in *" $name "*) ;; *) unreadable_with_sh="$unreadable_with_sh${unreadable_with_sh:+ }$name" ;; esac
+        continue
+      fi
       shell_out="$(env -i HOME="$case_home" PATH=/usr/bin:/bin /bin/sh -c '. "$1" >/dev/null 2>&1; echo "PATH=$PATH"; command -v axocoatl' sh "$profile_file")" || true
       path_expect_once "$profile_file read with sh" "$shell_out" "$@"
     done
@@ -1582,4 +1590,5 @@ path_expect_text 'checksum mismatch'
 
 shells_note="new shells started: ${real_shells:-none}"
 [ -z "$missing_shells" ] || shells_note="$shells_note; not installed here, startup files read with sh instead: $missing_shells"
+[ -z "$unreadable_with_sh" ] || shells_note="$shells_note; not sh syntax, so only checked for the line: $unreadable_with_sh"
 echo "Installer regression contract: PASS ($case_count local simulations, $startup_count startup files read; $shells_note)"
