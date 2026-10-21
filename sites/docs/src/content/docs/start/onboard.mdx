@@ -99,9 +99,9 @@ On **macOS**:
       This downloads about 0.9 GB and uses up to 8 GiB of memory while it runs. [Y/n]
   ```
 
-  The size is 6 CPUs and 8 GiB, the size Axocoatl is tested with, clamped to half
-  the processors and half the memory (`--machine-cpus` and `--machine-memory` change
-  it); any other size is printed as not yet tested. The machine is never rootful. When
+  The size is 6 CPUs and 8 GiB, clamped to half the processors and half the memory
+  (`--machine-cpus` and `--machine-memory` change it); onboarding prints any other size
+  as not yet tested. The machine is never rootful. When
   Podman would create it with a provider other than `applehv` (the podman.io package
   defaults to libkrun), onboarding offers to write `[machine] provider = "applehv"` to
   `~/.config/containers/containers.conf` first. It creates a machine only where
@@ -143,9 +143,9 @@ On **Linux and WSL2**:
   | Arch | `sudo pacman -S --noconfirm podman` |
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
-- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (4.9 is
-  tested), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3
-  to 4.8 works but is reported as not tested.
+- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (CI runs
+  4.9.3), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3 to
+  4.8 is accepted and reported as not tested.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
   its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
