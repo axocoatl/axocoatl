@@ -7639,6 +7639,32 @@ async fn proxy_preview_http_to_port(
     response
 }
 
+/// The `Cookie` header a Preview WebSocket handshake forwards: without any
+/// Axocoatl token cookie ([`crate::auth::without_local_token_cookies`]) and
+/// without a cookie that is not visible ASCII. tungstenite writes the
+/// upstream handshake and refuses a header value outside visible ASCII, so
+/// one such cookie failed every Preview WebSocket (development servers' live
+/// reload) with 502. Safari on macOS sends a `Domain=localhost` cookie that
+/// any top-level Preview page set to `é` as the byte 0xE9, to every Preview.
+/// Plain HTTP requests forward those bytes unchanged.
+fn preview_websocket_cookie(value: &HeaderValue) -> Option<HeaderValue> {
+    let without_tokens = crate::auth::without_local_token_cookies(value)?;
+    let kept = without_tokens
+        .as_bytes()
+        .split(|byte| *byte == b';')
+        .map(<[u8]>::trim_ascii)
+        .filter(|pair| {
+            !pair.is_empty() && pair.iter().all(|byte| matches!(byte, b' '..=b'~' | b'\t'))
+        })
+        .collect::<Vec<_>>()
+        .join(&b"; "[..]);
+    if kept.is_empty() {
+        None
+    } else {
+        HeaderValue::from_bytes(&kept).ok()
+    }
+}
+
 async fn preview_websocket_proxy(
     state: AppState,
     target: PreviewHostTarget,
@@ -7669,7 +7695,7 @@ async fn preview_websocket_proxy_to_port(
     let cookie = parts
         .headers
         .get(header::COOKIE)
-        .and_then(crate::auth::without_local_token_cookies);
+        .and_then(preview_websocket_cookie);
     let upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(upgrade) => upgrade,
         Err(error) => return error.into_response(),
@@ -9333,6 +9359,41 @@ mod tests {
     }
 
     #[test]
+    fn preview_websocket_cookie_drops_tokens_and_cookies_it_cannot_write() {
+        let forwarded = |value: &[u8]| {
+            preview_websocket_cookie(&HeaderValue::from_bytes(value).unwrap())
+                .map(|value| value.to_str().unwrap().to_string())
+        };
+        assert_eq!(
+            forwarded(
+                b"junk=\xe9; axocoatl-token-18080=forged; app=1; axocoatl-token-18080-signed-in=1"
+            )
+            .as_deref(),
+            Some("app=1")
+        );
+        assert_eq!(
+            forwarded(b"app=1; j\xfcnk=1; theme=dark; utf8=\xc3\xa9; tab=a\tb").as_deref(),
+            Some("app=1; theme=dark; tab=a\tb")
+        );
+        assert_eq!(forwarded(b"junk=\xe9"), None);
+        assert_eq!(forwarded(b"axocoatl-token-18080=secret"), None);
+        assert_eq!(forwarded(b"a=1;b=2").as_deref(), Some("a=1; b=2"));
+
+        // Why: the upstream handshake cannot carry the non-ASCII cookie, so
+        // forwarding it as HTTP does failed the whole WebSocket.
+        let handshake = |cookie: HeaderValue| {
+            let mut request = "ws://127.0.0.1:9/hmr".into_client_request().unwrap();
+            request.headers_mut().insert(header::COOKIE, cookie);
+            tokio_tungstenite::tungstenite::handshake::client::generate_request(request)
+        };
+        let browser_sent = HeaderValue::from_bytes(b"junk=\xe9; app=1").unwrap();
+        assert!(
+            handshake(crate::auth::without_local_token_cookies(&browser_sent).unwrap()).is_err()
+        );
+        assert!(handshake(preview_websocket_cookie(&browser_sent).unwrap()).is_ok());
+    }
+
+    #[test]
     fn preview_set_cookie_loses_only_its_domain() {
         let host_only = |value: &[u8]| {
             host_only_preview_cookie(&HeaderValue::from_bytes(value).unwrap())
@@ -9633,6 +9694,11 @@ mod tests {
                             .get(header::SEC_WEBSOCKET_PROTOCOL)
                             .and_then(|value| value.to_str().ok())
                             .map(str::to_string),
+                        request
+                            .headers()
+                            .get(header::COOKIE)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_string),
                     );
                     observed_tx
                         .take()
@@ -9726,6 +9792,12 @@ mod tests {
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("preview-v1, preview-v2"),
         );
+        request.headers_mut().insert(
+            header::COOKIE,
+            HeaderValue::from_static(
+                "axocoatl-token-18080=workbench-secret; app=1; axocoatl-token-18080-signed-in=1",
+            ),
+        );
         let (mut client, response) = tokio_tungstenite::connect_async(request)
             .await
             .expect("connect through real Preview WebSocket proxy");
@@ -9756,6 +9828,8 @@ mod tests {
         assert_eq!(observed.1.as_deref(), Some(virtual_host.as_str()));
         assert_eq!(observed.2.as_deref(), Some(virtual_origin.as_str()));
         assert_eq!(observed.3.as_deref(), Some("preview-v1, preview-v2"));
+        // Session code never receives the workbench sign-in cookies.
+        assert_eq!(observed.4.as_deref(), Some("app=1"));
 
         upstream.await.expect("real WebSocket upstream joins");
         shutdown_tx
