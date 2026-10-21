@@ -82,7 +82,10 @@ path can fall through to the control origin. Each Session and logical port has
 its own browser storage/cookie origin. Modern browsers can block ordinary app
 cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
-cookies work without becoming shared sibling cookies. A browser GET or HEAD
+cookies work without becoming shared sibling cookies. Safari on macOS also
+accepts a `Domain=localhost` cookie from a top-level Preview page and sends it
+to the workbench and to every other Preview
+([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
 for the exact `/` workbench document on a loopback IP literal redirects to
 `localhost` on the same listener and preserves the query. API, health, and
 asset URLs do not redirect.
@@ -858,10 +861,13 @@ WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
 non-HTML bodies stream without whole-response buffering. The upstream app sees
 the validated virtual authority while the TCP connection remains loopback.
 Sibling Sessions can therefore use the same logical port without sharing a
-host port, browser origin, host-only cookies, or control-plane access. Rejection
-of a parent-domain cookie such as `Domain=localhost` is browser policy; the
-current Chromium journey verifies it, while the proxy forwards application
-`Set-Cookie` headers unchanged. Both proxies remove `axocoatl-token-*` cookies
+host port, browser origin, host-only cookies, or control-plane access. Whether
+a parent-domain cookie such as `Domain=localhost` is refused is browser policy:
+Chromium and WebKit on Linux refuse it, and Safari on macOS accepts it from a
+top-level Preview page and sends it to the workbench and to every other Preview
+([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). The
+proxy forwards application `Set-Cookie` headers unchanged, `Domain` included,
+and forwards request cookies other than Axocoatl's. Both proxies remove `axocoatl-token-*` cookies
 from forwarded requests and drop upstream `Set-Cookie` headers that would set
 one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
 authentication and never forwards Axocoatl credential headers. Its sandboxed

@@ -207,9 +207,15 @@ the Preview and failure paths called out below.
 - Opening the workbench at a loopback IP proves the product's canonical
   `127.0.0.1` → `localhost` document redirect. Preview cookie coverage checks
   that an ordinary embedded write is unavailable under modern third-party
-  policy, **Open full preview** opens the exact virtual URL with no opener,
-  host-only cookies work top-level, and neither that cookie nor an attempted
-  `Domain=localhost` parent cookie reaches a sibling Session/port origin.
+  policy and reaches nothing, **Open full preview** opens the exact virtual URL
+  with no opener, and host-only cookies work top-level and reach neither the
+  workbench nor another Session/port origin. A loopback cookie echo reads the
+  real Cookie headers (cookies ignore ports): no request to a Preview origin
+  ever carries an `axocoatl-token-*` cookie, and the workbench still opens with
+  its own. An attempted `Domain=localhost` cookie from the top-level Preview is
+  refused in Chromium and in WebKit on Linux; in WebKit on macOS (Safari) the
+  journey asserts the known behaviour instead, that it reaches the workbench and
+  every other Preview origin (`operate/security.mdx`).
 - Manual E2B cleanup is high-friction for both retained identities: the dialog
   requires the exact runtime ID or `axocoatl_creation_token`, begins unchecked,
   sends no request before affirmation, posts the exact confirmation payload,
