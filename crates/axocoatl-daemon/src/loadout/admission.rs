@@ -544,9 +544,11 @@ pub fn podman_unanswered(error: &str) -> String {
 
 /// `. ` and what to do when `error` is Podman failing for want of
 /// `newuidmap` or `newgidmap` (whose own message says to run `podman system
-/// migrate`, which alone changes nothing); else nothing.
+/// migrate`, which alone changes nothing); else nothing, also when `error`
+/// already says it (`ensure_ready`'s message does).
 fn id_map_tools_note(error: &str) -> String {
     axocoatl_isolation::podman_report::id_map_tools_hint(error)
+        .filter(|hint| !error.contains(hint.as_str()))
         .map(|hint| format!(". {hint}"))
         .unwrap_or_default()
 }

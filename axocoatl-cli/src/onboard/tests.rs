@@ -649,13 +649,18 @@ esac"#
 /// maps a range), the computer's `/etc/subuid` and `/etc/subgid` as the
 /// shims' root has them, and `sudo` running `sudo_body`.
 async fn linux_sandbox(shims: &Shims, sudo_body: &str, args: OnboardArgs) -> Onboarding {
+    linux_sandbox_on(shims, ubuntu(), sudo_body, args).await
+}
+
+/// [`linux_sandbox`] on the Linux `os`.
+async fn linux_sandbox_on(shims: &Shims, os: Os, sudo_body: &str, args: OnboardArgs) -> Onboarding {
     shims.add("sudo", sudo_body);
     if !shims.dir.path().join("podman").exists() {
         podman_shim(shims);
     }
     podman_state(shims, &["machine", "running"]);
     let mut found = facts(
-        ubuntu(),
+        os,
         64,
         podman_report(shims).await,
         shims,
@@ -669,7 +674,8 @@ async fn linux_sandbox(shims: &Shims, sudo_body: &str, args: OnboardArgs) -> Onb
         shims.root.path(),
         &found.os,
         &found.user,
-    );
+    )
+    .await;
     let ui = Ui::new(Mode::Yes, args.allow_sudo, None);
     onboarding(shims, ui, found, args)
 }
@@ -946,7 +952,8 @@ async fn a_podman_reached_through_container_host_is_not_changed_here() {
             shims.root.path(),
             &found.os,
             &found.user,
-        );
+        )
+        .await;
         assert!(found.podman.subordinate_ids.is_none());
         assert!(found.podman.id_map_tools.is_none());
         let args = OnboardArgs {
@@ -974,8 +981,12 @@ async fn a_podman_reached_through_container_host_is_not_changed_here() {
                 "{:?}",
                 o.steps
             );
+            // `podman system migrate` only as that Podman's user, where it
+            // runs: never run or offered as a command for this computer.
             assert!(
-                !o.steps[0].contains("migrate") && !o.steps[0].contains("sudo"),
+                o.steps[0].contains("then run `podman system migrate` as that user there")
+                    && !o.steps[0].contains("&& podman system migrate")
+                    && !o.steps[0].contains("sudo"),
                 "{:?}",
                 o.steps
             );
@@ -999,6 +1010,11 @@ async fn missing_newuidmap_is_installed_instead_of_only_migrating() {
     for allow_sudo in [false, true] {
         let shims = Shims::new();
         shims.id_map_tools(None);
+        // Ubuntu without uidmap, as dpkg says it.
+        shims.add(
+            "dpkg-query",
+            "echo 'dpkg-query: no packages found matching uidmap' >&2; exit 1",
+        );
         stale_podman(&shims);
         podman_state(&shims, &["stale"]);
         let sudo = format!(
@@ -1077,6 +1093,11 @@ async fn a_podman_info_failing_without_newuidmap_installs_uidmap() {
     ] {
         let shims = Shims::new();
         shims.id_map_tools(None);
+        // Ubuntu without uidmap, as dpkg says it.
+        shims.add(
+            "dpkg-query",
+            "echo 'dpkg-query: no packages found matching uidmap' >&2; exit 1",
+        );
         stale_podman(&shims);
         if migrated {
             std::fs::write(shims.dir.path().join("migrated"), "").unwrap();
@@ -1180,6 +1201,11 @@ esac"#,
 async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
     let shims = Shims::new();
     shims.id_map_tools(None);
+    // Ubuntu without uidmap, as dpkg says it.
+    shims.add(
+        "dpkg-query",
+        "echo 'dpkg-query: no packages found matching uidmap' >&2; exit 1",
+    );
     stale_podman(&shims);
     podman_state(&shims, &["machine", "running"]);
     let env = crate::doctor::Environment {
@@ -1223,7 +1249,8 @@ async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
         "{:?}",
         report.steps_left
     );
-    // A newuidmap that is there but not setuid: reinstalled, in words.
+    // A newuidmap that is there but not setuid, uidmap's state not known
+    // (no dpkg-query): reinstalled, in words.
     shims.id_map_tools(Some(0o755));
     let report = crate::doctor::collect(&config_path, &env).await;
     let podman = &report.sections.sandbox[0];
@@ -1239,14 +1266,231 @@ async fn doctor_names_the_uidmap_install_when_podman_info_fails() {
             .starts_with("Reinstall the package that provides"),
         "{podman:?}"
     );
+    // dpkg says uidmap is installed: `apt-get install` would do nothing,
+    // so the fix is its reinstall, which restores the setuid bit.
+    shims.add("dpkg-query", "printf installed");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let podman = &report.sections.sandbox[0];
+    assert_eq!(
+        podman.fix.as_deref(),
+        Some("sudo apt-get install --reinstall -y uidmap && podman system migrate"),
+        "{podman:?}"
+    );
+    // The same for helpers deleted from an installed uidmap, which doctor
+    // says are missing, not "not installed".
+    shims.id_map_tools(None);
+    let report = crate::doctor::collect(&config_path, &env).await;
+    let podman = &report.sections.sandbox[0];
+    assert!(
+        podman.detail.contains(
+            "alex has: newuidmap and newgidmap are missing, though their package uidmap is \
+             installed, so `podman info` fails"
+        ),
+        "{podman:?}"
+    );
+    assert_eq!(
+        podman.fix.as_deref(),
+        Some("sudo apt-get install --reinstall -y uidmap && podman system migrate")
+    );
+}
+
+/// `dnf install -y shadow-utils` does nothing on Fedora and RHEL, where
+/// shadow-utils is always installed, and `apt-get install -y uidmap` does
+/// nothing once uidmap is installed, even when a helper's file is gone:
+/// onboarding offers the reinstall then, which restores it. When an install
+/// or reinstall that ran changes nothing, the step left says so in words
+/// and does not offer the same command again (nor run `podman system
+/// migrate`, which would fail the same way).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_install_that_changes_nothing_is_not_offered_again() {
+    let fedora = || Os::Linux {
+        release: OsRelease::parse("ID=fedora\nVERSION_ID=42\n"),
+        wsl: None,
+        systemd: true,
+    };
+    for (os, query, answer, reinstall, restores) in [
+        (
+            fedora(),
+            "rpm",
+            "echo shadow-utils-4.17.4-1.fc42.aarch64",
+            "dnf reinstall -y shadow-utils",
+            true,
+        ),
+        (
+            fedora(),
+            "rpm",
+            "echo shadow-utils-4.17.4-1.fc42.aarch64",
+            "dnf reinstall -y shadow-utils",
+            false,
+        ),
+        (
+            ubuntu(),
+            "dpkg-query",
+            "printf installed",
+            "apt-get install --reinstall -y uidmap",
+            true,
+        ),
+        (
+            ubuntu(),
+            "dpkg-query",
+            "printf installed",
+            "apt-get install --reinstall -y uidmap",
+            false,
+        ),
+    ] {
+        let shims = Shims::new();
+        shims.id_map_tools(None);
+        stale_podman(&shims);
+        shims.add(query, answer);
+        // The reinstall puts the helpers back, setuid, or (a reinstall
+        // that cannot help) does nothing and succeeds, as `dnf install` of
+        // an installed package does.
+        let restore = if restores {
+            format!(
+                r#"for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{}/$n"; chmod 4755 "{}/$n"; done"#,
+                shims.dir.path().display(),
+                shims.dir.path().display()
+            )
+        } else {
+            ":".to_string()
+        };
+        let sudo = format!(
+            r#"case "$*" in
+  "{reinstall}") {restore} ;;
+  *) exit 1 ;;
+esac"#
+        );
+        let mut o = linux_sandbox_on(
+            &shims,
+            os,
+            &sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        let ready = sandbox::run(&mut o).await;
+        let calls = shims.calls();
+        let sudo_calls: Vec<&String> = calls
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .collect();
+        assert_eq!(sudo_calls, [&format!("sudo {reinstall}")], "{calls:?}");
+        // Asked as a reinstall, with the command it runs.
+        let output = o.ui.output();
+        assert!(
+            output.contains(&format!(
+                "Reinstall their package with `sudo {reinstall} && podman system migrate`? \
+                 `podman system migrate` stops your running containers. yes (--yes)"
+            )),
+            "{output}"
+        );
+        if restores {
+            assert!(ready, "{:?}\n{}", o.steps, o.ui.output());
+            let position = |wanted: &str| {
+                calls
+                    .iter()
+                    .position(|call| call.starts_with(wanted))
+                    .unwrap_or_else(|| panic!("{wanted}: {calls:?}"))
+            };
+            assert!(
+                position("sudo") < position("podman system migrate")
+                    && position("podman system migrate") < position("podman run"),
+                "{calls:?}"
+            );
+            assert!(o.steps.is_empty(), "{:?}", o.steps);
+        } else {
+            assert!(!ready);
+            let package = if query == "rpm" {
+                "shadow-utils"
+            } else {
+                "uidmap"
+            };
+            assert_eq!(
+                o.steps,
+                [format!(
+                    "`sudo {reinstall}` ran, but changed nothing: newuidmap and newgidmap are \
+                     missing, though their package {package} is installed. Running it again \
+                     would not help: find where this distribution puts newuidmap and \
+                     newgidmap, make sure they are on PATH and are setuid root or have file \
+                     capabilities, then run `podman system migrate`"
+                )]
+            );
+            // Nothing after the reinstall: migrate would fail the same way.
+            assert!(
+                !calls.iter().any(|call| call.contains("system migrate")),
+                "{calls:?}"
+            );
+        }
+    }
+}
+
+/// An install that ran, after which the helpers are on PATH but Podman
+/// still fails for want of them (it runs with another PATH): the step left
+/// offers no install of their package again, in either form.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_install_is_not_offered_again_when_podman_still_lacks_the_helpers() {
+    let shims = Shims::new();
+    shims.id_map_tools(None);
+    stale_podman(&shims);
+    let script = std::fs::read_to_string(shims.dir.path().join("podman"))
+        .unwrap()
+        .replace(
+            r#"elif [ ! -e "$D/newuidmap" ] && [ -f "$D/migrated" ]; then"#,
+            r#"elif { [ ! -e "$D/newuidmap" ] || [ -f "$D/other-path" ]; } && [ -f "$D/migrated" ]; then"#,
+        );
+    shims.write_program("podman", &script);
+    std::fs::write(shims.dir.path().join("other-path"), "").unwrap();
+    shims.add("dpkg-query", "printf installed");
+    let sudo = format!(
+        r#"case "$*" in
+  "apt-get install --reinstall -y uidmap") for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done ;;
+  *) exit 1 ;;
+esac"#,
+        dir = shims.dir.path().display()
+    );
+    let mut o = linux_sandbox(
+        &shims,
+        &sudo,
+        OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    )
+    .await;
+    assert!(!sandbox::run(&mut o).await);
+    let calls = shims.calls();
+    assert_eq!(
+        calls.iter().filter(|call| call.starts_with("sudo")).count(),
+        1,
+        "{calls:?}"
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].starts_with(
+            "`sudo apt-get install --reinstall -y uidmap` ran, but changed nothing: Rootless \
+             Podman cannot map"
+        ),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !o.steps[0].contains("install -y uidmap &&"),
+        "{:?}",
+        o.steps
+    );
 }
 
 /// Doctor looks for newuidmap and newgidmap on PATH only, as Podman does
 /// (`exec.LookPath`): setuid helpers in the root's usr/bin that are not on
-/// PATH are missing for Podman, and so for doctor.
+/// PATH are missing for Podman, and so for doctor, which says where they
+/// are and offers no install, which would not change PATH.
 #[cfg(unix)]
-#[test]
-fn doctor_looks_for_the_id_map_tools_on_path_only() {
+#[tokio::test]
+async fn doctor_looks_for_the_id_map_tools_on_path_only() {
     use std::os::unix::fs::PermissionsExt;
     let shims = Shims::new();
     shims.id_map_tools(None);
@@ -1256,47 +1500,134 @@ fn doctor_looks_for_the_id_map_tools_on_path_only() {
         std::fs::write(bin.join(name), "#!/bin/sh\nexit 1\n").unwrap();
         std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o4755)).unwrap();
     }
-    let tools = crate::doctor::id_map_tools(&shims.host(false), &ubuntu());
+    let host = shims.host(false);
+    let root = shims.root.path();
+    let tools = crate::doctor::id_map_tools(&host, root, &ubuntu()).await;
     assert_eq!(tools.missing, ["newuidmap", "newgidmap"]);
+    assert_eq!(tools.off_path, ["/usr/bin/newuidmap", "/usr/bin/newgidmap"]);
+    assert_eq!(
+        tools.describe(),
+        "newuidmap and newgidmap are in /usr/bin, which is not on PATH"
+    );
+    assert_eq!(tools.command(), None);
+    // No dpkg-query here: whether uidmap is installed is not known.
+    assert_eq!(tools.package_installed, None);
     assert_eq!(
         tools.install.as_deref(),
         Some("sudo apt-get install -y uidmap")
     );
     shims.id_map_tools(Some(0o4755));
-    assert!(crate::doctor::id_map_tools(&shims.host(false), &ubuntu()).usable());
+    assert!(crate::doctor::id_map_tools(&host, root, &ubuntu())
+        .await
+        .usable());
     shims.id_map_tools(Some(0o755));
-    let tools = crate::doctor::id_map_tools(&shims.host(false), &ubuntu());
+    let tools = crate::doctor::id_map_tools(&host, root, &ubuntu()).await;
     assert_eq!(tools.unprivileged.len(), 2, "{tools:?}");
-    // Fedora and RHEL ship them in shadow-utils (`rpm -qf`), Arch in
-    // shadow; openSUSE moved them between packages, so none is named.
-    for (os_release, install) in [
+
+    // Nowhere: what the package query says decides between installing
+    // and reinstalling. Fedora and RHEL ship them in shadow-utils (`rpm
+    // -qf`), Arch in shadow; openSUSE moved them between packages, so
+    // none is named.
+    shims.id_map_tools(None);
+    std::fs::remove_dir_all(&bin).unwrap();
+    let fedora = "ID=fedora\nVERSION_ID=42\n";
+    let rhel = "ID=\"rhel\"\nVERSION_ID=\"9.8\"\n";
+    for (os_release, query, answer, installed, install, described) in [
         (
-            "ID=fedora\nVERSION_ID=42\n",
-            Some("sudo dnf install -y shadow-utils"),
+            "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+            "dpkg-query",
+            "printf installed",
+            Some(true),
+            Some("sudo apt-get install --reinstall -y uidmap"),
+            "newuidmap and newgidmap are missing, though their package uidmap is installed",
         ),
         (
-            "ID=\"rhel\"\nVERSION_ID=\"9.8\"\n",
-            Some("sudo dnf install -y shadow-utils"),
+            "ID=ubuntu\nVERSION_ID=\"24.04\"\n",
+            "dpkg-query",
+            "echo 'dpkg-query: no packages found matching uidmap' >&2; exit 1",
+            Some(false),
+            Some("sudo apt-get install -y uidmap"),
+            "newuidmap and newgidmap are not installed",
         ),
-        ("ID=arch\n", Some("sudo pacman -S --noconfirm shadow")),
+        (
+            "ID=debian\nVERSION_ID=\"12\"\n",
+            "dpkg-query",
+            "printf config-files",
+            Some(false),
+            Some("sudo apt-get install -y uidmap"),
+            "newuidmap and newgidmap are not installed",
+        ),
+        (
+            fedora,
+            "rpm",
+            "echo shadow-utils-4.17.4-1.fc42.aarch64",
+            Some(true),
+            Some("sudo dnf reinstall -y shadow-utils"),
+            "newuidmap and newgidmap are missing, though their package shadow-utils is installed",
+        ),
+        (
+            fedora,
+            "rpm",
+            "echo 'package shadow-utils is not installed'; exit 1",
+            Some(false),
+            Some("sudo dnf install -y shadow-utils"),
+            "newuidmap and newgidmap are not installed",
+        ),
+        // rpm not answering: shadow-utils is always installed there, and
+        // only a reinstall restores a helper's file.
+        (
+            rhel,
+            "none",
+            "",
+            None,
+            Some("sudo dnf reinstall -y shadow-utils"),
+            "newuidmap and newgidmap are not found on PATH",
+        ),
+        (
+            "ID=arch\n",
+            "pacman",
+            "echo 'shadow 4.17.4-1'",
+            Some(true),
+            Some("sudo pacman -S --noconfirm shadow"),
+            "newuidmap and newgidmap are missing, though their package shadow is installed",
+        ),
         (
             "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+            "none",
+            "",
             None,
+            None,
+            "newuidmap and newgidmap are not found on PATH",
         ),
     ] {
+        for program in ["dpkg-query", "rpm", "pacman"] {
+            let _ = std::fs::remove_file(shims.dir.path().join(program));
+        }
+        if query != "none" {
+            shims.add(query, answer);
+        }
         let os = Os::Linux {
             release: OsRelease::parse(os_release),
             wsl: None,
             systemd: true,
         };
-        assert_eq!(
-            crate::doctor::id_map_tools(&shims.host(false), &os)
-                .install
-                .as_deref(),
-            install,
-            "{os_release}"
-        );
+        let tools = crate::doctor::id_map_tools(&host, root, &os).await;
+        assert_eq!(tools.package_installed, installed, "{os_release} {answer}");
+        assert_eq!(tools.install.as_deref(), install, "{os_release} {answer}");
+        assert_eq!(tools.command().as_deref(), install, "{os_release} {answer}");
+        assert_eq!(tools.describe(), described, "{os_release} {answer}");
     }
+    // Only read-only queries ran.
+    let calls = shims.calls();
+    assert!(
+        calls
+            .iter()
+            .all(|call| call == "dpkg-query -W -f ${db:Status-Status} uidmap"
+                || call == "rpm -q shadow-utils"
+                || call == "pacman -Q shadow"),
+        "{calls:?}"
+    );
+    assert!(calls.contains(&"dpkg-query -W -f ${db:Status-Status} uidmap".to_string()));
 }
 
 /// Step 3's steps left for a model too large for this computer, or whose
@@ -1523,7 +1854,10 @@ async fn doctor_judges_a_podman_reached_elsewhere_by_its_podman_info() {
         "{ranges:?}"
     );
     assert!(
-        !fix.contains("migrate") && !fix.contains("sudo") && !fix.contains("alex"),
+        fix.contains("then run `podman system migrate` as that user there")
+            && !fix.contains("&& podman system migrate")
+            && !fix.contains("sudo")
+            && !fix.contains("alex"),
         "{fix}"
     );
     assert!(
@@ -3396,13 +3730,18 @@ async fn doctor_names_connect_openrouter_and_reads_the_key_it_stores() {
         "OpenRouter API key secret openrouter is not stored, and an Agent or run default uses \
          OpenRouter"
     );
+    // The configuration doctor checks is not the default one: the command
+    // names it, as the "not configured" fix does, so the key goes to its
+    // data directory.
     assert_eq!(
-        item.fix.as_deref(),
-        Some(
-            "Run `axocoatl connect openrouter`, which signs you in to OpenRouter in the browser \
-             and stores the key it issues without showing it"
-        )
+        item.fix,
+        Some(format!(
+            "Run `axocoatl connect openrouter --config {}`, which signs you in to OpenRouter in \
+             the browser and stores the key it issues without showing it",
+            crate::onboard::host::shell_quote(&config_path.display().to_string())
+        ))
     );
+    crate::paste_safe::assert_paste_safe(item.fix.as_deref().unwrap());
     let data_dir = env.data_dir.as_deref().unwrap();
     {
         use std::os::unix::fs::PermissionsExt;

@@ -124,6 +124,55 @@ impl PackageManager {
             PackageManager::Zypper => None,
         }
     }
+
+    /// The command that installs [`PackageManager::id_map_package`], or
+    /// reinstalls it when it is `installed`: `apt-get install` and `dnf
+    /// install` do nothing for an installed package ("already the newest
+    /// version", "Nothing to do"), even when a helper's file was deleted or
+    /// lost its setuid bit or file capabilities. `apt-get install
+    /// --reinstall` only when dpkg says uidmap is installed; `dnf
+    /// reinstall` unless rpm says shadow-utils is not installed (it always
+    /// is, and `dnf reinstall` refuses one that is not); `pacman -S`
+    /// reinstalls an installed package anyway.
+    pub(crate) fn id_map_install(self, installed: Option<bool>) -> Option<Cmd> {
+        let package = self.id_map_package()?;
+        Some(match (self, installed) {
+            (PackageManager::Apt, Some(true)) => {
+                Cmd::sudo("apt-get", &["install", "--reinstall", "-y", package])
+            }
+            (PackageManager::Dnf, Some(false)) => self.install(&[package]),
+            (PackageManager::Dnf, _) => Cmd::sudo("dnf", &["reinstall", "-y", package]),
+            _ => self.install(&[package]),
+        })
+    }
+
+    /// The read-only command that says whether `package` is installed:
+    /// `dpkg-query -W -f '${db:Status-Status}' uidmap` prints `installed`
+    /// (it exits 1 for a package dpkg does not know), `rpm -q` and `pacman
+    /// -Q` exit 0 for an installed package and 1 for one that is not.
+    pub(crate) fn package_query(self, package: &str) -> (&'static str, Vec<String>) {
+        let (program, args): (&'static str, Vec<&str>) = match self {
+            PackageManager::Apt => (
+                "dpkg-query",
+                vec!["-W", "-f", "${db:Status-Status}", package],
+            ),
+            PackageManager::Dnf | PackageManager::Zypper => ("rpm", vec!["-q", package]),
+            PackageManager::Pacman => ("pacman", vec!["-Q", package]),
+        };
+        (program, args.into_iter().map(str::to_string).collect())
+    }
+
+    /// Whether the package [`PackageManager::package_query`] asked about is
+    /// installed, from what the query printed and its exit code; `None`
+    /// when that does not say.
+    pub(crate) fn package_installed(self, code: Option<i32>, stdout: &str) -> Option<bool> {
+        match (self, code) {
+            (PackageManager::Apt, Some(0)) => Some(stdout.trim() == "installed"),
+            (_, Some(0)) => Some(true),
+            (_, Some(1)) => Some(false),
+            _ => None,
+        }
+    }
 }
 
 /// Windows Subsystem for Linux.
@@ -550,7 +599,7 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         }
         None => PodmanReport::not_installed(),
     };
-    crate::doctor::read_id_ranges(&mut podman, host, &host.root, &os, &user);
+    crate::doctor::read_id_ranges(&mut podman, host, &host.root, &os, &user).await;
     let ollama_cli = match host.find("ollama") {
         Some(path) => {
             let host_value = ollama_url.to_string();

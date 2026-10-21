@@ -161,14 +161,22 @@ On **Linux and WSL2**:
   missing or may not map (neither setuid nor given file capabilities), Podman maps only
   your own id, or, with a range in the files, `podman info` fails with `command required
   for rootless mode with multiple IDs: exec: "newuidmap": executable file not found in
-  $PATH` and a message to run `podman system migrate`, which alone changes nothing.
-  Onboarding then offers the package that ships them, then `podman system migrate`:
-  `sudo apt-get install -y uidmap` on Debian and Ubuntu (Podman only recommends it),
-  `sudo dnf install -y shadow-utils` on Fedora and RHEL, `sudo pacman -S --noconfirm
-  shadow` on Arch; elsewhere, or for a helper that is there but may not map, it says
-  what to install or reinstall. Doctor names the same fix on its Podman line. With `CONTAINER_HOST`,
-  `CONTAINER_CONNECTION` or a remote connection, this computer's files are not read and
-  nothing is run: the range belongs where that Podman runs.
+  $PATH` (once Podman has run before, its logged error also says to try `podman system
+  migrate`, which alone changes nothing). Onboarding then offers the package that ships
+  them, then `podman system migrate`: `sudo apt-get install -y uidmap` on Debian and
+  Ubuntu (Podman only recommends it). When the package is installed but a helper's file
+  is gone, or it lost its setuid bit or file capabilities, an install would do nothing,
+  so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
+  `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
+  installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
+  runs and changes nothing, onboarding says so and does not offer it again. Helpers in
+  `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no install;
+  on other distributions the fix says what to install or reinstall. Doctor names the
+  same fix: on its Podman line when `podman info` fails, otherwise on its User ID ranges
+  line. With `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection, this
+  computer's files are not read and nothing is run: the range belongs where that Podman
+  runs, and `podman system migrate` runs there, as that Podman's user (a restarted API
+  service alone keeps the old mapping).
 - Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
@@ -411,16 +419,14 @@ ends with the next command for your own repository.
 ## Without a terminal, and dry runs
 
 Without a terminal, onboarding answers nothing by itself: it exits 3, changes nothing
-and points to `--yes`. With `--yes` and these flags it runs unattended:
+and points to `--yes`. With `--yes` and the flags below it runs unattended. `--writer`
+takes `claude-code`, `codex`, `ollama` or `openrouter`; for example, for Claude Code:
 
 ```sh
-axocoatl onboard --yes --writer claude-code|codex|ollama|openrouter \
-    [--reviewer PROVIDER:MODEL] [--writer-model PROVIDER:MODEL] [--ollama-url URL] \
-    [--podman create|skip] [--machine-cpus N] [--machine-memory MiB] \
-    [--pull|--no-pull] [--recipe-build|--no-recipe-build] [--connect|--no-connect] \
-    [--openrouter-key-env VAR] [--port N] [--start dev|service|none] \
-    [--smoke-test|--no-smoke-test] [--allow-sudo] [--update|--replace]
+axocoatl onboard --yes --writer claude-code
 ```
+
+Add any of the flags in the table to answer the other questions.
 
 | Flag | Meaning |
 | --- | --- |
@@ -428,7 +434,7 @@ axocoatl onboard --yes --writer claude-code|codex|ollama|openrouter \
 | `--writer` | Who writes the code (Step 1). With `--update` and without it, the writer the setup has |
 | `--reviewer`, `--writer-model` | The models as `ollama:MODEL` or `openrouter:VENDOR/MODEL` (a Claude Code writer model is `anthropic:MODEL`, a Codex one `openai:MODEL`). The same model for both, or a non-OpenRouter reviewer with `--writer openrouter`, is a usage error |
 | `--ollama-url` | The Ollama server native Sessions use (default `http://localhost:11434`); it must be on this computer |
-| `--podman create\|skip` | Install Podman where onboarding can (Homebrew on Apple silicon, a known Linux package manager; elsewhere it names the installer) and create its machine on macOS, when missing (the default), or leave Podman as it is |
+| `--podman create`, `--podman skip` | `create` (the default) sets up a missing Podman where onboarding can: on a Mac with Apple silicon and Homebrew it installs Podman with Homebrew, and on a Mac it creates and starts the machine; on Linux it installs Podman with apt-get, dnf, pacman or zypper, with sudo. Elsewhere, and on Ubuntu 22.04, whose Podman is too old, it says what to do. `skip` leaves Podman as it is |
 | `--machine-cpus`, `--machine-memory` | The size of a new Podman machine (memory in MiB) |
 | `--pull`, `--no-pull` | Pull the chosen Ollama models, or leave the pulls as steps left |
 | `--recipe-build`, `--no-recipe-build` | Build the Claude Code or Codex sandbox image |
@@ -534,7 +540,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
 | Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
 | Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |
-| Models | OpenRouter and other hosted-provider keys present (not checked with the provider): a key in the file, or the stored secret `api_key_secret` names. Without `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and changes nothing else | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
+| Models | OpenRouter and other hosted-provider keys present (not checked with the provider): a key in the file, or the stored secret `api_key_secret` names. Without `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and changes nothing else, and a secret that is not stored names the same command; for a configuration other than the default one, both add `--config` with its path, so the key is stored in that configuration's data directory | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
 | Writers | Claude Code and Codex: sandbox image built and credential stored (for Codex, the credential the setup names); the `claude`, `codex` and `gh` CLIs (`gh` signed in, for `--keep pr`); the names of stored credentials | FAIL for the writer the configuration names (its `# Writer:` comment); WARN for one partly set up |
 | Daemon | Configuration valid; data directory writable and owned; a running daemon and its version against the CLI's; the Always-On Service's program; the configured port when no daemon runs; webhooks | FAIL for the configuration and data directory; otherwise WARN |
 

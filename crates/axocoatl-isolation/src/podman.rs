@@ -461,9 +461,22 @@ fn ready_action(readiness: PodmanReadiness) -> ReadyAction {
             "podman is required for local Session isolation but is not installed. Axocoatl will not install host software automatically. {}",
             manual_install_hint()
         )),
-        PodmanReadiness::Unavailable(error) => ReadyAction::Fail(format!(
-            "podman readiness check did not complete safely: {error}"
-        )),
+        PodmanReadiness::Unavailable(error) => ReadyAction::Fail(unavailable_message(&error)),
+    }
+}
+
+/// What a Podman that did not answer is told: for want of `newuidmap` or
+/// `newgidmap` (whose own message says to run `podman system migrate`,
+/// which alone changes nothing), what Podman said and the packages that
+/// ship them, as doctor and the workbench's readiness item say it;
+/// otherwise Podman's error.
+pub fn unavailable_message(error: &str) -> String {
+    match crate::podman_report::id_map_tools_hint(error) {
+        Some(hint) => format!(
+            "Podman did not answer ({}). {hint}",
+            crate::podman_report::id_map_failure_reason(error).unwrap_or_else(|| error.to_string())
+        ),
+        None => format!("podman readiness check did not complete safely: {error}"),
     }
 }
 
@@ -1444,6 +1457,61 @@ esac"#,
             ready_action(PodmanReadiness::MachineMissing),
             ReadyAction::Fail(message) if message.contains("podman machine init")
         ));
+    }
+
+    /// Session start, `axocoatl run`, `recipe build`, `connect codex`, the
+    /// browser containers and SearXNG go through `ensure_ready`: a Podman
+    /// that fails for want of `newuidmap` gets what doctor and the
+    /// workbench say (the packages, then `podman system migrate`), not
+    /// only Podman's own message, which says to run `podman system
+    /// migrate` alone. Another error is passed on as Podman wrote it.
+    #[test]
+    fn a_podman_without_its_id_map_helpers_is_told_what_to_install() {
+        for error in [
+            "OCI container setup failed: podman info failed: Error: command required for \
+             rootless mode with multiple IDs: exec: \"newuidmap\": executable file not found in \
+             $PATH",
+            r#"OCI container setup failed: podman info failed: time="2026-10-20T20:01:02-07:00" level=error msg="invalid internal status, try resetting the pause process with \"podman system migrate\": command required for rootless mode with multiple IDs: exec: \"newuidmap\": executable file not found in $PATH""#,
+        ] {
+            let ReadyAction::Fail(message) =
+                ready_action(PodmanReadiness::Unavailable(error.to_string()))
+            else {
+                panic!("an unavailable Podman must fail");
+            };
+            assert_eq!(
+                message,
+                "Podman did not answer (command required for rootless mode with multiple IDs: \
+                 exec: \"newuidmap\": executable file not found in $PATH). Rootless Podman \
+                 needs newuidmap and newgidmap to map your subordinate user and group IDs, and \
+                 newuidmap is not found on PATH: install (or reinstall) them (Debian and Ubuntu: \
+                 uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run `podman system \
+                 migrate`; `axocoatl doctor` names the command for this computer"
+            );
+            assert!(!message.contains("did not complete safely"), "{message}");
+        }
+        let ReadyAction::Fail(message) = ready_action(PodmanReadiness::Unavailable(
+            "Error: cannot set up namespace using \"/usr/bin/newuidmap\": should have setuid or \
+             have filecaps setuid: exit status 1"
+                .to_string(),
+        )) else {
+            panic!("an unavailable Podman must fail");
+        };
+        assert!(
+            message.contains(
+                "/usr/bin/newuidmap is neither setuid nor given file capabilities: install (or \
+                 reinstall) them"
+            ),
+            "{message}"
+        );
+        assert_eq!(
+            ready_action(PodmanReadiness::Unavailable(
+                "Cannot connect to Podman".to_string()
+            )),
+            ReadyAction::Fail(
+                "podman readiness check did not complete safely: Cannot connect to Podman"
+                    .to_string()
+            )
+        );
     }
 
     #[test]

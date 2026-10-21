@@ -279,13 +279,13 @@ pub(crate) fn podman_install_route(
 /// runs on this computer ([`PodmanReport::runs_here`]):
 /// add to `report` what `/etc/subuid` and `/etc/subgid` (under `root`) give
 /// `user`, this process's user, and whether `newuidmap` and `newgidmap` on
-/// the host's `PATH` can map them. Nothing is read on macOS, whose machine
-/// has its own, nor for a Podman reached through `CONTAINER_HOST`,
-/// `CONTAINER_CONNECTION` or a remote connection: this computer's files do
-/// not govern it, so its own `podman info` decides.
+/// the host's `PATH` can map them ([`id_map_tools`]). Nothing is read on
+/// macOS, whose machine has its own, nor for a Podman reached through
+/// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection: this
+/// computer's files do not govern it, so its own `podman info` decides.
 ///
 /// [`PodmanReport::runs_here`]: podman_report::PodmanReport::runs_here
-pub(crate) fn read_id_ranges(
+pub(crate) async fn read_id_ranges(
     report: &mut podman_report::PodmanReport,
     host: &crate::onboard::host::Host,
     root: &Path,
@@ -310,27 +310,32 @@ pub(crate) fn read_id_ranges(
         }
     };
     report.subordinate_ids = podman_report::read_subordinate_ids(root, user, uid);
-    report.id_map_tools = Some(id_map_tools(host, os));
+    report.id_map_tools = Some(id_map_tools(host, root, os).await);
 }
+
+/// The system directories a distribution installs `newuidmap` and
+/// `newgidmap` to, searched (under the root) for a helper that is not on
+/// `PATH`, to say where it is.
+const SYSTEM_BIN_DIRECTORIES: [&str; 4] = ["/usr/bin", "/usr/sbin", "/bin", "/sbin"];
 
 /// `newuidmap` and `newgidmap` as rootless Podman finds them: on `PATH`
 /// only (the host's, which the Podman that onboarding, doctor and the
 /// daemon run inherits), as Podman's `exec.LookPath` looks them up, so a
 /// helper in `/usr/bin` that is not on `PATH` counts as missing, as it does
-/// for Podman. With the command that installs them on this distribution.
-pub(crate) fn id_map_tools(
+/// for Podman. When one is missing or cannot map, also what is known about
+/// why: a missing one found in a system directory under `root` that is not
+/// on `PATH`, and whether the package that ships them here is installed
+/// (asked with dpkg-query, rpm or pacman, read-only). With the command
+/// that installs that package, or reinstalls it when it is installed.
+pub(crate) async fn id_map_tools(
     host: &crate::onboard::host::Host,
+    root: &Path,
     os: &Os,
 ) -> podman_report::IdMapTools {
+    let manager = os.release().and_then(|release| release.package_manager());
+    let package = manager.and_then(|manager| manager.id_map_package());
     let mut tools = podman_report::IdMapTools {
-        install: os
-            .release()
-            .and_then(|release| release.package_manager())
-            .and_then(|manager| {
-                manager
-                    .id_map_package()
-                    .map(|package| manager.install(&[package]).display())
-            }),
+        package: package.map(str::to_string),
         ..Default::default()
     };
     for name in ["newuidmap", "newgidmap"] {
@@ -342,6 +347,32 @@ pub(crate) fn id_map_tools(
             Some(_) => {}
         }
     }
+    if !tools.usable() {
+        let on_path: Vec<PathBuf> = std::env::split_paths(&host.path).collect();
+        for name in &tools.missing {
+            let found = SYSTEM_BIN_DIRECTORIES
+                .iter()
+                .filter(|directory| !on_path.iter().any(|path| path == Path::new(directory)))
+                .map(|directory| format!("{directory}/{name}"))
+                .find(|path| {
+                    root.join(path.trim_start_matches('/'))
+                        .metadata()
+                        .is_ok_and(|metadata| metadata.is_file())
+                });
+            tools.off_path.extend(found);
+        }
+        if let (Some(manager), Some(package)) = (manager, package) {
+            let (program, args) = manager.package_query(package);
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            tools.package_installed = host
+                .probe(program, &args)
+                .await
+                .and_then(|probe| manager.package_installed(probe.code, &probe.stdout));
+        }
+    }
+    tools.install = manager
+        .and_then(|manager| manager.id_map_install(tools.package_installed))
+        .map(|install| install.display());
     tools
 }
 
@@ -572,12 +603,15 @@ struct ModelFixes {
 }
 
 /// When the configuration does not say who writes: name the model to
-/// change, or the writer to write a new configuration for.
+/// change, or the writer to write a new configuration for. The writer is a
+/// placeholder with the choices in words: `--writer claude-code|codex|…`
+/// pasted into a shell is a pipeline that replaces the configuration with
+/// a Claude Code one.
 fn unknown_writer_fix(model: &str, what: &str) -> String {
     format!(
-        "{what} in place of {model} in this configuration, or write a new one with `axocoatl \
-         onboard --replace --writer claude-code|codex|ollama|openrouter` (it backs this one up \
-         first)"
+        "{what} in place of {model} in this configuration, or write a new one (this one is \
+         backed up first) with `axocoatl onboard --replace --writer WRITER`, where WRITER is \
+         claude-code, codex, ollama or openrouter"
     )
 }
 
@@ -728,7 +762,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     // ── Sandbox ──
     let mut report =
         podman_report::inspect_through(&env.podman, env.podman_connection.clone()).await;
-    read_id_ranges(&mut report, &env.host, &env.id_root, &env.os, &env.user);
+    read_id_ranges(&mut report, &env.host, &env.id_root, &env.os, &env.user).await;
     let e2b = config
         .as_ref()
         .is_some_and(|config| config.sandbox.backend == "e2b");
@@ -887,7 +921,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 .flatten()
                 .any(|spec| spec.starts_with("openrouter:"));
         if let Some(openrouter) = &config.providers.openrouter {
-            match provider_key("OpenRouter", openrouter, data_dir.as_deref()) {
+            match provider_key("OpenRouter", openrouter, data_dir.as_deref(), config_path) {
                 Ok(line) => {
                     openrouter_ready = true;
                     sections.models.push(Item::ok("OpenRouter", line));
@@ -924,12 +958,12 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             ("Mistral", &config.providers.mistral),
         ] {
             if let Some(credentials) = credentials {
-                sections
-                    .models
-                    .push(match provider_key(name, credentials, data_dir.as_deref()) {
+                sections.models.push(
+                    match provider_key(name, credentials, data_dir.as_deref(), config_path) {
                         Ok(line) => Item::ok(name, line),
                         Err((line, hint)) => Item::warn(name, line, Some(hint)),
-                    });
+                    },
+                );
             }
         }
     }
@@ -1311,16 +1345,18 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
 /// store (where `axocoatl connect openrouter` keeps OpenRouter's key; the
 /// daemon reads it when it starts), else a value in `api_key` (written in
 /// the file, or from a `${VARIABLE}` that is set). `Ok` with the line, or
-/// the line and what stores the key.
+/// the line and what stores the key: a command for the configuration at
+/// `config_path`, which selects the data directory the key is stored in.
 fn provider_key(
     name: &str,
     credentials: &axocoatl_config::ProviderCredentials,
     data_dir: Option<&Path>,
+    config_path: &Path,
 ) -> Result<String, (String, String)> {
     if let Some(line) = data_dir.and_then(|data_dir| {
         crate::connect_cmd::openrouter::doctor_key_line(name, credentials, data_dir)
     }) {
-        return line;
+        return line.map_err(|(line, hint)| (line, with_config_flag(&hint, config_path)));
     }
     let key = credentials.api_key.expose_secret();
     if key.is_empty() || key.contains("your-key") || key.starts_with("${") {
@@ -1333,17 +1369,50 @@ fn provider_key(
     }
 }
 
-/// `axocoatl connect openrouter`, with `--config` when doctor checks
-/// another configuration than the default one.
-fn connect_openrouter_command(config_path: &Path) -> String {
+/// ` --config PATH` when doctor checks another configuration than the
+/// default one, else nothing: a command that stores a key or adds a
+/// provider then acts on that configuration and its data directory.
+fn config_flag(config_path: &Path) -> String {
     if config_path == crate::default_config_path_for_clap() {
-        "axocoatl connect openrouter".to_string()
+        String::new()
     } else {
         format!(
-            "axocoatl connect openrouter --config {}",
+            " --config {}",
             crate::onboard::host::shell_quote(&config_path.display().to_string())
         )
     }
+}
+
+/// `axocoatl connect openrouter`, with `--config` when doctor checks
+/// another configuration than the default one.
+fn connect_openrouter_command(config_path: &Path) -> String {
+    format!("axocoatl connect openrouter{}", config_flag(config_path))
+}
+
+/// `hint` (how to store a provider's key) with [`config_flag`] added to
+/// each `axocoatl connect openrouter` and `axocoatl secret set` command in
+/// it, so the key goes to the data directory of the configuration doctor
+/// checks.
+fn with_config_flag(hint: &str, config_path: &Path) -> String {
+    let flag = config_flag(config_path);
+    if flag.is_empty() {
+        return hint.to_string();
+    }
+    let mut text = String::new();
+    for (index, part) in hint.split('`').enumerate() {
+        if index > 0 {
+            text.push('`');
+        }
+        text.push_str(part);
+        let command = index % 2 == 1;
+        if command
+            && (part.starts_with("axocoatl connect openrouter")
+                || part.starts_with("axocoatl secret set "))
+        {
+            text.push_str(&flag);
+        }
+    }
+    text
 }
 
 /// Load the configuration the way the daemon does, selecting its data
@@ -1979,9 +2048,17 @@ mod tests {
         let (config, run) = parsed(text);
         assert_eq!(onboard_config::writer_marker(text), None);
         let expected = "Name a smaller model (or an OpenRouter one) in place of gpt-oss:20b in \
-                        this configuration, or write a new one with `axocoatl onboard --replace \
-                        --writer claude-code|codex|ollama|openrouter` (it backs this one up first)";
+                        this configuration, or write a new one (this one is backed up first) \
+                        with `axocoatl onboard --replace --writer WRITER`, where WRITER is \
+                        claude-code, codex, ollama or openrouter";
         assert_eq!(too_large_fix("gpt-oss:20b", &config, &run, None), expected);
+        crate::paste_safe::assert_paste_safe(expected);
+        crate::paste_safe::assert_paste_safe(&unreadable_model_fix(
+            "gpt-oss:20b",
+            &config,
+            &run,
+            None,
+        ));
         assert!(
             unreadable_model_fix("gpt-oss:20b", &config, &run, None).starts_with(
                 "Check the model with `ollama run gpt-oss:20b`, or name another model in place \
@@ -2212,6 +2289,42 @@ mod tests {
         assert_eq!(three.status, Status::Warn);
         assert!(three.detail.contains("6.7"));
         assert_eq!(landlock_item(Some(6), None, false).status, Status::Ok);
+    }
+
+    /// A key-storing hint for a configuration other than the default one
+    /// names it, so `connect openrouter` and `secret set` store the key in
+    /// its data directory; for the default one it is unchanged.
+    #[test]
+    fn key_hints_name_a_configuration_that_is_not_the_default() {
+        let other = Path::new("/tmp/team a/axocoatl.yaml");
+        assert_eq!(
+            with_config_flag(
+                "Run `axocoatl connect openrouter --secret work`, which signs you in",
+                other
+            ),
+            "Run `axocoatl connect openrouter --secret work --config '/tmp/team a/axocoatl.yaml'`, \
+             which signs you in"
+        );
+        assert_eq!(
+            with_config_flag(
+                "Pipe the key into `axocoatl secret set mistral` (it reads standard input) or \
+                 name a variable with `--from-env`",
+                other
+            ),
+            "Pipe the key into `axocoatl secret set mistral --config '/tmp/team a/axocoatl.yaml'` \
+             (it reads standard input) or name a variable with `--from-env`"
+        );
+        let default = crate::default_config_path_for_clap();
+        let hint = "Run `axocoatl connect openrouter`, which signs you in";
+        assert_eq!(with_config_flag(hint, &default), hint);
+        assert_eq!(
+            connect_openrouter_command(other),
+            "axocoatl connect openrouter --config '/tmp/team a/axocoatl.yaml'"
+        );
+        assert_eq!(
+            connect_openrouter_command(&default),
+            "axocoatl connect openrouter"
+        );
     }
 
     #[test]

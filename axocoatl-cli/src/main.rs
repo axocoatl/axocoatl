@@ -8,6 +8,8 @@ mod connect_cmd;
 mod doctor;
 mod ollama_setup;
 mod onboard;
+#[cfg(test)]
+mod paste_safe;
 mod receipt_cmd;
 mod recipe_cmd;
 mod run_cmd;
