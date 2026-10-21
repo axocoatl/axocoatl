@@ -670,7 +670,9 @@ unbalanced='one=$(case a in a) echo 1;; esac)'
 zsh_short_if='if [[ -n x ]] { : }'
 c_for='for ((i = 0; i < 1; i++)); do :; done'
 
-# The installer's own lines count wherever they are.
+# The installer's own lines count wherever they are when its marker comment
+# is right before them, and the guarded line always; an own line without the
+# marker (as 1.4.0 told users to add it) counts only where it surely runs.
 startup_expect adds_to_path yes "the installer's line" "$(printf '# Added by the Axocoatl installer\n%s' "$guarded")"
 startup_expect adds_to_path yes "the installer's ~/.bashrc line" "$nonlogin"
 startup_expect adds_to_path yes "the unguarded line (1.4.0 and earlier printed it; unreleased 1.5.0 builds wrote it)" "$unguarded"
@@ -689,13 +691,28 @@ for construct in "$zsh_function" "$here_string" "$arithmetic" "$zsh_short_for" "
 done
 startup_expect adds_to_path yes "the installer's line in a block for another OS (taken at the user's word)" "$(os_block "  $guarded")"
 startup_expect adds_to_path yes "the installer's line in a loop" "$(printf 'for d in a; do\n%s\ndone' "$guarded")"
-startup_expect adds_to_path yes "the installer's line after a line that ends in &&" "$(printf '[ "$(uname)" = SunOS ] &&\n  %s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after a line that ends in &&" "$(printf '[ "$(uname)" = SunOS ] &&\n  %s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after a line that ends in \\" "$(printf '[ "$(uname)" = SunOS ] && \\\n  %s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line in a block for another OS" "$(os_block "  $unguarded")"
+startup_expect adds_to_path no "the unmarked line in a function" "$(printf 'use_local_bin() {\n  %s\n}' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after an early return" "$(printf '[ -n "$NO_LOCAL" ] && return\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the marked line in a block for another OS (taken at the user's word)" \
+  "$(os_block "$(printf '  # Added by the Axocoatl installer\n  %s' "$unguarded")")"
 startup_expect adds_to_path yes "fish's line" "$(path_line_for fish)" config.fish
 startup_expect adds_to_path yes "the fish line unreleased 1.5.0 builds wrote" 'fish_add_path "$HOME/.local/bin"' config.fish
 startup_expect adds_to_path yes "the unguarded line in fish" "$unguarded" config.fish
 startup_expect adds_to_path yes "fish's line after blocks" \
   "$(printf 'function mkcd; mkdir -p $argv; and cd $argv; end\nif status is-interactive\nend\nif test -n x\nelse if test -n y\nend\n%s' "$(path_line_for fish)")" config.fish
-startup_expect adds_to_path yes "fish's line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line in a block" "$(printf 'if test (uname) = SunOS\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line in a function" "$(printf 'function local_bin\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line after a return" "$(printf 'status is-interactive; or return\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path yes "fish's unmarked line after a block word in quotes" "$(printf 'echo "begin"\n%s' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line in a block with a quoted end" \
+  "$(printf 'if test -n x\n  echo "x; end"\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path no "fish's unmarked line after a quoted test that opens a block" \
+  "$(printf 'if test "$x" = y\n  %s\nend' "$(path_line_for fish)")" config.fish
+startup_expect adds_to_path yes "fish's marked line in a block (taken at the user's word)" \
+  "$(printf 'if test (uname) = Linux\n  # Added by the Axocoatl installer\n  %s\nend' "$(path_line_for fish)")" config.fish
 startup_expect adds_to_path no "the installer's sh line in fish" "$guarded" config.fish
 startup_expect adds_to_path no "fish's line in zsh" "$(path_line_for fish)" .zprofile
 startup_expect adds_to_path no "a subdirectory" 'export PATH="$HOME/.local/bin/scripts:$PATH"'

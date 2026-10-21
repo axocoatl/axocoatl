@@ -344,14 +344,23 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 
 # Whether startup file $1 counts as putting the install directory ($dest) on
 # PATH, so that it gets no line. The directory may be written $HOME/...,
-# ${HOME}/... (not in fish) or as its full path. It counts when either holds:
-#   - one of its lines, without leading and trailing blanks, is one of the
-#     installer's own lines for its shell (own_sh_lines for a file that does
-#     not end in .fish, own_fish_lines for one that does), anywhere in the
-#     file, at any depth. The installer appends its line at the end of the
-#     file, at the top level; counting it wherever it is means no construct
-#     before it can make a reinstall add it again. A user who moved it into a
-#     block (an OS check, a function) is taken at their word.
+# ${HOME}/... (not in fish) or as its full path. Lines are compared without
+# leading and trailing blanks. It counts when any of these holds:
+#   - a line right after the installer's marker comment (# Added by the
+#     Axocoatl installer) is one of the installer's own lines for its shell
+#     (own_sh_lines for a file that does not end in .fish, own_fish_lines for
+#     one that does), anywhere in the file, at any depth: the installer
+#     writes the marker and its line together, so no construct before them
+#     can make a reinstall add them again, and a user who moved them into a
+#     block (an OS check, a function) is taken at their word;
+#   - in a file that does not end in .fish, a line is the guarded line (or
+#     the same after the ~/.bashrc prefix), anywhere: nothing but this
+#     installer writes that case statement;
+#   - an own line without the marker (the export line installers up to 1.4.0
+#     printed for the user to add, or a fish line) is on a line that surely
+#     runs: sure() for sh, bash and zsh; for fish, outside any block (if,
+#     for, while, function, switch, begin ... end), before any return or
+#     exit, and not after a line ending in \;
 #   - in a file that does not end in .fish, it has the three lines Debian's
 #     and Ubuntu's ~/.profile use, starting on a line sure() is true for:
 #       if [ -d "$HOME/.local/bin" ] ; then
@@ -359,10 +368,10 @@ function track(s,    i, n, c, t, two, three, op, bs) {
 #       fi
 # Nothing else counts: not a subdirectory, a line that takes the directory
 # out of PATH or names it in a comment, an own line with more on its line,
-# nor Debian's lines in a block, after a line that ends in && or \, or after
-# a return. The installer's line does nothing when PATH has the directory, so
-# adding one too many costs nothing, while counting a file wrongly would leave
-# new terminals without axocoatl.
+# nor an unmarked own line or Debian's lines in a block, after a line that
+# ends in && or \, or after a return. The installer's line does nothing when
+# PATH has the directory, so adding one too many costs nothing, while
+# counting a file wrongly would leave new terminals without axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
@@ -370,17 +379,44 @@ adds_to_path() {
     *) dest_rel="" ;;
   esac
   case "$1" in
-    *.fish) scan_syntax='fish' scan_lines="$(own_fish_lines @DIR@)" ;;
-    *) scan_syntax='sh' scan_lines="$(own_sh_lines @DIR@)" ;;
+    *.fish) scan_syntax='fish' scan_lines="$(own_fish_lines @DIR@)" scan_anywhere='' ;;
+    *)
+      scan_syntax='sh' scan_lines="$(own_sh_lines @DIR@)"
+      scan_anywhere="$(guarded_line @DIR@; echo; printf '%s' "$nonlogin_prefix"; guarded_line @DIR@)"
+      ;;
   esac
   scan_dir="$dest" scan_rel="$dest_rel" scan_syntax="$scan_syntax" \
-  scan_lines="$scan_lines" awk "$startup_awk"'
+  scan_lines="$scan_lines" scan_anywhere="$scan_anywhere" awk "$startup_awk"'
     BEGIN {
       stanza = 0
       found = 0
+      prev = ""
+      fdepth = 0; fended = 0; flost = 0; fcont = 0
       fish = (ENVIRON["scan_syntax"] == "fish")
       n = split(ENVIRON["scan_lines"], list, "\n")
       for (i = 1; i <= n; i++) own[list[i]] = 1
+      n = split(ENVIRON["scan_anywhere"], list, "\n")
+      for (i = 1; i <= n; i++) if (list[i] != "") anywhere[list[i]] = 1
+    }
+    # fish: blocks open with if, for, while, function, switch or begin where
+    # a command starts and close with end; return and exit end the file. A
+    # line with a quote or a # that names one of those words anywhere is not
+    # followed (flost), so nothing after it counts.
+    function fish_track(s,    parts, k, w, m) {
+      if (s ~ /^#/) return
+      if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(])(if|for|while|function|switch|begin|end|return|exit)([ \t;)]|$)/) {
+        flost = 1
+        return
+      }
+      m = split(s, parts, ";")
+      for (k = 1; k <= m; k++) {
+        w = trim(parts[k])
+        sub(/^(and|or|not|command|builtin)[ \t]+/, "", w)
+        sub(/[ \t].*/, "", w)
+        if (w ~ /^(if|for|while|function|switch|begin)$/) fdepth++
+        else if (w == "end") { if (fdepth > 0) fdepth--; else flost = 1 }
+        else if (w == "return" || w == "exit") fended = 1
+      }
     }
     # The line with each way of writing the directory as @DIR@.
     function dir(s) {
@@ -393,8 +429,19 @@ adds_to_path() {
     }
     {
       line = trim(dir($0))
-      if (line in own) { found = 1; exit }
-      if (fish) next
+      if ((line in own && prev == "# Added by the Axocoatl installer") || line in anywhere) {
+        found = 1
+        exit
+      }
+      if (fish) {
+        if (line in own && !fdepth && !fended && !flost && !fcont) { found = 1; exit }
+        fish_track(line)
+        fcont = (line ~ /\\$/)
+        prev = line
+        next
+      }
+      if (line in own && sure()) { found = 1; exit }
+      prev = line
       if (stanza == 2 && line == "fi" && !lost && !ended) { found = 1; exit }
       if (stanza == 1 && line ~ /^(export[ \t]+)?PATH="?@DIR@:\$\{?PATH\}?"?$/) stanza = 2
       else stanza = 0
