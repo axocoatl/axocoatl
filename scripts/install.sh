@@ -27,7 +27,8 @@
 # the directory that holds its archive and .sha256 file instead of the GitHub
 # release; the checksum is still required.
 # AXOCOATL_INSTALL_SYSTEM_DIR and AXOCOATL_INSTALL_TTY replace /usr/local/bin
-# and /dev/tty for scripts/test-install.sh.
+# and /dev/tty for scripts/test-install.sh, and AXOCOATL_INSTALL_ROOT stands
+# in for / where it looks for a podman that is not on PATH.
 set -eu
 
 REPO="axocoatl/axocoatl"
@@ -62,6 +63,7 @@ case "$base_url" in
 esac
 system_dir="${AXOCOATL_INSTALL_SYSTEM_DIR:-/usr/local/bin}"
 tty_device="${AXOCOATL_INSTALL_TTY:-/dev/tty}"
+root_dir="${AXOCOATL_INSTALL_ROOT:-}"
 
 # A path as the user knows it: ~/... under the home directory.
 display_path() {
@@ -931,12 +933,36 @@ else
   fi
 fi
 
-# Every Session and run needs rootless Podman. Onboarding installs it after
-# asking where it can (axocoatl-cli/src/onboard/sandbox.rs, install), and
-# otherwise says what to do.
+# Every Session and run needs rootless Podman, which `axocoatl dev` finds on
+# PATH. Onboarding looks for programs on PATH and then in podman_dirs, the
+# same list as extra_dirs in axocoatl-cli/src/onboard/host.rs (Host::from_env;
+# scripts/test-install.sh checks that they match). When it finds no podman
+# there, it installs Podman after asking where it can, and otherwise says what
+# to do (onboard/sandbox.rs, install). When it finds one only in such a
+# directory, it installs nothing and does not change PATH (sandbox.rs,
+# on_path).
 if ! command -v podman >/dev/null 2>&1; then
-  info "Podman, which every Session and run needs, is not on PATH."
-  info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+  if [ "$os" = "Darwin" ]; then
+    podman_dirs='/opt/homebrew/bin /usr/local/bin /opt/podman/bin /Applications/Ollama.app/Contents/Resources'
+    podman_dirs_shown='/opt/homebrew/bin, /usr/local/bin or /opt/podman/bin'
+  else
+    podman_dirs='/usr/local/bin'
+    podman_dirs_shown='/usr/local/bin'
+  fi
+  podman_found=""
+  for podman_dir in $podman_dirs; do
+    if [ -f "${root_dir}${podman_dir}/podman" ] && [ -x "${root_dir}${podman_dir}/podman" ]; then
+      podman_found="${podman_dir}/podman"
+      break
+    fi
+  done
+  if [ -n "$podman_found" ]; then
+    info "Podman, which every Session and run needs, is installed at ${podman_found}, but ${podman_dir} is not on PATH, where axocoatl dev looks for it."
+    info "Add ${podman_dir} to PATH for new terminals; onboard (below) finds Podman there, but does not change PATH."
+  else
+    info "Podman, which every Session and run needs, is not on PATH or in ${podman_dirs_shown}."
+    info "onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
+  fi
 fi
 
 echo
