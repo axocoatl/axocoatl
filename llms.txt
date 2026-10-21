@@ -176,6 +176,8 @@ Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
 newer. Native Windows is not a release target; Windows users run Axocoatl inside WSL2 (not yet
 verified).
 
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
 Tested end to end on the 1.5.0 release candidate: from a clean install on macOS 26 on
 Apple silicon (48 GB) with rootless Podman 6.1.4 and 5.8 and Ollama 0.40.6 (the local
 pair, qwen3-coder:30b writing and gpt-oss:20b reviewing; with less memory, use
@@ -184,9 +186,13 @@ Ubuntu 24.04 on arm64 with rootless Podman 4.9.3, in a VM, with the models serve
 the Mac's Ollama; CI also runs on Ubuntu 24.04 on x86_64 against a stub model server.
 On macOS, `axocoatl run fix` with local models, fix-claude-code and fix-codex each passed
 on Node.js (with npm ci), Python (pytest), Go and Rust repositories, every receipt
-verified; on Ubuntu, fix passed on Node.js, Python, Go and Rust. Not yet verified: Intel Macs, Macs with less than
-48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on
-Windows. Docker is not
+verified; on Ubuntu, fix passed on Node.js, Python, Go and Rust.
+-->
+
+Onboarding offers the local pair, qwen3-coder:30b writing and gpt-oss:20b reviewing, from
+48 GB of memory; with less, use OpenRouter for the reviewer or both, or Claude Code or
+Codex as the writer. Not yet verified: Intel Macs, Macs with less than 48 GB for local models,
+Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not
 supported; Podman can run alongside it. The first daemon start downloads an 87 MB
 embedding model from huggingface.co. Removing Axocoatl:
 https://docs.axocoatl.ai/operate/uninstall/

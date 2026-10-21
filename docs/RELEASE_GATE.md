@@ -245,7 +245,8 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
      backup and the work directory are kept and the gate says where they are.
 9. `scripts/check-copy-paste.mjs`, when the tree has it. When `sites/docs` has
    not installed its YAML parser (js-yaml), the gate runs `npm ci` there first,
-   as its own step; the lint never runs without it.
+   as its own step. The lint never passes without it: a failed install fails its
+   own step, and the lint then fails every YAML block.
 10. Ctrl+C stops `axocoatl dev` with exit 0 (recorded, not required).
 
 The ubuntu-22.04 leg (`--expect-refusal "Podman 3.4.4"`) checks only that
@@ -278,6 +279,16 @@ Supporting checks, run in CI's workflow-contracts job:
   script's own logic is tested on any host before the product parts exist. A
   simulated path always records a failed step and can never be evidence.
 
+CI's "Podman suites (ignored tests)" job runs the Podman tests that are
+ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
+`session_trust_podman`, and the three `node_modules` mount point tests
+(`a_repository_without_node_modules_has_none_left_behind`,
+`under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`
+and `a_development_containers_node_modules_volume_keeps_the_mount_point`),
+which must report `3 passed`, so that a renamed test cannot pass by matching
+nothing. The egress and workload suites need prepared local images and are
+not wired yet.
+
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`,
 which proves each fixture fails before the stub's fix and passes after it
 with the runner's own toolchains. A fixture another workstream owns that is
@@ -288,10 +299,9 @@ The gate refuses to install where `/usr/local/bin` is writable and already
 holds an `axocoatl`: the published installer would overwrite another
 install.
 
-### What Tier A depends on
+### The contracts Tier A checks
 
-The gate was written against the shared 1.5.0 contract while these were being
-built; until they land, Tier A fails at the first step that needs them:
+Tier A fails at the first step where one of these does not hold:
 
 - `axocoatl onboard`'s non-interactive flags and exit codes (0 ready, 1 not
   ready with steps listed, 3 usage), and its writing of `run.models` and
@@ -309,8 +319,9 @@ built; until they land, Tier A fails at the first step that needs them:
   chosen by detection;
 - the `node-plain` fixture (onboarding's first-run sample; its
   `stub-fixes.json` entry matches onboarding's `src/paging.js`);
-- the installer's `add this line to <profile>:` output (or a profile change),
-  without which a new shell does not find the binary on macOS;
+- the installer's `add this line to FILE:` or `add this line to FILE and
+  FILE:` output (or a profile change), without which a new shell does not
+  find the binary on macOS;
 - `scripts/check-copy-paste.mjs`.
 
 ## Tier B: macOS hosted runner, every pull request (not required)
@@ -331,7 +342,7 @@ machine, so this checks the plumbing a new Mac user meets:
 
    | Podman state | doctor |
    |---|---|
-   | not installed | FAIL, fix `brew install podman` (the Intel build: the Podman 6 / Intel package text) |
+   | not installed | FAIL, fix "Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`" (the Intel build: "Podman 6 no longer supports Intel Macs", the Podman 5.8 package) |
    | not installed, no Homebrew (aarch64) | FAIL, fix names the podman.io installer, not onboarding installing Podman |
    | no machine | FAIL, fix runs `podman machine init` |
    | machine stopped | OK: it starts on first use; no FAIL |
@@ -469,7 +480,18 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
   and in Chromium on x86_64 and aarch64, all against the release build.
   `release.yml`'s browser gate still runs Chromium only, until the WebKit leg
-  has passed in CI.
+  has passed in CI. Run on a Mac with `AXO_BROWSER_ENGINE=webkit`, WebKit
+  behaves as Safari does: there the "Preview browser contract" journey
+  asserts that a top-level Preview's `Domain=localhost` cookie reaches the
+  workbench and every other Preview origin. In every engine it reads the real
+  Cookie headers from a loopback echo server and asserts that no request to a
+  Preview origin carries an `axocoatl-token-*` cookie and that the workbench
+  stays signed in.
+- Known gap: in Safari on macOS a top-level Preview's `Domain=localhost`
+  cookie reaches the workbench and every other Preview
+  ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
+  The macOS WebKit journey asserts this; the person on the
+  `C1-workbench-webkit` path should confirm it in Safari.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the

@@ -154,7 +154,13 @@ On **Linux and WSL2**:
   of either file uses (100000-165535 when they are empty). Onboarding and doctor read
   both files and print the exact command; with `--yes`, onboarding runs it only with
   `--allow-sudo`. A range that is in the files but that Podman has not picked up yet
-  needs only `podman system migrate`, which stops your running containers.
+  needs only `podman system migrate`, which stops your running containers. When only
+  one of the files is short, only it gets a range. When the files leave no free range
+  from 100000 up, onboarding names none and asks you to choose one. If `newuidmap` or
+  `newgidmap` is missing (Debian and Ubuntu: package `uidmap`), onboarding offers `sudo
+  apt-get install -y uidmap && podman system migrate` instead. With `CONTAINER_HOST`,
+  `CONTAINER_CONNECTION` or a remote connection, this computer's files are not read and
+  nothing is run: the range belongs where that Podman runs.
 - Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
@@ -292,7 +298,8 @@ configuration then names the variable, not the key), or from a hidden prompt (th
 is then stored in the owner-only configuration); before that prompt it says to create
 a key at `https://openrouter.ai/settings/keys` and add credits at
 `https://openrouter.ai/settings/credits`. Without a key nothing is saved, and the step
-left gives the `axocoatl onboard` command with the models you chose. With `--writer openrouter` the
+left gives the `axocoatl onboard` command with the writer and models you chose (Codex
+asks again which account pays). With `--writer openrouter` the
 reviewer runs on OpenRouter too; a `--reviewer ollama:…` is a usage error. Before writing anything, onboarding
 checks that OpenRouter accepts the key and lists both models. OpenRouter uses your
 OpenRouter credits; BYOK is not supported for native Sessions.

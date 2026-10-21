@@ -1,6 +1,6 @@
 ---
 title: Install Axocoatl
-description: Install the release binary on macOS 11 or newer, on Linux, or inside WSL2 on Windows (not yet verified), or build the CLI from source. What has been tested, what it needs and what it downloads.
+description: Install the release binary on macOS 11 or newer, on Linux, or inside WSL2 on Windows (not yet verified), or build the CLI from source. What is not yet verified, what it needs and what it downloads.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -11,12 +11,16 @@ distribution, not in PowerShell; there is no native Windows binary.
 The Linux archives target GNU libc 2.35 or newer. They do not run on
 musl-based distributions such as Alpine; use the Cargo or source path there.
 
-| | |
-| --- | --- |
+{/* VERIFIED-PENDING: restate from the final live runs */}
+{/*
 | Tested end to end | macOS 26 on Apple silicon (48 GB), rootless Podman 6.1.4 and 5.8, Ollama 0.40.6: the 1.5.0 release candidate installed and onboarded on a Mac wiped of Podman, Ollama and Axocoatl |
 | Tested end to end | Ubuntu 24.04 on arm64, rootless Podman 4.9.3, in a VM with the models served from the Mac's Ollama |
 | Verified in CI | Ubuntu 24.04 on x86_64, rootless Podman 4.9.3, against a stub model server |
 | Repositories | On macOS, `fix` with local models, `fix-claude-code` and `fix-codex` each passed on Node.js, Python, Go and Rust, every receipt verified; on Ubuntu, `fix` passed on Node.js, Python, Go and Rust ([how toolchains work](/configure/toolchains/)) |
+*/}
+
+| | |
+| --- | --- |
 | Not yet verified | Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows |
 
 ## Install the binary
@@ -36,8 +40,9 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
     to the startup files your shell reads in a new terminal and a new login, and prints
     that line when it cannot ask or you answer with end of input (Ctrl-D). The line adds
-    the directory only when `PATH` does not have it, and a file that already adds it,
-    such as Ubuntu's `~/.profile`, gets none. In a GitHub
+    the directory only when `PATH` does not have it, and a file that already has the
+    installer's line, or the lines Ubuntu's and Debian's `~/.profile` use to add
+    `~/.local/bin`, gets none. In a GitHub
     Actions step it adds the directory to `$GITHUB_PATH` instead, for the job's later
     steps.
   </TabItem>
@@ -140,8 +145,10 @@ A run's sandbox also pulls its base image and packages the first time it starts.
 [Set up Axocoatl](/start/onboard/). What it needs:
 
 - **Rootless Podman**, for every Session and every `axocoatl run`. On macOS Podman runs
-  containers in a Linux virtual machine; onboarding installs Podman with Homebrew
-  (`brew install podman`) and creates and starts the machine:
+  containers in a Linux virtual machine. On Apple silicon with Homebrew, onboarding
+  installs Podman (`brew install podman`) after asking; without Homebrew it points to
+  the installer from podman.io, and on an Intel Mac to the Podman 5.8 package. It then
+  creates and starts the machine:
 
   ```sh
   podman machine init --cpus 6 --memory 8192 --disk-size 60
@@ -154,10 +161,16 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   machine (Podman Desktop's default) does not work for `axocoatl run`; onboarding
   offers to switch it to rootless. On Linux, Podman runs containers directly and needs
   no machine: install Podman 4.3 or later (4.9 is tested; Ubuntu 22.04 ships 3.4.4, which
-  onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo apt-get install -y podman`, and give your user a range of
-  subordinate ids (`sudo usermod --add-subuids 100000-165535 --add-subgids
-  100000-165535 $USER && podman system migrate`, or the free range `axocoatl doctor`
-  names when another user already has that one) if it has none.
+  onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo apt-get
+  install -y podman`. For the subordinate ids rootless Podman needs, run `axocoatl
+  onboard` or `axocoatl doctor` and use the exact command it prints: when your user has
+  no range in `/etc/subuid` and `/etc/subgid`, or fewer than 65536 ids, onboarding
+  offers to run it and doctor fails "User ID ranges" with it. It is `sudo usermod
+  --add-subuids <first>-<last> --add-subgids <first>-<last> <user> && podman system
+  migrate` (with one of the two options when only one file is short), with a range no
+  line of either file uses. Do not copy a range from
+  elsewhere: the range is `100000-165535` only when both files are empty, and on Ubuntu
+  the first user created usually has that one already.
 - **A writer and a different reviewer model**: Claude Code (a Claude Pro or Max plan),
   Codex (a ChatGPT plan or an OpenAI API key), a local Ollama pair, or OpenRouter
   credits. Claude Code and Codex write but do not review, so they need a reviewer on

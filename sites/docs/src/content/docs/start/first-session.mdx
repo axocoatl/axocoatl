@@ -128,7 +128,9 @@ hunk review, branch checkout, and commit as deliberate user actions.
 - An image outside Axocoatl's curated presets is rejected unless
   `sandbox.allow_untrusted_images: true`.
 - Session startup never installs Podman or creates its VM; `axocoatl onboard` does,
-  after asking. Run it, or follow the `doctor` guidance, then retry.
+  after asking, where it can (Homebrew on Apple silicon, or a package manager it knows
+  on Linux; otherwise it names the installer). Run it, or follow the `doctor` guidance,
+  then retry.
 - With `sandbox.network: none`, the local image must already contain Axocoatl's
   required repository commands; offline startup cannot download missing tools.
 - E2B uses one daemon-global template and rejects a per-Session or devcontainer

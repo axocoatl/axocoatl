@@ -252,17 +252,24 @@ axocoatl dev       # start the daemon and the one app
 ```
 
 Prebuilt releases support macOS 11 or newer and GNU/Linux with glibc 2.35 or
-newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2, and there is no native
-Windows binary. What has been tested, end to end: macOS 26 on Apple silicon (48 GB) with
+newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2 (not yet verified), and
+there is no native Windows binary.
+
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
+What has been tested, end to end: macOS 26 on Apple silicon (48 GB) with
 rootless Podman 6.1.4 and 5.8 and Ollama 0.40.6, where the 1.5.0 release candidate was
 installed and onboarded on a Mac wiped of Podman, Ollama and Axocoatl; and Ubuntu 24.04
 with rootless Podman 4.9.3 (arm64, in a VM, with the models served from the Mac's
 Ollama). CI also runs on Ubuntu 24.04 on x86_64 against a stub model server. On macOS,
 `axocoatl run fix` with local models, `fix-claude-code` and `fix-codex` each passed on
 Node.js (with `npm ci`), Python (pytest), Go and Rust repositories, every receipt
-verified; on Ubuntu, `fix` passed on Node.js, Python, Go and Rust. Not yet verified: Intel
-Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with
-SELinux, and WSL2 on Windows. Docker is not supported; Podman can run alongside it. The first daemon start downloads an 87 MB embedding model from
+verified; on Ubuntu, `fix` passed on Node.js, Python, Go and Rust.
+-->
+
+Not yet verified: Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04,
+Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can
+run alongside it. The first daemon start downloads an 87 MB embedding model from
 huggingface.co. To remove Axocoatl, see
 [Uninstall](https://docs.axocoatl.ai/operate/uninstall/).
 
