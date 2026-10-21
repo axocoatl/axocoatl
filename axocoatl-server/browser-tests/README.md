@@ -385,8 +385,10 @@ the Preview and failure paths called out below.
   context menu, drag), `window.open` (how the file editor opens a link), and an
   OSC 8 link a program prints in the Terminal (an `<ax-terminal>` whose
   WebSocket Playwright answers). In WebKit on macOS each is refused, opens
-  nothing, and the workbench says why; in Chromium each opens the address as
-  before (the Terminal after xterm.js's own prompt).
+  nothing, and the workbench says why. Elsewhere nothing is refused: a click,
+  `window.open` and the Terminal link open the address as before (the
+  Terminal after xterm.js's own prompt), and whatever a Command-click or middle
+  click opens, as that engine decides, is that address.
 - `preview-embedding.test.mjs` checks, without a browser, which browsers keep
   a Preview embedded (Safari's engine on macOS, iOS and iPadOS, by
   `navigator.vendor`, then the user agent; not Chromium-based browsers,

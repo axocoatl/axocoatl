@@ -3367,13 +3367,17 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
       addEventListener('preview-stays-embedded', () => { window.__refusals += 1; });
     });
     const refusals = () => page.evaluate(() => window.__refusals);
-    const expectOpened = async (before, what, refusalsBefore) => {
+    // Outside Safari, `mustOpen` routes open the address in every engine; a
+    // Command-click or middle click opens a tab as that engine decides
+    // (WebKit on Linux, for one, has its own rules), so for those only what
+    // did open is checked.
+    const expectOpened = async (before, what, refusalsBefore, mustOpen = true) => {
       const opened = await pagesOpenedWithin(context, before);
       assert.equal(await refusals(), refusalsBefore + (embedded ? 1 : 0), `${what}: refusals`);
       if (embedded) {
         assert.deepEqual(opened, [], `${what} opened a Preview top-level in Safari`);
       } else {
-        assert.ok(opened.length >= 1, `${what} opened nothing outside Safari`);
+        if (mustOpen) assert.ok(opened.length >= 1, `${what} opened nothing outside Safari`);
         for (const extra of context.pages().filter((candidate) => !before.has(candidate))) {
           await extra.waitForURL(previewUrl).catch(() => {});
           assert.equal(extra.url(), previewUrl, what);
@@ -3419,15 +3423,15 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
     }, previewUrl);
     const citation = page.locator('#route-sweep-links a');
     assert.equal(await citation.getAttribute('href'), previewUrl);
-    for (const [what, options] of [
-      ['a click', {}],
-      ['a Command-click', { modifiers: ['Meta'] }],
-      ['a middle click', { button: 'middle' }],
+    for (const [what, options, mustOpen] of [
+      ['a click', {}, true],
+      ['a Command-click', { modifiers: ['Meta'] }, false],
+      ['a middle click', { button: 'middle' }, false],
     ]) {
       const before = new Set(context.pages());
       const refusalsBefore = await refusals();
       await citation.click(options);
-      await expectOpened(before, `${what} on a link to a Preview`, refusalsBefore);
+      await expectOpened(before, `${what} on a link to a Preview`, refusalsBefore, mustOpen);
       assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`, what);
     }
     // Its context menu (Safari's own holds Open Link in New Tab) and
