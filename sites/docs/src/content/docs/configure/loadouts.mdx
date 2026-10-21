@@ -40,7 +40,8 @@ axocoatl run fix --task "Paging skips the last item when the total is a multiple
   --junit axocoatl-junit.xml --record run.axorecord.jsonl
 ```
 
-`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) fit a 48 GB Mac, one at a time;
+`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) each fit a 48 GB Mac as onboarding
+judges a model's size (at most about 0.65 of memory), and a fix run calls them in turn;
 `gpt-oss:20b` as reviewer has not been measured. `gpt-oss:120b` (65 GB), the reviewer we
 measured, needs a machine with roughly 96 GB of memory or more.
 

@@ -283,15 +283,23 @@ Supporting checks, run in CI's workflow-contracts job:
 
 CI's "Podman suites (ignored tests)" job runs the Podman tests that are
 ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
-`session_trust_podman`, and the five `node_modules` mount point tests
+`session_trust_podman`, and the nine `node_modules` mount point tests
 (`a_repository_without_node_modules_has_none_left_behind`,
 `under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`,
 `a_development_containers_node_modules_volume_keeps_the_mount_point`,
-`a_container_that_bind_mounts_the_mount_point_itself_keeps_it` and
-`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it`: plain,
-hardened keep-id, a development container, a bind of the mount point itself,
-and a tmpfs through a bind of the repository), which must report `5 passed`,
-so that a renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
+`a_container_that_bind_mounts_the_mount_point_itself_keeps_it`,
+`a_bind_of_the_mount_point_through_a_link_keeps_it`,
+`a_bind_volume_of_the_mount_point_keeps_it`,
+`an_overlay_volume_of_the_mount_point_keeps_it`,
+`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it` and
+`dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected`:
+plain, hardened keep-id, a development container, a bind of the mount point
+itself, a bind through a link, a bind volume, an overlay volume, a tmpfs
+through a bind of the repository, and Podman's `no such container` and `no
+such volume` answers). Each removal they assert runs while an unrelated
+container exists, and each keep they assert names why, so a broken `podman
+container inspect` fails them. The step must report `9 passed`, so that a
+renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
 not wired yet.
 
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
@@ -498,20 +506,40 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   asserts that the workbench's own token cookie never reaches a Preview
   origin, and that with those cookies the workbench still opens, connects and
   reads the API. `preview-cookies.test.mjs` needs Podman and
-  `docker.io/library/node:20-slim`, and is skipped without that image. Through
-  the real Preview proxy and a real Session app it asserts that:
+  `docker.io/library/node:20-slim`. On a developer machine it is skipped
+  without that image. CI's product-browser legs and `release.yml`'s browser
+  gate pull the image by digest and set `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`,
+  so there a missing image fails it. Through the real Preview proxy and a real
+  Session app it asserts that:
   - the app never receives an `axocoatl-token-*` cookie over HTTP or a
     WebSocket upgrade;
   - an app's `Set-Cookie` with `Domain=localhost` stays host-only;
   - a forged signed-in cookie gives a signed-out browser the retry page at
     most once per navigation.
+
+  `signed-out.test.mjs` asserts in every engine that the workbench reloads at
+  most once a minute when its API answers 401, and otherwise shows "This
+  browser is signed out". In WebKit on a Mac it sets, from a full-page Preview
+  origin, about 52 large `Path=/api` cookies for `localhost`, and asserts:
+  - the token cookie stays stored but API requests get 401;
+  - the workbench loads twice, then shows the message;
+  - the same cookies with `Path=/ws` leave the live connection reconnecting.
 - Known gap: in Safari on macOS a top-level Preview's script can set a
   `Domain=localhost` cookie that reaches the workbench and every other Preview
   ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
-  The app's server no longer can. The macOS WebKit journeys assert this; the
-  person on the `C1-workbench-webkit` path should confirm it in Safari. Any
-  page in Safari can also sign out a browser that signed in seconds earlier by
-  writing about 1,000 cookies, because WebKit drops its whole cookie jar.
+  The app's server no longer can through the Preview proxies.
+  - About 52 large such cookies with `Path=/api` sign that browser out of the
+    workbench's API until localhost's data is removed in Safari's settings.
+    The workbench then says "This browser is signed out" instead of reloading
+    without end.
+  - With `Path=/ws` they keep its live connection from opening.
+
+  The macOS WebKit journeys assert this. The person on the
+  `C1-workbench-webkit` path should confirm it in Safari, including that
+  Safari > Settings > Privacy > Manage Website Data removes the cookies. Any
+  page in Safari can also sign out a browser that signed in seconds earlier
+  and has no workbench page open, by writing about 1,000 cookies, because
+  WebKit drops its whole cookie jar.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the
@@ -563,11 +591,14 @@ model download dominates unless models are cached.
 The public statements of what was verified live describe the release's
 final live runs, never an earlier build. While those runs are outstanding,
 each such place holds a pending marker (the string `pendingMarker` names in
-`sites/marketing/scripts/validate.mjs`), with the earlier text commented out
-below it as a template: the CHANGELOG's Verified section and its other
-entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`, the marketing home,
-install and changelog pages, and the docs' install, onboarding, security
-and Fix/QA/Audit pages.
+`sites/marketing/scripts/validate.mjs`): the CHANGELOG's Verified section and
+its other entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`, the marketing
+home, install and changelog pages, and the docs' install, onboarding,
+security and Fix/QA/Audit pages. Except in `llms.txt`, which has the marker
+alone and points to the CHANGELOG, the earlier text is commented out below
+each marker as a template. Restating replaces the marker and its commented
+template with the final text: the release-bound check looks for the marker
+only, so a template left behind would ship in the page source.
 
 `release.yml`'s marketing job runs `./scripts/verify-marketing-gate.sh
 source-bound`, whose release-bound validation refuses every file in that list

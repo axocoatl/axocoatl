@@ -150,8 +150,9 @@ On **Linux and WSL2**:
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
   its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
   Invalid argument`): `sudo usermod --add-subuids <first>-<last> --add-subgids
-  <first>-<last> <user> && podman system migrate`, with a range of 65536 that no line
-  of either file uses (100000-165535 when they are empty). Onboarding and doctor read
+  <first>-<last> <user> && podman system migrate`, with the first 65536 ids from 100000
+  up that no line of either file uses (100000-165535 whenever no line uses those, for
+  example when both files are empty). Onboarding and doctor read
   both files and print the exact command; with `--yes`, onboarding runs it only with
   `--allow-sudo`. A range that is in the files but that Podman has not picked up yet
   needs only `podman system migrate`, which stops your running containers. When only
@@ -226,7 +227,7 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
    | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | This reviewer's quality has not been measured |
-   | Under 48 GB | — | — | No local pair has been tested; onboarding says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
+   | Under 48 GB | — | — | Not yet verified with local models. Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
 
    {/* VERIFIED-PENDING: restate from the final live runs */}
    {/* The 48 to 95 GB row said: Runs end to end on 48 GB. */}
