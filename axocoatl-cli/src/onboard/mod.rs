@@ -119,7 +119,9 @@ impl WriterChoice {
 /// `--podman`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PodmanChoice {
-    /// Install Podman and create and start its machine when they are missing
+    /// Set up a missing Podman: on a Mac, install it with Homebrew (Apple
+    /// silicon) and create and start its machine; on Linux, install it with
+    /// apt-get, dnf, pacman or zypper (with sudo); elsewhere, say how
     Create,
     /// Leave Podman as it is
     Skip,
@@ -161,8 +163,10 @@ pub struct OnboardArgs {
     /// The Ollama server native Sessions use (default http://localhost:11434)
     #[arg(long, value_name = "URL")]
     pub ollama_url: Option<String>,
-    /// create: install Podman and create its machine when missing; skip:
-    /// leave Podman as it is
+    /// create (the default): set up a missing Podman where onboarding can
+    /// (Mac: Homebrew on Apple silicon, then the machine; Linux: the
+    /// distribution's package manager, with sudo); skip: leave Podman as it
+    /// is
     #[arg(long, value_enum)]
     pub podman: Option<PodmanChoice>,
     /// CPUs for a new Podman machine (default: min(6, half the cores))
@@ -335,15 +339,15 @@ impl OnboardArgs {
 }
 
 /// What onboarding prints when it cannot ask and was not told to answer.
+/// Every command line in it can be pasted as it is: no `a|b` alternatives
+/// (a shell runs them as a pipeline) and no `[…]` or `(…)`.
 pub(crate) const NO_TERMINAL: &str = "axocoatl onboard asks before every change to this computer, \
-and there is no terminal to ask in. Run it in a terminal, or answer with flags:
-  axocoatl onboard --yes --writer claude-code|codex|ollama|openrouter
-      [--reviewer PROVIDER:MODEL] [--writer-model PROVIDER:MODEL] [--ollama-url URL]
-      [--podman create|skip] [--machine-cpus N] [--machine-memory MiB]
-      [--pull|--no-pull] [--recipe-build|--no-recipe-build] [--connect|--no-connect]
-      [--openrouter-key-env VAR] [--port N] [--start dev|service|none]
-      [--smoke-test|--no-smoke-test] [--allow-sudo] [--update|--replace]
-  axocoatl onboard --plan    (prints every action it would take; changes nothing)
+and there is no terminal to ask in. Run it in a terminal, or answer with flags, for example:
+  axocoatl onboard --yes --writer WRITER
+where WRITER is claude-code, codex, ollama or openrouter. `axocoatl onboard --help` lists the \
+flags that answer the other questions (the models, Podman, pulls, sign-ins, how to start, sudo, \
+an existing configuration). To print every action onboarding would take, changing nothing:
+  axocoatl onboard --plan
 Nothing was changed.";
 
 /// What an existing configuration becomes.

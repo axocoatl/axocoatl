@@ -583,26 +583,22 @@ mod tests {
         );
         assert_eq!(item.status, ReadinessStatus::Fail);
         assert!(blocked.is_none());
-        assert_eq!(
-            item.fix.as_deref(),
-            Some(
-                "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and \
-                 group IDs, and newuidmap is not installed: install (or reinstall) them (Debian \
-                 and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run \
-                 `podman system migrate`; `axocoatl doctor` names the command for this computer."
-            )
-        );
+        let hint = "Rootless Podman needs newuidmap and newgidmap to map your subordinate user \
+                    and group IDs, and newuidmap is not found on PATH: install (or reinstall) \
+                    them (Debian and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: \
+                    shadow), then run `podman system migrate`; `axocoatl doctor` names the \
+                    command for this computer";
+        assert_eq!(item.fix, Some(format!("{hint}.")));
         let refused = crate::loadout::admission::podman_not_ready(error);
-        assert!(
-            refused.ends_with(
-                "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and \
-                 group IDs, and newuidmap is not installed: install (or reinstall) them (Debian \
-                 and Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run \
-                 `podman system migrate`; `axocoatl doctor` names the command for this computer"
-            ),
-            "{refused}"
-        );
+        assert!(refused.ends_with(hint), "{refused}");
         assert!(!crate::loadout::admission::podman_unanswered("timed out").contains("newuidmap"));
+        // A loadout run that made Podman ready first (`ensure_ready`) gets
+        // its message, which says it already: once.
+        let ensured = axocoatl_isolation::podman::unavailable_message(error);
+        assert!(ensured.ends_with(hint), "{ensured}");
+        let refused = crate::loadout::admission::podman_not_ready(&ensured);
+        assert_eq!(refused.matches(hint).count(), 1, "{refused}");
+        assert!(refused.ends_with(hint), "{refused}");
     }
 
     /// The first screen's fix for a missing Podman names onboarding once and

@@ -184,12 +184,15 @@ impl PodmanReport {
         }
     }
 
-    /// Podman runs here and `podman info` failed because `newuidmap` or
-    /// `newgidmap` cannot map the user's range ([`id_map_tools_failure`]):
-    /// what the error says about them.
+    /// Podman runs here, on Linux (not in a machine, as on macOS), and
+    /// `podman info` failed because `newuidmap` or `newgidmap` cannot map
+    /// the user's range ([`id_map_tools_failure`]): what the error says
+    /// about them.
     fn id_map_failure(&self) -> Option<IdMapTools> {
         match &self.readiness {
-            PodmanReadiness::Unavailable(error) if self.runs_here() => id_map_tools_failure(error),
+            PodmanReadiness::Unavailable(error) if self.runs_here() && !self.machine_platform => {
+                id_map_tools_failure(error)
+            }
             _ => None,
         }
     }
@@ -646,9 +649,23 @@ pub struct IdMapTools {
     /// The paths of helpers found that are neither setuid nor given file
     /// capabilities, so they cannot map other ids.
     pub unprivileged: Vec<String>,
-    /// The command that installs the missing helpers here (`sudo apt-get
-    /// install -y uidmap`), when the caller knows the distribution's
-    /// package.
+    /// Of [`IdMapTools::missing`], the ones found in a system directory that
+    /// is not on `PATH` (`/usr/bin/newuidmap`): there, but Podman does not
+    /// find them, and no install changes that.
+    pub off_path: Vec<String>,
+    /// The package that ships them here (`uidmap`), when the caller knows
+    /// the distribution's package.
+    pub package: Option<String>,
+    /// Whether [`IdMapTools::package`] is installed (`None`: not known).
+    pub package_installed: Option<bool>,
+    /// Of [`IdMapTools::unprivileged`], the ones the package does not own
+    /// (a copy elsewhere on `PATH`, before the package's): no reinstall
+    /// changes them.
+    pub foreign: Vec<String>,
+    /// The command that installs the package here (`sudo apt-get install -y
+    /// uidmap`), or reinstalls it when it is installed (`sudo apt-get
+    /// install --reinstall -y uidmap`, `sudo dnf reinstall -y
+    /// shadow-utils`), when the caller knows the distribution's package.
     pub install: Option<String>,
 }
 
@@ -658,49 +675,179 @@ impl IdMapTools {
         self.missing.is_empty() && self.unprivileged.is_empty()
     }
 
-    /// `newuidmap and newgidmap are not installed`, and the ones that
-    /// cannot map.
-    fn describe(&self) -> String {
-        let verb = |names: &[String]| if names.len() == 1 { "is" } else { "are" };
+    /// The missing helpers that are nowhere this computer was searched:
+    /// [`IdMapTools::missing`] without the ones [`IdMapTools::off_path`]
+    /// found.
+    fn not_found(&self) -> Vec<String> {
+        self.missing
+            .iter()
+            .filter(|name| {
+                !self.off_path.iter().any(|path| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .is_some_and(|file| file == name.as_str())
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The directories [`IdMapTools::off_path`] found helpers in, once each.
+    fn off_path_directories(&self) -> Vec<String> {
+        let mut directories: Vec<String> = Vec::new();
+        for path in &self.off_path {
+            let directory = std::path::Path::new(path)
+                .parent()
+                .map(|parent| parent.display().to_string())
+                .unwrap_or_default();
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+        directories
+    }
+
+    /// `newuidmap and newgidmap are not installed`, the ones that are there
+    /// but not on `PATH`, and the ones that cannot map. A helper whose
+    /// package is installed is "missing" (its file was deleted), and one
+    /// whose package is not known is "not found on PATH", as Podman says.
+    pub fn describe(&self) -> String {
+        let verb = |count: usize| if count == 1 { "is" } else { "are" };
         let mut parts = Vec::new();
-        if !self.missing.is_empty() {
-            parts.push(format!(
-                "{} {} not installed",
-                self.missing.join(" and "),
-                verb(&self.missing)
-            ));
+        let not_found = self.not_found();
+        if !not_found.is_empty() {
+            let names = not_found.join(" and ");
+            let are = verb(not_found.len());
+            parts.push(match (&self.package, self.package_installed) {
+                (Some(package), Some(true)) => format!(
+                    "{names} {are} missing, though {} package {package} is installed",
+                    if not_found.len() == 1 { "its" } else { "their" }
+                ),
+                (_, Some(false)) => format!("{names} {are} not installed"),
+                _ => format!("{names} {are} not found on PATH"),
+            });
+        }
+        if !self.off_path.is_empty() {
+            let names: Vec<String> = self
+                .off_path
+                .iter()
+                .filter_map(|path| {
+                    std::path::Path::new(path)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .collect();
+            let directories = self.off_path_directories();
+            parts.push(match directories.as_slice() {
+                [directory] => format!(
+                    "{} {} in {directory}, which is not on PATH",
+                    names.join(" and "),
+                    verb(names.len())
+                ),
+                _ => format!(
+                    "{} are not on PATH ({})",
+                    names.join(" and "),
+                    self.off_path.join(", ")
+                ),
+            });
         }
         if !self.unprivileged.is_empty() {
             parts.push(format!(
                 "{} {} neither setuid nor given file capabilities",
                 self.unprivileged.join(" and "),
-                verb(&self.unprivileged)
+                verb(self.unprivileged.len())
             ));
         }
         parts.join(", and ")
     }
 
-    /// What only the person can do about the helpers, when no command here
-    /// does it: a helper that cannot map, or no known package.
+    /// The package is installed and [`IdMapTools::install`] reinstalls it,
+    /// which restores a helper's file, its setuid bit or its file
+    /// capabilities.
+    fn reinstalls(&self) -> bool {
+        self.package_installed == Some(true) && self.install.is_some()
+    }
+
+    /// The command that fixes the helpers here, when one does: it installs
+    /// (or reinstalls) the package for a helper that is nowhere, and
+    /// reinstalls an installed package for one that cannot map. Never for a
+    /// helper that is there but not on `PATH`, which no install changes.
+    pub fn command(&self) -> Option<String> {
+        let needed = !self.not_found().is_empty()
+            || (!self.packaged_unprivileged().is_empty() && self.reinstalls());
+        self.install.clone().filter(|_| needed)
+    }
+
+    /// [`IdMapTools::unprivileged`] without [`IdMapTools::foreign`]: the
+    /// package's own files, which a reinstall restores.
+    fn packaged_unprivileged(&self) -> Vec<String> {
+        self.unprivileged
+            .iter()
+            .filter(|path| !self.foreign.contains(path))
+            .cloned()
+            .collect()
+    }
+
+    /// What only the person can do about the helpers, beside
+    /// [`IdMapTools::command`]: put a directory on `PATH`, remove a copy
+    /// the package does not own, reinstall a package whose state is not
+    /// known, or install them where no package is known.
     fn manual(&self) -> Option<String> {
-        if !self.unprivileged.is_empty() {
-            let (they, are, have, their) = if self.unprivileged.len() == 1 {
+        let mut words = Vec::new();
+        let directories = self.off_path_directories();
+        if !directories.is_empty() {
+            words.push(format!(
+                "Add {} to PATH where Podman and Axocoatl run (Podman looks newuidmap and \
+                 newgidmap up on PATH only)",
+                directories.join(" and ")
+            ));
+        }
+        if !self.foreign.is_empty() {
+            let mut directories: Vec<&std::path::Path> = self
+                .foreign
+                .iter()
+                .filter_map(|path| std::path::Path::new(path).parent())
+                .collect();
+            directories.dedup();
+            let (its_directory, they_are, file, them) =
+                match (self.foreign.len(), directories.len()) {
+                    (1, _) => ("its directory", "it is", "file", "it"),
+                    (_, 1) => ("their directory", "they are", "files", "them"),
+                    _ => ("their directories", "they are", "files", "them"),
+                };
+            let package = self.package.as_deref().unwrap_or("the package");
+            words.push(format!(
+                "Delete {} or take {its_directory} off PATH: {they_are} not the {file} {package} \
+                 installed, so no reinstall changes {them}",
+                self.foreign.join(" and ")
+            ));
+        }
+        let packaged = self.packaged_unprivileged();
+        if !packaged.is_empty() && !self.reinstalls() {
+            let (they, are, have, their) = if packaged.len() == 1 {
                 ("it", "is", "has", "its")
             } else {
                 ("they", "are", "have", "their")
             };
-            Some(format!(
+            words.push(format!(
                 "Reinstall the package that provides {} so that {they} {are} setuid root or \
                  {have} {their} file capabilities again ({ID_MAP_PACKAGES})",
-                self.unprivileged.join(" and ")
-            ))
-        } else if self.install.is_none() {
-            Some(format!(
-                "Install newuidmap and newgidmap from your distribution ({ID_MAP_PACKAGES})"
-            ))
-        } else {
-            None
+                packaged.join(" and ")
+            ));
         }
+        if !self.not_found().is_empty() && self.install.is_none() {
+            words.push(format!(
+                "Install newuidmap and newgidmap from your distribution ({ID_MAP_PACKAGES})"
+            ));
+        }
+        (!words.is_empty()).then(|| {
+            let mut text = words.remove(0);
+            for more in words {
+                text.push_str("; ");
+                text.push_str(&lowercase_first(&more));
+            }
+            text
+        })
     }
 
     /// Add what `other` found missing or unable to map, keeping the order.
@@ -785,7 +932,7 @@ pub fn id_map_tools_hint(error: &str) -> Option<String> {
 
 /// The part of a failed `podman info` that names the helper, as Podman
 /// wrote it, for the finding.
-fn id_map_failure_reason(error: &str) -> Option<String> {
+pub(crate) fn id_map_failure_reason(error: &str) -> Option<String> {
     let error = unescaped_quotes(error);
     let start = [
         "command required for rootless mode",
@@ -865,7 +1012,8 @@ pub struct LocalIdFix {
     /// set, onboarding runs nothing.
     pub manual: Option<String>,
     /// Install `newuidmap` and `newgidmap`, as shown (`sudo apt-get install
-    /// -y uidmap`).
+    /// -y uidmap`), or reinstall their package (`sudo dnf reinstall -y
+    /// shadow-utils`).
     pub install: Option<String>,
     /// `usermod` and its arguments, run with `sudo`.
     pub usermod: Option<Vec<String>>,
@@ -951,9 +1099,11 @@ pub fn local_fix(
         usermod: None,
         migrate: true,
     };
-    let tools = |fix: &mut LocalIdFix, tools: &IdMapTools| match tools.manual() {
-        Some(manual) => fix.manual = Some(manual),
-        None => fix.install = tools.install.clone(),
+    // What only the person can do (then onboarding runs nothing), and the
+    // command that installs or reinstalls the helpers' package.
+    let tools = |fix: &mut LocalIdFix, tools: &IdMapTools| {
+        fix.manual = tools.manual();
+        fix.install = tools.command();
     };
     match problem {
         IdRangeProblem::Elsewhere => return None,
@@ -1056,6 +1206,14 @@ fn elsewhere_finding(report: &PodmanReport) -> Finding {
         ),
         None => {
             let socket = match &report.connection {
+                // On a Mac, such a socket is usually a machine's API socket
+                // (`podman machine inspect` names it).
+                ConnectionOverride::Host(host)
+                    if host.starts_with("unix://") && report.machine_platform =>
+                {
+                    " (a unix:// socket here is usually a Podman machine's API socket: then it \
+                     runs in that machine, reached with `podman machine ssh`)"
+                }
                 ConnectionOverride::Host(host) if host.starts_with("unix://") => {
                     " (a unix:// socket is on this computer, but the Podman behind it may run as \
                      another user, or be the host's when this shell runs in a toolbox or \
@@ -1063,11 +1221,15 @@ fn elsewhere_finding(report: &PodmanReport) -> Finding {
                 }
                 _ => "",
             };
+            // A rootless Podman keeps the mapping its pause process holds:
+            // a restarted API service joins that process, so the range
+            // takes effect only after `podman system migrate` as that user.
             format!(
                 "Where that Podman runs{socket}, give the user it runs as a range of subordinate \
                  user and group IDs (`usermod --add-subuids` and `--add-subgids`, as root there, \
-                 with a range no other user there has), then restart that Podman as that user; \
-                 onboarding changes nothing for it{}",
+                 with a range no other user there has), then run `podman system migrate` as that \
+                 user there (restarting its API service alone keeps one ID mapped: the new \
+                 service joins the old pause process); onboarding changes nothing for it{}",
                 variable.map(unset).unwrap_or_default()
             )
         }
@@ -2027,8 +2189,10 @@ mod tests {
     /// judged by its own `podman info`, as before the files were read: this
     /// computer's empty /etc/subuid says nothing about it. With one id
     /// mapped it still fails, but the fix names nothing to run here: no
-    /// sudo usermod for this computer's user, and no `podman system
-    /// migrate`, which Podman refuses through an override.
+    /// sudo usermod for this computer's user, and `podman system migrate`
+    /// only as that Podman's user where it runs (Podman refuses it through
+    /// an override, and a restarted API service joins the old pause
+    /// process, keeping one id mapped).
     #[test]
     fn a_podman_reached_elsewhere_is_judged_by_its_podman_info() {
         let empty = parse_subordinate_ids("", "", "alex", Some(1001));
@@ -2052,7 +2216,15 @@ mod tests {
             let fix = ranges.fix.unwrap();
             let variable = connection.describe().unwrap();
             assert!(ranges.detail.contains(&variable), "{}", ranges.detail);
-            assert!(!fix.contains("system migrate"), "{fix}");
+            assert!(
+                fix.contains(
+                    "then run `podman system migrate` as that user there (restarting its API \
+                     service alone keeps one ID mapped: the new service joins the old pause \
+                     process)"
+                ),
+                "{fix}"
+            );
+            assert!(!fix.contains("restart that Podman"), "{fix}");
             assert!(!fix.contains("sudo") && !fix.contains("alex"), "{fix}");
             // Not "nothing on this computer changes it": a unix:// socket
             // may be this computer's (another user's Podman).
@@ -2086,6 +2258,18 @@ mod tests {
                 )),
                 "{fix}"
             );
+            // On a Mac a unix:// socket is a machine's, not a toolbox's.
+            let unix = matches!(&connection, ConnectionOverride::Host(host) if host.starts_with("unix://"));
+            assert!(!fix.contains("toolbox"), "{fix}");
+            assert_eq!(
+                fix.contains(
+                    "(a unix:// socket here is usually a Podman machine's API socket: then it \
+                     runs in that machine, reached with `podman machine ssh`)"
+                ),
+                unix,
+                "{fix}"
+            );
+            assert!(fix.contains("then run `podman system migrate` as that user there"));
         }
         // podman-remote, or a default remote connection, without either
         // variable: `podman info` says the service is remote.
@@ -2100,7 +2284,12 @@ mod tests {
             "{}",
             ranges.detail
         );
-        assert!(!ranges.fix.unwrap().contains("migrate"));
+        let fix = ranges.fix.unwrap();
+        assert!(
+            fix.contains("then run `podman system migrate` as that user there")
+                && !fix.contains("sudo"),
+            "{fix}"
+        );
         // On macOS the machine's Podman is remote too.
         let mut mac = mac_report();
         mac.runtime = Some(parse_runtime_info(SINGLE_INFO.as_bytes()).unwrap());
@@ -2215,9 +2404,9 @@ mod tests {
         assert_eq!(
             hint,
             "Rootless Podman needs newuidmap and newgidmap to map your subordinate user and group \
-             IDs, and newuidmap is not installed: install (or reinstall) them (Debian and Ubuntu: \
-             uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run `podman system \
-             migrate`; `axocoatl doctor` names the command for this computer"
+             IDs, and newuidmap is not found on PATH: install (or reinstall) them (Debian and \
+             Ubuntu: uidmap; Fedora and RHEL: shadow-utils; Arch: shadow), then run `podman \
+             system migrate`; `axocoatl doctor` names the command for this computer"
         );
     }
 
@@ -2234,8 +2423,10 @@ mod tests {
         let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
         let tools = IdMapTools {
             missing: vec!["newuidmap".to_string(), "newgidmap".to_string()],
-            unprivileged: Vec::new(),
+            package: Some("uidmap".to_string()),
+            package_installed: Some(false),
             install: Some("sudo apt-get install -y uidmap".to_string()),
+            ..IdMapTools::default()
         };
         let mut report = linux_report(SINGLE_INFO, Some(ok));
         report.readiness = PodmanReadiness::Unavailable(error.to_string());
@@ -2276,7 +2467,7 @@ mod tests {
         assert!(
             podman
                 .detail
-                .contains("alex has: newuidmap is not installed, so"),
+                .contains("alex has: newuidmap is not found on PATH, so"),
             "{}",
             podman.detail
         );
@@ -2288,7 +2479,8 @@ mod tests {
             )
         );
 
-        // A helper that is there but may not map: reinstalled, in words.
+        // A helper that is there but may not map, its package's state not
+        // known: reinstalled, in words.
         report.readiness = PodmanReadiness::Unavailable(
             "Error: cannot set up namespace using \"/usr/bin/newuidmap\": should have setuid or \
              have filecaps setuid: exit status 1"
@@ -2361,8 +2553,10 @@ mod tests {
         let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
         let tools = IdMapTools {
             missing: vec!["newuidmap".to_string(), "newgidmap".to_string()],
-            unprivileged: Vec::new(),
+            package: Some("uidmap".to_string()),
+            package_installed: Some(false),
             install: Some("sudo apt-get install -y uidmap".to_string()),
+            ..IdMapTools::default()
         };
         let mut report = linux_report(SINGLE_INFO, Some(ok.clone()));
         report.id_map_tools = Some(tools.clone());
@@ -2384,11 +2578,12 @@ mod tests {
         let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
         assert!(fix.uses_sudo() && fix.manual.is_none());
 
-        // A helper that is there but cannot map: no command fixes it here.
+        // A helper that is there but cannot map, its package's state not
+        // known: no command here, the reinstall in words.
         report.id_map_tools = Some(IdMapTools {
-            missing: Vec::new(),
             unprivileged: vec!["/usr/bin/newuidmap".to_string()],
             install: tools.install.clone(),
+            ..IdMapTools::default()
         });
         let ranges = ranges_finding(&report).unwrap();
         assert!(ranges
@@ -2405,12 +2600,12 @@ mod tests {
         );
         // Both: "they".
         report.id_map_tools = Some(IdMapTools {
-            missing: Vec::new(),
             unprivileged: vec![
                 "/usr/bin/newuidmap".to_string(),
                 "/usr/bin/newgidmap".to_string(),
             ],
             install: tools.install.clone(),
+            ..IdMapTools::default()
         });
         assert!(ranges_finding(&report).unwrap().fix.unwrap().starts_with(
             "Reinstall the package that provides /usr/bin/newuidmap and /usr/bin/newgidmap so \
@@ -2419,8 +2614,14 @@ mod tests {
         // No known package manager (openSUSE among them): in words.
         report.id_map_tools = Some(IdMapTools {
             install: None,
+            package: None,
+            package_installed: None,
             ..tools.clone()
         });
+        assert!(ranges_finding(&report)
+            .unwrap()
+            .detail
+            .starts_with("newuidmap and newgidmap are not found on PATH, so"));
         assert_eq!(
             ranges_finding(&report).unwrap().fix.as_deref(),
             Some(
@@ -2456,6 +2657,139 @@ mod tests {
         let mut mapped = linux_report(LINUX_INFO, Some(ok));
         mapped.id_map_tools = Some(tools);
         assert_eq!(id_range_problem(&mapped), None);
+    }
+
+    /// A helper whose package is installed is missing because its file was
+    /// deleted, or cannot map because its setuid bit or file capabilities
+    /// were lost: an install changes nothing then (`apt-get install -y
+    /// uidmap` and `dnf install -y shadow-utils` say it is already
+    /// installed), so the fix is the package manager's reinstall, as the
+    /// caller built it. A helper that is there but not on PATH is said to
+    /// be so, and no install or reinstall is offered: only PATH changes it.
+    #[test]
+    fn installed_helpers_are_reinstalled_or_put_on_path_never_installed_again() {
+        let ok = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let mut report = linux_report(SINGLE_INFO, Some(ok));
+        let reinstall = "sudo dnf reinstall -y shadow-utils";
+        // Deleted, the package installed.
+        report.id_map_tools = Some(IdMapTools {
+            missing: vec!["newuidmap".to_string(), "newgidmap".to_string()],
+            package: Some("shadow-utils".to_string()),
+            package_installed: Some(true),
+            install: Some(reinstall.to_string()),
+            ..IdMapTools::default()
+        });
+        assert_eq!(
+            id_range_problem(&report),
+            Some(IdRangeProblem::NoIdMapTools)
+        );
+        let ranges = ranges_finding(&report).unwrap();
+        assert!(
+            ranges.detail.starts_with(
+                "newuidmap and newgidmap are missing, though their package shadow-utils is \
+                 installed, so rootless Podman maps only alex's own user ID"
+            ),
+            "{}",
+            ranges.detail
+        );
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some("sudo dnf reinstall -y shadow-utils && podman system migrate")
+        );
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert_eq!(fix.manual, None);
+        assert_eq!(fix.install.as_deref(), Some(reinstall));
+        // One deleted: "its".
+        report.id_map_tools.as_mut().unwrap().missing = vec!["newgidmap".to_string()];
+        assert!(ranges_finding(&report)
+            .unwrap()
+            .detail
+            .starts_with("newgidmap is missing, though its package shadow-utils is installed"));
+
+        // There but unable to map, the package installed: the reinstall
+        // restores the setuid bit (Debian, Ubuntu) or the file
+        // capabilities (Fedora, RHEL), so it is run, not said in words.
+        let apt = "sudo apt-get install --reinstall -y uidmap";
+        report.id_map_tools = Some(IdMapTools {
+            unprivileged: vec!["/usr/bin/newuidmap".to_string()],
+            package: Some("uidmap".to_string()),
+            package_installed: Some(true),
+            install: Some(apt.to_string()),
+            ..IdMapTools::default()
+        });
+        let ranges = ranges_finding(&report).unwrap();
+        assert!(ranges
+            .detail
+            .starts_with("/usr/bin/newuidmap is neither setuid nor given file capabilities"));
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some("sudo apt-get install --reinstall -y uidmap && podman system migrate")
+        );
+        // A copy the package does not own, first on PATH: a reinstall would
+        // change nothing, so the fix is in words and runs nothing.
+        report.id_map_tools.as_mut().unwrap().unprivileged =
+            vec!["/home/alex/bin/newuidmap".to_string()];
+        report.id_map_tools.as_mut().unwrap().foreign =
+            vec!["/home/alex/bin/newuidmap".to_string()];
+        let ranges = ranges_finding(&report).unwrap();
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "Delete /home/alex/bin/newuidmap or take its directory off PATH: it is not the \
+                 file uidmap installed, so no reinstall changes it, then: podman system migrate"
+            )
+        );
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert!(fix.manual.is_some() && fix.install.is_none(), "{fix:?}");
+
+        // In /usr/bin, which is not on PATH: said so, and no command but
+        // the migrate once PATH has it.
+        report.id_map_tools = Some(IdMapTools {
+            missing: vec!["newuidmap".to_string(), "newgidmap".to_string()],
+            off_path: vec![
+                "/usr/bin/newuidmap".to_string(),
+                "/usr/bin/newgidmap".to_string(),
+            ],
+            package: Some("uidmap".to_string()),
+            package_installed: Some(true),
+            install: Some(apt.to_string()),
+            ..IdMapTools::default()
+        });
+        let ranges = ranges_finding(&report).unwrap();
+        assert!(
+            ranges.detail.starts_with(
+                "newuidmap and newgidmap are in /usr/bin, which is not on PATH, so rootless \
+                 Podman maps only alex's own user ID"
+            ),
+            "{}",
+            ranges.detail
+        );
+        assert!(
+            !ranges.detail.contains("not installed"),
+            "{}",
+            ranges.detail
+        );
+        assert_eq!(
+            ranges.fix.as_deref(),
+            Some(
+                "Add /usr/bin to PATH where Podman and Axocoatl run (Podman looks newuidmap and \
+                 newgidmap up on PATH only), then: podman system migrate"
+            )
+        );
+        let fix = local_fix(&report, "alex", &IdRangeProblem::NoIdMapTools).unwrap();
+        assert!(fix.manual.is_some() && fix.install.is_none(), "{fix:?}");
+
+        // Through `podman info`'s error on a Mac: never a Linux package fix.
+        let mut mac = linux_report(SINGLE_INFO, None);
+        mac.runtime = None;
+        mac.readiness = PodmanReadiness::Unavailable(
+            "Error: command required for rootless mode with multiple IDs: exec: \"newuidmap\": \
+             executable file not found in $PATH"
+                .to_string(),
+        );
+        assert_eq!(id_range_problem(&mac), Some(IdRangeProblem::NoIdMapTools));
+        mac.machine_platform = true;
+        assert_eq!(id_range_problem(&mac), None);
     }
 
     /// With a shim Podman: a machine that is stopped, the read-only commands

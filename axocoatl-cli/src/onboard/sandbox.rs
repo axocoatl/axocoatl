@@ -64,7 +64,8 @@ async fn reinspect(o: &mut Onboarding) {
         &o.host.root,
         &o.facts.os,
         &o.facts.user,
-    );
+    )
+    .await;
 }
 
 /// Step 2; returns whether the sandbox is ready.
@@ -675,6 +676,18 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     };
+    // Their package is installed: the command reinstalls it.
+    let reinstall = o
+        .facts
+        .podman
+        .id_map_tools
+        .as_ref()
+        .is_some_and(|tools| tools.package_installed == Some(true));
+    let install_them = if reinstall {
+        "Reinstall their package"
+    } else {
+        "Install them"
+    };
     let question = match problem {
         IdRangeProblem::NotApplied => format!(
             "{}. Restart rootless Podman with `podman system migrate`? It stops your running \
@@ -682,7 +695,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             finding.detail
         ),
         IdRangeProblem::NoIdMapTools => format!(
-            "{}. Install them with `{fix_text}`? `podman system migrate` stops your running \
+            "{}. {install_them} with `{fix_text}`? `podman system migrate` stops your running \
              containers.",
             finding.detail
         ),
@@ -690,9 +703,9 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             "{}. {} with `{fix_text}`? `podman system migrate` stops your running containers.",
             finding.detail,
             if install {
-                "Install them and add a range"
+                format!("{install_them} and add a range")
             } else {
-                "Add a range"
+                "Add a range".to_string()
             }
         ),
     };
@@ -700,7 +713,28 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     }
-    if let Err(error) = o.ui.execute_all(&o.host, &commands).await {
+    // The install (or reinstall) first, on its own: when it succeeds and
+    // the helpers are still unusable, it did not fix them, and offering it
+    // again would only repeat it.
+    let (install_command, rest) = match install {
+        true => (commands.first().cloned(), &commands[1..]),
+        false => (None, &commands[..]),
+    };
+    if let Some(command) = &install_command {
+        if let Err(error) = o.ui.execute(&o.host, command).await {
+            o.step_left(format!("{error}; run {fix_text}"));
+            return false;
+        }
+        if !o.ui.plan() {
+            let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
+            if !now.usable() {
+                o.step_left(install_did_not_fix(&command.display(), &now.describe()));
+                return false;
+            }
+        }
+    }
+    let ran = o.ui.execute_all(&o.host, rest).await;
+    if let (Err(error), None) = (&ran, &install_command) {
         o.step_left(format!("{error}; run {fix_text}"));
         return false;
     }
@@ -708,18 +742,55 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
     if o.ui.plan() {
         return true;
     }
-    match podman_report::id_range_problem(&o.facts.podman) {
-        None => true,
-        Some(problem) => {
-            let finding = podman_report::id_range_finding(&o.facts.podman, &user, &problem);
-            o.step_left(format!(
-                "{}: {}",
-                finding.detail,
-                finding.fix.unwrap_or_default()
-            ));
+    // After an install that ran, what is left now, and never that install
+    // again when Podman still fails for want of the helpers.
+    let left = podman_report::id_range_problem(&o.facts.podman).map(|problem| {
+        let finding = podman_report::id_range_finding(&o.facts.podman, &user, &problem);
+        let again =
+            podman_report::local_fix(&o.facts.podman, &user, &problem).and_then(|fix| fix.install);
+        // Any install of the helpers' package again (the same command, or
+        // its other form once PATH has them but Podman still fails), so
+        // never one.
+        match (install_command.as_ref().map(Cmd::display), again) {
+            (Some(installed), Some(_)) => install_did_not_fix(&installed, &finding.detail),
+            _ => format!("{}: {}", finding.detail, finding.fix.unwrap_or_default()),
+        }
+    });
+    match (ran, left) {
+        (Ok(()), None) => true,
+        (Err(error), None) => {
+            o.step_left(error);
+            false
+        }
+        (Ok(()), Some(left)) => {
+            o.step_left(left);
+            false
+        }
+        (Err(error), Some(left)) => {
+            o.step_left(format!("{error}; {}", lowercase_first(&left)));
             false
         }
     }
+}
+
+/// `text` with its first letter in lower case, after a `;`.
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if !text.starts_with('`') => first.to_lowercase().chain(chars).collect(),
+        _ => text.to_string(),
+    }
+}
+
+/// The step left when `ran`, the install or reinstall of the id-map
+/// helpers' package, succeeded and the helpers still cannot map (`still`
+/// says why): in words, without the same command.
+fn install_did_not_fix(ran: &str, still: &str) -> String {
+    format!(
+        "`{ran}` ran, but did not fix this: {still}. Running it again would not help: find where \
+         this distribution puts newuidmap and newgidmap, make sure they are on PATH and are \
+         setuid root or have file capabilities, then run `podman system migrate`"
+    )
 }
 
 /// The commands that run `fix`, exactly as its text shows them. `None` when
@@ -727,16 +798,18 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
 fn id_fix_commands(o: &Onboarding, fix: &LocalIdFix) -> Option<Vec<Cmd>> {
     let mut commands = Vec::new();
     if let Some(shown) = &fix.install {
+        let installed = o
+            .facts
+            .podman
+            .id_map_tools
+            .as_ref()
+            .and_then(|tools| tools.package_installed);
         let install = o
             .facts
             .os
             .release()
             .and_then(|release| release.package_manager())
-            .and_then(|manager| {
-                manager
-                    .id_map_package()
-                    .map(|package| manager.install(&[package]))
-            })
+            .and_then(|manager| manager.id_map_install(installed))
             .filter(|install| install.display() == *shown)?;
         commands.push(install);
     }
