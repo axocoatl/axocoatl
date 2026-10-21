@@ -49,7 +49,7 @@ Onboarding prints what it found, for example:
 
 ```text
 This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 412 GB free.
-Found: Homebrew 7.0.10, Podman 5.8.2 (no machine), Ollama 0.40.6 at http://localhost:11434 (cloud models on), claude 2.1.292, git 2.39.5.
+Found: Homebrew 7.0.10, Podman 6.1.4 (no machine), Ollama 0.40.6 at http://localhost:11434 (cloud models on), claude 2.1.292, git 2.39.5.
 Not found: codex, gh.
 ```
 
@@ -143,9 +143,9 @@ On **Linux and WSL2**:
   | Arch | `sudo pacman -S --noconfirm podman` |
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
-- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (CI runs
-  4.9.3), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3 to
-  4.8 is accepted and reported as not tested.
+- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (the 1.5.0
+  release gate ran Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
+  or newer. Podman 4.3 to 4.8 is accepted and reported as not tested.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
   its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
@@ -193,7 +193,7 @@ On **Linux and WSL2**:
 Then one throwaway container proves the setup: onboarding pulls
 `docker.io/library/alpine:3.20` (about 4 MB, the image Sessions start from) and runs it
 rootless with `--userns=keep-id`, no network, no capabilities and `--rm`. On success it
-prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPUs / 8 GiB`.
+prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB`.
 
 ### Step 3A: a local writer and reviewer (Ollama)
 

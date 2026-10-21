@@ -189,11 +189,13 @@ release-evidence/1.5.0/ in the repository):
   Node.js (with and without dependencies), Python (pytest), Rust and Go repositories;
   `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models passed on Node.js and
   Python; the workbench in Safari went from the sign-in link to a commit.
-- Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed Podman from apt
-  and Ollama with its official installer; with OpenRouter models, `axocoatl run fix`
-  passed on the same repositories.
-- CI, Ubuntu 24.04 on x86_64 and arm64: the same install, onboarding and
-  `axocoatl run fix` on the same repositories, against a scripted model server.
+- Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed Podman with apt
+  and added a range of subordinate ids if the user had none, each with sudo after
+  asking, and connected OpenRouter in the browser; with those OpenRouter models,
+  `axocoatl run fix` passed on the same repositories.
+- CI, Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with
+  no terminal against a scripted model server (Podman already on the runner, no
+  first-run sample), and `axocoatl run fix` on the same repositories.
 
 Onboarding offers the local pair, qwen3-coder:30b writing and gpt-oss:20b reviewing, from
 48 GB of memory, unless models already installed fit and make a pair, which come first;

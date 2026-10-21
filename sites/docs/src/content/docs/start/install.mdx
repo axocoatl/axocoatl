@@ -17,8 +17,8 @@ command to passing runs, every receipt verified:
 | | |
 | --- | --- |
 | macOS, end to end | macOS 26.6 on Apple silicon (48 GB), with Axocoatl, Podman and Ollama uninstalled first (the downloaded models kept): onboarding installed Podman and Ollama with Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn |
-| Linux, end to end | Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed Podman from apt and Ollama with its official installer, with OpenRouter models |
-| Linux, in CI | Ubuntu 24.04 on x86_64 and arm64: the same install, onboarding and `axocoatl run fix`, against a scripted model server |
+| Linux, end to end | Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed Podman with apt and added a range of subordinate ids if the user had none, each with `sudo` after asking, and connected OpenRouter in the browser for the OpenRouter models the runs used |
+| Linux, in CI | Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with no terminal against a scripted model server (Podman already on the runner, no first-run sample), and `axocoatl run fix` |
 | Repositories | `fix` passed on Node.js (with and without dependencies), Python (pytest), Rust and Go repositories on each, with local models on the Mac; on the Mac, `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models passed on Node.js and Python ([how toolchains work](/configure/toolchains/)) |
 | Evidence | Each path's transcript, times, downloads and tool versions, in the signed bundle under `release-evidence/1.5.0/` in the repository |
 | Not yet verified | Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows |
@@ -171,10 +171,10 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   project's checks run inside it, while Ollama runs on the Mac itself. A rootful
   machine (Podman Desktop's default) does not work for `axocoatl run`; onboarding
   offers to switch it to rootless. On Linux, Podman runs containers directly and needs
-  no machine: install Podman 4.3 or later (CI runs 4.9.3; Ubuntu 22.04 ships 3.4.4,
-  which onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo
-  apt-get install -y podman`; onboarding runs that, after asking, with apt, dnf, pacman
-  or zypper, and names what to install on other distributions. For the subordinate ids rootless Podman needs, run `axocoatl
+  no machine: install Podman 4.3 or later (the 1.5.0 release gate ran Ubuntu
+  24.04's; Ubuntu 22.04 ships 3.4.4, which onboarding refuses, so Ubuntu 22.04 is
+  not yet verified), for example `sudo apt-get install -y podman`; onboarding runs
+  that, after asking, with apt, dnf, pacman or zypper, and names what to install on other distributions. For the subordinate ids rootless Podman needs, run `axocoatl
   onboard` or `axocoatl doctor` and use the exact command it prints: when your user has
   no range in `/etc/subuid` and `/etc/subgid`, or fewer than 65536 ids, onboarding
   offers to run it and doctor fails "User ID ranges" with it. It is `sudo usermod

@@ -5,7 +5,7 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.0] - Unreleased
+## [1.5.0] - 2026-10-22
 
 ### Workbench first run
 - **The first screen shows readiness.** `GET /api/readiness` runs `axocoatl doctor`'s
@@ -175,8 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subordinate ids now fail (they were warnings followed by "All required checks
   passed"), rootless is always probed, and a stopped machine is OK because it starts on
   first use. Doctor, and onboarding's own check, warn when Podman on macOS is a release
-  other than 5.8 or 6.1 ("has not been tested with Axocoatl on macOS yet (5.8 and 6.1
-  are)"), and when Podman on Linux is 4.3 to 4.8 ("(4.9 is)"); 1.4.0's doctor and
+  other than 6.1, the one Homebrew installs ("has not been tested with Axocoatl on macOS
+  yet (6.1 is)"), and when Podman on Linux is 4.3 to 4.8 ("(4.9 is)"); 1.4.0's doctor and
   onboarding named no Podman release as tested. Each configured Ollama model shows its
   size against memory and the context Ollama loads it with (below 16384 fails); the
   Writers section shows built recipe images, stored credential names and the `claude`,
@@ -787,18 +787,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Domain` named another site, which browsers refused, is now kept host-only.
 
 ### Verified
-- **The release commit went from a new user to passing, signed runs on clean machines**
-  in the release gate (`docs/RELEASE_GATE.md`), and every receipt verified. Each path's
-  transcript, wall times and downloads, and the versions of Podman, Ollama, Claude Code
-  and Codex it ran, are in the evidence bundle under `release-evidence/1.5.0/`, signed
-  by a key in `.axocoatl/gate-keys`.
+- **The release commit went from the published install command to passing, signed runs**
+  in the release gate (`docs/RELEASE_GATE.md`): for a new user on GitHub's Ubuntu
+  runners and in an Ubuntu 24.04 VM, and on a Mac reset for the gate, which kept its
+  downloaded models and its Homebrew. Each path's transcript, wall times and downloads,
+  and the versions of Podman, Ollama, Claude Code and Codex it ran, are in the evidence
+  bundle under `release-evidence/1.5.0/`, signed by a key in `.axocoatl/gate-keys`.
   - In CI (a push run of `ci.yml` on `main`), on GitHub's ubuntu-24.04 (x86_64) and
-    ubuntu-24.04-arm runners: a brand-new `HOME`, the README's install command against
-    the release archive just built, `axocoatl onboard` against a scripted model server
-    standing in for Ollama 0.40.6 with cloud models off, `axocoatl doctor`,
-    `axocoatl dev`, and the README's `axocoatl run fix` on every fixture in
-    `tests/fixtures/newuser` (`node-plain`, `node-deps`, `python-pytest`, `rust` and
-    `go`), each receipt and record verified. On the ubuntu-22.04 runner, onboarding
+    ubuntu-24.04-arm runners: a brand-new `HOME` and the README's install command
+    against the release archive just built. Then, with Podman already on the runner
+    (the workflow installs it when the image lacks it), `axocoatl onboard` with no
+    terminal (`--yes`, no first-run sample) against a scripted model server standing in
+    for Ollama 0.40.6 with cloud models off, `axocoatl doctor`, `axocoatl dev`, and
+    `axocoatl run fix` on every fixture in `tests/fixtures/newuser` (`node-plain`,
+    `node-deps`, `python-pytest`, `rust` and `go`): the README's command, and on
+    `node-plain`, onboarding's first-run sample, the command that fixture's own README
+    gives. Each receipt and record verified. On the ubuntu-22.04 runner, onboarding
     refused Podman 3.4.4. The macOS plumbing passed on arm64 and Intel runners, as did
     the rest of CI: the native gate on Linux, the browser regressions in Chromium on
     x86_64 and aarch64 and in WebKit on x86_64, the docs and marketing sites, and the
@@ -809,30 +813,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     recorded. With local models, onboarding installed Podman and Ollama with Homebrew
     after asking, created the Podman machine, turned Ollama's cloud models off, chose
     `qwen3-coder:30b` to write and `gpt-oss:20b` to review (already downloaded), and
-    passed its first-run sample fix; the README's `axocoatl run fix` then passed on every
-    fixture. After each setup on the Mac, `axocoatl doctor` said ready.
+    passed its first-run sample fix. `axocoatl run fix` then passed on every fixture
+    (the README's command, and on `node-plain` its own README's), each receipt and record
+    verified. After each setup on the Mac, `axocoatl doctor` said ready.
   - Claude Code, signed in through the browser (`axocoatl connect claude-code`): the home
-    page's `fix-claude-code` command passed on `node-deps` and `python-pytest`, and with
-    `--keep pr` opened a pull request on a throwaway GitHub repository, where the docs'
-    verify-receipt Action, pinned to the release commit, passed. A run with
-    `anthropic:opus` as the reviewer was refused with exit 3 and left no Session.
+    page's `fix-claude-code` command passed on `node-deps` and `python-pytest`, each
+    receipt verified, and with `--keep pr` opened a pull request on a throwaway GitHub
+    repository, where the docs' verify-receipt Action, pinned to the release commit,
+    passed. A run with `anthropic:opus` as the reviewer was refused with exit 3 and left
+    no Session.
   - Codex, billed to the ChatGPT plan (ChatGPT sign-in in the browser): the site's
-    `fix-codex` command passed on `node-deps` and `python-pytest`.
+    `fix-codex` command passed on `node-deps` and `python-pytest`, each receipt verified.
   - OpenRouter, connected through the browser (`axocoatl connect openrouter`; no key
     typed), with different writer and reviewer models: `axocoatl run fix` passed on
     `node-deps` and `python-pytest`, and `fix-claude-code` with the OpenRouter reviewer
-    on `node-deps`.
+    on `node-deps`, each receipt verified.
   - The workbench in Safari, from the sign-in link to a commit: Open workspace refused
     the home folder and accepted the repository, a new Session started, Team & budget
     came pre-filled and Apply worked, one turn edited a file, Source Control showed
     "Last turn 1", a commit was made with the account's Git identity, and Ctrl+C stopped
     `axocoatl dev` with exit 0.
   - On Ubuntu 24.04 (aarch64) in a Lima VM, as a new user made with `adduser`: onboarding,
-    answered live, installed Podman from apt, added a range of subordinate ids if the
-    user had none, and installed Ollama with its official installer and the systemd
-    drop-in that turns cloud models off, each with `sudo` after asking. With OpenRouter
-    models connected through the browser, the README's command without `--model` passed
-    on every fixture, each receipt and record verified.
+    answered live, installed Podman with apt and added a range of subordinate ids if the
+    user had none, each with `sudo` after asking, and connected OpenRouter through the
+    browser (no key typed). It did not install Ollama: it does that only when a local
+    model is chosen. `axocoatl doctor` said ready, and with the OpenRouter models
+    onboarding configured, the README's command without `--model` passed on every
+    fixture (on `node-plain`, that fixture's own README's command), each receipt and
+    record verified.
 
 ## [1.4.0] - 2026-10-14
 

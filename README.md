@@ -264,21 +264,26 @@ newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2 (not yet verifi
 there is no native Windows binary.
 
 What the 1.5.0 release gate verified on the release commit, from the published install
-command to passing runs, every receipt verified:
+command to passing runs:
 
 - **macOS 26.6 on Apple silicon (48 GB)**, with Axocoatl, Podman and Ollama uninstalled
   first (the downloaded models kept). `axocoatl onboard` installed Podman and Ollama with
   Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn.
   `axocoatl run fix` with local models passed on Node.js (with and without
-  dependencies), Python (pytest), Rust and Go repositories; `fix-claude-code`,
-  `fix-codex` and `fix` with OpenRouter models passed on Node.js and Python,
-  `fix-claude-code` also with `--keep pr` and the verify-receipt Action; and the
-  workbench in Safari went from the sign-in link to a commit.
-- **Ubuntu 24.04 on arm64**, in a VM, as a new user: onboarding installed Podman from apt
-  and Ollama with its official installer, and with OpenRouter models `axocoatl run fix`
-  passed on the same Node.js, Python, Rust and Go repositories.
-- **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install, onboarding and
-  `axocoatl run fix` on the same repositories, against a scripted model server.
+  dependencies), Python (pytest), Rust and Go repositories, and `fix-claude-code`,
+  `fix-codex` and `fix` with OpenRouter models on Node.js and Python, each receipt
+  verified. `fix-claude-code` with `--keep pr` also opened a pull request, on which the
+  docs' verify-receipt Action passed, and the workbench in Safari went from the sign-in
+  link to a commit.
+- **Ubuntu 24.04 on arm64**, in a VM, as a new user: onboarding installed Podman with apt
+  and added a range of subordinate ids if the user had none, each with `sudo` after
+  asking, and connected OpenRouter in the browser. With those OpenRouter models,
+  `axocoatl run fix` passed on the same Node.js, Python, Rust and Go repositories, each
+  receipt verified.
+- **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install command, then
+  onboarding with no terminal against a scripted model server (Podman already on the
+  runner, no first-run sample), and `axocoatl run fix` on the same repositories, each
+  receipt verified.
 
 Each path's transcript, times, downloads and the Podman, Ollama, Claude Code and Codex
 versions it ran are in the signed evidence bundle under `release-evidence/1.5.0/`.

@@ -117,7 +117,7 @@
 
       <article class="release">
         <span class="release-tag">v1.5.0</span>
-        <span class="release-date">Unreleased</span>
+        <span class="release-date">2026-10-22</span>
         <h2>Native Sessions run on Ollama 0.40, and a restored data directory starts again.</h2>
 
         <p>Native execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew
@@ -247,19 +247,23 @@
         <h3>Verified</h3>
         <ul>
           <li>The release commit went from the published install command to passing,
-              signed runs on clean machines, every receipt verified. On a 48 GB Mac on
-              Apple silicon (macOS 26.6), with Axocoatl, Podman and Ollama uninstalled
-              first, <code>axocoatl onboard</code> installed Podman and Ollama with
-              Homebrew; <code>fix</code> with local models passed on Node.js, Python, Rust
-              and Go repositories, and <code>fix-claude-code</code>, <code>fix-codex</code>
-              and <code>fix</code> with OpenRouter models on Node.js and Python, after
+              signed runs, every receipt verified. On a 48 GB Mac on Apple silicon
+              (macOS 26.6), with Axocoatl, Podman and Ollama uninstalled first (the
+              downloaded models kept), <code>axocoatl onboard</code> installed Podman and
+              Ollama with Homebrew; <code>fix</code> with local models passed on Node.js,
+              Python, Rust and Go repositories, and <code>fix-claude-code</code>,
+              <code>fix-codex</code> and <code>fix</code> with OpenRouter models on Node.js
+              and Python, after
               <code>connect claude-code</code>, <code>connect codex</code> and
               <code>connect openrouter</code> signed in through the browser. The workbench
               in Safari went from the sign-in link to a commit.</li>
-          <li>On Ubuntu 24.04 on arm64, in a VM, as a new user: Podman from apt, OpenRouter
-              models, and <code>fix</code> on Node.js, Python, Rust and Go. In CI, the same
-              new-user flow on Ubuntu 24.04 on x86_64 and arm64 against a scripted model
-              server.</li>
+          <li>On Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed
+              Podman with apt, with <code>sudo</code> after asking, and connected
+              OpenRouter in the browser; <code>fix</code> with those OpenRouter models
+              passed on Node.js, Python, Rust and Go. In CI, on Ubuntu 24.04 on x86_64 and
+              arm64: the same install command, then onboarding with no terminal against a
+              scripted model server (Podman already on the runner, no first-run sample),
+              and <code>fix</code> on the same repositories.</li>
           <li>Each path's transcript, times, downloads and tool versions are in the signed
               evidence bundle under <code>release-evidence/1.5.0/</code> in the
               repository.</li>
