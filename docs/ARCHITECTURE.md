@@ -1388,15 +1388,21 @@ agent:**
   the same device, inode and birth time). A mount counts when `podman ps` lists one at
   its path, or when a host directory one of a container's mounts takes is it, or is a
   directory above it while the container has a volume, bind or tmpfs where it is. Those
-  host directories are each bind's source, each `lowerdir=` of an overlay volume, and the
-  device of each `local` volume made with `o=bind` or `o=rbind`. This is checked with one
+  host directories are each bind's source; an overlay volume's merged directory and each
+  `lowerdir=`, `upperdir=` and `workdir=` it names; the device of each `local` volume
+  made with `o=bind`, `o=rbind` or `type=bind`; and the source of each bind mount a
+  container takes with `--volumes-from`, which its own inspect leaves out, read from the
+  inspect of the container it names in `HostConfig.VolumesFrom`. This is checked with one
   `podman container inspect` of every listed container (once more without any it reports
   as `no such container`) and one `podman volume inspect` of the volumes they mount;
   `HostConfig.Tmpfs` adds the tmpfs mounts that `Mounts` leaves out. Podman reports bind
   sources with links unresolved, so they are compared by spelling first and then
   resolved on dedicated threads (not tokio's blocking pool), for at most 5 s per
-  release; an error other than a missing path, or no answer in time, keeps every
-  candidate.
+  release. An error other than a missing path (a permission, as for the overlay of a
+  `--userns=keep-id` container, whose directory in Podman's storage belongs to a
+  subordinate uid), no answer in time, or a `--volumes-from` naming a container Podman no
+  longer lists keeps every candidate, logged at `info` with the container, the mount and
+  the reason.
   Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
