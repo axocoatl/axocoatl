@@ -685,20 +685,44 @@ pub(crate) mod testing {
         /// Add a program `name` running `body` (POSIX sh) after logging
         /// `name args…`.
         pub(crate) fn add(&self, name: &str, body: &str) {
+            self.write_program(
+                name,
+                &format!(
+                    "#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\necho \"{name} $*\" >> \"{}\"\n{body}\n",
+                    self.dir.path().join("calls.log").display()
+                ),
+            );
+        }
+
+        /// Write the program `name` (mode 755) with `text`, in a child
+        /// process, so this multi-threaded test process never holds a
+        /// descriptor open for writing it. On Linux a test on another
+        /// thread that forks while one is open passes it to its child, and
+        /// running the program before that child execs fails with ETXTBSY
+        /// ("Text file busy"), which made these tests flaky.
+        pub(crate) fn write_program(&self, name: &str, text: &str) {
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
+                use std::io::Write;
                 let path = self.dir.path().join(name);
-                std::fs::write(
-                    &path,
-                    format!(
-                        "#!/bin/sh\nPATH=\"$PATH:/usr/bin:/bin\"\necho \"{name} $*\" >> \"{}\"\n{body}\n",
-                        self.dir.path().join("calls.log").display()
-                    ),
-                )
-                .unwrap();
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut child = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg("cat > \"$1.new\" && chmod 755 \"$1.new\" && mv -f \"$1.new\" \"$1\"")
+                    .arg("sh")
+                    .arg(&path)
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                assert!(child.wait().unwrap().success(), "{}", path.display());
             }
+            #[cfg(not(unix))]
+            std::fs::write(self.dir.path().join(name), text).unwrap();
         }
 
         pub(crate) fn calls(&self) -> Vec<String> {

@@ -579,14 +579,13 @@ esac"#
     podman_shim(&shims);
     // Without subordinate ids until usermod runs.
     let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
-    std::fs::write(
-        shims.dir.path().join("podman"),
-        script.replace(
+    shims.write_program(
+        "podman",
+        &script.replace(
             r#"if [ -f "$D/rootful" ]; then"#,
             r#"if [ -f "$D/no-ids" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ -f "$D/rootful" ]; then"#,
         ),
-    )
-    .unwrap();
+    );
     std::fs::rename(
         shims.dir.path().join("podman"),
         shims.dir.path().join("podman.real"),
@@ -778,7 +777,7 @@ async fn a_range_podman_has_not_applied_is_picked_up_with_migrate() {
             r#""system migrate") ;;"#,
             r#""system migrate") rm -f "$D/stale" ;;"#,
         );
-    std::fs::write(shims.dir.path().join("podman"), script).unwrap();
+    shims.write_program("podman", &script);
     podman_state(&shims, &["stale"]);
     let mut o = linux_sandbox(&shims, "exit 1", yes(WriterChoice::Ollama)).await;
     assert_eq!(
@@ -815,14 +814,13 @@ async fn the_crun_ping_group_range_error_names_the_subuid_fix() {
     let shims = Shims::new();
     podman_shim(&shims);
     let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
-    std::fs::write(
-        shims.dir.path().join("podman"),
-        script.replace(
+    shims.write_program(
+        "podman",
+        &script.replace(
             "  run*) echo 1000 ;;",
             "  run*) echo 'Error: OCI runtime error: crun: write to `/proc/sys/net/ipv4/ping_group_range`: Invalid argument' >&2; exit 126 ;;",
         ),
-    )
-    .unwrap();
+    );
     // The files cannot tell (ranges from SSSD), so the container decides.
     std::fs::write(shims.root.path().join("etc/nsswitch.conf"), "subid: sss\n").unwrap();
     let mut o = linux_sandbox(&shims, "exit 1", yes(WriterChoice::Ollama)).await;
@@ -907,7 +905,7 @@ fn stale_podman(shims: &Shims) {
             r#""system migrate") ;;"#,
             r#""system migrate") rm -f "$D/stale" ;;"#,
         );
-    std::fs::write(shims.dir.path().join("podman"), script).unwrap();
+    shims.write_program("podman", &script);
 }
 
 /// A Podman reached through CONTAINER_HOST (another user's rootless socket
