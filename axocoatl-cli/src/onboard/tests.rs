@@ -892,18 +892,20 @@ async fn doctor_fails_a_missing_subuid_range_on_linux() {
 /// the range was added), `podman info` maps only the user's own id; once
 /// `podman system migrate` removes it, a new pause process needs a setuid
 /// `newuidmap` on PATH, and without one `podman info` fails with Podman's
-/// own message (exit 125), as seen live on Ubuntu 24.04.
+/// own message: as `Error: …` (exit 125) before any migrate, and logged
+/// through logrus with escaped quotes (exit 1) after one, as seen live on
+/// Ubuntu 24.04.
 fn stale_podman(shims: &Shims) {
     podman_shim(shims);
     let script = std::fs::read_to_string(shims.dir.path().join("podman")).unwrap();
     let script = script
         .replace(
             r#"if [ -f "$D/rootful" ]; then"#,
-            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ ! -e "$D/newuidmap" ]; then echo 'Error: command required for rootless mode with multiple IDs: exec: "newuidmap": executable file not found in $PATH' >&2; exit 125; elif [ ! -u "$D/newuidmap" ]; then echo "Error: cannot set up namespace using \"$D/newuidmap\": should have setuid or have filecaps setuid: exit status 1" >&2; exit 125; elif [ -f "$D/rootful" ]; then"#,
+            r#"if [ -f "$D/stale" ]; then echo "$info" | sed 's/{"container_id":1,"host_id":100000,"size":65536}//g; s/},\]/}]/g'; elif [ ! -e "$D/newuidmap" ] && [ -f "$D/migrated" ]; then echo 'time="2026-10-20T20:01:02-07:00" level=error msg="invalid internal status, try resetting the pause process with \"podman system migrate\": command required for rootless mode with multiple IDs: exec: \"newuidmap\": executable file not found in $PATH"' >&2; exit 1; elif [ ! -e "$D/newuidmap" ]; then echo 'Error: command required for rootless mode with multiple IDs: exec: "newuidmap": executable file not found in $PATH' >&2; exit 125; elif [ ! -u "$D/newuidmap" ] && [ -f "$D/migrated" ]; then printf 'time="2026-10-20T20:01:02-07:00" level=error msg="invalid internal status, try resetting the pause process with \\"podman system migrate\\": cannot set up namespace using \\"%s\\": should have setuid or have filecaps setuid: exit status 1"\n' "$D/newuidmap" >&2; exit 1; elif [ ! -u "$D/newuidmap" ]; then echo "Error: cannot set up namespace using \"$D/newuidmap\": should have setuid or have filecaps setuid: exit status 1" >&2; exit 125; elif [ -f "$D/rootful" ]; then"#,
         )
         .replace(
             r#""system migrate") ;;"#,
-            r#""system migrate") rm -f "$D/stale" ;;"#,
+            r#""system migrate") rm -f "$D/stale"; touch "$D/migrated" ;;"#,
         );
     shims.write_program("podman", &script);
 }
@@ -1060,13 +1062,25 @@ esac"#,
 /// says to run `podman system migrate` (which alone changes nothing).
 /// Onboarding offers to install uidmap instead of a step to read `podman
 /// info`: under --yes only with --allow-sudo, and --plan shows it once.
+/// The same holds for Podman's logged form of the failure, which a user
+/// who already ran `podman system migrate` gets.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_podman_info_failing_without_newuidmap_installs_uidmap() {
-    for (mode, allow_sudo) in [(Mode::Yes, false), (Mode::Yes, true), (Mode::Plan, false)] {
+    for (mode, allow_sudo, migrated) in [
+        (Mode::Yes, false, false),
+        (Mode::Yes, true, false),
+        (Mode::Plan, false, false),
+        (Mode::Yes, false, true),
+        (Mode::Yes, true, true),
+        (Mode::Plan, false, true),
+    ] {
         let shims = Shims::new();
         shims.id_map_tools(None);
         stale_podman(&shims);
+        if migrated {
+            std::fs::write(shims.dir.path().join("migrated"), "").unwrap();
+        }
         let sudo = format!(
             r#"case "$*" in
   "apt-get install -y uidmap") for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done ;;
@@ -1087,10 +1101,12 @@ esac"#,
         let PodmanReadiness::Unavailable(error) = &o.facts.podman.readiness else {
             panic!("{:?}", o.facts.podman.readiness);
         };
-        assert!(
-            error.contains("exec: \"newuidmap\": executable file not found in $PATH"),
-            "{error}"
-        );
+        let expected = if migrated {
+            "exec: \\\"newuidmap\\\": executable file not found in $PATH\""
+        } else {
+            "exec: \"newuidmap\": executable file not found in $PATH"
+        };
+        assert!(error.contains(expected), "{error}");
         assert_eq!(
             axocoatl_isolation::podman_report::id_range_problem(&o.facts.podman),
             Some(axocoatl_isolation::podman_report::IdRangeProblem::NoIdMapTools)

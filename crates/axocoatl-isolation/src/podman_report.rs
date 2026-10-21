@@ -733,8 +733,13 @@ pub const ID_MAP_PACKAGES: &str = "Debian and Ubuntu: uidmap; Fedora and RHEL: s
 /// "newuidmap": executable file not found in $PATH` for one not on `PATH`
 /// (the first of the two it lacks), or `cannot set up namespace using
 /// "/usr/bin/newuidmap": should have setuid or have filecaps setuid` for one
-/// that may not map. `None` for any other error.
+/// that may not map. Once a pause process has run, Podman logs the same
+/// text through logrus (`level=error msg="invalid internal status, try
+/// resetting the pause process with \"podman system migrate\": …`, exit
+/// 1), with its inner quotes escaped; both forms are read. `None` for any
+/// other error.
 pub fn id_map_tools_failure(error: &str) -> Option<IdMapTools> {
+    let error = &*unescaped_quotes(error);
     let mut tools = IdMapTools::default();
     for name in ["newuidmap", "newgidmap"] {
         if error.contains(&format!("exec: \"{name}\": executable file not found")) {
@@ -780,7 +785,8 @@ pub fn id_map_tools_hint(error: &str) -> Option<String> {
 
 /// The part of a failed `podman info` that names the helper, as Podman
 /// wrote it, for the finding.
-fn id_map_failure_reason(error: &str) -> Option<&str> {
+fn id_map_failure_reason(error: &str) -> Option<String> {
+    let error = unescaped_quotes(error);
     let start = [
         "command required for rootless mode",
         "cannot set up namespace using",
@@ -790,7 +796,18 @@ fn id_map_failure_reason(error: &str) -> Option<&str> {
     .filter_map(|marker| error.find(marker))
     .min()?;
     let rest = &error[start..];
-    Some(rest.lines().next().unwrap_or(rest).trim_end())
+    let line = rest.lines().next().unwrap_or(rest).trim_end();
+    // The logrus form ends with the closing quote of `msg="…"`.
+    Some(line.strip_suffix('"').unwrap_or(line).to_string())
+}
+
+/// `error` with logrus's escaped quotes (`\"`) read as plain ones.
+fn unescaped_quotes(error: &str) -> std::borrow::Cow<'_, str> {
+    if error.contains("\\\"") {
+        std::borrow::Cow::Owned(error.replace("\\\"", "\""))
+    } else {
+        std::borrow::Cow::Borrowed(error)
+    }
 }
 
 /// What is wrong with the user's subordinate ids for rootless Podman.
@@ -2143,19 +2160,31 @@ mod tests {
         assert_eq!(tools.missing, ["newuidmap"]);
         assert!(tools.unprivileged.is_empty());
         assert_eq!(
-            id_map_failure_reason(missing),
+            id_map_failure_reason(missing).as_deref(),
             Some(
                 "command required for rootless mode with multiple IDs: exec: \"newuidmap\": \
                  executable file not found in $PATH"
             )
         );
-        // After `podman system migrate` without the helpers.
-        let migrated = "Error: invalid internal status, try resetting the pause process with \
-                        \"podman system migrate\": command required for rootless mode with \
-                        multiple IDs: exec: \"newgidmap\": executable file not found in $PATH";
+        // After `podman system migrate` without the helpers, Podman 4.9.3
+        // logs the failure through logrus (exit 1), its quotes escaped.
+        let migrated = r#"time="2026-10-20T20:01:02-07:00" level=error msg="invalid internal status, try resetting the pause process with \"podman system migrate\": command required for rootless mode with multiple IDs: exec: \"newgidmap\": executable file not found in $PATH""#;
         assert_eq!(
             id_map_tools_failure(migrated).unwrap().missing,
             ["newgidmap"]
+        );
+        assert_eq!(
+            id_map_failure_reason(migrated).as_deref(),
+            Some(
+                "command required for rootless mode with multiple IDs: exec: \"newgidmap\": \
+                 executable file not found in $PATH"
+            )
+        );
+        assert!(id_map_tools_hint(migrated).is_some());
+        let logged_setuid = r#"time="2026-10-20T20:01:02-07:00" level=error msg="invalid internal status, try resetting the pause process with \"podman system migrate\": cannot set up namespace using \"/usr/bin/newuidmap\": should have setuid or have filecaps setuid: exit status 1""#;
+        assert_eq!(
+            id_map_tools_failure(logged_setuid).unwrap().unprivileged,
+            ["/usr/bin/newuidmap"]
         );
         for (error, path) in [
             (
