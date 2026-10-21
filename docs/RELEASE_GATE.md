@@ -2,7 +2,8 @@
 
 No Axocoatl release is published until a machine that has never seen Axocoatl
 goes from the published install command to a first passing, signed run on
-every default path, following only the published copy. Every live run before
+every default path, following only the published copy, unless the logged
+override described below is used. Every live run before
 1.5 reused a machine that was already set up: a running Podman machine,
 Ollama with models already pulled, a `/usr/local/bin` the founder can write
 to, and `~/.local/bin` already on `PATH`. This gate exists so that cannot
@@ -276,24 +277,31 @@ Supporting checks, run in CI's workflow-contracts job:
   against a stand-in `axocoatl` (`scripts/release-gate/testdata/fake-axocoatl.mjs`,
   which follows the shared contract) and the real stub. That covers Tier A
   and a `--live` (D1) run in which onboarding chooses the port, so the gate
-  script's own logic is tested on any host before the product parts exist. A
-  simulated path always records a failed step and can never be evidence.
+  script's own logic is checked on a host without Podman, models or a release
+  build. A simulated path always records a failed step and can never be
+  evidence.
 
 CI's "Podman suites (ignored tests)" job runs the Podman tests that are
 ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
-`session_trust_podman`, and the three `node_modules` mount point tests
+`session_trust_podman`, and the five `node_modules` mount point tests
 (`a_repository_without_node_modules_has_none_left_behind`,
-`under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`
-and `a_development_containers_node_modules_volume_keeps_the_mount_point`),
-which must report `3 passed`, so that a renamed test cannot pass by matching
-nothing. The egress and workload suites need prepared local images and are
+`under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`,
+`a_development_containers_node_modules_volume_keeps_the_mount_point`,
+`a_container_that_bind_mounts_the_mount_point_itself_keeps_it` and
+`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it`: plain,
+hardened keep-id, a development container, a bind of the mount point itself,
+and a tmpfs through a bind of the repository), which must report `5 passed`,
+so that a renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
 not wired yet.
 
-The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`,
-which proves each fixture fails before the stub's fix and passes after it
-with the runner's own toolchains. A fixture another workstream owns that is
-not in the tree yet is reported PENDING; the gate itself fails its runs. The
-job then runs `test-release-gate.sh` with that job's release binary.
+The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
+with `GATE_REQUIRE_ALL_TOOLCHAINS=1`, which proves each fixture in
+`tests/fixtures/newuser/fixtures.json` fails before the stub's fix and passes
+after it with the runner's own toolchains; a missing toolchain fails it. Every
+fixture that file lists is in the tree. (A fixture listed with an `owner`
+that is missing from the tree would be reported PENDING, and the gate would
+fail its runs.) The job then runs `test-release-gate.sh` with that job's
+release binary.
 
 The gate refuses to install where `/usr/local/bin` is writable and already
 holds an `axocoatl`: the published installer would overwrite another
@@ -348,7 +356,7 @@ machine, so this checks the plumbing a new Mac user meets:
    | machine stopped | OK: it starts on first use; no FAIL |
    | running, rootless | OK: ready; no FAIL |
    | running, rootful | FAIL, fix sets `--rootful=false` |
-   | Podman 6.1.4 (numeric memory, libkrun) | no version WARN (6.1 is tested on macOS); WARN naming the untested libkrun provider; no FAIL |
+   | Podman 6.1.4 (numeric memory, libkrun) | no version WARN (doctor lists 6.1 among the macOS releases it does not warn about); WARN naming the libkrun provider as untested; no FAIL |
 
 4. `axocoatl onboard --plan` (nothing changes) must show the consent it would
    ask for: `brew install podman`, the podman.io installer when there is no
@@ -480,18 +488,30 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
   and in Chromium on x86_64 and aarch64, all against the release build.
   `release.yml`'s browser gate still runs Chromium only, until the WebKit leg
-  has passed in CI. Run on a Mac with `AXO_BROWSER_ENGINE=webkit`, WebKit
-  behaves as Safari does: there the "Preview browser contract" journey
-  asserts that a top-level Preview's `Domain=localhost` cookie reaches the
-  workbench and every other Preview origin. In every engine it reads the real
-  Cookie headers from a loopback echo server and asserts that no request to a
-  Preview origin carries an `axocoatl-token-*` cookie and that the workbench
-  stays signed in.
-- Known gap: in Safari on macOS a top-level Preview's `Domain=localhost`
-  cookie reaches the workbench and every other Preview
+  has passed in CI. Run on a Mac with `AXO_BROWSER_ENGINE=webkit`, Playwright's
+  WebKit (measured with 26.4) accepts `Domain=localhost` cookies as Safari on
+  macOS is expected to; live Safari has not confirmed it yet. There the
+  "Preview browser contract" journey asserts that a top-level Preview's
+  `Domain=localhost` cookies reach the workbench and every other Preview
+  origin. Those cookies are one that is not ASCII, a forged
+  `axocoatl-token-<port>` and `-signed-in`, and 40 of 1 KB. In every engine it
+  asserts that the workbench's own token cookie never reaches a Preview
+  origin, and that with those cookies the workbench still opens, connects and
+  reads the API. `preview-cookies.test.mjs` needs Podman and
+  `docker.io/library/node:20-slim`, and is skipped without that image. Through
+  the real Preview proxy and a real Session app it asserts that:
+  - the app never receives an `axocoatl-token-*` cookie over HTTP or a
+    WebSocket upgrade;
+  - an app's `Set-Cookie` with `Domain=localhost` stays host-only;
+  - a forged signed-in cookie gives a signed-out browser the retry page at
+    most once per navigation.
+- Known gap: in Safari on macOS a top-level Preview's script can set a
+  `Domain=localhost` cookie that reaches the workbench and every other Preview
   ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
-  The macOS WebKit journey asserts this; the person on the
-  `C1-workbench-webkit` path should confirm it in Safari.
+  The app's server no longer can. The macOS WebKit journeys assert this; the
+  person on the `C1-workbench-webkit` path should confirm it in Safari. Any
+  page in Safari can also sign out a browser that signed in seconds earlier by
+  writing about 1,000 cookies, because WebKit drops its whole cookie jar.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the
@@ -537,6 +557,37 @@ model download dominates unless models are cached.
   dropped only when they pass.
 - **D5 WSL2** on a Windows 11 VM with nested virtualization: the site's WSL2
   flow end to end. WSL2 stays labelled "not yet verified" until it passes.
+
+## Restating what was verified
+
+The public statements of what was verified live describe the release's
+final live runs, never an earlier build. While those runs are outstanding,
+each such place holds a pending marker (the string `pendingMarker` names in
+`sites/marketing/scripts/validate.mjs`), with the earlier text commented out
+below it as a template: the CHANGELOG's Verified section and its other
+entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`, the marketing home,
+install and changelog pages, and the docs' install, onboarding, security
+and Fix/QA/Audit pages.
+
+`release.yml`'s marketing job runs `./scripts/verify-marketing-gate.sh
+source-bound`, whose release-bound validation refuses every file in that list
+that still holds a marker, and the build needs that job; a release-tag
+marketing deploy runs the same check. CI on pull requests and
+`scripts/preflight.sh` run the portable mode, which does not look for
+markers, so a green CI does not mean the markers are gone. The restatement
+therefore has to land before the tag. Check it before tagging with:
+
+```bash
+./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
+```
+
+The evidence check accepts a bundle only for the tagged commit, or an
+ancestor that differs from it in evidence files alone (see above), so text
+changed after the live runs needs the runs again on the new commit. Write
+the restated text, and remove the markers, in the candidate commit before
+Tier C and D1 run on it, stating what those runs are to show; if a run fails
+or shows something else, correct the text and run again on the corrected
+commit.
 
 ## Keeping the gate honest
 

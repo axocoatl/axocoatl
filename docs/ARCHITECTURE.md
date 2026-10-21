@@ -1380,10 +1380,15 @@ agent:**
   dependency tree rather than exposing another host path. When `{dir}` has no
   `node_modules`, the start makes that mount point as the person (left to the OCI
   runtime, it would belong to the container's root, a subordinate uid under rootless
-  Podman), and every container removal removes it again once no Podman container mounts
-  anything on it (at its path, or through a bind mount of it or of a directory above
-  it), if it is still the empty directory the start made (same device, inode and birth
-  time; containers carry it in `io.axocoatl.dependency-mountpoint-identity`)
+  Podman), and marks it with a random nonce in its `user.axocoatl.mountpoint` extended
+  attribute. Every Session-container removal and the end of every start removes it again
+  once no container Podman lists has a mount on it, if it is still empty and still
+  carries that nonce (on a filesystem without user extended attributes, the same device,
+  inode and birth time). A mount counts when it is at its path, when its source resolves
+  to it, or when its source is a directory above it and the container has a volume, bind
+  or tmpfs where it is. This is checked with one `podman container inspect` of every
+  listed container; `HostConfig.Tmpfs` adds the tmpfs mounts that `Mounts` leaves out.
+  Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
   directory inside the container. A Workspace equal to or below either protected root is

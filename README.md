@@ -13,7 +13,7 @@ host enforced. One open-source Rust executable; no Axocoatl account or telemetry
 
 ```bash
 curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified)
-axocoatl onboard   # set up Podman, a writer and a reviewer for this OS user; it asks before each change
+axocoatl onboard   # set up a writer and a reviewer for this OS user, and Podman where it can install it (else it names the installer); it asks before each change
 axocoatl doctor    # check the sandbox, the models, the writers and the daemon
 axocoatl dev       # start the daemon and leave it running
 
@@ -23,6 +23,13 @@ axocoatl run fix --task "Paging skips the last item when the total is a multiple
   --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
 axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
 ```
+
+Onboarding installs Podman after asking where it can: with Homebrew on an Apple-silicon
+Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. On a Mac without
+Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
+package, and on another Linux distribution it names what to install; Ubuntu 22.04 and
+older are refused, since their Podman is too old. On a Mac it then creates and starts
+the Podman machine, after asking.
 
 Run the loadout that matches the writer you chose in onboarding: `axocoatl run fix` for a
 local or OpenRouter writer, `axocoatl run fix-claude-code` or `axocoatl run fix-codex`,
@@ -36,19 +43,27 @@ check, such as `npm test`, `pytest` or `go test ./...`
 ([repository toolchains](https://docs.axocoatl.ai/configure/toolchains/)).
 
 On a Mac with 48 GB of memory, onboarding offers `qwen3-coder:30b` (19 GB) to write and
-`gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release. That pair has run end to end on
-a 48 GB Mac; `gpt-oss:20b` as reviewer has not been measured. The reviewer in the
+`gpt-oss:20b` (14 GB) to review, on Ollama 0.40.6 or a later 0.x release;
+`gpt-oss:20b` as reviewer has not been measured. The reviewer in the
 measurements below, `gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less
 memory, use OpenRouter for the reviewer (or for both), or Claude Code or Codex as the
 writer. What each path needs and downloads is on
 [the install page](https://axocoatl.ai/install#what-it-needs).
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
+That pair has run end to end on a 48 GB Mac.
+-->
 
-The summary one real run printed on standard output (progress goes to standard error):
-`axocoatl run fix` on the 1.5.0 release candidate, on a small Go repository with the
-paging bug above whose check is `go test ./...`, with `qwen3-coder:30b` writing and
-`gpt-oss:20b` reviewing on Ollama 0.40.6, on a 48 GB Mac set up from a clean install by
-`axocoatl onboard`. Its receipt verified with `axocoatl receipt verify … --repo .`. It
+The summary `axocoatl run fix` prints on standard output (progress goes to standard
+error) looks like this, here for a small Go repository with the paging bug above whose
+check is `go test ./...`, with `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing. It
 shows the format, not a measurement.
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
+It is the summary one real run printed: `axocoatl run fix` on the 1.5.0 release
+candidate, on Ollama 0.40.6, on a 48 GB Mac set up from a clean install by
+`axocoatl onboard`. Its receipt verified with `axocoatl receipt verify … --repo .`.
+-->
 
 ```text
 Verdict: pass (exit 0)

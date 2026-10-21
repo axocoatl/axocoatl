@@ -138,24 +138,29 @@
               releases, a new major release, pre-releases and local builds, each with what
               to do. A model that is not GGUF, or that Ollama runs with its MLX runner, is
               refused.</li>
-          <li><code>axocoatl onboard</code> is the one setup command: it sets up Podman, a
-              writer (Claude Code, Codex, local models or OpenRouter) and a different
-              reviewer, asking before each change, and ends ready or with the steps left.
+          <li><code>axocoatl onboard</code> is the one setup command: it sets up a writer
+              (Claude Code, Codex, local models or OpenRouter) and a different reviewer,
+              asking before each change, and ends ready or with the steps left. It
+              installs Podman with Homebrew on an Apple-silicon Mac, then creates its
+              machine, or with the package manager on Linux; on a Mac without Homebrew it
+              points to the podman.io installer, and it refuses Ubuntu 22.04 and older.
               With 48 GB of memory or more it suggests <code>qwen3-coder:30b</code> writing
               and <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB),
               loaded one at a time.</li>
           <li><code>axocoatl doctor</code> reports the sandbox, the models, the writers and
               the daemon, each with its fix, and ends with whether Axocoatl is ready.</li>
           <li>The daemon follows <code>CONTAINER_CONNECTION</code> and
-              <code>CONTAINER_HOST</code> as Podman does; when the Podman they select does
-              not answer and Sessions have containers to remove, it no longer starts
-              without removing them, and names the variable.</li>
+              <code>CONTAINER_HOST</code> as Podman does. When the Podman they select does
+              not answer, it no longer starts without removing its leftover containers:
+              its start fails, naming the variable, whenever the data directory holds any
+              Podman Session, closed ones included.</li>
           <li>When its install directory is not on PATH, the installer asks before adding one
               line to the startup files your shell reads. <code>AXOCOATL_VERSION</code>
               installs a given release, and <code>AXOCOATL_INSTALL_BASE_URL</code> names
               where its archive is.</li>
-          <li>Every command on the home page, /install, the README and the docs' first-run
-              pages runs as written, and the pages say what is not yet verified.</li>
+          <li>Commands on the home page, /install, the README and the docs' first-run pages
+              that did not run as written are fixed, a lint checks their shape, and the
+              pages say what is not yet verified.</li>
         </ul>
 
         <h3>Added</h3>
@@ -170,7 +175,9 @@
               the data directory's ownership record; <code>axocoatl service status</code>
               shows why the service last failed to start; the docs have an Uninstall
               page.</li>
-          <li>A clean-machine new-user gate blocks every release.</li>
+          <li>A clean-machine new-user gate blocks a release; the only way past it is a
+              logged manual override that only GitHub logins listed in the repository can
+              start.</li>
         </ul>
 
         <h3>Fixed</h3>
@@ -182,7 +189,8 @@
           <li>Onboarding and doctor read your subordinate ids from <code>/etc/subuid</code>
               and <code>/etc/subgid</code> on Linux, and print the exact command to add a
               free range, instead of passing while <code>keep-id</code> containers
-              failed.</li>
+              failed. When <code>newuidmap</code> or <code>newgidmap</code> is missing,
+              they name the package that ships them.</li>
           <li>A run leaves no <code>node_modules</code> in a repository that had none; on
               Linux one owned by a subordinate uid made your own <code>npm install</code>
               fail.</li>
@@ -194,6 +202,8 @@
           <li>On Linux, <code>connect claude-code</code> and <code>connect codex</code> no
               longer type a line break into the program's terminal when they stop, which
               showed as an extra blank line.</li>
+          <li>Preview WebSockets stay open beside a cookie that is not ASCII, which in
+              Safari stopped the live reload of every Session's Preview.</li>
         </ul>
 
         <h3>Security</h3>
@@ -206,11 +216,19 @@
           <li>The workbench's vendored markdown-it moves to 14.3.3 for GHSA-vfgh-jcmw-g37q and
               GHSA-gfr2-rv44-r23c. The documentation site's build moves to vite 8.3.4 for
               GHSA-587h-7wmj-h5pm; nothing of it ships in Axocoatl.</li>
-          <li>Known issue: in Safari on macOS, a Preview opened full page can set a cookie
-              for <code>localhost</code> that reaches the workbench and every other
-              Session's Preview. It cannot sign in or read the workbench's cookies. For
-              Sessions whose code you do not trust, use a Chromium-based browser
-              (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).</li>
+          <li>A cookie that is not ASCII no longer signs Safari out of the workbench: the
+              daemon reads the <code>Cookie</code> header as bytes, one cookie at a
+              time.</li>
+          <li>A Preview app's server can no longer set a cookie for <code>localhost</code>:
+              the Preview proxies remove the <code>Domain</code> attribute from its
+              <code>Set-Cookie</code> headers.</li>
+          <li>Known issue: in Safari on macOS, the script of a Preview opened full page can
+              still set a cookie for <code>localhost</code> that reaches the workbench and
+              every other Session's Preview. It cannot sign in or read the workbench's
+              cookies. For Sessions whose code you do not trust, use a Chromium-based
+              browser
+              (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
+              Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>
 
         <!-- VERIFIED-PENDING: restate from the final live runs -->
