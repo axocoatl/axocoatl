@@ -133,7 +133,7 @@ Every finding had to come with an executable reproduction that a validator re-ra
 | Claim | Where it was | Why withdrawn | Replaced by |
 | --- | --- | --- | --- |
 | "Small local models are a first-class target." | `README.md` (Any model, per Agent), `docs/PRODUCT.md` (One product); repeated as the `llms.txt` bullet "Small local models:", the docs heading "Reliability for small local models" (`understand/architecture`), "Small local models get specific handling" (marketing home), "Native execution handles small local models specifically" (marketing concepts), "Native activations are built to keep working on small local models" (`docs/ARCHITECTURE.md`) and the advice "short, plain instructions suit small local models" (docs `configure/agents`) | Nothing measured that small local models do well in Axocoatl. The measurements that exist point the other way for hard work: through Axocoatl, a local gpt-oss 120B explorer found 1% to 4% of 16 planted bugs in every QA setup tried (`evidence/qa-web-bench/RESULTS.md`, arms A0–A4, 3 to 6 runs each, pre-registered). | The mechanisms, stated as mechanisms: an early stream end and a transient provider failure are retried once, older tool output is masked, an overflowing request is trimmed, and what still fails is recorded as not covered. |
-| An example `axocoatl run` summary: a `pages.py` fix "approved after 2 of 3 rounds by ollama:gpt-oss:20b", 412,907 input tokens | `README.md`, marketing home | It was written to show the format; no run printed it. | The standard output of one real run (see Not measured). |
+| An example `axocoatl run` summary: a `pages.py` fix "approved after 2 of 3 rounds by ollama:gpt-oss:20b", 412,907 input tokens | `README.md`, marketing home | It was written to show the format; no run printed it. | A summary labelled as the format, not a measurement (see Not measured). |
 | "A local writer. A stronger reviewer." and "a local writer can be reviewed by a stronger model" for the setup the commands use | marketing home, `README.md`, `llms.txt`, docs index card, `configure/cross-model-review` (also "Bigger local model", "Strong reviewer") | The commands' reviewer, `gpt-oss:20b`, is smaller than the 30B writer and unmeasured; only the gpt-oss 120B reviewer was measured (R2, R7). | "A different reviewer"; the measured 120B results keep their wording. |
 | "If the project stopped tomorrow, the executable you have would keep running" | marketing why page | 1.4.0 refused the Ollama Homebrew installed within days, because native Ollama Sessions accepted only the audited release line; 1.5.0 still refuses a new major Ollama release. | "Your receipts keep verifying offline with the executable you have" and the Ollama version policy as it is: 0.40.6 and later 0.x releases, a newer minor only through the contract probes, a new major release needing a newer Axocoatl. |
 | `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | No hosted CI runner has run `axocoatl run`; workbench turns get no receipt. | "From your shell"; "every `axocoatl run` that finishes". |
@@ -157,14 +157,20 @@ quality or performance claims about them.
 - The e2e check (tester-army/e2e) as a required check.
 - Any reviewer or Agent through OpenRouter.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and
-  onboarding offers on a 48 GB Mac. It is smaller than its writer. It has run end to end on
-  a 48 GB Mac (the run below); how well it reviews has not been measured, and the pages that
-  name it as a reviewer say so.
-- The `axocoatl run` summary on the README and the marketing home page is the standard
-  output of one run, copied verbatim: `axocoatl run fix` on a development build of 1.5.0
-  (commit `fde8074`), Ollama 0.40.6, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing,
-  on a small test repository whose check is `sh test.sh`, on a 48 GB Mac. It shows the
-  format, not a measurement.
+  onboarding offers on a 48 GB Mac. It is smaller than its writer. How well it reviews has
+  not been measured, and the pages that name it as a reviewer say so.
+- The `axocoatl run` summary on the README and the marketing home page shows the format of
+  the summary `axocoatl run fix` prints (a small Go repository whose check is
+  `go test ./...`, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing), not a
+  measurement.
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
+- The pair has run end to end on a 48 GB Mac (the run below).
+- The summary is the standard output of one run, copied verbatim: `axocoatl run fix` on
+  the 1.5.0 release candidate, Ollama 0.40.6, on a 48 GB Mac set up from a clean install
+  by `axocoatl onboard`; its receipt verified. Re-capture it from a run of the final
+  build, and name that build here.
+-->
 - Speed of helpers or of parallel workers through Axocoatl (no speed claims).
 - Whether the default team, or any team, beats one Agent through Axocoatl beyond T1.
 

@@ -99,9 +99,9 @@ On **macOS**:
       This downloads about 0.9 GB and uses up to 8 GiB of memory while it runs. [Y/n]
   ```
 
-  The size is 6 CPUs and 8 GiB, the size Axocoatl is tested with, clamped to half
-  the processors and half the memory (`--machine-cpus` and `--machine-memory` change
-  it); any other size is printed as not yet tested. The machine is never rootful. When
+  The size is 6 CPUs and 8 GiB, clamped to half the processors and half the memory
+  (`--machine-cpus` and `--machine-memory` change it); onboarding prints any other size
+  as not yet tested. The machine is never rootful. When
   Podman would create it with a provider other than `applehv` (the podman.io package
   defaults to libkrun), onboarding offers to write `[machine] provider = "applehv"` to
   `~/.config/containers/containers.conf` first. It creates a machine only where
@@ -143,9 +143,9 @@ On **Linux and WSL2**:
   | Arch | `sudo pacman -S --noconfirm podman` |
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
-- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (4.9 is
-  tested), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3
-  to 4.8 works but is reported as not tested.
+- Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (CI runs
+  4.9.3), so onboarding stops there and asks for Ubuntu 24.04 or newer. Podman 4.3 to
+  4.8 is accepted and reported as not tested.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
   its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
@@ -225,12 +225,15 @@ prints a line such as `✓ Sandbox ready: Podman 5.8.2, applehv, rootless, 6 CPU
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
-   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Runs end to end on 48 GB; this reviewer's quality has not been measured |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | This reviewer's quality has not been measured |
    | Under 48 GB | — | — | No local pair has been tested; onboarding says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
 
+   {/* VERIFIED-PENDING: restate from the final live runs */}
+   {/* The 48 to 95 GB row said: Runs end to end on 48 GB. */}
+
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
-   judges it: on 16 GB neither of the tested models does, on 24 GB only `gpt-oss:20b`
-   does. At a terminal it offers OpenRouter for both, Claude Code or Codex as the writer
+   judges it (at most about 0.65 of its memory): on a 24 GB Mac only `gpt-oss:20b` of
+   these models does, and on a Mac with less memory neither does. At a terminal it offers OpenRouter for both, Claude Code or Codex as the writer
    (their setup follows), or local models you name. The reviewer must be a different
    model from the writer. Under 48 GB with `--yes`, `--writer ollama` stays local:
    without `--writer-model` and `--reviewer`, naming the models is a step left
@@ -425,7 +428,7 @@ axocoatl onboard --yes --writer claude-code|codex|ollama|openrouter \
 | `--writer` | Who writes the code (Step 1). With `--update` and without it, the writer the setup has |
 | `--reviewer`, `--writer-model` | The models as `ollama:MODEL` or `openrouter:VENDOR/MODEL` (a Claude Code writer model is `anthropic:MODEL`, a Codex one `openai:MODEL`). The same model for both, or a non-OpenRouter reviewer with `--writer openrouter`, is a usage error |
 | `--ollama-url` | The Ollama server native Sessions use (default `http://localhost:11434`); it must be on this computer |
-| `--podman create\|skip` | Install Podman and create its machine when missing (the default), or leave Podman as it is |
+| `--podman create\|skip` | Install Podman where onboarding can (Homebrew on Apple silicon, a known Linux package manager; elsewhere it names the installer) and create its machine on macOS, when missing (the default), or leave Podman as it is |
 | `--machine-cpus`, `--machine-memory` | The size of a new Podman machine (memory in MiB) |
 | `--pull`, `--no-pull` | Pull the chosen Ollama models, or leave the pulls as steps left |
 | `--recipe-build`, `--no-recipe-build` | Build the Claude Code or Codex sandbox image |

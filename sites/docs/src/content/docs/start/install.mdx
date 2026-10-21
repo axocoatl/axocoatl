@@ -40,11 +40,12 @@ musl-based distributions such as Alpine; use the Cargo or source path there.
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
     to the startup files your shell reads in a new terminal and a new login, and prints
     that line when it cannot ask or you answer with end of input (Ctrl-D). The line adds
-    the directory only when `PATH` does not have it, and a file that already has the
-    installer's line, or the lines Ubuntu's and Debian's `~/.profile` use to add
-    `~/.local/bin`, gets none. In a GitHub
-    Actions step it adds the directory to `$GITHUB_PATH` instead, for the job's later
-    steps.
+    the directory only when `PATH` does not have it. A file that has one of the
+    installer's lines anywhere in it gets none, so installing again adds nothing. So does
+    a file with the lines Ubuntu's and Debian's `~/.profile` use to add `~/.local/bin`,
+    when they are at its top level and nothing before them can keep them from running.
+    In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
+    job's later steps.
   </TabItem>
   <TabItem label="Cargo">
     ```sh
@@ -113,17 +114,19 @@ not create a repository or Workspace.
 ## What it needs and downloads
 
 Every run has a writer, which changes the code, and a reviewer, a different model that
-only reads. `axocoatl onboard` sets up both, and Podman, and asks before each download
-or change.
+only reads. `axocoatl onboard` sets up both, and Podman where it can install it
+([below](#runtime-prerequisites)), and asks before each download or change.
 
 - **Writer.** Claude Code needs a Claude Pro or Max plan and the `claude` CLI on this
   computer. Codex signs in with your ChatGPT plan. A local writer runs on Ollama.
 - **Reviewer.** A local model on Ollama, or a hosted one paid with OpenRouter credits.
-- **Memory for local models.** The local pair, `qwen3-coder:30b` writing and
-  `gpt-oss:20b` reviewing, was tested on a 48 GB Mac, one model loaded at a time. No
+- **Memory for local models.** With 48 to 95 GB, onboarding offers the local pair,
+  `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing, one model loaded at a time. No
   local pair has been tested with less memory: there, use OpenRouter for the reviewer
   (or for both), or Claude Code or Codex as the writer. `gpt-oss:120b`, the reviewer we
   measured, needs about 96 GB or more.
+  {/* VERIFIED-PENDING: restate from the final live runs */}
+  {/* The local pair was tested on a 48 GB Mac, one model loaded at a time. */}
 - **Docker** is not supported; Axocoatl runs Podman, which can run alongside Docker.
 - **For `--keep pr`:** `git`, the `gh` CLI signed in, and a GitHub remote.
 
@@ -141,7 +144,7 @@ A run's sandbox also pulls its base image and packages the first time it starts.
 
 ## Runtime prerequisites
 
-`axocoatl onboard` sets these up, asking before each change; see
+`axocoatl onboard` sets these up where it can, asking before each change; see
 [Set up Axocoatl](/start/onboard/). What it needs:
 
 - **Rootless Podman**, for every Session and every `axocoatl run`. On macOS Podman runs
@@ -155,22 +158,24 @@ A run's sandbox also pulls its base image and packages the first time it starts.
   podman machine start
   ```
 
-  Axocoatl is tested with this size of machine (onboarding uses half the computer's
-  processors and memory when that is less); the Claude Code and Codex images and your
+  Onboarding creates this size of machine, or one with half the computer's processors
+  and memory when that is less; the Claude Code and Codex images and your
   project's checks run inside it, while Ollama runs on the Mac itself. A rootful
   machine (Podman Desktop's default) does not work for `axocoatl run`; onboarding
   offers to switch it to rootless. On Linux, Podman runs containers directly and needs
-  no machine: install Podman 4.3 or later (4.9 is tested; Ubuntu 22.04 ships 3.4.4, which
-  onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo apt-get
-  install -y podman`. For the subordinate ids rootless Podman needs, run `axocoatl
+  no machine: install Podman 4.3 or later (CI runs 4.9.3; Ubuntu 22.04 ships 3.4.4,
+  which onboarding refuses, so Ubuntu 22.04 is not yet verified), for example `sudo
+  apt-get install -y podman`; onboarding runs that, after asking, with apt, dnf, pacman
+  or zypper, and names what to install on other distributions. For the subordinate ids rootless Podman needs, run `axocoatl
   onboard` or `axocoatl doctor` and use the exact command it prints: when your user has
   no range in `/etc/subuid` and `/etc/subgid`, or fewer than 65536 ids, onboarding
   offers to run it and doctor fails "User ID ranges" with it. It is `sudo usermod
   --add-subuids <first>-<last> --add-subgids <first>-<last> <user> && podman system
-  migrate` (with one of the two options when only one file is short), with a range no
-  line of either file uses. Do not copy a range from
-  elsewhere: the range is `100000-165535` only when both files are empty, and on Ubuntu
-  the first user created usually has that one already.
+  migrate` (with one of the two options when only one file is short), with the first
+  65536 ids from 100000 up that no line of either file uses. Do not copy a range from
+  elsewhere: it is `100000-165535` whenever no line of either file uses those ids, for
+  example when both files are empty, and on Ubuntu the first user created usually has
+  that one already, so yours differs.
 - **A writer and a different reviewer model**: Claude Code (a Claude Pro or Max plan),
   Codex (a ChatGPT plan or an OpenAI API key), a local Ollama pair, or OpenRouter
   credits. Claude Code and Codex write but do not review, so they need a reviewer on
@@ -210,7 +215,8 @@ designed for.
    ```
 
 2. Open the Linux distribution and install Podman, or let `axocoatl onboard` install
-   it in step 3. On Ubuntu:
+   it with apt after asking in step 3 (it refuses Ubuntu 22.04 and older, whose Podman
+   is too old). On Ubuntu 24.04:
 
    ```sh
    sudo apt-get update

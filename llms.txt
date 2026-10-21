@@ -144,8 +144,9 @@ cleanup, under explicit storage limits.
 # Windows (not PowerShell; WSL2 not yet verified).
 curl -fsSL https://axocoatl.ai/install.sh | sh
 
-# Configure Axocoatl once for this OS user: onboard sets up Podman, a writer and a
-# reviewer, asking before each change; doctor checks what is ready; dev starts the daemon.
+# Configure Axocoatl once for this OS user: onboard sets up a writer and a reviewer, and
+# Podman where it can install it (else it names the installer), asking before each
+# change; doctor checks what is ready; dev starts the daemon.
 axocoatl onboard
 axocoatl doctor
 axocoatl dev
@@ -176,18 +177,7 @@ Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
 newer. Native Windows is not a release target; Windows users run Axocoatl inside WSL2 (not yet
 verified).
 
-<!-- VERIFIED-PENDING: restate from the final live runs -->
-<!--
-Tested end to end on the 1.5.0 release candidate: from a clean install on macOS 26 on
-Apple silicon (48 GB) with rootless Podman 6.1.4 and 5.8 and Ollama 0.40.6 (the local
-pair, qwen3-coder:30b writing and gpt-oss:20b reviewing; with less memory, use
-OpenRouter for the reviewer or both, or Claude Code or Codex as the writer), and on
-Ubuntu 24.04 on arm64 with rootless Podman 4.9.3, in a VM, with the models served from
-the Mac's Ollama; CI also runs on Ubuntu 24.04 on x86_64 against a stub model server.
-On macOS, `axocoatl run fix` with local models, fix-claude-code and fix-codex each passed
-on Node.js (with npm ci), Python (pytest), Go and Rust repositories, every receipt
-verified; on Ubuntu, fix passed on Node.js, Python, Go and Rust.
--->
+<!-- VERIFIED-PENDING: restate here what the final live runs verified (template: CHANGELOG.md, 1.5.0, Verified) -->
 
 Onboarding offers the local pair, qwen3-coder:30b writing and gpt-oss:20b reviewing, from
 48 GB of memory; with less, use OpenRouter for the reviewer or both, or Claude Code or

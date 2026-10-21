@@ -328,8 +328,11 @@ pub(crate) fn run_program(
 /// Where keystrokes are written to the program: its terminal's master side,
 /// through a descriptor of its own. Not portable-pty's `take_writer`, whose
 /// writer, when dropped, types a line break and an end-of-file into the
-/// program's terminal. The relay drops its writer once the program has
-/// exited (`run_program` waits for that after a stop too). On Linux the
+/// program's terminal. The relay drops its writer when it stops: once the
+/// program has exited, or, after a stop, once it has exited or
+/// `pump_output` has waited for that for about a second (20 × `POLL`),
+/// and at once when the program's exit could not be waited for. Only in
+/// those last two cases can the program still be running then. On Linux the
 /// program's terminal lasts until the relay closes its own side, so it
 /// echoed that line break into the output still being read: an extra blank
 /// line after the program's last line (or after the error line held for the

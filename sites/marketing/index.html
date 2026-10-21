@@ -52,7 +52,7 @@
       <p class="lede">Claude Code, Codex or a local model works in a sandbox its credential never enters. When it says it is done, the host runs your tests on the final files and a different model reviews the change. Every run ends with an exit code for CI and a receipt signed on your computer.</p>
       <div class="hero-run">
         <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
-        <p class="hero-run-note">macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified). Then <code>axocoatl onboard</code> sets up Podman, the writer and a reviewer, and asks before each download or change.</p>
+        <p class="hero-run-note">macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified). Then <code>axocoatl onboard</code> sets up the writer and a reviewer, and asks before each download or change. It installs Podman with Homebrew on an Apple-silicon Mac (then creates its machine) or with the package manager on Linux; elsewhere it names the installer, and it refuses Ubuntu 22.04 and older.</p>
         <div class="code-pane">
           <div class="code-pane-head">one run with Claude Code as the writer · after <code>axocoatl onboard</code>, with <code>axocoatl dev</code> running</div>
           <pre><code><span class="code-key">cd</span> ~/src/my-app
@@ -133,7 +133,7 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
       </ol>
       <div class="stack run-summary">
         <div class="code-pane">
-          <div class="code-pane-head">what a passing fix run printed · real output · standard output</div>
+          <div class="code-pane-head">what a passing fix run prints · standard output</div>
           <pre><code><span class="code-key">Verdict:</span> pass (exit 0)
 <span class="code-key">Loadout:</span> fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
 <span class="code-key">Checks:</span>
@@ -147,7 +147,12 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
 <span class="code-key">Network:</span> 16 recorded events, 0 allowed and 0 refused connections, 0 route requests
 <span class="code-key">Record:</span> run-289c0a31-ef02-42ac-b7a9-d21e8767ddae</code></pre>
         </div>
-        <p class="small muted">Copied from one <code>axocoatl run fix</code> on the 1.5.0 release candidate, on a small Go repository whose check is <code>go test ./...</code>: <code>qwen3-coder:30b</code> wrote the fix and <code>gpt-oss:20b</code> approved it in the first round, both on Ollama 0.40.6 on a 48 GB Mac set up from a clean install by <code>axocoatl onboard</code>. Its receipt verified. It shows the format, not a measurement. Progress lines go to standard error. <a href="https://docs.axocoatl.ai/reference/run/">Every flag and exit code →</a></p>
+        <!-- VERIFIED-PENDING: restate from the final live runs -->
+        <!--
+        <div class="code-pane-head">what a passing fix run printed · real output · standard output</div>
+        <p class="small muted">Copied from one <code>axocoatl run fix</code> on the 1.5.0 release candidate, on a small Go repository whose check is <code>go test ./...</code>: <code>qwen3-coder:30b</code> wrote the fix and <code>gpt-oss:20b</code> approved it in the first round, both on Ollama 0.40.6 on a 48 GB Mac set up from a clean install by <code>axocoatl onboard</code>. Its receipt verified.</p>
+        -->
+        <p class="small muted">The summary for a small Go repository whose check is <code>go test ./...</code>, with <code>qwen3-coder:30b</code> writing and <code>gpt-oss:20b</code> reviewing. It shows the format, not a measurement. Progress lines go to standard error. <a href="https://docs.axocoatl.ai/reference/run/">Every flag and exit code →</a></p>
       </div>
 
       <div class="stack" id="loadouts" style="margin-top:var(--s-8)">
