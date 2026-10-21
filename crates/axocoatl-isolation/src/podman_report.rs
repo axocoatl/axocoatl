@@ -204,8 +204,9 @@ impl PodmanReport {
     }
 
     /// The machine Podman reaches, when it reaches one: `None` when
-    /// `CONTAINER_HOST` is set, or `CONTAINER_CONNECTION` names a connection
-    /// that is not a listed machine. Commands that change a machine
+    /// `CONTAINER_HOST` selects the connection (`CONTAINER_CONNECTION`,
+    /// which wins over it, is not set), or `CONTAINER_CONNECTION` names a
+    /// connection that is not a listed machine. Commands that change a machine
     /// (`podman machine set`, `start`, `stop`) are given this one's name.
     pub fn machine_in_use(&self) -> Option<&MachineInfo> {
         match &self.connection {

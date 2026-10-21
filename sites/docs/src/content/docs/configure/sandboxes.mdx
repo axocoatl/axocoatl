@@ -50,8 +50,12 @@ explicit decision to continue without project setup. On local Podman, a root
 Node project's `node_modules` is a container-local volume rather than the host's
 native dependency tree. When the repository has no `node_modules`, Axocoatl makes
 the empty directory that volume is mounted on, as you, and removes it again once
-no Session container mounts it; a `node_modules` you had is left as it is, and what
-you install into it on the host stays. The workspace is still mounted read-write: an approved
+no Podman container mounts anything on it (directly, or through a bind mount of the
+repository, as a development container's `node_modules` volume does), if it is still
+that empty directory. A `node_modules` you had, or put in its place, is left as it is,
+and what you install into it on the host stays. Docker's containers are not in
+Podman's list: while a Session is open on such a repository, do not mount a volume
+on its `node_modules` from Docker. The workspace is still mounted read-write: an approved
 command may change tracked or untracked project files, and nested package
 directories are not given an additional dependency-volume boundary.
 
