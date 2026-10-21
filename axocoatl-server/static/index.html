@@ -91,13 +91,15 @@
 <!-- Signed out. When the API answers 401 (a cleared or expired sign-in
      cookie, or a rotated local API token), `/` serves the sign-in page
      instead of this shell, so one reload shows it. But `/` can go on serving
-     this shell while the API answers 401: Safari on macOS leaves the token
-     cookie off API requests alone once about 52 large cookies set for
-     localhost with Path=/api fill the Cookie header it sends, and a
-     full-page Preview's script can set them. So this page reloads at most
-     once a minute, and only when sessionStorage can record when it did;
-     otherwise it shows, over the page, that this browser is signed out and
-     how to sign in again. -->
+     this shell while the API answers 401. Safari on macOS sends at most about
+     200 KB of cookies with a request, longest path first, and skips each one
+     that no longer fits; so cookies set for localhost with Path=/api, 51 of
+     4,000 bytes and then smaller ones that fill what is left, leave the token
+     cookie off API requests alone (the large ones by themselves still leave
+     room for it). A full-page Preview's script can set them. So this page
+     reloads at most once a minute, and only when sessionStorage can record
+     when it did; otherwise it shows, over the page, that this browser is
+     signed out and how to sign in again. -->
 <script>
   (() => {
     const send = window.fetch.bind(window);

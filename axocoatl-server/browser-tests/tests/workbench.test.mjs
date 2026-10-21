@@ -2590,7 +2590,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // 1 KB, and asserts the workbench stays signed in with them.
   // preview-cookies.test.mjs asserts the same against a real Preview app
   // behind the real proxy, and what that app receives; signed-out.test.mjs,
-  // the ~52 large Path=/api cookies that do sign Safari out of the API.
+  // the 51 large and 9 filler Path=/api cookies that do sign Safari out of
+  // the API.
   const safariSharesLocalhostCookies = process.platform === 'darwin'
     && browser.browserType().name() === 'webkit';
   const {

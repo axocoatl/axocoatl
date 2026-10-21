@@ -117,7 +117,7 @@
 
       <article class="release">
         <span class="release-tag">v1.5.0</span>
-        <span class="release-date">2026-10-20</span>
+        <span class="release-date">Unreleased</span>
         <h2>Native Sessions run on Ollama 0.40, and a restored data directory starts again.</h2>
 
         <p>Native execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew
@@ -142,8 +142,8 @@
               (Claude Code, Codex, local models or OpenRouter) and a different reviewer,
               asking before each change, and ends ready or with the steps left. It
               installs Podman with Homebrew on an Apple-silicon Mac, or with apt, dnf,
-              pacman or zypper on Linux; on a Mac without Homebrew it points to the
-              podman.io installer, on an Intel Mac to the Podman 5.8 package, and on
+              pacman or zypper on Linux; on an Apple-silicon Mac without Homebrew it points
+              to the podman.io installer, on an Intel Mac to the Podman 5.8 package, and on
               another Linux it says what to install; it refuses Ubuntu 22.04 and older. On
               a Mac it then creates and starts the Podman machine. With 48 GB of memory or
               more it suggests <code>qwen3-coder:30b</code> writing and
@@ -231,9 +231,13 @@
           <li>Known issue: in Safari on macOS, the script of a Preview opened full page can
               still set a cookie for <code>localhost</code> that reaches the workbench and
               every other Session's Preview. It cannot sign in or read the workbench's
-              cookies, but about 52 large such cookies sign that browser out of the
-              workbench's API until localhost's data is removed in Safari's settings. For
-              Sessions whose code you do not trust, use a Chromium-based browser
+              cookies, but enough such cookies to fill the about 200 KB Safari sends with
+              a request can sign that browser out of the workbench's API (with
+              <code>Path=/api</code>, until localhost's data is removed in Safari's
+              settings) or out of the whole workbench (with <code>Path=/</code>; signing
+              in again works until the Preview writes them again), and with
+              <code>Path=/ws</code> they stop its live updates. For Sessions whose code you
+              do not trust, use a Chromium-based browser
               (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
               Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>

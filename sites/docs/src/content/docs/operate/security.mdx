@@ -254,12 +254,13 @@ can therefore:
   before the sign-in page.
 - Sign the workbench out of its API. Safari sends at most about 200 KB of
   cookies with a request, puts the cookies with the longest path first, and
-  leaves out each one that no longer fits. About 52 cookies for `localhost`
-  with `Path=/api` (51 of 4,000 bytes, then smaller ones that fill what is
-  left) leave the token cookie off every API request, while `/` still gets
-  it, so the API answers 401. The workbench page then reloads once and shows
-  "This browser is signed out" with what to do; it reloads at most once a
-  minute, where it used to reload without end. Opening the sign-in link again
+  leaves out each one that no longer fits. Cookies for `localhost` with
+  `Path=/api`, 51 of 4,000 bytes and then smaller ones that fill what is left
+  (the large ones alone still leave room for it), leave the token cookie off
+  every API request, while `/` still gets it, so the API answers 401. The
+  workbench page then reloads once and shows "This browser is signed out" with
+  what to do; it reloads at most once a minute, where it used to reload without
+  end. Opening the sign-in link again
   does not help while those cookies stay, and they stay until they expire or
   you remove them: remove localhost's data in Safari > Settings > Privacy >
   Manage Website Data, then open the sign-in link again (`axocoatl url`).
