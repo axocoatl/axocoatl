@@ -86,19 +86,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fix on a sample repository (`tests/fixtures/newuser/node-plain`). It asks once per
   change to the computer, showing the exact command and its size; Enter is yes only for a
   change whose size is shown and that fits, and no for anything that changes an existing
-  setup. It ends ready (exit 0) or with a numbered list of the steps left (exit 1); it no
-  longer prints "✓ Axocoatl configured" after a failed check. Every command it runs is
-  logged under `~/Library/Logs/Axocoatl` (macOS) or `~/.local/state/axocoatl` (Linux).
-  - Sandbox: installs Podman (Homebrew, or apt, dnf, pacman or zypper with `sudo`),
-    creates and starts the machine at `podman machine init --cpus 6 --memory 8192
-    --disk-size 60` clamped to half the computer (never rootful; applehv pinned when
-    Podman would use another provider), starts a stopped machine, offers to switch a
-    rootful machine (Podman Desktop's default) to rootless (or, keeping it, to create a
-    separate rootless `axocoatl` machine for `CONTAINER_CONNECTION`) and to grow one under
-    4 GiB,
-    refuses Podman older than 4.3 (Ubuntu 22.04's 3.4.4), adds a range of subordinate ids,
-    reports Landlock, and proves the setup with one throwaway keep-id container. It never
-    creates a machine where Podman has a connection defined, or when `CONTAINER_HOST` or
+  setup, except the configuration itself: updating or replacing `config.yaml` (shown
+  first and backed up) defaults to yes. It ends ready (exit 0) or with a numbered list of
+  the steps left (exit 1); it no longer prints "✓ Axocoatl configured" after a failed
+  check. Every command it runs is logged under `~/Library/Logs/Axocoatl` (macOS) or
+  `~/.local/state/axocoatl` (Linux).
+  - Sandbox: installs Podman where Homebrew (on Apple silicon) or a package manager it
+    knows is present (apt, dnf, pacman or zypper with `sudo`; Ubuntu 22.04 and older are
+    refused, and elsewhere it names the installer to use), creates and starts the
+    machine at `podman machine init --cpus 6 --memory 8192 --disk-size 60` clamped to half
+    the computer (never rootful; applehv pinned when Podman would use another provider),
+    starts a stopped machine, offers to switch a rootful machine (Podman Desktop's
+    default) to rootless (or, keeping it, to create a separate rootless `axocoatl` machine
+    for `CONTAINER_CONNECTION`) and to grow one under 4 GiB, refuses Podman older than 4.3
+    (Ubuntu 22.04's 3.4.4), adds a range of subordinate ids (Fixed, below), reports
+    Landlock, and proves the setup with one throwaway keep-id container. It never creates
+    a machine where Podman has a connection defined, or when `CONTAINER_HOST` or
     `CONTAINER_CONNECTION` names one. Every `podman machine` command it runs or prints
     names the machine in use (Podman acts on `podman-machine-default` without a name), and
     nothing is changed through `CONTAINER_HOST` or a connection that is not a machine. A
@@ -114,12 +117,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `gpt-oss:120b` reviewer, 48 to 95 GB `gpt-oss:20b`, and below 48 GB no local pair is
     offered by default (with `--yes`, an explicit `--writer ollama` there needs the models
     named; it is never switched to OpenRouter). Pulls show their sizes and the free disk
-    they need, check each exit status and show Ollama's error, and with `--yes` a pull
-    that does not fit the disk is a step left; each model is loaded once to read its
-    context; below 16384 tokens onboarding sets `OLLAMA_CONTEXT_LENGTH=32768` for the
-    service (Homebrew's `services/ollama.env`, recognised from the real `brew services
-    --help`, or a systemd drop-in) after asking. Writing into an existing `server.json`,
-    service environment file or drop-in defaults to no.
+    they need, check each exit status and show Ollama's error; a model too large for this
+    computer's memory is named in the pull question and is not pulled on Enter, nor under
+    `--yes` without `--pull`, and with `--yes` a pull that does not fit the disk is a step
+    left; each model is loaded once to read its context; below 16384 tokens onboarding
+    sets `OLLAMA_CONTEXT_LENGTH=32768` for the service (Homebrew's `services/ollama.env`,
+    recognised from the real `brew services --help`, or a systemd drop-in) after asking.
+    Writing into an existing `server.json`, service environment file or drop-in defaults
+    to no.
+  - Below 48 GB, at a terminal, onboarding offers OpenRouter for both models, Claude Code
+    or Codex as the writer, or local models you name. When Ollama is not answering at the
+    default address, it asks whether Ollama already runs at another address on this
+    computer. On Linux it passes on the installer's note when Ollama found no NVIDIA or
+    AMD GPU.
   - Claude Code and Codex: finds the CLI, states the subscription each needs, builds the
     recipe image and signs in through `axocoatl recipe build` and `axocoatl connect`
     after asking, sets up the reviewer alone on Ollama or OpenRouter, and names Codex's
@@ -127,7 +137,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - OpenRouter: separate writer (default `qwen/qwen3-coder`) and reviewer (default
     `openai/gpt-oss-120b`) models, the same model refused, the writer's output limit 4096
     (it was 2048 for every Agent), the key from an environment variable or a hidden
-    prompt, and the key and both models checked before anything is written.
+    prompt, and the key and both models checked before anything is written. Without an
+    OpenRouter key nothing is saved, and the step left gives the full `axocoatl onboard`
+    command again: the writer (`--writer claude-code`, `--writer codex` or a local
+    `--writer-model`), the reviewer and, when one was named, `--openrouter-key-env VAR`.
   - The configuration holds `run.models`, the defaults `axocoatl run` uses for
     `writer_model` and `reviewer_model`, a `# Writer:` comment naming who writes (and
     Codex's credential), and the first free port from 8080 in `server.port`. An existing
@@ -142,9 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `--machine-cpus`, `--machine-memory`, `--pull`, `--recipe-build`, `--connect`,
     `--openrouter-key-env`, `--port`, `--start`, `--smoke-test`, `--allow-sudo`,
     `--update` and `--replace` runs it unattended; `--plan` prints every action, Steps 6
-    and 7 and the Podman checks included, and writes nothing. Without a terminal and without `--yes` it exits 3 and changes nothing (it
-    used to write an Ollama configuration and exit 0). `--install-daemon` is now
-    `--start service`.
+    and 7 and the Podman checks included, and writes nothing. Without a terminal and
+    without `--yes` it exits 3 and changes nothing (it used to write an Ollama
+    configuration and exit 0). `--install-daemon` is now `--start service`.
 - **`axocoatl doctor` says what is ready.** It reports Sandbox, Models, Writers and
   Daemon, each item OK, WARN or FAIL with its fix, then `Ready for: …` or the steps left,
   ending with `Ready: yes` or `Ready: no`; `--json` prints the same report. A missing
@@ -159,12 +172,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program the Always-On Service runs. Each loaded model shows how much of it is in GPU
   memory. With `sandbox.backend: e2b`, `axocoatl run` still needs Podman. The Rust
   toolchain warning is gone, and a missing configuration points to `axocoatl onboard`.
-- **One Podman preflight and machine size everywhere.** `recipe build` and `connect
-  codex` start a stopped machine (by its name, or the one `CONTAINER_CONNECTION` names)
-  and name a missing Podman or machine with its fix,
-  instead of `os error 2` or `podman build failed (exit status: 125)`, and a failed image
-  check says what Podman printed; every hint that
-  says to create a machine prints the sized command instead of Podman's 2 GiB default.
+  A writer path that is not set up and was not chosen is marked with a neutral `·`
+  instead of a failure. The fix for a configured Ollama model too large for this
+  computer follows the model's role: for a reviewer it is OpenRouter for the reviewer
+  (`--reviewer openrouter:openai/gpt-oss-120b`), keeping a Claude Code or Codex writer;
+  while an Agent runs the model it is `axocoatl onboard --replace` (with the writer
+  named), since `--update` keeps the Agents and changes only `run.models`.
+- **One Podman preflight and machine size everywhere.** Onboarding, doctor, the daemon's
+  start and Session cleanup, and the workbench's readiness report decide about Podman
+  the same way: they ask Podman itself first (`podman info`), then why it did not
+  answer. `recipe build` and `connect codex` start a
+  stopped machine (by its name, or the one `CONTAINER_CONNECTION` names) and name a
+  missing Podman or machine with its fix, instead of `os error 2` or `podman build failed
+  (exit status: 125)`, and a failed image check says what Podman printed; every hint that
+  says to create a machine prints the sized command (`podman machine init --cpus …
+  --memory … --disk-size 60 && podman machine start`) instead of Podman's 2 GiB default.
+  What to do about a missing Podman is one text, chosen per computer, in the readiness
+  checklist, the New Session picker, `axocoatl doctor`, the "podman is required … not
+  installed" refusal and the Podman status line: on Apple silicon with Homebrew "Run
+  `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`";
+  without Homebrew, the podman.io installer; on an Intel Mac, the Podman 5.8 package; on
+  Linux, the distribution's command (`sudo apt-get install -y podman`, dnf, pacman,
+  zypper); on Ubuntu 22.04 and older, that its Podman is too old. 1.4.0 printed `brew
+  install podman && podman machine init && podman machine start` on every Mac.
+- **The daemon follows `CONTAINER_CONNECTION` and `CONTAINER_HOST` as Podman does.** On
+  macOS the daemon judged Podman from `podman machine list` alone, so with Podman reached
+  through `CONTAINER_HOST` and no machine listed it started as if Podman were not set up
+  and skipped removing its own leftover containers. The daemon's start and its Session
+  cleanup now use the preflight above, which, like onboarding and doctor, reads
+  `CONTAINER_CONNECTION` before `CONTAINER_HOST`, as Podman does (an empty value counts as
+  unset). When the Podman a variable selects does not answer and Sessions in the data
+  directory have containers to remove, the start fails instead of skipping that cleanup,
+  naming the variable (`early bootstrap could not determine whether deterministic Podman
+  Session containers are absent: CONTAINER_HOST=… is set, and Podman does not answer
+  through it: …`): unset the variable, or start the Podman it selects. A stopped machine
+  that `CONTAINER_CONNECTION` names starts on first use, like the default one.
 - **`axocoatl dev` and `serve` hold their port before they start.** A taken port fails at
   once with which port and how to choose another, instead of "Axocoatl is running"
   followed by "Address already in use". `GET /health` also returns the daemon's version.
@@ -178,18 +220,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal before adding one marked line to the startup files your shell reads in a new
   terminal and a new login (`~/.zprofile` for zsh on macOS, `~/.zshrc` and `~/.zprofile`
   on Linux; for bash the login file that exists, else `~/.bash_profile` on macOS and
-  `~/.profile` on Linux, and on Linux `~/.bashrc` too; `fish_add_path` in fish's
-  `config.fish`, under `$XDG_CONFIG_HOME` when that is set; `~/.profile` otherwise), and
+  `~/.profile` on Linux, and on Linux `~/.bashrc` too; `fish_add_path --path` in fish's
+  `config.fish`, under `$XDG_CONFIG_HOME` when that is set, which changes only `PATH` and
+  saves nothing in fish's universal `fish_user_paths`; `~/.profile` otherwise), and
   prints that line and those files when it cannot ask. The line adds the directory only
-  when PATH does not have it, and a file that already adds it gets none: next to Ubuntu's
-  and Debian's `~/.profile`, which reads `~/.bashrc` and then adds `~/.local/bin` itself,
-  only `~/.bashrc` gets a line, one that skips login shells, so a new login and a new
-  terminal each list `~/.local/bin` once. `AXOCOATL_MODIFY_PATH=yes` adds it
-  without asking and `=no` never asks; end of input at the question (Ctrl-D) counts as
-  no. In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next
-  commands are printed with the binary's full path unless the shell already finds it, and an
-  earlier `axocoatl` on PATH is named. Without Podman, the installer says that onboarding
-  sets it up, on every platform, instead of an `apt-get` line on WSL alone.
+  when PATH does not have it. A file gets none only when, at its top level, it already
+  has the installer's line or the lines Debian's and Ubuntu's `~/.profile` use to add
+  `~/.local/bin`. A subdirectory, a line that removes the directory, a mention in a
+  comment or a line for another OS does not count, so such a file gets the line too.
+  Next to such a `~/.profile`, read directly or by a `~/.bash_profile` that sources it
+  (`. ~/.profile`, `. "$HOME"/.profile`, its full path, or behind `[ -f … ] &&` or `if [
+  -f … ]`), only `~/.bashrc` gets a line, one that skips login shells. A new login, an
+  SSH login (`bash -il`) and a new terminal each list `~/.local/bin` once.
+  `AXOCOATL_MODIFY_PATH=yes` adds it without asking and `=no` never asks; end of input at
+  the question (Ctrl-D) counts as no. In a GitHub Actions step it adds the directory to
+  `$GITHUB_PATH` instead. The next commands are printed with the binary's full path
+  unless the shell already finds it, and an earlier `axocoatl` on PATH is named. Without
+  Podman, the installer says that onboarding sets it up or says how, on every platform,
+  instead of an `apt-get` line on WSL alone.
 - **The installer can install a given release from a given place.**
   `AXOCOATL_VERSION=v1.5.0` installs that release instead of the latest one, and
   `AXOCOATL_INSTALL_BASE_URL` (`https://` or `file://`, with `AXOCOATL_VERSION`) names the
@@ -204,15 +252,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `axocoatl validate`; and the quickstarts name the loadout that matches the writer chosen
   in onboarding (`fix` for a local or OpenRouter writer, `fix-claude-code` or `fix-codex`
   otherwise).
-- **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
+- **The public pages say what is not yet verified and what a run needs.**
+  <!-- VERIFIED-PENDING: restate from the final live runs -->
+  <!--
+  - **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
   (48 GB) with rootless Podman 6.1.4 and 5.8, and Ubuntu 24.04 on arm64 with rootless
-  Podman 4.9.3; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3. Intel Macs, Macs
-  with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux and
-  WSL2 are labelled "not yet verified", and the install command says it runs in macOS,
-  Linux or WSL2, not PowerShell. The pages name the prerequisites (a Claude Pro or Max plan and
-  the `claude` CLI for Claude Code, a reviewer model, Podman), the memory the local pair
-  was tested on (48 GB; with less, OpenRouter for the reviewer or both, or Claude Code or
-  Codex as the writer), what gets downloaded
+  Podman 4.9.3; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3.
+  -->
+  Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora
+  with SELinux and WSL2 are labelled "not yet verified", and the install command says it
+  runs in macOS, Linux or WSL2, not PowerShell. The pages name the prerequisites (a
+  Claude Pro or Max plan and the `claude` CLI for Claude Code, a reviewer model,
+  Podman), the memory the local pair was tested on (48 GB; with less, OpenRouter for the
+  reviewer or both, or Claude Code or Codex as the writer), what gets downloaded
   (including the 87 MB embedding model the first daemon start fetches from
   huggingface.co), how a run detects the repository's language and installs its
   dependencies before the writer starts (for `fix-claude-code` and `fix-codex` too), and
@@ -304,10 +356,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--remove` deletes it and its line in the configuration, keeping the line while
   Agents still use OpenRouter. It never stores into, sends or removes a secret another
   command owns (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key).
-  Onboarding can call its sign-in, which leaves signal handling to the process. Not
-  yet run against a real OpenRouter account: its tests
-  use a fake OpenRouter, and the live checks reached only OpenRouter's public catalog,
-  its sign-in page and the refusal of a code it never issued.
+  Onboarding can call its sign-in, which leaves signal handling to the process.
 - **`api_key_secret` for hosted providers.** `providers.<name>.api_key_secret` names a
   secret in the data root's store in place of `api_key`, so the key is not in the
   configuration file; the daemon reads it when it starts and logs, without a value,
@@ -385,16 +434,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (seen in the release gate's CI case), that namespace kept the old range, so doctor
   said OK and exited 0 while every `keep-id` container, which Podman maps from the
   files, failed in crun with "write to `/proc/sys/net/ipv4/ping_group_range`: Invalid
-  argument", and onboarding showed only that message. On Linux both now read the files
-  (by user name or uid, as Podman does): no range, or fewer than 65536 ids, is a FAIL
-  ("User ID ranges", so doctor exits 1) whose fix is `sudo usermod --add-subuids
-  <first>-<last> --add-subgids <first>-<last> <user> && podman system migrate`, with a
-  range no line of either file uses (100000-165535 when they are empty). Onboarding asks
-  before running it and, under `--yes`, runs it only with `--allow-sudo`. A range in the
-  files that Podman has not picked up yet fails with `podman system migrate` alone (no
-  sudo; it stops running containers). A sandbox check container that still fails on
-  `ping_group_range` names the same fix. Ranges that `nsswitch.conf` takes from SSSD
-  are not judged from the files.
+  argument", and onboarding showed only that message. On Linux, when Podman runs on this
+  computer, both now read the files (by user name or uid, as Podman does): no range, or
+  fewer than 65536 ids, is a FAIL ("User ID ranges", so doctor exits 1) whose fix is
+  `sudo usermod --add-subuids <first>-<last> --add-subgids <first>-<last> <user> &&
+  podman system migrate`, with a range no line of either file uses (100000-165535 when
+  they are empty). When only one file is short, the finding names that file and usermod
+  adds a range to it alone. When the files leave no free range from 100000 up, no range
+  is named: the fix says to choose one. Onboarding asks before running it and, under
+  `--yes`, runs it only with `--allow-sudo`. A range in the files that Podman has not
+  picked up yet fails with `podman system migrate` alone (no sudo; it stops running
+  containers). When `podman info` maps one id because `newuidmap` or `newgidmap` is
+  missing (Debian and Ubuntu ship them in `uidmap`, which Podman only recommends), the
+  fix installs them (`sudo apt-get install -y uidmap && podman system migrate`, asked like
+  the Podman install) instead of repeating migrate. A sandbox check container that still
+  fails on `ping_group_range` names the same fix. The files are not judged when ranges
+  come from SSSD (`nsswitch.conf`), or when Podman is reached through `CONTAINER_HOST`,
+  `CONTAINER_CONNECTION` or a remote connection: that Podman's own `podman info` decides,
+  as before. If it maps one id, the fix says to add the range where it runs, and nothing
+  (no usermod, no `podman system migrate`, which the remote client refuses) is run or
+  printed for this computer.
 - **Hardened commands can rename files into other directories.** From Landlock ABI 2
   (Linux 5.19), a Landlock domain that does not handle `REFER` refuses every rename or
   link into another directory. The hardened supervisor's domain handled only creating
@@ -424,10 +483,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the person's own `npm install` or `npm ci` then failed with `EACCES: permission denied,
   mkdir 'node_modules/…'` until they removed it; on macOS it was the person's but stayed
   behind after every run. Axocoatl now makes that directory as the person before the
-  container starts, and removes it again once no container mounts it (Close,
-  `axocoatl dev` stopping, or the next daemon start after one was killed), if it is
-  still empty. A repository's own `node_modules` is never made or removed, and what the
-  person installs into it while a Session is open stays theirs.
+  container starts, and removes it again once no Podman container mounts anything on it,
+  if it is still the empty directory Axocoatl made: at Close, when `axocoatl dev` stops,
+  or, after a daemon was killed, when the next daemon removes the containers it left (at
+  that daemon's start, or at its first Session when the Podman machine was stopped then;
+  if Podman cannot list those containers at that point, the directory stays). A
+  repository's own `node_modules`, one the person puts in its place, and what the person
+  installs into it stay theirs. A container of the person's own that mounts a volume on
+  it through a bind mount of the repository (a development container) keeps it until
+  that container is gone; Docker's containers are not visible to Podman.
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
@@ -436,12 +500,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Root's commands in a Session container (its readiness checks and user setup) ran
   programs found on the image's `PATH`, which can name a directory the workload users
   write; they now run with a `PATH` of system directories only.
+- On Linux, `axocoatl connect claude-code` and `connect codex` no longer type a line
+  break and an end of file into the program's terminal when they stop relaying
+  keystrokes (the pseudo-terminal library's writer did this when it was dropped, after
+  the program had exited). The terminal echoed that line break into the output still
+  being read: an extra blank line after the program's last line, or after the Podman
+  error line held back for the message, always while a process the program left behind
+  held the terminal and now and then otherwise. On macOS the terminal is gone by then.
 - **A copied or moved data directory starts again.** The data root's format ownership
   record, `.axocoatl-daemon.lock/format.json`, names the directory it was written in: the
   SHA-256 of its path, the device and inode of the directory, and those of the retained
-  lock file `.axocoatl-daemon.lock.v1`. A copy has new inodes and a moved directory a new
-  path, so 1.1.0 through 1.4.0 refused every data root that was restored from a cold
-  backup with `cp -a` (as [Data and backup](https://docs.axocoatl.ai/operate/data-backup/)
+  lock file `.axocoatl-daemon.lock.v1`. A copy usually has new inodes (an in-place
+  `rm -rf` and `cp -a` on ext4 can get the same ones back, and such a restore was not
+  refused) and a moved directory a new path, so 1.1.0 through 1.4.0 refused a data root
+  that was restored from a cold backup with `cp -a` (as [Data and backup](https://docs.axocoatl.ai/operate/data-backup/)
   says to make one), brought to a new Mac by Migration Assistant or Time Machine, or moved:
   `Failed to bootstrap daemon: … failed data-directory format ownership admission: invalid
   or ambiguous format ownership: unsupported, incomplete, or differently owned manifest`.
@@ -507,8 +579,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The documentation site's build moves to vite 8.3.4 for GHSA-587h-7wmj-h5pm (its
   development server's editor launch on Windows). Nothing of the site's build ships in
   Axocoatl.
+- **Safari on macOS lets a full-page Preview set a cookie for `localhost`.** This
+  happens on a Preview page opened with **Open full preview**, or in a window the
+  Preview opens itself on a click (the Preview frame allows popups). The page's script
+  or its server can set a `Domain=localhost` cookie. Safari then sends it to the
+  workbench on every port and to every other Session's Preview, and the Preview proxies
+  forward it, because they strip only `axocoatl-token-*` cookies. Safari sends it before
+  the other app's own cookie of the same name, so it can plant a value in another
+  Session's app. It can also pass values to another top-level Preview, and make a
+  development server answer 431 (Safari sends about 200 KB of cookies). It cannot sign
+  in, sign the workbench out, read the workbench's host-only HttpOnly cookies, or reach
+  `127.0.0.1`. While a browser is signed out, a forged signed-in cookie sends each
+  navigation through the retry page once. Chromium and WebKit on Linux refuse such a
+  cookie, and Safari gives an embedded Preview no cookies at all. Until this changes,
+  use a Chromium-based browser for Sessions whose code you do not trust ([Security:
+  Safari shares `Domain=localhost`
+  cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
+  Measured in Playwright WebKit 26.4 on macOS.
 
 ### Verified
+<!-- VERIFIED-PENDING: restate from the final live runs -->
+<!--
 - **The release candidate was verified live on clean machines.** On macOS 26.6 on an
   Apple M5 Pro with 48 GB, wiped of Podman, Ollama and Axocoatl, the published install
   command installed 1.5.0, and `axocoatl onboard` installed Podman 6.1.4 and Ollama 0.40.6
@@ -524,6 +615,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   OpenRouter `openai/gpt-oss-120b` reviewer passed on Python. On Ubuntu 24.04 (arm64 VM,
   a fresh user, rootless Podman 4.9.3, Landlock ABI 4, the models served from the Mac's
   Ollama), `fix` passed on Node.js, Python, Go and Rust.
+
+Also restate from the final runs (not yet run on the integrated build):
+- `connect openrouter` signed in to a real OpenRouter account through the browser (the
+  founder did this live on 2026-10-20 during the 1.5.0 verification; the
+  `connect_cmd/openrouter*` code is unchanged since 583320b, onboarding's OpenRouter
+  step is not).
+- The macOS product-gate legs: WebKit and Chromium counts (fix150/r2-browser measured
+  252 tests on WebKit: 251 passed, 0 failed, 1 skipped, test 8, which needs
+  AXOCOATL_REFERENCE_RUNTIME_IMAGE; Chromium the same), and that on darwin WebKit the
+  "Preview browser contract" journey asserts the Safari Domain=localhost behaviour.
+-->
 
 ## [1.4.0] - 2026-10-14
 

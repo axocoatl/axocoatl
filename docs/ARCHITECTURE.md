@@ -1380,8 +1380,11 @@ agent:**
   dependency tree rather than exposing another host path. When `{dir}` has no
   `node_modules`, the start makes that mount point as the person (left to the OCI
   runtime, it would belong to the container's root, a subordinate uid under rootless
-  Podman), and every container removal removes it again once no container mounts it,
-  if it is still empty (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
+  Podman), and every container removal removes it again once no Podman container mounts
+  anything on it (at its path, or through a bind mount of it or of a directory above
+  it), if it is still the empty directory the start made (same device, inode and birth
+  time; containers carry it in `io.axocoatl.dependency-mountpoint-identity`)
+  (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
   directory inside the container. A Workspace equal to or below either protected root is
   rejected; canonicalizing the Workspace before mounting prevents a symlink spelling from

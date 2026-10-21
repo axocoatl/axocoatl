@@ -89,10 +89,13 @@ that language's official image, and installs the dependencies, such as `npm ci`,
 ecosystem's package registries open for that step. Then the writer works, and the host
 runs the check, such as `npm test`, `pytest`, `go test ./...` or `cargo test`. The same
 applies to `fix`, `fix-claude-code` and `fix-codex`; see
-[Repository toolchains](/configure/toolchains/). Verified live on the 1.5.0 release
+[Repository toolchains](/configure/toolchains/).
+{/* VERIFIED-PENDING: restate from the final live runs */}
+{/* Verified live on the 1.5.0 release
 candidate: on macOS, `fix` with local models, `fix-claude-code` and `fix-codex` each
 passed on Node.js, Python, Go and Rust repositories; on Ubuntu 24.04, `fix` passed on
-Node.js, Python, Go and Rust. Name the check with `--check` when Axocoatl detects none.
+Node.js, Python, Go and Rust. */}
+Name the check with `--check` when Axocoatl detects none.
 </Aside>
 
 ### With Claude Code or Codex as the writer

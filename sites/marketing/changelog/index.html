@@ -122,35 +122,46 @@
 
         <p>Native execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew
           and ollama.com ship 0.40.6. Native Sessions now run on Ollama 0.40.6 and later 0.40
-          releases, with GGUF models in llama.cpp's <code>llama-server</code> only, after two
-          small requests to your own server show that a prompt longer than the context is
-          refused before generation and that a one-token limit stops after one token. A data
+          releases, and on a later 0.x release once the contract probes pass, with GGUF
+          models in llama.cpp's <code>llama-server</code> only. The probes are two small
+          requests to your own server: a prompt longer than the context must be refused
+          before generation, and a one-token limit must stop after one token. A data
           directory restored from a backup or brought to a new Mac, which 1.1.0 through 1.4.0
           refused to start on, starts again.</p>
 
         <h3>Changed</h3>
         <ul>
-          <li>Native Sessions accept Ollama <code>0.40.P</code> with <code>P</code> 6 or later
-              and refuse 0.20.6, older releases, a newer minor release, pre-releases and local
-              builds, each with what to do. A model that is not GGUF, or that Ollama runs with
-              its MLX runner, is refused.</li>
-          <li><code>axocoatl onboard</code> suggests <code>qwen3-coder:30b</code> for Lead and
-              <code>gpt-oss:20b</code> for Reviewer, a pair that fits a 48 GB Mac one at a
-              time.</li>
+          <li>Native Sessions accept Ollama <code>0.40.P</code> with <code>P</code> 6 or later,
+              and a later 0.x release (0.41 or later) once both contract probes pass for
+              each model: doctor and onboarding warn that it is newer than the audited
+              0.40.6, and the run's receipt names it as unaudited. They refuse 0.20.6, older
+              releases, a new major release, pre-releases and local builds, each with what
+              to do. A model that is not GGUF, or that Ollama runs with its MLX runner, is
+              refused.</li>
+          <li><code>axocoatl onboard</code> is the one setup command: it sets up Podman, a
+              writer (Claude Code, Codex, local models or OpenRouter) and a different
+              reviewer, asking before each change, and ends ready or with the steps left.
+              With 48 GB of memory or more it suggests <code>qwen3-coder:30b</code> writing
+              and <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB),
+              loaded one at a time.</li>
+          <li><code>axocoatl doctor</code> reports the sandbox, the models, the writers and
+              the daemon, each with its fix, and ends with whether Axocoatl is ready.</li>
+          <li>The daemon follows <code>CONTAINER_CONNECTION</code> and
+              <code>CONTAINER_HOST</code> as Podman does; when the Podman they select does
+              not answer and Sessions have containers to remove, it no longer starts
+              without removing them, and names the variable.</li>
           <li>When its install directory is not on PATH, the installer asks before adding one
-              line to the profile your shell reads. <code>AXOCOATL_VERSION</code> installs a
-              given release, and <code>AXOCOATL_INSTALL_BASE_URL</code> names where its archive
-              is.</li>
+              line to the startup files your shell reads. <code>AXOCOATL_VERSION</code>
+              installs a given release, and <code>AXOCOATL_INSTALL_BASE_URL</code> names
+              where its archive is.</li>
           <li>Every command on the home page, /install, the README and the docs' first-run
-              pages runs as written, and the pages say what has been tested and what has
-              not.</li>
+              pages runs as written, and the pages say what is not yet verified.</li>
         </ul>
 
         <h3>Added</h3>
         <ul>
           <li><code>axocoatl connect openrouter</code> signs in to OpenRouter in the browser
-              and stores the key it gets, with no key to paste. It has not yet been run
-              against a real OpenRouter account.</li>
+              and stores the key it gets, with no key to paste.</li>
           <li><code>api_key_secret</code> names a stored secret in place of a hosted
               provider's <code>api_key</code>.</li>
           <li>The Ollama version each native model ran on is in the run's record and its
@@ -159,6 +170,7 @@
               the data directory's ownership record; <code>axocoatl service status</code>
               shows why the service last failed to start; the docs have an Uninstall
               page.</li>
+          <li>A clean-machine new-user gate blocks every release.</li>
         </ul>
 
         <h3>Fixed</h3>
@@ -167,14 +179,52 @@
               new location once, and 1.4.0 starts on it after that.</li>
           <li>A Session keeps working in a repository restored or copied at the same
               path.</li>
+          <li>Onboarding and doctor read your subordinate ids from <code>/etc/subuid</code>
+              and <code>/etc/subgid</code> on Linux, and print the exact command to add a
+              free range, instead of passing while <code>keep-id</code> containers
+              failed.</li>
+          <li>A run leaves no <code>node_modules</code> in a repository that had none; on
+              Linux one owned by a subordinate uid made your own <code>npm install</code>
+              fail.</li>
+          <li>Hardened commands can rename files into other directories (Landlock ABI 2,
+              Linux 5.19, and later), so Rust checks can pass in loadout runs.</li>
+          <li>One upstream error from the reviewer's model no longer ends a run.</li>
+          <li>Safari opens the workbench from a <code>127.0.0.1</code> bookmark or sign-in
+              link.</li>
+          <li>On Linux, <code>connect claude-code</code> and <code>connect codex</code> no
+              longer type a line break into the program's terminal when they stop, which
+              showed as an extra blank line.</li>
         </ul>
 
         <h3>Security</h3>
         <ul>
           <li>The route to Ollama on this computer refuses Ollama 0.40's new endpoints, and a
               Session opens it only when Ollama reports its cloud features disabled.</li>
-          <li>Dependencies move to zip 9 for RUSTSEC-2026-0367, -0368 and -0369.</li>
+          <li>Dependencies move to zip 9 for RUSTSEC-2026-0367, -0368 and -0369, to
+              rustls-webpki 0.103.16 for RUSTSEC-2026-0382, and to webpki-roots and
+              webpki-root-certs 1.0.10 for RUSTSEC-2026-0381 and -0383.</li>
+          <li>The workbench's vendored markdown-it moves to 14.3.3 for GHSA-vfgh-jcmw-g37q and
+              GHSA-gfr2-rv44-r23c. The documentation site's build moves to vite 8.3.4 for
+              GHSA-587h-7wmj-h5pm; nothing of it ships in Axocoatl.</li>
+          <li>Known issue: in Safari on macOS, a Preview opened full page can set a cookie
+              for <code>localhost</code> that reaches the workbench and every other
+              Session's Preview. It cannot sign in or read the workbench's cookies. For
+              Sessions whose code you do not trust, use a Chromium-based browser
+              (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).</li>
         </ul>
+
+        <!-- VERIFIED-PENDING: restate from the final live runs -->
+        <!--
+        <h3>Verified</h3>
+        <ul>
+          <li>The release candidate was verified live on clean machines: on a 48 GB Mac wiped
+              of Podman, Ollama and Axocoatl, the published install command and
+              axocoatl onboard; fix, fix-claude-code and fix-codex on Node.js, Python, Go and
+              Rust repositories, every receipt verified; connect claude-code, connect codex
+              and connect openrouter signed in through the browser. On Ubuntu 24.04, fix on
+              Node.js, Python, Go and Rust.</li>
+        </ul>
+        -->
       </article>
 
       <article class="release">

@@ -326,9 +326,10 @@ This runs the official `codex login` for you and stores the ChatGPT sign-in it m
 the secret `codex-chatgpt`. You approve the sign-in in the browser (or, with
 `--device-auth`, enter the code Codex shows at the address it gives); you never see, copy,
 paste or type a token. Nothing but Podman needs to be installed on your computer (with,
-on macOS, its machine created and running; `axocoatl onboard` installs Podman and
-creates and starts the machine after asking, and `connect codex` starts a stopped
-machine itself): by default the pinned Codex 0.160.1, the one the `codex` recipe
+on macOS, its machine created and running; `axocoatl onboard` installs Podman after
+asking where Homebrew (on Apple silicon) or a package manager it knows is present, and
+otherwise names the installer, creates and starts the machine after asking, and
+`connect codex` starts a stopped machine itself): by default the pinned Codex 0.160.1, the one the `codex` recipe
 installs, runs in a throwaway container.
 
 - **The image.** It is the `codex` recipe image recorded in the data root by
