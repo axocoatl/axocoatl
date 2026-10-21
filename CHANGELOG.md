@@ -547,8 +547,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ranges come from SSSD (`nsswitch.conf`), or when Podman is reached through
   `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection: that Podman's own
   `podman info` decides, as before. If it maps one id, the fix says to add the range
-  where that Podman runs, then to run `podman system migrate` there as that Podman's
-  user (a restarted API service joins the old pause process and keeps one id mapped).
+  where that Podman runs, then, as that Podman's user there, to run `podman system
+  migrate` and then restart its API service (either one alone keeps one id mapped).
   For a macOS machine, that is inside it with `podman machine ssh`, then restart the
   machine. On Linux a `unix://` socket may be another user's Podman on this computer;
   on a Mac it is usually a machine's API socket. Onboarding runs nothing for it (no

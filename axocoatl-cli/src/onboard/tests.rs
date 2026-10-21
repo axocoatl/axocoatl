@@ -984,7 +984,7 @@ async fn a_podman_reached_through_container_host_is_not_changed_here() {
             // `podman system migrate` only as that Podman's user, where it
             // runs: never run or offered as a command for this computer.
             assert!(
-                o.steps[0].contains("then run `podman system migrate` as that user there")
+                o.steps[0].contains("run `podman system migrate` and then restart its API service")
                     && !o.steps[0].contains("&& podman system migrate")
                     && !o.steps[0].contains("sudo"),
                 "{:?}",
@@ -1892,7 +1892,7 @@ async fn doctor_judges_a_podman_reached_elsewhere_by_its_podman_info() {
         "{ranges:?}"
     );
     assert!(
-        fix.contains("then run `podman system migrate` as that user there")
+        fix.contains("run `podman system migrate` and then restart its API service")
             && !fix.contains("&& podman system migrate")
             && !fix.contains("sudo")
             && !fix.contains("alex"),

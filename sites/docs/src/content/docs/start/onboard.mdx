@@ -177,8 +177,8 @@ On **Linux and WSL2**:
   same fix: on its Podman line when `podman info` fails, otherwise on its User ID ranges
   line. With `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection, this
   computer's files are not read and nothing is run: the range belongs where that Podman
-  runs, and `podman system migrate` runs there, as that Podman's user (a restarted API
-  service alone keeps the old mapping).
+  runs, and there, as that Podman's user, `podman system migrate` runs and then its API
+  service restarts (either one alone keeps the old mapping).
 - Landlock: below ABI 3 (Linux 6.2) fix, fix-claude-code, fix-codex and audit cannot
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper

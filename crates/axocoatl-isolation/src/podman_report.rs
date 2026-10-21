@@ -1221,15 +1221,16 @@ fn elsewhere_finding(report: &PodmanReport) -> Finding {
                 }
                 _ => "",
             };
-            // A rootless Podman keeps the mapping its pause process holds:
-            // a restarted API service joins that process, so the range
-            // takes effect only after `podman system migrate` as that user.
+            // A rootless Podman keeps the mapping its pause process holds,
+            // and a running API service keeps its own: measured with 4.9.3,
+            // neither a restarted service nor `podman system migrate` alone
+            // maps the range; migrate, then restart the service, does.
             format!(
                 "Where that Podman runs{socket}, give the user it runs as a range of subordinate \
                  user and group IDs (`usermod --add-subuids` and `--add-subgids`, as root there, \
-                 with a range no other user there has), then run `podman system migrate` as that \
-                 user there (restarting its API service alone keeps one ID mapped: the new \
-                 service joins the old pause process); onboarding changes nothing for it{}",
+                 with a range no other user there has), then, as that user there, run `podman \
+                 system migrate` and then restart its API service (either one alone keeps one \
+                 ID mapped); onboarding changes nothing for it{}",
                 variable.map(unset).unwrap_or_default()
             )
         }
@@ -2218,9 +2219,8 @@ mod tests {
             assert!(ranges.detail.contains(&variable), "{}", ranges.detail);
             assert!(
                 fix.contains(
-                    "then run `podman system migrate` as that user there (restarting its API \
-                     service alone keeps one ID mapped: the new service joins the old pause \
-                     process)"
+                    "then, as that user there, run `podman system migrate` and then restart its \
+                     API service (either one alone keeps one ID mapped)"
                 ),
                 "{fix}"
             );
@@ -2269,7 +2269,7 @@ mod tests {
                 unix,
                 "{fix}"
             );
-            assert!(fix.contains("then run `podman system migrate` as that user there"));
+            assert!(fix.contains("run `podman system migrate` and then restart its API service"));
         }
         // podman-remote, or a default remote connection, without either
         // variable: `podman info` says the service is remote.
@@ -2286,7 +2286,7 @@ mod tests {
         );
         let fix = ranges.fix.unwrap();
         assert!(
-            fix.contains("then run `podman system migrate` as that user there")
+            fix.contains("run `podman system migrate` and then restart its API service")
                 && !fix.contains("sudo"),
             "{fix}"
         );
