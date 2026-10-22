@@ -1307,7 +1307,10 @@ async fn actual_a_change_too_large_to_record_still_runs_the_checks_and_the_revie
             .map(|(name, _)| format!("{name}\\n"))
             .collect::<String>();
         assert!(
-            prompt.contains(&format!("The files the turn changed:\\n{listed}")),
+            prompt.contains(&format!(
+                "The {} files the turn changed:\\n{listed}",
+                files.len()
+            )),
             "{prompt}"
         );
         assert!(!prompt.contains("notes.txt"), "{prompt}");

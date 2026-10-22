@@ -1253,4 +1253,152 @@ mod tests {
             ReviewVerdict::Unreadable
         );
     }
+
+    /// `len` deterministic bytes no compressor shrinks.
+    fn noise(len: usize, seed: u64) -> Vec<u8> {
+        let mut state = seed | 1;
+        let mut bytes = Vec::with_capacity(len + 8);
+        while bytes.len() < len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            bytes.extend_from_slice(&state.to_le_bytes());
+        }
+        bytes.truncate(len);
+        bytes
+    }
+
+    /// The first 12 KiB of the patch a capture keeps of a change too large
+    /// to record: the fix to src/lib.rs, then new files under gen/, as
+    /// `git diff --binary` prints random ones (a binary patch in base85,
+    /// or, for a file without a NUL byte, lines that are not UTF-8 and read
+    /// as U+FFFD), as the capture's text prefix holds them.
+    fn generated_prefix(size: usize) -> String {
+        const BASE85: &[u8] =
+            b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+        let mut prefix = "diff --git a/src/lib.rs b/src/lib.rs\nindex 384eba8..4dda3a8 100644\n\
+             --- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -15,7 +15,7 @@ pub fn paginate<T: Clone>(items: \
+             &[T], size: usize) -> Vec<Vec<T>> {\n         } else {\n-            items.len() % \
+             size\n+            items.len() - start\n         };\n"
+            .to_owned();
+        for index in 0u64.. {
+            if prefix.len() > 12 * 1024 {
+                break;
+            }
+            let path = format!("gen/f{index}.bin");
+            let data = noise(size, index + 1);
+            if index % 4 == 0 {
+                prefix.push_str(&format!(
+                    "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..3b7d2f0\n\
+                     --- /dev/null\n+++ b/{path}\n@@ -0,0 +1,4 @@\n"
+                ));
+                for line in data.split(|byte| *byte == b'\n') {
+                    prefix.push('+');
+                    prefix.push_str(&String::from_utf8_lossy(line));
+                    prefix.push('\n');
+                }
+            } else {
+                prefix.push_str(&format!(
+                    "diff --git a/{path} b/{path}\nnew file mode 100644\nindex \
+                     {zero}..{digest}\nGIT binary patch\nliteral {size}\n",
+                    zero = "0".repeat(40),
+                    digest = axocoatl_session::receipt::sha256_hex(&data)[..40].to_owned(),
+                ));
+                for chunk in data.chunks(52) {
+                    prefix.push('z');
+                    for byte in noise(chunk.len() * 5 / 4, index) {
+                        prefix.push(BASE85[byte as usize % BASE85.len()] as char);
+                    }
+                    prefix.push('\n');
+                }
+                prefix.push_str("\nliteral 0\nHcmV?d00001\n\n");
+            }
+        }
+        let mut end = 12 * 1024;
+        while !prefix.is_char_boundary(end) {
+            end -= 1;
+        }
+        prefix.truncate(end);
+        prefix
+    }
+
+    /// The lines of the paths that differ from HEAD of `names`.
+    fn changed_lines<'a>(names: impl Iterator<Item = &'a [u8]>) -> String {
+        names
+            .map(|name| {
+                format!(
+                    "{}\t644\tfile\t{}\n",
+                    base64::engine::general_purpose::STANDARD.encode(name),
+                    "e".repeat(64)
+                )
+            })
+            .collect()
+    }
+
+    /// The description of a change too large for one capture costs a few
+    /// thousand tokens as the daemon counts a request (cl100k, which it
+    /// fits every request to its model's context with; the reviewer reads
+    /// it inside JSON, so both forms are counted), whatever the change: at
+    /// most 5,000 for generated files beside a fix, and 9,000 for names and
+    /// a patch chosen to cost the most. A reviewer with a 32,768-token
+    /// context, which a request may fill to 27,852 with its output
+    /// allowance, holds it beside the rest of its request (about 10,000
+    /// tokens for `axocoatl run fix`). The first 1.5.0 build listed every
+    /// changed path up to 48 KiB: 3,072 generated files beside a fix cost
+    /// about 22,000 tokens there, and that reviewer could not start.
+    #[test]
+    fn a_change_too_large_to_record_is_described_in_a_few_thousand_tokens() {
+        use axocoatl_session::turn_review::{describe_partial_change, MAX_PARTIAL_CHANGE_BYTES};
+        use axocoatl_token::{ApproximateCounter, TokenCounter};
+        let counter = ApproximateCounter::new().unwrap();
+        let tokens = |text: &str| {
+            counter
+                .count_text(text)
+                .max(counter.count_text(&serde_json::to_string(text).unwrap()))
+        };
+        let names = |count: usize| -> Vec<Vec<u8>> {
+            std::iter::once(b"src/lib.rs".to_vec())
+                .chain((0..count).map(|index| format!("gen/f{index}.bin").into_bytes()))
+                .collect()
+        };
+        // 3,072 files of 1 KiB, which a capture lists, and 12,288 of 256
+        // bytes, more than the 10,000 paths it lists.
+        let three = names(3072);
+        let listed = changed_lines(three.iter().map(Vec::as_slice));
+        let few =
+            describe_partial_change(Some(""), Some(&listed), &generated_prefix(1024), 4_717_831);
+        let many = describe_partial_change(Some(""), None, &generated_prefix(256), 6_208_208);
+        // Without the lines of the capture taken when the turn began.
+        let unknown =
+            describe_partial_change(None, Some(&listed), &generated_prefix(1024), 4_717_831);
+        for (label, change) in [("3,072", &few), ("12,288", &many), ("unknown", &unknown)] {
+            assert!(
+                tokens(change) <= 5_000,
+                "{label}: {} tokens",
+                tokens(change)
+            );
+        }
+        // Names and a patch chosen to cost the most tokens a byte: each name
+        // quoted byte by byte, and a prefix of text that is not UTF-8.
+        let costly: Vec<Vec<u8>> = (0..3072u32)
+            .map(|index| {
+                let mut name = format!("\u{85}{index}/").into_bytes();
+                name.extend(
+                    noise(60, u64::from(index) + 9)
+                        .iter()
+                        .map(|byte| byte | 0x80),
+                );
+                name
+            })
+            .collect();
+        let lines = changed_lines(costly.iter().map(Vec::as_slice));
+        let noisy = String::from_utf8_lossy(&noise(12 * 1024, 5)).into_owned();
+        let worst = describe_partial_change(None, Some(&lines), &noisy, 50_000_000);
+        assert!(
+            worst.len() <= MAX_PARTIAL_CHANGE_BYTES + 128,
+            "{}",
+            worst.len()
+        );
+        assert!(tokens(&worst) <= 9_000, "worst: {} tokens", tokens(&worst));
+    }
 }
