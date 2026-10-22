@@ -791,6 +791,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RUSTSEC-2026-0381 and -0383 (bundled roots trusted distrusted emSign intermediates).
 - The workbench's vendored markdown-it moves to 14.3.3 for GHSA-vfgh-jcmw-g37q and
   GHSA-gfr2-rv44-r23c, two quadratic-time paths when rendering Agent output.
+- The workbench's vendored Monaco editor is rebuilt with DOMPurify 3.4.17 for
+  GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr and GHSA-c6gr-qvv4-5v3f. Monaco's sanitizer
+  sets none of the affected `SAFE_FOR_TEMPLATES`, `IN_PLACE` or XHTML parser options.
 - The documentation site's build moves to vite 8.3.4 for GHSA-587h-7wmj-h5pm (its
   development server's editor launch on Windows). Nothing of the site's build ships in
   Axocoatl.
