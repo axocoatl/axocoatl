@@ -506,6 +506,33 @@ if [ "$(uname -s)" = Darwin ]; then
     fail "reset-mac-account.sh HOME refusal (exit $status): $out"
   fi
 fi
+# --keep-models keeps Ollama's downloaded models but removes its settings
+# (server.json, where onboarding turns cloud models off, and onboarding's
+# backups of it); a reset without it removes all of ~/.ollama. A reset
+# removes what --print-paths lists.
+reset_home="$work/reset-home"
+mkdir -p "$reset_home/.ollama/models/blobs"
+printf '{"disable_ollama_cloud": true}\n' >"$reset_home/.ollama/server.json"
+printf '{}\n' >"$reset_home/.ollama/server.json.bak-20261021T000000Z"
+kept=$(HOME="$reset_home" "$script_dir/reset-mac-account.sh" --print-paths --keep-models)
+all=$(HOME="$reset_home" "$script_dir/reset-mac-account.sh" --print-paths)
+if printf '%s\n' "$kept" | grep -qxF "$reset_home/.ollama/server.json" \
+  && printf '%s\n' "$kept" | grep -qxF "$reset_home/.ollama/server.json.bak-20261021T000000Z" \
+  && ! printf '%s\n' "$kept" | grep -qxF "$reset_home/.ollama" \
+  && ! printf '%s\n' "$kept" | grep -qF "$reset_home/.ollama/models" \
+  && printf '%s\n' "$kept" | grep -qxF "$reset_home/.config/axocoatl" \
+  && printf '%s\n' "$all" | grep -qxF "$reset_home/.ollama" \
+  && ! printf '%s\n' "$all" | grep -qF 'server.json'; then
+  pass "reset-mac-account.sh --keep-models removes Ollama's server.json and onboarding's backups of it, and keeps the models"
+else
+  fail "reset-mac-account.sh --keep-models paths: kept [$kept] all [$all]"
+fi
+if sed -n '2,/^set -u/p' "$script_dir/reset-mac-account.sh" | grep -q 'still remove Ollama.s settings,' \
+  && grep -q "Ollama's settings, ~/.ollama/server.json, are removed" "$script_dir/reset-mac-account.sh"; then
+  pass "reset-mac-account.sh says, in its help and its plan, that --keep-models removes Ollama's settings"
+else
+  fail "reset-mac-account.sh help or plan does not say that --keep-models removes server.json"
+fi
 out=$(GATE_ACCOUNT=axo-gate-test-nobody "$script_dir/newuser-mac.sh" --release-dir "$work" --site "$work" 2>&1)
 status=$?
 if [ "$status" = 2 ] && printf '%s' "$out" | grep -Eq 'gate account|macOS gate'; then

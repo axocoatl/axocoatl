@@ -426,7 +426,8 @@ OpenRouter (`axocoatl connect openrouter`), as a new user does.
 # In the gate account, in a checkout of the release candidate's commit.
 # ~/candidate holds axocoatl-vX.Y.Z-aarch64-apple-darwin.tar.gz and its .sha256
 # (from CI or release-artifact.sh); ~/candidate/site is the staged marketing site.
-# Add --keep-models to keep ~/.ollama, --dedicated-machine on a gate-only Mac.
+# Add --keep-models to keep Ollama's downloaded models, --dedicated-machine on a
+# gate-only Mac.
 scripts/release-gate/reset-mac-account.sh
 scripts/release-gate/newuser-mac.sh --release-dir ~/candidate --site ~/candidate/site \
   --pr-repo OWNER/axocoatl-gate-receipts
@@ -444,13 +445,20 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   - It stops the account's running `axocoatl dev` or `serve`. It then removes
     the account's Axocoatl data (including `~/.axocoatl`, the daemon's socket
     directory on macOS), logs, launch agents, Podman machines and container
-    storage, `~/.local/bin/axocoatl` and, unless `--keep-models`,
-    `~/.ollama` (the next run records "models cached").
+    storage, `~/.local/bin/axocoatl` and `~/.ollama`.
+  - With `--keep-models` it keeps Ollama's downloaded models (the next run
+    records "models cached") and removes only Ollama's settings,
+    `~/.ollama/server.json`, where onboarding turns cloud models off, and
+    onboarding's backups of it (`server.json.bak-*`). The next onboarding
+    then finds cloud models on, as a new user's Ollama has them, and turns
+    them off again. Ollama reads its settings when it starts: when one of the
+    account's Ollama servers is running, the plan says to stop it first
+    (`--dedicated-machine` stops and uninstalls it).
   - Only with `--dedicated-machine` does it `brew uninstall podman ollama`.
   - It never touches `~/.axocoatl-gate-signer`.
   - It shows the plan and asks for the account name first. `--dry-run` only
-    shows the plan; `--print-paths` lists the paths a reset removes and
-    changes nothing.
+    shows the plan; `--print-paths` lists the paths a reset removes (with
+    `--keep-models`, the paths that reset removes) and changes nothing.
   - Podman or Ollama installed from their own `.pkg` or app need the admin
     password to remove, and are left in place.
 - `newuser-mac.sh`:
