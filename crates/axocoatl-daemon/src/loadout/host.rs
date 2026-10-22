@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use axocoatl_session::run_outcome::{NetworkSummary, ReproRun, RunOutcome, TurnObservation};
+use axocoatl_session::run_outcome::{
+    NetworkSummary, ReproRun, RunOutcome, RunWarning, TurnObservation,
+};
 use axocoatl_session::run_record::RunEvent;
 use serde::{Deserialize, Serialize};
 
@@ -162,12 +164,19 @@ pub trait RunHost: Send + Sync {
 
     /// Sign the finished run's Outcome and write its receipt
     /// (`receipt.dsse.json`) before the Outcome itself is written, so a run
-    /// that has finished has its receipt settled. `Err` says why there is
-    /// none: the driver records it as the warning `receipt_unavailable`,
-    /// which never changes the verdict or the exit code. Daemon:
-    /// `seal_loadout_run` (receipts). A host without receipts signs nothing.
-    async fn seal(&self, _run_id: &str, _outcome: &RunOutcome) -> Result<(), String> {
-        Ok(())
+    /// that has finished has its receipt settled. `Ok(Some(_))` is the
+    /// warning `receipt_incomplete` of a receipt that does not cover every
+    /// path the run changed, which the driver records; `Err` says why there
+    /// is no receipt, which the driver records as the warning
+    /// `receipt_unavailable`. Neither changes the verdict or the exit code.
+    /// Daemon: `seal_loadout_run` (receipts). A host without receipts signs
+    /// nothing.
+    async fn seal(
+        &self,
+        _run_id: &str,
+        _outcome: &RunOutcome,
+    ) -> Result<Option<RunWarning>, String> {
+        Ok(None)
     }
 
     /// Write the run's Outcome once. Daemon: `RunRecordStore::finish`

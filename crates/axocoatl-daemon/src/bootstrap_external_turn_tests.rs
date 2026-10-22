@@ -1061,7 +1061,7 @@ impl crate::loadout::RunHost for TestRunHost {
         &self,
         run_id: &str,
         outcome: &axocoatl_session::run_outcome::RunOutcome,
-    ) -> Result<(), String> {
+    ) -> Result<Option<axocoatl_session::run_outcome::RunWarning>, String> {
         self.daemon.seal_loadout_run(run_id, outcome).await
     }
 

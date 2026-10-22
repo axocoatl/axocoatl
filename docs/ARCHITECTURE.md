@@ -842,7 +842,10 @@ Removed paths, symbolic links and what cannot be attributed are listed apart. Th
 the secret `receipt-signing-key` in a tagged JSON value that the egress broker refuses to
 send whatever a route calls it, and made on first use. Admission failures, driver errors
 and runs a restart ends are sealed the same way. Signing that fails adds the warning
-`receipt_unavailable` and changes neither verdict nor exit code. `GET
+`receipt_unavailable` and changes neither verdict nor exit code. A receipt that does not
+cover every path the run changed (`files.complete` false) lists the warning
+`receipt_incomplete` among its own, and the Outcome carries it with the receipt's reasons
+(`RunHost::seal` returns it); it changes neither verdict nor exit code either. `GET
 /api/runs/{run_id}/receipt` serves the envelope as written and `GET /api/receipts/key`
 the public key; `axocoatl receipt show|verify` read envelopes without a daemon. The
 composite action `actions/verify-receipt` runs `verify` in a pull request's workflow

@@ -614,11 +614,15 @@ pub async fn run_to_outcome_with(
         .await?;
     }
     // The receipt is signed from the finished Outcome and written before
-    // it. A receipt that cannot be signed is a warning, never a change of
-    // verdict or exit code: a key problem cannot turn a failing run into a
-    // passing one or the reverse.
-    if let Err(reason) = host.seal(&run.run_id, &outcome).await {
-        let warning = crate::bootstrap::receipts::receipt_unavailable(&reason);
+    // it. A receipt that cannot be signed, or does not cover every path the
+    // run changed, is a warning, never a change of verdict or exit code: a
+    // key problem cannot turn a failing run into a passing one or the
+    // reverse, and a passing run whose receipt proves less says so.
+    let sealed = match host.seal(&run.run_id, &outcome).await {
+        Ok(incomplete) => incomplete,
+        Err(reason) => Some(crate::bootstrap::receipts::receipt_unavailable(&reason)),
+    };
+    if let Some(warning) = sealed {
         outcome.warnings.push(warning.clone());
         record(
             host,
@@ -814,6 +818,9 @@ prompt: "{task}"
         sealed: Mutex<Option<(RunOutcome, usize)>>,
         /// When set, signing fails with this reason.
         seal_error: Option<String>,
+        /// When set, the receipt does not cover every path the run changed,
+        /// for these reasons.
+        seal_incomplete: Option<Vec<String>>,
     }
 
     impl FakeHost {
@@ -881,12 +888,15 @@ prompt: "{task}"
         async fn recorded_events(&self, _: &str) -> Result<Vec<RunEvent>, RunError> {
             Ok(self.events.lock().unwrap().clone())
         }
-        async fn seal(&self, _: &str, outcome: &RunOutcome) -> Result<(), String> {
+        async fn seal(&self, _: &str, outcome: &RunOutcome) -> Result<Option<RunWarning>, String> {
             let recorded = self.events.lock().unwrap().len();
             *self.sealed.lock().unwrap() = Some((outcome.clone(), recorded));
             match &self.seal_error {
                 Some(reason) => Err(reason.clone()),
-                None => Ok(()),
+                None => Ok(self
+                    .seal_incomplete
+                    .as_deref()
+                    .map(crate::bootstrap::receipts::receipt_incomplete)),
             }
         }
         async fn finish(&self, _: &str, outcome: &RunOutcome) -> Result<(), RunError> {
@@ -1056,6 +1066,85 @@ prompt: "{task}"
                 RunEvent::Warning { warning, .. } if warning.code == "receipt_unavailable"
             )));
         }
+    }
+
+    /// A passing run whose receipt does not cover every path it changed
+    /// still passes, and says so plainly: its Outcome, and so the summary,
+    /// the JUnit report and the record, carry the warning
+    /// `receipt_incomplete` with why, recorded once, beside the verdict.
+    #[tokio::test]
+    async fn a_pass_whose_receipt_does_not_cover_every_path_carries_a_warning() {
+        let run = context(&[], later());
+        let reason = "writer (generation 1) in turn turn-1: its captures are larger than the \
+                      recorded manifest and patch bounds, so they cannot be compared";
+        let host = FakeHost {
+            waits: Mutex::new(vec![observation(
+                TurnState::Completed,
+                vec![check(CheckState::Passed)],
+                review(true, "openai/gpt-oss-120b"),
+            )]),
+            seal_incomplete: Some(vec![reason.to_owned()]),
+            ..FakeHost::default()
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.verdict, RunVerdict::Pass);
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert!(outcome.attention.is_empty(), "{:?}", outcome.attention);
+        let incomplete: Vec<&RunWarning> = outcome
+            .warnings
+            .iter()
+            .filter(|warning| warning.code == "receipt_incomplete")
+            .collect();
+        assert_eq!(incomplete.len(), 1, "{:?}", outcome.warnings);
+        assert_eq!(
+            incomplete[0].message,
+            format!(
+                "The receipt does not cover every path the run changed, so it does not prove \
+                 what the run left: {reason}. Review the repository's changes themselves. The \
+                 verdict and exit code are unchanged."
+            )
+        );
+        let recorded = host
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                matches!(event, RunEvent::Warning { warning, .. }
+                    if warning.code == "receipt_incomplete")
+            })
+            .count();
+        assert_eq!(recorded, 1);
+        assert_eq!(host.finished.lock().unwrap().as_ref(), Some(&outcome));
+        let junit = axocoatl_session::run_junit::render_junit(&outcome).unwrap();
+        assert!(
+            junit.contains(
+                "<property name=\"axocoatl.warning.receipt_incomplete\" value=\"The receipt does \
+                 not cover every path the run changed"
+            ),
+            "{junit}"
+        );
+        // Many reasons: the first three, each bounded, and how many more.
+        let reasons: Vec<String> = (0..5)
+            .map(|index| format!("activation {index}: {}", "x".repeat(400)))
+            .collect();
+        let warning = crate::bootstrap::receipts::receipt_incomplete(&reasons);
+        assert!(
+            warning.message.contains("activation 2: "),
+            "{}",
+            warning.message
+        );
+        assert!(
+            !warning.message.contains("activation 3: "),
+            "{}",
+            warning.message
+        );
+        assert!(
+            warning.message.contains("...; and 2 more."),
+            "{}",
+            warning.message
+        );
+        assert!(warning.message.len() < 1200, "{}", warning.message.len());
     }
 
     #[tokio::test]

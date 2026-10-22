@@ -43,6 +43,10 @@ pub const PR_BLOCK_END: &str = "-->";
 pub const MAX_ENVELOPE_BYTES: usize = 16 * 1024 * 1024;
 /// Warning code of a finished run the daemon could not sign.
 pub const RECEIPT_UNAVAILABLE: &str = "receipt_unavailable";
+/// Warning code of a finished run whose receipt does not cover every path
+/// the run changed (`predicate.files.complete` is false): what it names is
+/// signed, but it does not prove what the run left.
+pub const RECEIPT_INCOMPLETE: &str = "receipt_incomplete";
 
 /// `predicate.files.source`: where the subject digests come from.
 pub mod source {
