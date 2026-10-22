@@ -51,11 +51,14 @@ use std::str::FromStr;
 ///   Playwright's WebKit, and apps that show pages with WebKit, whose user
 ///   agent leaves out `Version/` and `Safari/` (those are not required).
 ///
-/// Chromium-based browsers and Firefox on a Mac, and WebKit on Linux (which
-/// refuses a `Domain=localhost` cookie), are not. A Safari whose user agent
-/// was changed to another browser's (Develop > User Agent) is taken for that
-/// browser. static/ui/preview-embedding.js makes the same decision in the
-/// page, from `navigator.vendor` first.
+/// Chromium-based browsers and Firefox on a Mac, and WebKit on Linux with its
+/// own user agent (`X11; Linux`, which WebKitGTK and WPE build by default;
+/// that engine refuses a `Domain=localhost` cookie), are not. Only the user
+/// agent counts, so a browser is taken for what it says it is: a Safari whose
+/// user agent was changed to another browser's (Develop > User Agent) for that
+/// browser, and Playwright's WebKit on Linux, which sends Safari's Mac user
+/// agent, for Safari. static/ui/preview-embedding.js makes the same decision
+/// in the page, from `navigator.vendor` first.
 pub(crate) fn is_safari_engine_on_apple(user_agent: &str) -> bool {
     let has = |token: &str| user_agent.contains(token);
     let ios = ["iPhone", "iPad", "iPod", "CriOS/", "FxiOS/", "EdgiOS/"]
@@ -316,8 +319,10 @@ mod tests {
     use tower::ServiceExt;
 
     const SAFARI_MAC: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
-    // Playwright's WebKit on macOS, as measured with Playwright 1.64.1.
-    const PLAYWRIGHT_WEBKIT_MAC: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15";
+    // Playwright's WebKit, as measured with Playwright 1.64.1 on macOS and on
+    // Linux alike: on Linux too its pages send Safari's Mac user agent, so it
+    // is taken for Safari.
+    const PLAYWRIGHT_WEBKIT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15";
     const WKWEBVIEW_MAC: &str =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
     const SAFARI_IPHONE: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
@@ -334,7 +339,13 @@ mod tests {
     const OPERA_MAC: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/124.0.0.0";
     const FIREFOX_MAC: &str =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:143.0) Gecko/20100101 Firefox/143.0";
+    // WebKit on Linux with the user agent WebKitGTK and WPE build by default
+    // (X11 and the system's name and machine).
     const WEBKIT_LINUX: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15";
+    // That user agent as Playwright's WebKit 27.2 sends it on Linux (aarch64)
+    // for a tab it opens on its own (Control-click), measured with
+    // Playwright 1.64.1.
+    const WEBKIT_LINUX_OWN_TAB: &str = "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15";
     const CHROME_ANDROID: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
     const CHROME_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
 
@@ -357,7 +368,7 @@ mod tests {
     fn safari_engine_on_apple_is_every_ios_browser_and_webkit_on_a_mac() {
         for user_agent in [
             SAFARI_MAC,
-            PLAYWRIGHT_WEBKIT_MAC,
+            PLAYWRIGHT_WEBKIT,
             WKWEBVIEW_MAC,
             SAFARI_IPHONE,
             SAFARI_IPAD,
@@ -375,6 +386,7 @@ mod tests {
             OPERA_MAC,
             FIREFOX_MAC,
             WEBKIT_LINUX,
+            WEBKIT_LINUX_OWN_TAB,
             CHROME_ANDROID,
             CHROME_WINDOWS,
             "curl/8.7.1",
@@ -467,7 +479,13 @@ mod tests {
                 ("sec-fetch-mode", "navigate"),
             ]))
         };
-        for user_agent in [SAFARI_MAC, SAFARI_IPHONE, CHROME_IPHONE, WKWEBVIEW_MAC] {
+        for user_agent in [
+            SAFARI_MAC,
+            PLAYWRIGHT_WEBKIT,
+            SAFARI_IPHONE,
+            CHROME_IPHONE,
+            WKWEBVIEW_MAC,
+        ] {
             assert_eq!(
                 navigation(user_agent, "document"),
                 Some(PageRequest::TopLevel),
@@ -601,8 +619,14 @@ mod tests {
             );
         }
 
-        // Chromium, Firefox and WebKit on Linux get the app top-level.
-        for user_agent in [HEADLESS_CHROME_MAC, FIREFOX_MAC, WEBKIT_LINUX] {
+        // Chromium, Firefox and WebKit on Linux with its own user agent get
+        // the app top-level.
+        for user_agent in [
+            HEADLESS_CHROME_MAC,
+            FIREFOX_MAC,
+            WEBKIT_LINUX,
+            WEBKIT_LINUX_OWN_TAB,
+        ] {
             let mut pairs = document;
             pairs[0] = ("user-agent", user_agent);
             let (status, _, body) =

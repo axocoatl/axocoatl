@@ -31,14 +31,18 @@ export const PREVIEW_STAYS_EMBEDDED_EVENT = 'preview-stays-embedded';
 
 /**
  * True when `nav` is Safari's engine, WebKit, on macOS, iOS or iPadOS: Safari,
- * Playwright's WebKit on a Mac, and every browser on iOS. False for
- * Chromium-based browsers (Chrome, Edge, Opera, Brave, Arc), for Firefox, and
- * for WebKit on Linux, which refuses a `Domain=localhost` cookie.
+ * Playwright's WebKit, and every browser on iOS. False for Chromium-based
+ * browsers (Chrome, Edge, Opera, Brave, Arc), for Firefox, and for WebKit on
+ * Linux with its own user agent (`X11; Linux`), which refuses a
+ * `Domain=localhost` cookie.
  *
  * `navigator.vendor` names the engine: "Apple Computer, Inc." in WebKit,
  * "Google Inc." in Chromium, empty in Firefox. Only when it is empty or
  * missing does the user agent decide. Either the platform or the user agent
- * naming an Apple device is enough.
+ * naming an Apple device is enough, so the page never offers what the daemon,
+ * which sees only the user agent, refuses: Playwright's WebKit on Linux
+ * reports a Linux `navigator.platform` but sends Safari's Mac user agent, so
+ * both take it for Safari.
  *
  * @param {{vendor?: string, userAgent?: string, platform?: string} | undefined} nav
  * @returns {boolean}

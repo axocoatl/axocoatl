@@ -17,10 +17,15 @@ const MAC_CHROME = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 const IPHONE_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
 
 // What each browser reports as navigator.vendor, .platform and .userAgent.
-// The two Playwright rows were read from Playwright 1.64.1 on this Mac.
+// The Playwright rows were read from Playwright 1.64.1 on a Mac and on Linux
+// (aarch64; x86_64 differs only in the platform's machine). Playwright's
+// WebKit sends Safari's Mac user agent on Linux too, which is all the daemon
+// sees (src/preview_document.rs), so the page takes it for Safari as well.
+const PLAYWRIGHT_WEBKIT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15';
 const BROWSERS = [
   ['Safari on macOS', { vendor: APPLE, platform: 'MacIntel', userAgent: MAC_SAFARI }, true],
-  ['Playwright WebKit 27.2 on macOS', { vendor: APPLE, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15' }, true],
+  ['Playwright WebKit 27.2 on macOS', { vendor: APPLE, platform: 'MacIntel', userAgent: PLAYWRIGHT_WEBKIT }, true],
+  ['Playwright WebKit 27.2 on Linux', { vendor: APPLE, platform: 'Linux aarch64', userAgent: PLAYWRIGHT_WEBKIT }, true],
   ['Safari on iPhone', { vendor: APPLE, platform: 'iPhone', userAgent: IPHONE_SAFARI }, true],
   ['Safari on iPad, desktop site', { vendor: APPLE, platform: 'MacIntel', userAgent: MAC_SAFARI }, true],
   ['Chrome on iPhone (WebKit)', { vendor: APPLE, platform: 'iPhone', userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.7390.41 Mobile/15E148 Safari/604.1' }, true],
@@ -29,11 +34,12 @@ const BROWSERS = [
   ['no vendor, Safari\'s user agent', { userAgent: MAC_SAFARI }, true],
   ['Chrome on macOS', { vendor: GOOGLE, platform: 'MacIntel', userAgent: MAC_CHROME }, false],
   ['Playwright Chromium (headless) on macOS', { vendor: GOOGLE, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36' }, false],
+  ['Playwright Chromium (headless) on Linux', { vendor: GOOGLE, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.8078.4 Safari/537.36' }, false],
   ['Edge on macOS', { vendor: GOOGLE, platform: 'MacIntel', userAgent: `${MAC_CHROME} Edg/141.0.3537.57` }, false],
   ['Opera on macOS', { vendor: GOOGLE, platform: 'MacIntel', userAgent: `${MAC_CHROME} OPR/122.0.0.0` }, false],
   ['Chrome emulating an iPhone', { vendor: GOOGLE, platform: 'iPhone', userAgent: IPHONE_SAFARI }, false],
   ['Firefox on macOS', { vendor: '', platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:143.0) Gecko/20100101 Firefox/143.0' }, false],
-  ['WebKit on Linux', { vendor: APPLE, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15' }, false],
+  ['WebKit on Linux with its own user agent', { vendor: APPLE, platform: 'Linux x86_64', userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15' }, false],
   ['Chrome on Windows', { vendor: GOOGLE, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36' }, false],
   ['no navigator', undefined, false],
   ['an empty navigator', {}, false],

@@ -93,6 +93,18 @@ WebKit on x86_64. Set `AXOCOATL_E2E_BINARY` to select a binary other
 than `target/debug/axocoatl`; `npm run test:no-build` deliberately skips the
 Cargo build and uses that selected or default binary as-is.
 
+Playwright's WebKit sends Safari's Mac user agent on Linux too
+(`Macintosh; Intel Mac OS X 10_15_7`, while `navigator.platform` names
+Linux), from every page Playwright or a page opens. The daemon knows Safari
+by its user agent alone (`src/preview_document.rs`), and the workbench
+decides as the daemon does, so on both systems the WebKit leg gets what
+Safari gets: a Preview stays embedded and a top-level Preview page is
+refused. A tab that WebKit on Linux opens on its own (Control-click) is the
+exception: its first request carries WebKit's own `X11; Linux` user agent,
+and the daemon serves it as WebKit on Linux. Whether the browser keeps a
+`Domain=localhost` cookie is the engine's own: WebKit on macOS keeps it,
+WebKit on Linux refuses it, and the journeys assert each.
+
 On Linux, Playwright's WebKit loads everything through one network process
 that uses the system's libsoup, and that process sometimes crashes when a
 reload or a navigation cancels requests that are still in flight: libsoup
@@ -364,17 +376,18 @@ the Preview and failure paths called out below.
 - Opening the workbench at a loopback IP proves the product's canonical
   `127.0.0.1` → `localhost` document redirect. Preview cookie coverage checks
   that an ordinary embedded write is unavailable under modern third-party
-  policy and reaches nothing. In Chromium and WebKit on Linux, **Open full
+  policy and reaches nothing. In Chromium, **Open full
   preview** opens the exact virtual URL with no opener, and host-only cookies
   work top-level and reach neither the workbench nor another Session/port
   origin. The top-level page also tries, for `Domain=localhost`, a cookie that
   is not ASCII, a forged `axocoatl-token-<port>` and `-signed-in` cookie and
-  40 cookies of 1 KB, which those engines refuse. WebKit on macOS (Safari)
-  would accept them (`operate/security.mdx`), so there the daemon refuses a
-  Preview page that would run top-level (`src/preview_document.rs`) and the
-  workbench keeps the Preview embedded (`static/ui/preview-embedding.js`).
+  40 cookies of 1 KB, which Chromium refuses. Safari would accept them
+  (`operate/security.mdx`), so there the daemon refuses a Preview page that
+  would run top-level (`src/preview_document.rs`) and the workbench keeps the
+  Preview embedded (`static/ui/preview-embedding.js`); WebKit gets the same on
+  macOS and Linux, because it sends Safari's user agent on both.
   This journey's Preview is served by Playwright, so the daemon never sees
-  its requests; there it asserts
+  its requests; in WebKit it asserts
   that Open full preview has no address and says why, that the frame has no
   `allow-popups`, and that the Preview's own `window.open` of its address, a
   `target=_blank` link or form, a Command-click its script makes up and a
@@ -389,45 +402,52 @@ the Preview and failure paths called out below.
   conversation, a web-search citation (click, Command-click, middle click,
   context menu, drag), `window.open` (how the file editor opens a link), and an
   OSC 8 link a program prints in the Terminal (an `<ax-terminal>` whose
-  WebSocket Playwright answers). In WebKit on macOS each is refused, opens
-  nothing, and the workbench says why. Elsewhere nothing is refused: a click,
+  WebSocket Playwright answers). In WebKit, whose user agent is Safari's on
+  macOS and Linux alike (the journey asserts it), each is refused, opens
+  nothing, and the workbench says why. In Chromium nothing is refused: a click,
   `window.open` and the Terminal link open the address as before (the
   Terminal after xterm.js's own prompt), and whatever a Command-click or middle
   click opens, as that engine decides, is that address.
 - `preview-embedding.test.mjs` checks, without a browser, which browsers keep
   a Preview embedded (Safari's engine on macOS, iOS and iPadOS, by
-  `navigator.vendor`, then the user agent; not Chromium-based browsers,
-  Firefox, or WebKit on Linux) and which addresses the workbench then refuses
-  to open in a tab (any subdomain of `localhost`).
+  `navigator.vendor`, then the platform or the user agent, so Playwright's
+  WebKit on Linux too; not Chromium-based browsers, Firefox, or WebKit on
+  Linux with its own `X11; Linux` user agent) and which addresses the
+  workbench then refuses to open in a tab (any subdomain of `localhost`).
 - `preview-cookies.test.mjs` works through the real Preview proxy and a real
-  Session app on Podman, after signing in with the real link. Outside WebKit
-  on macOS it opens Preview addresses top-level itself, as someone who opens
-  one in a tab does, and sets the same cookies there; in WebKit on macOS it
+  Session app on Podman, after signing in with the real link. In Chromium
+  it opens Preview addresses top-level itself, as someone who opens
+  one in a tab does, and sets the same cookies there; in WebKit (taken for
+  Safari on macOS and Linux) it
   sets them from a page on another `*.localhost` address (the cookie echo,
   which Axocoatl does not serve), because the daemon refuses the Preview. It
   asserts that no request or WebSocket upgrade the app receives on either
   Preview port carries an `axocoatl-token-*` cookie (outside Safari the app
   gets its other cookies, an upgrade only the visible-ASCII ones, and its
-  WebSocket opens; in Safari the app receives no top-level request at all,
-  though Safari sends the forged cookies to those origins); that the app's
+  WebSocket opens; in WebKit the app receives no top-level request at all,
+  though WebKit on macOS sends the forged cookies to those origins); that the app's
   own `Set-Cookie` with `Domain=localhost` stays host-only on its Preview
   origin (the proxy removes `Domain`); that the workbench reloads, connects
   and reads the API; and that a browser that never signed in, holding a
   forged `-signed-in` cookie, gets the retry page then the sign-in page on
-  each navigation in Safari (the sign-in page at once elsewhere), never a
+  each navigation in WebKit on macOS (the sign-in page at once elsewhere), never a
   loop. Its third journey shows the real Preview in the workbench: in WebKit
-  on macOS Open full preview has no address, the frame has no
+  Open full preview has no address, the frame has no
   `allow-popups`, and the Preview's `window.open` of its address returns null
   and opens nothing. A real Command-click (Control-click on Linux) on a link
   inside the Preview's frame, and inside the Files view's frame for an HTML
   file, opens a tab: in WebKit on macOS the daemon's refusal page (403, no
   script, a link to the workbench), with no request to the app and no cookie
-  set; elsewhere the app, whose script ran. Playwright's WebKit reports no
+  set; elsewhere the app, whose script ran. In WebKit on Linux the first
+  request of a tab the browser opens on its own carries WebKit's own
+  `X11; Linux` user agent (Playwright gives Safari's only to the pages it or
+  a page opens), so the daemon serves it as it serves any WebKit on Linux,
+  and the journey asserts that user agent. Playwright's WebKit reports no
   request for a tab opened that way, so the tab's page is asserted. In every
   engine the app received no token cookie and the workbench stays signed in.
   Its last journey opens a Preview address typed into a tab and one reached
-  by a redirect from another site: in WebKit on macOS both get the refusal
-  page and the app none of the requests; elsewhere the app. In every engine a
+  by a redirect from another site: in WebKit both get the refusal
+  page and the app none of the requests; in Chromium the app. In every engine a
   page on the legacy `/api/sessions/<id>/proxy/<port>` path, signed in, gets
   403 and a line of text and the app is not asked, while `fetch()` from the
   workbench and a program with the token still reach it and its
