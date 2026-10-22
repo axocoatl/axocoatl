@@ -481,6 +481,41 @@ fn readiness_names_why_the_checks_are_not_ready() {
     assert_eq!(failure(&[Passed; 4], &older, &tree), Some(OLDER_TREE));
 }
 
+/// When a capture around the checks could not record the repository, the
+/// readiness reason says so in words with the capture's own reason, without
+/// the host's internal layers; without one it is the general reason.
+#[test]
+fn a_capture_that_could_not_record_the_repository_says_why() {
+    let tree = capture(Some("tree"), Some("head"));
+    let mut failed = capture(None, None);
+    failed.unavailable = Some(
+        "Session dispatch: IO error: repository command did not complete normally: \
+         TimedOut."
+            .into(),
+    );
+    assert_eq!(
+        not_captured(&[&tree, &failed]),
+        "The repository could not be captured around the checks, so they establish nothing: \
+         its state could not be recorded (repository command did not complete normally: \
+         TimedOut). Continue runs them again."
+    );
+    assert_eq!(not_captured(&[&tree, &capture(None, None)]), NOT_CAPTURED);
+    assert_eq!(not_captured(&[]), NOT_CAPTURED);
+    // A change whose patch reached the limit on a capture's temporary files
+    // is named as larger than Axocoatl records.
+    failed.unavailable = Some(format!(
+        "Session dispatch: {}",
+        super::super::repository_snapshot::TOO_LARGE_TO_CAPTURE
+    ));
+    assert_eq!(
+        not_captured(&[&tree, &failed]),
+        "The repository could not be captured around the checks, so they establish nothing: \
+         its state could not be recorded (The change is larger than Axocoatl records: its patch \
+         against HEAD passes the 64 MiB a capture may write, about 49 MiB of new binary file \
+         data). Continue runs them again."
+    );
+}
+
 /// Readiness does not count an Agent whose result was accepted after the
 /// checks' Before capture began; one accepted before it, or no longer
 /// current, does not invalidate it, and neither does the required reviewer.

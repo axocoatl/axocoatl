@@ -277,7 +277,8 @@ suite's `verdict` case is an `<error>` of type `busy` (exit code 7), `usage` (3)
 `--receipt` write nothing, since there is no run to record or sign; standard error says
 so. A finished run whose receipt could not be signed has the warning
 `receipt_unavailable`; `--receipt` then writes nothing, says why, and the exit code is
-the run's. With `--keep`, Keep runs first,
+the run's. A run whose receipt does not cover every path it changed has the warning
+`receipt_incomplete`, and standard error says so after where the receipt was written. With `--keep`, Keep runs first,
 so the `--record` file holds its `keep` event like `GET /api/runs/{run_id}/record`. When
 the run passed but one of the files could not be written, `axocoatl run` exits with that
 error's code instead of 0.

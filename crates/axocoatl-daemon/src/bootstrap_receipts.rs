@@ -413,7 +413,14 @@ impl AxocoatlDaemon {
     /// Outcome itself is written (so a run that has finished has its
     /// receipt settled). The data root's key is made the first time. The
     /// error says why there is no receipt; it never changes the verdict.
-    pub async fn seal_loadout_run(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), String> {
+    /// A receipt that does not cover every path the run changed lists the
+    /// warning `receipt_incomplete` among its own, and returns it for the
+    /// Outcome to carry: it, too, never changes the verdict.
+    pub async fn seal_loadout_run(
+        &self,
+        run_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<Option<axocoatl_session::run_outcome::RunWarning>, String> {
         let store = self
             .loadout_runs
             .store()
@@ -423,6 +430,13 @@ impl AxocoatlDaemon {
             return Err(format!("the Outcome names run {}", outcome.run_id));
         }
         let mut statement = self.receipt_statement(&manifest, outcome).await?;
+        let incomplete = (!statement.predicate.files.complete)
+            .then(|| receipt_incomplete(&statement.predicate.files.unattributed));
+        if let Some(warning) = &incomplete {
+            if !statement.predicate.warnings.contains(&warning.code) {
+                statement.predicate.warnings.push(warning.code.clone());
+            }
+        }
         let data_dir = self.data_root.path().to_path_buf();
         let (key, created) =
             tokio::task::spawn_blocking(move || receipt_key::load_or_create(&data_dir))
@@ -439,18 +453,20 @@ impl AxocoatlDaemon {
             .map_err(|error| format!("signing: {error}"))?;
         store
             .write_receipt(run_id, &receipt::envelope_file_bytes(&envelope))
-            .map_err(|error| format!("writing the receipt: {error}"))
+            .map_err(|error| format!("writing the receipt: {error}"))?;
+        Ok(incomplete)
     }
 
-    /// [`Self::seal_loadout_run`], or, when it fails, the warning the
-    /// Outcome carries instead of a receipt.
+    /// [`Self::seal_loadout_run`], and the warning the Outcome carries: the
+    /// receipt's own when it does not cover every path the run changed, or,
+    /// when signing fails, the one that says there is no receipt.
     pub async fn seal_or_warn(
         &self,
         run_id: &str,
         outcome: &RunOutcome,
     ) -> Option<axocoatl_session::run_outcome::RunWarning> {
         match self.seal_loadout_run(run_id, outcome).await {
-            Ok(()) => None,
+            Ok(incomplete) => incomplete,
             Err(reason) => {
                 tracing::warn!(run = %run_id, %reason, "a finished run could not be signed");
                 Some(receipt_unavailable(&reason))
@@ -518,6 +534,51 @@ impl AxocoatlDaemon {
             key_id: public.key_id(),
             line: public.line(&receipt_key::host_comment()),
         })
+    }
+}
+
+/// Most reasons the warning `receipt_incomplete` names, and most bytes of
+/// each.
+const INCOMPLETE_REASONS: usize = 3;
+const INCOMPLETE_REASON_BYTES: usize = 300;
+
+/// The warning of a finished run whose receipt does not cover every path the
+/// run changed, with why (`unattributed`, the receipt's own reasons), so a
+/// passing run's receipt is never read as proof of everything it left.
+pub fn receipt_incomplete(unattributed: &[String]) -> axocoatl_session::run_outcome::RunWarning {
+    let mut reasons: Vec<String> = unattributed
+        .iter()
+        .take(INCOMPLETE_REASONS)
+        .map(|reason| {
+            let reason = reason.trim().trim_end_matches('.');
+            if reason.len() <= INCOMPLETE_REASON_BYTES {
+                return reason.to_owned();
+            }
+            let mut end = INCOMPLETE_REASON_BYTES;
+            while !reason.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &reason[..end])
+        })
+        .collect();
+    if unattributed.len() > INCOMPLETE_REASONS {
+        reasons.push(format!(
+            "and {} more",
+            unattributed.len() - INCOMPLETE_REASONS
+        ));
+    }
+    let why = if reasons.is_empty() {
+        String::new()
+    } else {
+        format!(": {}", reasons.join("; "))
+    };
+    axocoatl_session::run_outcome::RunWarning {
+        code: receipt::RECEIPT_INCOMPLETE.into(),
+        message: format!(
+            "The receipt does not cover every path the run changed, so it does not prove what \
+             the run left{why}. Review the repository's changes themselves. The verdict and exit \
+             code are unchanged."
+        ),
     }
 }
 

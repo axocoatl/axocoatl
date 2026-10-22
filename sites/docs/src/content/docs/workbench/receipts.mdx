@@ -136,7 +136,11 @@ want those receipts accepted.
 The receipt is written just before the run's Outcome, so a run that has finished has its
 receipt settled. When it cannot be signed (the key cannot be read, say), the run gets the
 warning `receipt_unavailable` with the reason; the verdict and the exit code are never
-changed by it.
+changed by it. When it does not cover every path the run changed (a change of more than
+10,000 paths, say, whose captures do not list them), the run gets the warning
+`receipt_incomplete` with why, and the receipt lists it among its own warnings: a passing
+run's receipt then proves less than what the run left, and the verdict and the exit code
+are again unchanged.
 
 ## Verifying a receipt
 

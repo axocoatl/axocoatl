@@ -15,7 +15,7 @@ use crate::check_options::{
 use crate::execution_content::{
     ConditionProcessStatus, ExecutionContentError, ExecutionContentStore,
     RepositoryCheckDefinition, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
-    REPOSITORY_SNAPSHOT_COMMAND_V2,
+    REPOSITORY_SNAPSHOT_COMMAND_V2, REPOSITORY_SNAPSHOT_COMMAND_V3,
 };
 use crate::execution_store::DurableTurnSnapshot;
 use crate::turn_contract::{
@@ -88,8 +88,9 @@ pub fn group_of(graph: &TurnGraphSnapshot) -> Option<(CheckGroup, usize)> {
 
 /// Capture commands a check group may carry, newest first. A turn keeps the
 /// capture it was admitted with.
-const CAPTURE_COMMANDS: [&str; 3] = [
+const CAPTURE_COMMANDS: [&str; 4] = [
     REPOSITORY_SNAPSHOT_COMMAND,
+    REPOSITORY_SNAPSHOT_COMMAND_V3,
     REPOSITORY_SNAPSHOT_COMMAND_V2,
     REPOSITORY_SNAPSHOT_COMMAND_V1,
 ];
@@ -663,7 +664,18 @@ mod tests {
         )
         .unwrap();
         assert_ne!(current, previous);
-        for definitions in [current.clone(), earlier, previous] {
+        // 1.4's capture, which printed the whole patch however large.
+        let unbounded = check_definitions_with(
+            &checks,
+            &[CheckSettings {
+                timeout_ms: DEFAULT_CHECK_TIMEOUT_MS,
+                egress: false,
+            }],
+            REPOSITORY_SNAPSHOT_COMMAND_V3,
+        )
+        .unwrap();
+        assert_ne!(current, unbounded);
+        for definitions in [current.clone(), earlier, previous, unbounded] {
             let graph = graph_with(&mut content, &group, definitions.clone());
             assert_eq!(
                 admitted_check_definitions(&graph, &content, &group, &checks).unwrap(),

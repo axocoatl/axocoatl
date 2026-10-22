@@ -673,11 +673,13 @@ pub struct RunOutcome {
 
 /// Facts the verdict is decided from, apart from the Outcome lists.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct VerdictInputs {
+pub struct VerdictInputs<'a> {
     /// The loadout makes findings need attention (qa default; audit opt-in).
     pub fail_on_findings: bool,
     /// The final turn ended needing attention, failed or blocked.
     pub turn_needs_attention: bool,
+    /// Why, in words, when its record says ([`TurnObservation::attention_reason`]).
+    pub turn_attention_reason: Option<&'a str>,
     /// The wall clock or a budget ran out.
     pub budget_exhausted: bool,
     pub interrupted: bool,
@@ -695,7 +697,7 @@ impl RunOutcome {
     /// read, an unfinished turn, an
     /// exhausted budget, or (with `fail_on_findings`) a confirmed or
     /// reproduced finding needs attention. Nothing is ever silently a pass.
-    pub fn decide(&mut self, inputs: VerdictInputs) -> i32 {
+    pub fn decide(&mut self, inputs: VerdictInputs<'_>) -> i32 {
         let mut attention = Vec::new();
         let checks_failed = self
             .checks
@@ -771,7 +773,12 @@ impl RunOutcome {
             attention.push(format!("Findings unreadable for {}", areas.join(", ")));
         }
         if inputs.turn_needs_attention {
-            attention.push("A turn ended needing attention".into());
+            attention.push(match inputs.turn_attention_reason {
+                Some(reason) if !reason.trim().is_empty() => {
+                    format!("A turn ended needing attention: {}", reason.trim())
+                }
+                _ => "A turn ended needing attention".into(),
+            });
         }
         if inputs.budget_exhausted {
             attention.push("A budget or the wall clock ran out".into());
@@ -1197,6 +1204,45 @@ mod tests {
         let mut run = outcome();
         run.findings.push(finding(ReproClassification::Confirmed));
         assert_eq!(run.decide(inputs), exit_code::NEEDS_ATTENTION);
+    }
+
+    /// A turn that ended needing attention says why when its record does,
+    /// and only then.
+    #[test]
+    fn a_turn_needing_attention_says_why_when_it_is_known() {
+        let reason = "The repository could not be captured around the checks, so they establish \
+                      nothing: its state could not be recorded (the capture timed out).";
+        let mut run = outcome();
+        assert_eq!(
+            run.decide(VerdictInputs {
+                turn_needs_attention: true,
+                turn_attention_reason: Some(reason),
+                ..VerdictInputs::default()
+            }),
+            exit_code::NEEDS_ATTENTION
+        );
+        assert_eq!(
+            run.attention,
+            [format!("A turn ended needing attention: {reason}")]
+        );
+        for unknown in [None, Some(" ")] {
+            let mut run = outcome();
+            run.decide(VerdictInputs {
+                turn_needs_attention: true,
+                turn_attention_reason: unknown,
+                ..VerdictInputs::default()
+            });
+            assert_eq!(run.attention, ["A turn ended needing attention"]);
+        }
+        // A reason never makes a turn that did not need attention need it.
+        let mut run = outcome();
+        assert_eq!(
+            run.decide(VerdictInputs {
+                turn_attention_reason: Some(reason),
+                ..VerdictInputs::default()
+            }),
+            exit_code::PASS
+        );
     }
 
     #[test]

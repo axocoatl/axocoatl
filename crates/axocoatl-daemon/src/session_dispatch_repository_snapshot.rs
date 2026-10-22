@@ -3,7 +3,8 @@ use super::*;
 use axocoatl_session::execution_content::{
     is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
     RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES,
-    MAX_COMPARED_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT,
+    MAX_COMPARED_PATH_BYTES, MAX_PATCH_PREFIX_BYTES, MAX_RECORDED_PATCH_BYTES,
+    REPOSITORY_CAPTURE_SCRIPT,
 };
 use base64::Engine as _;
 
@@ -1157,12 +1158,28 @@ pub(crate) fn judged_changed_paths(
     (compared.before_sha256 == *before).then(|| compared.changed_paths.clone())
 }
 
+/// Why a capture whose patch reached the 64 MiB limit on its temporary
+/// files (exit 68) recorded nothing.
+pub(super) const TOO_LARGE_TO_CAPTURE: &str = "The change is larger than Axocoatl records: its \
+     patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new binary file \
+     data";
+
 pub(super) fn parse_capture(
     value: &serde_json::Value,
     observation: &mut ActivationRepositorySnapshot,
     mode: &CaptureMode,
 ) -> Result<()> {
-    if value.get("exit_code").and_then(serde_json::Value::as_i64) != Some(0)
+    let exit_code = value.get("exit_code").and_then(serde_json::Value::as_i64);
+    // A comparison whose list of changed paths is longer than one capture
+    // records (`MAX_COMPARED_PATH_BYTES` in base64) refuses it.
+    if matches!(mode, CaptureMode::Compare { .. }) && exit_code == Some(67) {
+        return Err(error("Repository capture changed too many paths to record"));
+    }
+    // A patch that reached the limit on a capture's temporary files.
+    if exit_code == Some(68) {
+        return Err(error(TOO_LARGE_TO_CAPTURE));
+    }
+    if exit_code != Some(0)
         || value
             .get("stdout_truncated")
             .and_then(serde_json::Value::as_bool)
@@ -1219,7 +1236,7 @@ pub(super) fn parse_capture(
     let patch = base64::engine::general_purpose::STANDARD
         .decode(field("patch_b64")?)
         .map_err(error)?;
-    if manifest.len() > 8192 || patch.len() > 512 * 1024 {
+    if manifest.len() > 8192 || patch.len() > MAX_RECORDED_PATCH_BYTES {
         return Err(error("Repository capture exceeds its declared bounds"));
     }
     observation.head = (head != "unborn").then(|| head.to_owned());
@@ -1229,11 +1246,19 @@ pub(super) fn parse_capture(
     observation.manifest_prefix = String::from_utf8(manifest).map_err(error)?;
     observation.patch_sha256 = Some(field("patch_sha256")?.to_owned());
     observation.patch_bytes = field("patch_bytes")?.parse().map_err(error)?;
+    if !is_digest(field("patch_sha256")?) {
+        return Err(error("Invalid captured patch digest"));
+    }
+    if patch.len() as u64 > observation.patch_bytes {
+        return Err(error("Captured patch is longer than its recorded size"));
+    }
+    // A patch too large to record whole arrives as its first bytes beside
+    // the whole patch's digest and size: it is shown, never kept as the
+    // protected patch, so nothing can apply or read files from part of it.
     observation.patch_complete = observation.patch_bytes == patch.len() as u64;
-    observation.patch_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&patch));
     observation.patch_prefix =
-        String::from_utf8_lossy(&patch[..patch.len().min(12288)]).into_owned();
-    let mut prefix_end = observation.patch_prefix.len().min(12288);
+        String::from_utf8_lossy(&patch[..patch.len().min(MAX_PATCH_PREFIX_BYTES)]).into_owned();
+    let mut prefix_end = observation.patch_prefix.len().min(MAX_PATCH_PREFIX_BYTES);
     while !observation.patch_prefix.is_char_boundary(prefix_end) {
         prefix_end -= 1;
     }
@@ -1258,6 +1283,9 @@ pub(super) fn parse_capture(
     {
         return Err(error("Captured patch digest differs from its exact bytes"));
     }
+    observation.patch_base64 = observation
+        .patch_complete
+        .then(|| base64::engine::general_purpose::STANDARD.encode(&patch));
     if base_fields == 10 {
         observation.changed_manifest =
             changed_manifest(field("changed_complete")?, field("changed_b64")?)?;
@@ -1568,6 +1596,130 @@ changed_b64={encoded}
                 parse_capture(&bad, &mut observation(), &CaptureMode::Observe).is_err(),
                 "{bad}"
             );
+        }
+    }
+
+    /// A capture whose patch is too large to record whole prints its first
+    /// bytes beside the whole patch's digest and size: the host records the
+    /// patch as incomplete, keeps the prefix only as text to show and keeps
+    /// no protected patch, so nothing can apply part of it. A prefix that
+    /// claims more than the patch, or a digest that is not one, refuses the
+    /// capture, as does a whole patch whose digest differs.
+    #[test]
+    fn a_patch_too_large_to_record_is_kept_as_its_digest_size_and_prefix() {
+        let prefix = "diff --git a/src/lib.rs b/src/lib.rs\n".repeat(400);
+        assert!(prefix.len() > MAX_PATCH_PREFIX_BYTES);
+        let with_patch = |patch: &[u8], bytes: usize, sha: &str| {
+            let mut value = output("");
+            let stdout = value["stdout"].as_str().unwrap().to_owned();
+            let empty_sha = format!("{:x}", Sha256::digest(b""));
+            let stdout = stdout
+                .replacen(
+                    &format!("patch_sha256={empty_sha}"),
+                    &format!("patch_sha256={sha}"),
+                    1,
+                )
+                .replacen("patch_bytes=0", &format!("patch_bytes={bytes}"), 1)
+                .replacen(
+                    "patch_b64=\n",
+                    &format!(
+                        "patch_b64={}\n",
+                        base64::engine::general_purpose::STANDARD.encode(patch)
+                    ),
+                    1,
+                );
+            value["stdout"] = serde_json::Value::String(stdout);
+            value
+        };
+        let whole_sha = digest('9');
+        let mut partial = observation();
+        parse_capture(
+            &with_patch(prefix.as_bytes(), 9 * 1024 * 1024, &whole_sha),
+            &mut partial,
+            &CaptureMode::Observe,
+        )
+        .unwrap();
+        assert!(!partial.patch_complete);
+        assert_eq!(partial.patch_base64, None);
+        assert_eq!(partial.patch_bytes, 9 * 1024 * 1024);
+        assert_eq!(partial.patch_sha256.as_deref(), Some(whole_sha.as_str()));
+        assert_eq!(partial.patch_prefix, prefix[..MAX_PATCH_PREFIX_BYTES]);
+        assert!(partial.tree_sha256.is_some());
+
+        let whole = b"diff --git a/a b/a\n".to_vec();
+        let sha = format!("{:x}", Sha256::digest(&whole));
+        let mut recorded = observation();
+        parse_capture(
+            &with_patch(&whole, whole.len(), &sha),
+            &mut recorded,
+            &CaptureMode::Observe,
+        )
+        .unwrap();
+        assert!(recorded.patch_complete);
+        assert_eq!(
+            recorded.patch_base64,
+            Some(base64::engine::general_purpose::STANDARD.encode(&whole))
+        );
+
+        for (patch, bytes, sha) in [
+            // More bytes than the patch it claims to begin.
+            (prefix.as_bytes(), 10, whole_sha.clone()),
+            // Not a digest.
+            (
+                prefix.as_bytes(),
+                9 * 1024 * 1024,
+                "not-a-digest".to_owned(),
+            ),
+            // A whole patch whose digest differs.
+            (whole.as_slice(), whole.len(), whole_sha.clone()),
+        ] {
+            let mut refused = observation();
+            assert!(parse_capture(
+                &with_patch(patch, bytes, &sha),
+                &mut refused,
+                &CaptureMode::Observe
+            )
+            .is_err());
+            assert_eq!(refused.patch_base64, None);
+        }
+        // A prefix beyond what one capture records is not a prefix.
+        let oversized = vec![b'x'; MAX_RECORDED_PATCH_BYTES + 1];
+        assert!(parse_capture(
+            &with_patch(&oversized, oversized.len() + 1, &whole_sha),
+            &mut observation(),
+            &CaptureMode::Observe
+        )
+        .is_err());
+        // A comparison that listed more changed paths than one capture
+        // records says so.
+        let compare = CaptureMode::Compare {
+            baseline: "/tmp/axocoatl-baseline.Qx12ab".into(),
+            expected: digest('d'),
+        };
+        let refused = serde_json::json!({"stdout": "", "exit_code": 67, "stdout_truncated": false});
+        let failure = parse_capture(&refused, &mut observation(), &compare)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            failure.contains("changed too many paths to record"),
+            "{failure}"
+        );
+        let failure = parse_capture(&refused, &mut observation(), &CaptureMode::Observe)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            failure.contains("failed or its result was truncated"),
+            "{failure}"
+        );
+        // A patch that reached the limit on a capture's temporary files says
+        // the change is larger than Axocoatl records, in every mode.
+        let too_large =
+            serde_json::json!({"stdout": "", "exit_code": 68, "stdout_truncated": false});
+        for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
+            let failure = parse_capture(&too_large, &mut observation(), mode)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(failure, format!("Session dispatch: {TOO_LARGE_TO_CAPTURE}"));
         }
     }
 

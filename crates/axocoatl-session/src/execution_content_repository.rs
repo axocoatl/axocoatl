@@ -10,7 +10,12 @@ pub const REPOSITORY_CAPTURE_SCRIPT: &str =
 /// Run at the exact working root to observe HEAD, the file manifest and the
 /// patch against HEAD. It writes only under its own temporary directory and
 /// takes no git locks. Git reads no configuration from outside the
-/// repository, and nothing the repository configures can run a program.
+/// repository, and nothing the repository configures can run a program. Its
+/// output stays within the smallest capture bound whatever the change: a
+/// patch larger than [`MAX_RECORDED_PATCH_BYTES`] is recorded by its digest,
+/// its size and its first [`MAX_PATCH_PREFIX_BYTES`]. A patch that reaches
+/// the 64 MiB limit on its temporary files (about 49 MiB of new binary file
+/// data) ends it with exit code 68: a change larger than it records.
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot.sh")
@@ -28,6 +33,23 @@ pub const REPOSITORY_SNAPSHOT_COMMAND_V2: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot_v2.sh")
 );
+
+/// The capture command of 1.4 and the first 1.5 builds, which printed the
+/// whole patch however large, so a change whose patch passed the capture's
+/// output bound could not be recorded. Turns admitted with it keep it.
+pub const REPOSITORY_SNAPSHOT_COMMAND_V3: &str = concat!(
+    "capture_mode=observe\n",
+    include_str!("execution_content_repository_snapshot_v3.sh")
+);
+
+/// Most bytes of the patch against `HEAD` one capture records whole
+/// ([`ActivationRepositorySnapshot::patch_base64`]). A larger patch is
+/// recorded by its digest and size and [`MAX_PATCH_PREFIX_BYTES`] of it.
+pub const MAX_RECORDED_PATCH_BYTES: usize = 512 * 1024;
+
+/// Most bytes of a patch one capture keeps as text to show
+/// ([`ActivationRepositorySnapshot::patch_prefix`]).
+pub const MAX_PATCH_PREFIX_BYTES: usize = 12 * 1024;
 
 /// Most bytes of the manifest lines of the paths that differ from `HEAD`
 /// one capture records ([`ActivationRepositorySnapshot::changed_manifest`]).
@@ -58,8 +80,16 @@ pub struct ActivationRepositorySnapshot {
     pub manifest_complete: bool,
     pub patch_sha256: Option<String>,
     pub patch_bytes: u64,
+    /// The patch's first bytes as text, at most [`MAX_PATCH_PREFIX_BYTES`],
+    /// to show; never file input.
     pub patch_prefix: String,
+    /// Whether the capture recorded the whole patch (`patch_base64`). A
+    /// capture whose patch is larger than [`MAX_RECORDED_PATCH_BYTES`], or
+    /// does not fit its output beside the rest, records only its digest,
+    /// size and prefix.
     pub patch_complete: bool,
+    /// The whole patch against `HEAD`, exactly, when `patch_complete`;
+    /// otherwise absent.
     pub patch_base64: Option<String>,
     pub unavailable: Option<String>,
     /// SHA-256 of the complete manifest a write-scope judgement compares:
@@ -309,7 +339,7 @@ fn validate_observation(
             .changed_manifest
             .as_ref()
             .is_some_and(|lines| lines.len() > MAX_CHANGED_MANIFEST_BYTES)
-        || observation.patch_prefix.len() > 12288
+        || observation.patch_prefix.len() > MAX_PATCH_PREFIX_BYTES
         || observation
             .unavailable
             .as_ref()
@@ -350,6 +380,9 @@ fn validate_observation(
             "invalid repository judgement capture",
         ));
     }
+    // The protected patch is only ever the whole patch: a capture that could
+    // not record it whole keeps its digest, size and a prefix to show, and
+    // nothing anything could apply.
     if let Some(encoded) = &observation.patch_base64 {
         use base64::Engine as _;
         if encoded.len() > 700 * 1024 {
@@ -358,7 +391,8 @@ fn validate_observation(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|_| ExecutionContentError::Invalid("invalid protected patch bytes"))?;
-        if bytes.len() > 512 * 1024
+        if bytes.len() > MAX_RECORDED_PATCH_BYTES
+            || !observation.patch_complete
             || bytes.len() as u64 != observation.patch_bytes
             || observation.patch_sha256.as_deref() != Some(sha256(&bytes).as_str())
         {
@@ -372,7 +406,7 @@ fn validate_observation(
         if !valid_digest(observation.tree_sha256.as_deref())
             || !valid_digest(observation.patch_sha256.as_deref())
             || observation.unavailable.is_some()
-            || observation.patch_base64.is_none()
+            || observation.patch_base64.is_some() != observation.patch_complete
         {
             return Err(ExecutionContentError::Invalid(
                 "invalid checked repository identity",
@@ -799,6 +833,268 @@ mod tests {
         let kept = capture(root, "capture_mode=keep\n").unwrap();
         assert_eq!(changed_lines(&kept), changed_lines(&output));
         let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
+    }
+
+    /// `len` bytes no compressor shrinks, as a compiled test program's would
+    /// barely be, at `path`.
+    fn random_file(path: &std::path::Path, len: usize, seed: u64) {
+        let mut state = seed | 1;
+        let mut bytes = Vec::with_capacity(len + 8);
+        while bytes.len() < len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            bytes.extend_from_slice(&state.to_le_bytes());
+        }
+        bytes.truncate(len);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// The output of a capture command at `root`: its exit code, standard
+    /// output and standard error.
+    fn run_command(root: &std::path::Path, command: &str) -> (i32, String, String) {
+        let output = std::process::Command::new("sh")
+            .args(["-c", command])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
+    /// The most a capture prints: the 768 KiB of output a check's capture
+    /// takes, less the 16 KiB kept for the fixed lines, plus those lines.
+    const MOST_PRINTED: usize = 768 * 1024 - 16 * 1024 + 1024;
+
+    fn decoded(output: &str, name: &str) -> Vec<u8> {
+        base64::engine::general_purpose::STANDARD
+            .decode(field(output, name))
+            .unwrap()
+    }
+
+    /// A change whose patch is far larger than a capture's output may take
+    /// (compiled test programs left in the repository root, more than 5 MiB
+    /// together, or one 9 MiB file) is captured in every mode within the
+    /// bound: the whole patch's digest and size and its first 12 KiB, exactly
+    /// the 1.4 capture's patch's, every other field the 1.4 capture's, and
+    /// the lines of every changed path, which 1.4 left out. The comparison
+    /// a write scope is judged on names every changed path.
+    #[test]
+    fn a_change_too_large_for_one_capture_is_recorded_by_digest_size_and_first_bytes() {
+        for files in [
+            &[("test_fix", 4_628_176), ("test_reproduction", 4_627_816)][..],
+            &[("big.bin", 9 * 1024 * 1024)][..],
+        ] {
+            let repo = sizeable_repository();
+            let root = repo.path();
+            let kept = capture(root, "capture_mode=keep\n").unwrap();
+            let baseline = field(&kept, "baseline").to_owned();
+            let expected = field(&kept, "judged").to_owned();
+            std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
+            for (index, (name, len)) in files.iter().enumerate() {
+                random_file(&root.join(name), *len, index as u64 + 7);
+            }
+            let (code, unbounded, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
+            assert_eq!(code, 0);
+            let whole = decoded(&unbounded, "patch_b64");
+            assert!(whole.len() > 5 * 1024 * 1024, "{}", whole.len());
+            assert!(
+                unbounded.len() > 1024 * 1024,
+                "1.4's capture overflowed its bound"
+            );
+            let observed = capture(root, "capture_mode=observe\n").unwrap();
+            assert!(observed.len() <= MOST_PRINTED, "{}", observed.len());
+            assert_eq!(field(&observed, "patch_bytes"), whole.len().to_string());
+            assert_eq!(field(&observed, "patch_sha256"), sha256(&whole));
+            assert_eq!(
+                decoded(&observed, "patch_b64"),
+                whole[..MAX_PATCH_PREFIX_BYTES]
+            );
+            for name in [
+                "format",
+                "head",
+                "tree",
+                "manifest_bytes",
+                "manifest_b64",
+                "patch_sha256",
+                "patch_bytes",
+            ] {
+                assert_eq!(field(&observed, name), field(&unbounded, name), "{name}");
+            }
+            assert_eq!(field(&unbounded, "changed_complete"), "0");
+            let mut changed: Vec<(String, String)> = changed_lines(&observed)
+                .unwrap()
+                .into_iter()
+                .map(|(path, _, kind, digest)| (path, format!("{kind} {digest}")))
+                .collect();
+            changed.sort();
+            let mut expected_lines = vec![(
+                "config/prod.js".to_owned(),
+                format!("file {}", sha256_text("prod, fixed\n")),
+            )];
+            for (name, _) in files {
+                let bytes = std::fs::read(root.join(name)).unwrap();
+                expected_lines.push(((*name).to_owned(), format!("file {}", sha256(&bytes))));
+            }
+            expected_lines.sort();
+            assert_eq!(changed, expected_lines);
+
+            let compared = capture(
+                root,
+                &format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
+            )
+            .unwrap();
+            assert!(compared.len() <= MOST_PRINTED, "{}", compared.len());
+            assert_eq!(field(&compared, "patch_sha256"), sha256(&whole));
+            assert_eq!(
+                decoded(&compared, "patch_b64"),
+                whole[..MAX_PATCH_PREFIX_BYTES]
+            );
+            let mut listed: Vec<String> = field(&compared, "changed")
+                .split(',')
+                .map(|encoded| {
+                    String::from_utf8(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(encoded)
+                            .unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            listed.sort();
+            let names: Vec<String> = expected_lines.into_iter().map(|(path, _)| path).collect();
+            assert_eq!(listed, names);
+            assert!(!std::path::Path::new(&baseline).exists());
+        }
+    }
+
+    /// Up to the 512 KiB the host records, a patch is printed whole and the
+    /// capture is byte for byte the 1.4 capture; one line more and only its
+    /// first 12 KiB is.
+    #[test]
+    fn a_patch_up_to_the_recorded_bound_is_printed_whole_as_before() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let (_, unchanged, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
+        assert_eq!(capture(root, "capture_mode=observe\n").unwrap(), unchanged);
+        std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
+        // An untracked text file whose patch is within one line of the bound.
+        let line = format!("{}\n", "x".repeat(63));
+        std::fs::write(root.join("notes.txt"), line.repeat(8000)).unwrap();
+        let (_, probe, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
+        let size: usize = field(&probe, "patch_bytes").parse().unwrap();
+        // Each line adds 65 bytes of patch ("+", 63 bytes, newline).
+        let fit = 8000 + (MAX_RECORDED_PATCH_BYTES - size) / 65;
+        std::fs::write(root.join("notes.txt"), line.repeat(fit)).unwrap();
+        let (_, before, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
+        let size: usize = field(&before, "patch_bytes").parse().unwrap();
+        assert!(
+            size <= MAX_RECORDED_PATCH_BYTES && size + 65 > MAX_RECORDED_PATCH_BYTES,
+            "{size}"
+        );
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(
+            output, before,
+            "a patch within the bound is printed as 1.4 did"
+        );
+        assert_eq!(field(&output, "changed_complete"), "1");
+        std::fs::write(root.join("notes.txt"), line.repeat(fit + 1)).unwrap();
+        let (_, over, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
+        let whole = decoded(&over, "patch_b64");
+        assert!(whole.len() > MAX_RECORDED_PATCH_BYTES);
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(
+            decoded(&output, "patch_b64"),
+            whole[..MAX_PATCH_PREFIX_BYTES]
+        );
+        assert_eq!(field(&output, "patch_bytes"), whole.len().to_string());
+        assert_eq!(field(&output, "changed_complete"), "1");
+    }
+
+    /// A patch that reaches the 64 MiB limit on a capture's temporary files
+    /// stops the capture with its own exit code, 68, which the host reads as
+    /// a change larger than Axocoatl records, in every mode: 50 MiB of new
+    /// random file data does (Git's binary patch writes 52 bytes as a line of
+    /// 67), and 49 MiB is still captured, as any change too large to record
+    /// whole.
+    #[test]
+    fn a_patch_past_the_temporary_file_limit_is_named_as_too_large() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        let baseline = field(&kept, "baseline").to_owned();
+        let expected = field(&kept, "judged").to_owned();
+        random_file(&root.join("big.bin"), 49 * 1024 * 1024, 21);
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        let size: u64 = field(&output, "patch_bytes").parse().unwrap();
+        assert!(size > 63 * 1024 * 1024 && size < 64 * 1024 * 1024, "{size}");
+        assert_eq!(field(&output, "changed_complete"), "1");
+        random_file(&root.join("big.bin"), 50 * 1024 * 1024, 21);
+        for mode in [
+            "capture_mode=observe\n".to_owned(),
+            format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
+        ] {
+            let (code, output, stderr) =
+                run_command(root, &format!("{mode}{REPOSITORY_CAPTURE_SCRIPT}"));
+            assert_eq!(code, 68, "{stderr}");
+            assert!(
+                stderr.contains("the patch is larger than one capture records"),
+                "{stderr}"
+            );
+            assert_eq!(output, "");
+        }
+        let _ = std::fs::remove_dir_all(&baseline);
+    }
+
+    /// A comparison whose changed list is long leaves the patch less room,
+    /// so the whole output still fits; a list longer than the host accepts
+    /// is refused before anything is printed, and the kept manifest is
+    /// removed as a finished comparison removes it.
+    #[test]
+    fn a_long_changed_list_takes_the_patchs_room_and_a_longer_one_is_refused() {
+        for (files, refused) in [(1700, false), (2100, true)] {
+            let repo = sizeable_repository();
+            let root = repo.path();
+            let kept = capture(root, "capture_mode=keep\n").unwrap();
+            let baseline = field(&kept, "baseline").to_owned();
+            let expected = field(&kept, "judged").to_owned();
+            std::fs::create_dir(root.join("generated")).unwrap();
+            for index in 0..files {
+                // 200-byte names: about 270 bytes each in the changed list.
+                let name = format!("{index:05}-{}", "n".repeat(194));
+                std::fs::write(root.join("generated").join(name), index.to_string()).unwrap();
+            }
+            random_file(&root.join("blob.bin"), 2 * 1024 * 1024, 3);
+            let (code, output, stderr) = run_command(
+                root,
+                &format!(
+                    "capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n\
+                     {REPOSITORY_CAPTURE_SCRIPT}"
+                ),
+            );
+            assert!(!std::path::Path::new(&baseline).exists());
+            if refused {
+                assert_eq!(code, 67, "{stderr}");
+                assert!(stderr.contains("more than one capture records"), "{stderr}");
+                assert_eq!(output, "");
+                continue;
+            }
+            assert_eq!(code, 0, "{stderr}");
+            assert!(output.len() <= MOST_PRINTED, "{}", output.len());
+            let listed = field(&output, "changed");
+            assert!(
+                listed.len() > 400 * 1024 && listed.len() <= 512 * 1024,
+                "{}",
+                listed.len()
+            );
+            assert_eq!(listed.split(',').count(), files + 1);
+            assert_eq!(decoded(&output, "patch_b64").len(), MAX_PATCH_PREFIX_BYTES);
+        }
     }
 
     #[test]

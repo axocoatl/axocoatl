@@ -247,6 +247,8 @@ struct Scenario {
     /// How each reviewer generation's model call fails after its stream
     /// started, by generation (index 0 is generation 1); `None` answers.
     reviewer_failures: Vec<Option<ReviewerFailure>>,
+    /// A shell command the lead runs with bash before it answers.
+    lead_command: Option<String>,
     lead_requests: std::sync::Mutex<Vec<(ActivationRef, String)>>,
     reviewer_requests: std::sync::Mutex<Vec<(ActivationRef, String)>>,
 }
@@ -256,6 +258,7 @@ impl Scenario {
             verdicts: verdicts.iter().map(|verdict| verdict.to_string()).collect(),
             lead_fails_first: false,
             reviewer_failures: vec![],
+            lead_command: None,
             lead_requests: std::sync::Mutex::new(vec![]),
             reviewer_requests: std::sync::Mutex::new(vec![]),
         })
@@ -375,6 +378,33 @@ impl LlmProvider for ScriptedProvider {
                 return Ok(Box::pin(tokio_stream::iter(vec![Err(
                     ProviderError::Stream("lead provider lost its connection".into()),
                 )])));
+            }
+            let first = self
+                .scenario
+                .lead_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(activation, _)| *activation == self.activation)
+                .count()
+                == 1;
+            if let Some(command) = self.scenario.lead_command.as_ref().filter(|_| first) {
+                return Ok(Box::pin(tokio_stream::iter(
+                    vec![
+                        StreamEvent::ToolCallDelta {
+                            index: Some(0),
+                            id: format!("lead-bash-{generation}"),
+                            name: Some("bash".into()),
+                            args_delta: serde_json::json!({ "command": command }).to_string(),
+                        },
+                        StreamEvent::Usage(TokenUsageStats::new(5, 5)),
+                        StreamEvent::Done {
+                            finish_reason: FinishReason::ToolUse,
+                        },
+                    ]
+                    .into_iter()
+                    .map(Ok),
+                )));
             }
             format!("Lead answer, generation {generation}")
         };
@@ -1139,6 +1169,170 @@ async fn actual_required_checks_and_review_complete_the_turn() {
         assert_eq!(review.verdict, Some(ReviewVerdict::Approve));
         assert_eq!(review.round, Some(rounds as u32));
         assert!(review.current);
+    }
+}
+
+/// A change too large for one capture to record whole: the lead leaves
+/// compiled test programs (more than 5 MiB together), or one 9 MiB file, in
+/// the root of a repository whose manifest is larger than a capture keeps.
+/// Every capture records the change (the whole patch's digest and size and
+/// its first bytes, never as file input), the turn is not paused for it,
+/// the required checks run on its tree, the reviewer is told the change is
+/// too large to show in full and given the files the turn changed, and the
+/// receipt names each file the lead wrote with the digest it has on disk.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_a_change_too_large_to_record_still_runs_the_checks_and_the_review() {
+    use super::super::activation_tests::{actual_sandbox, git_init};
+    use crate::run_attribution::{receipt_files, CaptureFacts, RunAttribution};
+    use axocoatl_session::execution_content::RepositorySnapshotPhase;
+    use axocoatl_session::receipt::Subject;
+    let ready = ConditionId::new("required-check:ready").unwrap();
+    for files in [
+        &[
+            ("test_fix", 4_628_176usize),
+            ("test_reproduction", 4_627_816),
+        ][..],
+        &[("big.bin", 9 * 1024 * 1024)][..],
+    ] {
+        let checks = vec![vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "test -f notes.txt".to_owned(),
+        ]];
+        let mut fixture = review_fixture_with(1, &checks, &["bash"], &["read_file", "bash"]).await;
+        let sandbox = actual_sandbox(&mut fixture.repository).await;
+        let root = fixture.repository._workspace.path().to_path_buf();
+        git_init(&root);
+        std::fs::create_dir(root.join("lib")).unwrap();
+        for index in 0..200 {
+            std::fs::write(
+                root.join(format!("lib/file-{index}.js")),
+                format!("{index}\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(root.join("notes.txt"), "draft\n").unwrap();
+        for args in [
+            &["add", "-A"][..],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ][..],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap()
+                .success());
+        }
+        let command = files
+            .iter()
+            .map(|(name, len)| format!("head -c {len} /dev/urandom > {name}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let scenario = Arc::new(Scenario {
+            lead_command: Some(command),
+            ..Arc::into_inner(Scenario::new(&["VERDICT: APPROVE\nNothing must change."])).unwrap()
+        });
+        let run = run_turn_within(&fixture, scenario.clone(), Duration::from_secs(300)).await;
+        sandbox.stop_checked().await.unwrap();
+
+        let run = run.unwrap();
+        let contract = run.outcome.snapshot.contract();
+        let view = run.controller.control_plane().unwrap();
+        let readiness = view.required_check_readiness.clone().unwrap();
+        let review = view.required_review.clone().unwrap();
+        // Not paused: one epoch, completed, the checks ready and the review
+        // approved, as any change's turn.
+        assert_eq!(
+            contract.state(),
+            Some(LogicalTurnState::Completed),
+            "readiness: {readiness:?}; review: {review:?}"
+        );
+        assert_eq!(contract.epochs().len(), 1);
+        assert!(contract.condition_satisfied(&ready));
+        assert_eq!(readiness.state, "passed", "{readiness:?}");
+        assert_eq!(review.state, "approved", "{review:?}");
+        let lead = contract
+            .activations()
+            .iter()
+            .find(|item| item.activation.node_id.as_str() == "lead-node")
+            .unwrap()
+            .activation
+            .clone();
+        let captures = run
+            .controller
+            .with_team_stores(|_, content, _| {
+                Ok(content
+                    .repository_snapshots(&run.outcome.snapshot, &lead)
+                    .unwrap())
+            })
+            .unwrap();
+        let written: u64 = files.iter().map(|(_, len)| *len as u64).sum();
+        for capture in &captures {
+            let content = &capture.content;
+            assert_eq!(content.unavailable, None, "{:?}", content.phase);
+            assert!(content.tree_sha256.is_some());
+            if content.phase == RepositorySnapshotPhase::Before {
+                assert!(content.patch_complete);
+                continue;
+            }
+            // The After capture and both captures around the checks.
+            assert!(!content.patch_complete, "{:?}", content.phase);
+            assert_eq!(content.patch_base64, None);
+            assert!(content.patch_bytes > written, "{}", content.patch_bytes);
+            assert!(content.patch_prefix.starts_with("diff --git "));
+            assert!(!content.manifest_complete);
+            assert!(content.changed_manifest.is_some());
+        }
+        assert_eq!(captures.len(), 4);
+        let requests = scenario.reviewer_requests.lock().unwrap().clone();
+        let (_, prompt) = requests.last().unwrap();
+        assert!(
+            prompt.contains("The change is too large to show in full: its patch against HEAD is"),
+            "{prompt}"
+        );
+        // The reviewer reads its input as JSON, where a newline is `\n`.
+        let listed = files
+            .iter()
+            .map(|(name, _)| format!("{name}\\n"))
+            .collect::<String>();
+        assert!(
+            prompt.contains(&format!(
+                "The {} files the turn changed:\\n{listed}",
+                files.len()
+            )),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("notes.txt"), "{prompt}");
+        // The receipt: every file the lead wrote, with its digest on disk.
+        let facts: Vec<CaptureFacts> = captures
+            .iter()
+            .map(|capture| CaptureFacts::from_snapshot(&capture.content))
+            .collect();
+        let mut attribution = RunAttribution::default();
+        attribution.add_activation("lead", &facts);
+        let receipt = receipt_files(&attribution, &[], &root);
+        assert!(receipt.facts.complete, "{:?}", receipt.facts);
+        let mut expected: Vec<Subject> = files
+            .iter()
+            .map(|(name, _)| {
+                let bytes = std::fs::read(root.join(name)).unwrap();
+                Subject::sha256(*name, axocoatl_session::receipt::sha256_hex(&bytes))
+            })
+            .collect();
+        expected.sort_by(|left, right| left.name.cmp(&right.name));
+        assert_eq!(receipt.subject, expected);
+        assert!(receipt.facts.read_at_finish.is_empty());
     }
 }
 

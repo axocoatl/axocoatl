@@ -54,6 +54,7 @@ fn capture(phase: CapturePhase, manifest: Option<&str>) -> CaptureFacts {
         manifest: manifest.map(str::to_string),
         patch: None,
         changed: None,
+        head: None,
     }
 }
 
@@ -306,6 +307,24 @@ fn last_turn_names_the_changed_paths_or_why_they_are_unknown() {
         (
             vec!["calc.py".to_string(), "tests/test_calc.py".to_string()],
             None
+        )
+    );
+
+    // An After capture that could not record the repository says why in
+    // its own words, without the host's internal layers.
+    let mut too_large = capture(CapturePhase::After, None);
+    too_large.unavailable = Some(
+        "Session dispatch: The change is larger than Axocoatl records: its patch against HEAD \
+         passes the 64 MiB a capture may write, about 49 MiB of new binary file data"
+            .into(),
+    );
+    assert_eq!(
+        attribute_activation(&[capture(CapturePhase::Before, Some(&before)), too_large]),
+        ActivationChanges::Unknown(
+            "its After capture is unavailable (The change is larger than Axocoatl records: its \
+             patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new \
+             binary file data)"
+                .into()
         )
     );
 

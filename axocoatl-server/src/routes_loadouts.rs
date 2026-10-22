@@ -691,7 +691,11 @@ impl RunHost for DaemonRunHost {
         self.state.read().await.loadout_run_stop_requested(run_id)
     }
 
-    async fn seal(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), String> {
+    async fn seal(
+        &self,
+        run_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<Option<axocoatl_session::run_outcome::RunWarning>, String> {
         self.state
             .read()
             .await

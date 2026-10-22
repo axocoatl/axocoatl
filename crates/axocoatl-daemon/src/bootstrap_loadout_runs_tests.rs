@@ -1560,6 +1560,33 @@ async fn receipts_child_body() {
         files.unattributed,
         vec!["turn turn-gone is not in the Session's history".to_string()]
     );
+    // A receipt that does not cover every path the run changed says so among
+    // its own warnings, and the run's Outcome carries the warning with why.
+    assert_eq!(
+        opened.statement.predicate.warnings,
+        vec!["receipt_incomplete".to_string()]
+    );
+    let recorded: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            daemon
+                .data_root
+                .path()
+                .join(axocoatl_session::run_record::RUN_RECORD_DIR)
+                .join(&restarted.run_id)
+                .join("outcome.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let warnings = recorded["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0]["code"], "receipt_incomplete");
+    assert_eq!(
+        warnings[0]["message"],
+        "The receipt does not cover every path the run changed, so it does not prove what the \
+         run left: turn turn-gone is not in the Session's history. Review the repository's \
+         changes themselves. The verdict and exit code are unchanged."
+    );
 
     // A key that cannot be read: the run keeps its verdict and says why it
     // has no receipt; the API says so too.
@@ -2347,7 +2374,11 @@ impl crate::loadout::RunHost for LiveHost {
         self.daemon.loadout_run_stop_requested(run_id)
     }
 
-    async fn seal(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), String> {
+    async fn seal(
+        &self,
+        run_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<Option<axocoatl_session::run_outcome::RunWarning>, String> {
         self.daemon.seal_loadout_run(run_id, outcome).await
     }
 

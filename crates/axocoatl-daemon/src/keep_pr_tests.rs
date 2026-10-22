@@ -565,6 +565,7 @@ fn capture(phase: CapturePhase) -> CaptureFacts {
         manifest: None,
         patch: None,
         changed: None,
+        head: None,
     }
 }
 
@@ -664,6 +665,42 @@ fn activation_changes_come_from_its_own_captures() {
     garbage.patch = Some(b"warning: something\n".to_vec());
     assert!(matches!(
         attribute_activation(&[before.clone(), garbage]),
+        ActivationChanges::Unknown(_)
+    ));
+    // A change whose patch is too large to record, in a repository whose
+    // manifest is too: on the same HEAD, the lines of the paths that differ
+    // from HEAD name what the activation changed, whatever was dirty before.
+    let mut large_before = capture(CapturePhase::Before);
+    large_before.head = Some("h".repeat(40));
+    large_before.changed = Some(format!(
+        "{}{}",
+        manifest_line("dirty.txt", "1"),
+        manifest_line("reverted.txt", "2")
+    ));
+    let mut large_after = capture(CapturePhase::After);
+    large_after.head = Some("h".repeat(40));
+    large_after.changed = Some(format!(
+        "{}{}{}",
+        manifest_line("dirty.txt", "1"),
+        manifest_line("src/lib.rs", "3"),
+        manifest_line("test_fix", "4")
+    ));
+    assert_eq!(
+        attribute_activation(&[large_before.clone(), large_after.clone()]),
+        ActivationChanges::Changed(set(&["reverted.txt", "src/lib.rs", "test_fix"]))
+    );
+    // HEAD moved: the lines are against different trees, and are not compared.
+    let mut moved = large_after.clone();
+    moved.head = Some("m".repeat(40));
+    assert!(matches!(
+        attribute_activation(&[large_before.clone(), moved]),
+        ActivationChanges::Unknown(_)
+    ));
+    // Lines left out of either capture are not guessed at.
+    let mut unlisted = large_after;
+    unlisted.changed = None;
+    assert!(matches!(
+        attribute_activation(&[large_before, unlisted]),
         ActivationChanges::Unknown(_)
     ));
     // Captures too large to compare, or missing, are never guessed at.

@@ -908,11 +908,16 @@ async fn write_receipt(
             let files = &opened.statement.predicate.files;
             let covered = opened.statement.subject.len();
             format!(
-                " (key {}, {covered} file{} covered, {} removed, {})",
+                " (key {}, {covered} file{} covered, {} removed, {}{})",
                 axocoatl_session::receipt::short_key_id(&opened.statement.predicate.signer.key_id),
                 if covered == 1 { "" } else { "s" },
                 files.removed.len(),
-                files.source
+                files.source,
+                if files.complete {
+                    ""
+                } else {
+                    "; it does not cover every path the run changed"
+                }
             )
         })
         .unwrap_or_default();

@@ -713,6 +713,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
     outcome.decide(VerdictInputs {
         fail_on_findings: report.fail_on_findings,
         turn_needs_attention: false,
+        turn_attention_reason: None,
         budget_exhausted: report.budget_exhausted,
         interrupted: false,
     });
