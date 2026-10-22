@@ -520,6 +520,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipping it.
 
 ### Fixed
+- **A change too large for one repository capture no longer stops the turn.** A writer
+  that left two compiled test programs (4.6 MB each) in the repository root, seen in the
+  release gate on the Rust fixture with `qwen3-coder:30b`, made the capture after it fail
+  with "repository command output is incomplete or exceeds its capture bound; partial
+  bytes cannot become file input": the capture printed the whole patch against `HEAD`,
+  every untracked file included, where its output may take 1 MiB (768 KiB around the
+  checks). The turn paused, the required checks and the review never ran, and the run
+  ended needing attention, saying only "A turn ended needing attention". A capture now
+  prints a patch whole up to 512 KiB, the most the host records, and a larger one as its
+  SHA-256, its size and its first 12 KiB, so its whole output stays under 768 KiB
+  whatever the change; that prefix is kept only as text to show, never as a patch
+  anything applies or reads files from. Such a change's checks run on its tree as any
+  change's do. The reviewer is told the change is too large to show in full, with its
+  size, the files the turn changed and the first part of the patch. Keep, Source
+  Control's Last turn and receipts attribute it from the lines of the changed paths that
+  each capture still records, compared on the same `HEAD`, when neither the manifest nor
+  the patch fits, and a receipt names each file with its digest as before. A write-scope
+  comparison listing more changed paths than the 512 KiB the host accepts is refused by
+  the capture itself, as the host refused it. Turns admitted with the earlier capture
+  keep it for their checks. A patch larger than 64 MiB, the limit on a capture's
+  temporary files (an 80 MiB untracked file, for example), still cannot be captured.
+  When a capture around the checks cannot record the repository, the checks' readiness
+  in the workbench and the run's Needs attention line now say why ("A turn ended
+  needing attention: The repository could not be captured around the checks, so they
+  establish nothing: its state could not be recorded (...)").
 - **Onboarding and doctor read the user's subordinate ids from `/etc/subuid` and
   `/etc/subgid`.** They judged the range only from `podman info`, which reports the user
   namespace Podman's pause process already holds. After a user's range was removed
