@@ -26,7 +26,8 @@
 //! message.
 //!
 //! Onboarding's OpenRouter step calls [`sign_in_for_onboarding`] and writes
-//! [`provider_yaml`] under the `providers:` of the configuration it writes.
+//! [`provider_yaml`] under the `providers:` of a configuration it writes new
+//! (an existing one is edited as `connect` edits it).
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -38,9 +39,9 @@ use axocoatl_daemon::provider_secrets::{
 };
 use axocoatl_daemon::secret_store;
 
-// Onboarding writes these lines in the configuration it writes.
-#[allow(unused_imports)]
-pub(crate) use super::openrouter_config::provider_yaml;
+// Onboarding writes these lines in a configuration it writes new, and edits
+// an existing one as `connect` does.
+pub(crate) use super::openrouter_config::{plan_connect, provider_yaml};
 pub(crate) use axocoatl_daemon::provider_secrets::OPENROUTER_SECRET;
 
 use super::browser::Opener;
@@ -121,6 +122,10 @@ pub(crate) struct SignIn {
     /// How long the browser sign-in may take.
     pub(crate) sign_in_time: Duration,
     pub(crate) endpoints: Endpoints,
+    /// The command a failure says to run again: `None` for `axocoatl
+    /// connect openrouter` (and its `--sign-in-timeout` after a timeout),
+    /// or onboarding's own command.
+    pub(crate) retry: Option<String>,
 }
 
 /// What a sign-in stored, without the key.
@@ -218,7 +223,17 @@ pub(crate) async fn sign_in(
         browser,
         sign_in_time,
         endpoints,
+        retry,
     } = request;
+    let command = retry.as_deref().unwrap_or("axocoatl connect openrouter");
+    let again = format!("Run `{command}` again to retry.");
+    let more_time = match &retry {
+        None => "Give it more time with --sign-in-timeout MINUTES.",
+        Some(_) => {
+            "For more time, sign in first with `axocoatl connect openrouter --sign-in-timeout \
+             MINUTES`, then run it."
+        }
+    };
     // Every refusal the store would make after the sign-in comes now,
     // before a key is made that would then be lost.
     secret_store::check_can_store(&data_dir, &secret).map_err(|error| {
@@ -287,7 +302,6 @@ pub(crate) async fn sign_in(
         minutes(sign_in_time)
     );
     let _ = out.flush();
-    let again = "Run `axocoatl connect openrouter` again to retry.";
     let returned = tokio::select! {
         returned = callback.wait(&pkce) => returned,
         () = tokio::time::sleep(sign_in_time) => {
@@ -305,7 +319,7 @@ pub(crate) async fn sign_in(
                 exit::NO_TOKEN,
                 format!(
                     "The OpenRouter sign-in was not completed within {}; nothing was \
-                     stored.{ignored} {again} Give it more time with --sign-in-timeout MINUTES.",
+                     stored.{ignored} {again} {more_time}",
                     minutes(sign_in_time)
                 ),
             ));
@@ -360,7 +374,7 @@ pub(crate) async fn sign_in(
             exit::UNVERIFIED,
             format!(
                 "could not get the key from OpenRouter: {}. Nothing was stored. Check the \
-                 network and run `axocoatl connect openrouter` again.",
+                 network and run `{command}` again.",
                 error.describe()
             ),
         ),
@@ -402,12 +416,12 @@ pub(crate) async fn sign_in(
 /// (opened with this computer's opener unless `no_browser`, the address
 /// printed either way), and store the key as the secret
 /// [`OPENROUTER_SECRET`] in `data_dir` (created if needed). Progress goes
-/// to standard error. It does not ask the BYOK question (onboarding asks
-/// it first) and writes no configuration: in the configuration onboarding
-/// writes, the whole OpenRouter part of `providers:` (its
-/// `openrouter_billing:` line and its `openrouter:` block) is
-/// [`provider_yaml`]`(&connected.secret)`; show [`connected_lines`]. Every
-/// [`Failure`] says that nothing was stored.
+/// to `out`, never the key; a failure says to run `retry` (onboarding's
+/// command) again. It does not ask the BYOK question (onboarding asks it
+/// first) and writes no configuration: the configuration onboarding writes
+/// names the secret in `api_key_secret`, with `openrouter_billing: credits`
+/// ([`provider_yaml`]`(&connected.secret)`); show [`connected_lines`].
+/// Every [`Failure`] says that nothing was stored.
 ///
 /// It installs no signal handling, so the process keeps its own: Ctrl-C,
 /// `SIGTERM` or a hang-up during the sign-in ends onboarding as it would at
@@ -415,13 +429,13 @@ pub(crate) async fn sign_in(
 /// atomic write). A caller that handles signals itself passes its own
 /// [`Interrupt`] to [`onboarding_sign_in`] and raises it instead; the
 /// sign-in then stops with [`exit::INTERRUPTED`].
-// Called by onboarding's OpenRouter step, which another change adds.
-#[allow(dead_code)]
 pub(crate) async fn sign_in_for_onboarding(
     data_dir: &Path,
     writer: Option<&str>,
     reviewer: Option<&str>,
     no_browser: bool,
+    retry: &str,
+    out: &mut (dyn Write + Send),
 ) -> Result<Connected, Failure> {
     let endpoints = Endpoints::openrouter().map_err(|error| failure(exit::FAILURE, error))?;
     // Never raised: signals keep the process's own handling.
@@ -432,20 +446,23 @@ pub(crate) async fn sign_in_for_onboarding(
         reviewer,
         Browser::for_this_computer(no_browser),
         endpoints,
-        &mut std::io::stderr(),
+        retry,
+        out,
         &interrupt,
     )
     .await
 }
 
-/// [`sign_in_for_onboarding`] with its browser, endpoints, output and
+/// [`sign_in_for_onboarding`] with its browser, endpoints and
 /// `interrupt`, which the caller raises to stop the sign-in.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn onboarding_sign_in(
     data_dir: &Path,
     writer: Option<&str>,
     reviewer: Option<&str>,
     browser: Browser,
     endpoints: Endpoints,
+    retry: &str,
     out: &mut (dyn Write + Send),
     interrupt: &Interrupt,
 ) -> Result<Connected, Failure> {
@@ -464,6 +481,7 @@ pub(crate) async fn onboarding_sign_in(
             browser,
             sign_in_time: Duration::from_secs(DEFAULT_SIGN_IN_MINUTES * 60),
             endpoints,
+            retry: Some(retry.to_string()),
         },
         out,
         interrupt,
@@ -929,6 +947,7 @@ pub(crate) async fn connect_and_configure(
                 flags.sign_in_timeout.unwrap_or(DEFAULT_SIGN_IN_MINUTES) * 60,
             ),
             endpoints,
+            retry: None,
         },
         out,
         interrupt,

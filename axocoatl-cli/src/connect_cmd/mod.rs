@@ -52,7 +52,7 @@ mod verify;
 #[cfg(test)]
 mod ink_model;
 #[cfg(test)]
-mod openrouter_tests;
+pub(crate) mod openrouter_tests;
 #[cfg(test)]
 mod tests;
 

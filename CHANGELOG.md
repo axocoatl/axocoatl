@@ -142,11 +142,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     credential (`codex-chatgpt` or `codex-openai`) on the run command instead of `auto`.
   - OpenRouter: separate writer (default `qwen/qwen3-coder`) and reviewer (default
     `openai/gpt-oss-120b`) models, the same model refused, the writer's output limit 4096
-    (it was 2048 for every Agent), the key from an environment variable or a hidden
-    prompt, and the key and both models checked before anything is written. Without an
-    OpenRouter key nothing is saved, and the step left gives the full `axocoatl onboard`
-    command again: the writer (`--writer claude-code`, `--writer codex` or a local
-    `--writer-model`), the reviewer and, when one was named, `--openrouter-key-env VAR`.
+    (it was 2048 for every Agent), and the key and both models checked before anything
+    is written. The key comes from a browser sign-in: at a terminal with no key yet,
+    onboarding offers **Sign in to OpenRouter in your browser (recommended)** first,
+    which runs `axocoatl connect openrouter`'s OAuth PKCE flow inline (the models checked
+    in OpenRouter's catalog, the sign-in page opened and its address printed, the
+    browser's return to a loopback port, which a Lima VM forwards to the host), stores
+    the key OpenRouter issues as the secret `openrouter` without showing it, and writes
+    `api_key_secret: openrouter` and `openrouter_billing: credits`, never the key. A key
+    connected before with `axocoatl connect openrouter` (the secret the configuration
+    names in `api_key_secret`, or `openrouter` when it names no key), when the secret
+    store holds it as doctor checks, is used without asking, at a terminal and under
+    `--yes`; one OpenRouter refuses is a step left that connects again. An environment
+    variable (`--openrouter-key-env VAR`, `OPENROUTER_API_KEY`, or one named at the
+    terminal) and a hidden prompt remain the other ways. Under `--yes` with no key,
+    nothing is asked and the step left says to run `axocoatl connect openrouter`, then
+    the same `axocoatl onboard` command. Without an OpenRouter key nothing is saved, and
+    the step left gives the full `axocoatl onboard` command again: the writer (`--writer
+    claude-code`, `--writer codex` or a local `--writer-model`), the reviewer and, when
+    one was named, `--openrouter-key-env VAR`.
   - The configuration holds `run.models`, the defaults `axocoatl run` uses for
     `writer_model` and `reviewer_model`, a `# Writer:` comment naming who writes (and
     Codex's credential), and the first free port from 8080 in `server.port`. An existing
@@ -430,7 +444,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--remove` deletes it and its line in the configuration, keeping the line while
   Agents still use OpenRouter. It never stores into, sends or removes a secret another
   command owns (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key).
-  Onboarding can call its sign-in, which leaves signal handling to the process.
+  Onboarding's OpenRouter step runs the same sign-in, which leaves signal handling to
+  the process; a failure there names the `axocoatl onboard` command to run again.
 - **`api_key_secret` for hosted providers.** `providers.<name>.api_key_secret` names a
   secret in the data root's store in place of `api_key`, so the key is not in the
   configuration file; the daemon reads it when it starts and logs, without a value,
@@ -824,8 +839,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     no Session.
   - Codex, billed to the ChatGPT plan (ChatGPT sign-in in the browser): the site's
     `fix-codex` command passed on `node-deps` and `python-pytest`, each receipt verified.
-  - OpenRouter, connected through the browser (`axocoatl connect openrouter`; no key
-    typed), with different writer and reviewer models: `axocoatl run fix` passed on
+  - OpenRouter, connected through the browser from onboarding (its browser sign-in; no
+    key typed), with different writer and reviewer models: `axocoatl run fix` passed on
     `node-deps` and `python-pytest`, and `fix-claude-code` with the OpenRouter reviewer
     on `node-deps`, each receipt verified.
   - The workbench in Safari, from the sign-in link to a commit: Open workspace refused
@@ -836,11 +851,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On Ubuntu 24.04 (aarch64) in a Lima VM, as a new user made with `adduser`: onboarding,
     answered live, installed Podman with apt and added a range of subordinate ids if the
     user had none, each with `sudo` after asking, and connected OpenRouter through the
-    browser (no key typed). It did not install Ollama: it does that only when a local
-    model is chosen. `axocoatl doctor` said ready, and with the OpenRouter models
-    onboarding configured, the README's command without `--model` passed on every
-    fixture (on `node-plain`, that fixture's own README's command), each receipt and
-    record verified.
+    browser from onboarding (its browser sign-in; no key typed). It did not install
+    Ollama: it does that only when a local model is chosen. `axocoatl doctor` said
+    ready, and with the OpenRouter models onboarding configured, the README's command
+    without `--model` passed on every fixture (on `node-plain`, that fixture's own
+    README's command), each receipt and record verified.
 
 ## [1.4.0] - 2026-10-14
 

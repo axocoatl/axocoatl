@@ -268,7 +268,8 @@ command to passing runs:
 
 - **macOS 26.6 on Apple silicon (48 GB)**, with Axocoatl, Podman and Ollama uninstalled
   first (the downloaded models kept). `axocoatl onboard` installed Podman and Ollama with
-  Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn.
+  Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn (OpenRouter
+  through onboarding's browser sign-in).
   `axocoatl run fix` with local models passed on Node.js (with and without
   dependencies), Python (pytest), Rust and Go repositories, and `fix-claude-code`,
   `fix-codex` and `fix` with OpenRouter models on Node.js and Python, each receipt
@@ -277,9 +278,9 @@ command to passing runs:
   link to a commit.
 - **Ubuntu 24.04 on arm64**, in a VM, as a new user: onboarding installed Podman with apt
   and added a range of subordinate ids if the user had none, each with `sudo` after
-  asking, and connected OpenRouter in the browser. With those OpenRouter models,
-  `axocoatl run fix` passed on the same Node.js, Python, Rust and Go repositories, each
-  receipt verified.
+  asking, and connected OpenRouter through its own browser sign-in. With those OpenRouter
+  models, `axocoatl run fix` passed on the same Node.js, Python, Rust and Go
+  repositories, each receipt verified.
 - **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install command, then
   onboarding with no terminal against a scripted model server (Podman already on the
   runner, no first-run sample), and `axocoatl run fix` on the same repositories, each

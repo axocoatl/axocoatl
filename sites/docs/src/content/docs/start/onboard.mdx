@@ -32,8 +32,9 @@ Axocoatl can use later through **Open workspace…** in the browser app.
 - A command that needs `sudo` asks for your password itself. With `--yes`, such a
   command runs only with `--allow-sudo`; otherwise it is listed as a step left.
 - Keys are never pasted into a command line. Claude Code and Codex sign in through
-  `axocoatl connect` in the browser; an OpenRouter key comes from an environment
-  variable or a hidden prompt.
+  `axocoatl connect` in the browser. For OpenRouter, onboarding signs you in in the
+  browser itself (or uses the key you connected with `axocoatl connect openrouter`);
+  an environment variable or a hidden prompt are the other ways.
 - Every command onboarding runs, with its exit status, is written to
   `~/Library/Logs/Axocoatl/onboard-<time>.log` on macOS and
   `~/.local/state/axocoatl/onboard-<time>.log` on Linux (`$XDG_STATE_HOME/axocoatl`
@@ -322,19 +323,51 @@ provider bills you and Axocoatl cannot count the cost. Native Sessions refuse it
 new account has none. It asks you to confirm that OpenRouter credits pay and the
 account has no BYOK keys, then asks for two models: the writer (default
 `qwen/qwen3-coder`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
-and refuses the same model for both. The writer's output limit is 4096 tokens. The key comes from
-`--openrouter-key-env VAR`, from the configuration when onboarding updates a setup
-that has one (a `${VAR}` reference is used when `VAR` is set; at a terminal you can
-answer no and enter another key), from `OPENROUTER_API_KEY` when it is set (the
-configuration then names the variable, not the key), or from a hidden prompt (the key
-is then stored in the owner-only configuration); before that prompt it says to create
-a key at `https://openrouter.ai/settings/keys` and add credits at
-`https://openrouter.ai/settings/credits`. Without a key nothing is saved, and the step
-left gives the `axocoatl onboard` command with the writer and models you chose (Codex
-asks again which account pays). With `--writer openrouter` the
-reviewer runs on OpenRouter too; a `--reviewer ollama:…` is a usage error. Before writing anything, onboarding
-checks that OpenRouter accepts the key and lists both models. OpenRouter uses your
-OpenRouter credits; BYOK is not supported for native Sessions.
+and refuses the same model for both. The writer's output limit is 4096 tokens.
+
+The key, in this order:
+
+1. `--openrouter-key-env VAR`: the configuration names the variable, not the key.
+2. A key you connected in the browser: the secret the configuration names in
+   `api_key_secret`, or, when it names no key, the secret `openrouter` that
+   `axocoatl connect openrouter` stores. When Axocoatl's secret store holds it (the
+   check `axocoatl doctor` makes), onboarding uses it without asking, at a terminal
+   and with `--yes`.
+3. The key the configuration has when onboarding updates a setup: a `${VAR}`
+   reference is used when `VAR` is set; at a terminal you can answer no and give
+   another key.
+4. `OPENROUTER_API_KEY` when it is set, after asking (the configuration then names
+   the variable, not the key).
+5. At a terminal, onboarding asks how to get the key:
+   - **Sign in to OpenRouter in your browser (recommended)**, the default: the same
+     sign-in as [`axocoatl connect openrouter`](/configure/providers/#configure-openrouter).
+     It checks both models in OpenRouter's catalog, opens OpenRouter's sign-in page
+     in your browser and prints its address, waits up to 10 minutes for the browser
+     to return to `http://127.0.0.1:<port>/callback`, and stores the key OpenRouter
+     issues as the secret `openrouter` in Axocoatl's secret store (`0600`), never
+     showing it. The configuration gets `api_key_secret: openrouter` and
+     `openrouter_billing: credits`, never the key. The callback is a loopback port,
+     so from a VM, open the link in a browser that can reach that port (Lima
+     forwards a guest's loopback ports to the host; elsewhere, forward it with
+     `ssh -L`). Cancelling in the browser or running out of time stores nothing, and
+     the step left says to run onboarding again.
+   - **Read it from an environment variable**: you name it (default
+     `OPENROUTER_API_KEY`); the configuration names the variable, not the key.
+   - **Enter it at a hidden prompt**: the key is then stored in the owner-only
+     configuration. Before the prompt, onboarding says to create a key at
+     `https://openrouter.ai/settings/keys` and add credits at
+     `https://openrouter.ai/settings/credits`.
+
+With `--yes` and no key from 1 to 4, nothing is asked: the step left says to sign in
+with `axocoatl connect openrouter` first, then run the same `axocoatl onboard` command
+again, which uses that key. Without a key nothing is saved, and the step left gives the
+`axocoatl onboard` command with the writer and models you chose (Codex asks again which
+account pays). With `--writer openrouter` the reviewer runs on OpenRouter too; a
+`--reviewer ollama:…` is a usage error. Before writing anything, onboarding checks that
+OpenRouter accepts the key and lists both models (after a sign-in, the sign-in has
+checked both). A key you connected that OpenRouter refuses is a step left that signs
+in again with `axocoatl connect openrouter`. OpenRouter uses your OpenRouter credits;
+BYOK is not supported for native Sessions.
 
 ### Step 4: the configuration
 
@@ -438,7 +471,7 @@ Add any of the flags in the table to answer the other questions.
 
 | Flag | Meaning |
 | --- | --- |
-| `--yes` | Answer yes to every question. A `sudo` step also needs `--allow-sudo`; a sign-in also needs `--connect` and a terminal, otherwise it is a step left |
+| `--yes` | Answer yes to every question. A `sudo` step also needs `--allow-sudo`; the Claude Code and Codex sign-ins also need `--connect` and a terminal, otherwise each is a step left. OpenRouter's key must already be there: one you connected with `axocoatl connect openrouter`, the configuration's, `--openrouter-key-env` or `OPENROUTER_API_KEY`; otherwise the step left says to connect it |
 | `--writer` | Who writes the code (Step 1). With `--update` and without it, the writer the setup has |
 | `--reviewer`, `--writer-model` | The models as `ollama:MODEL` or `openrouter:VENDOR/MODEL` (a Claude Code writer model is `anthropic:MODEL`, a Codex one `openai:MODEL`). The same model for both, or a non-OpenRouter reviewer with `--writer openrouter`, is a usage error |
 | `--ollama-url` | The Ollama server native Sessions use (default `http://localhost:11434`); it must be on this computer |
@@ -446,8 +479,8 @@ Add any of the flags in the table to answer the other questions.
 | `--machine-cpus`, `--machine-memory` | The size of a new Podman machine (memory in MiB) |
 | `--pull`, `--no-pull` | Pull the chosen Ollama models, or leave the pulls as steps left |
 | `--recipe-build`, `--no-recipe-build` | Build the Claude Code or Codex sandbox image |
-| `--connect`, `--no-connect` | Sign in to Claude Code or Codex now |
-| `--openrouter-key-env VAR` | Read the OpenRouter key from `VAR`; the configuration names the variable |
+| `--connect`, `--no-connect` | Sign in to Claude Code or Codex now, or not |
+| `--openrouter-key-env VAR` | Read the OpenRouter key from `VAR` instead of a browser sign-in; the configuration names the variable |
 | `--port` | The workbench port |
 | `--start dev\|service\|none` | Step 6 (`none` with `--yes` when not given) |
 | `--smoke-test`, `--no-smoke-test` | Step 7 (off with `--yes` when not given) |
@@ -471,7 +504,8 @@ With a configuration already there, onboarding offers:
   up, and change only what is missing or what this run chose: a provider section it
   needs, the OpenRouter key when you chose another, `run`, and `server.port`. The
   writer, the run models, the Codex credential and the OpenRouter key the setup has are
-  kept unless a flag names others; `axocoatl onboard --update --port 8081` changes only
+  kept unless a flag names others (a key connected in the browser is used without
+  asking); `axocoatl onboard --update --port 8081` changes only
   the port. Everything else, comments included, stays as it was, and the change is
   shown as a diff first, with every secret value hidden.
 - **Replace it**: write a new configuration; the old file is backed up first and is
@@ -482,8 +516,9 @@ With a configuration already there, onboarding offers:
 <Aside type="caution" title="The user configuration can contain a key">
 An OpenRouter key typed at the hidden prompt is stored as plain text in a configuration
 file with owner-only permissions (`0600` on supported Unix systems). Axocoatl does not
-encrypt that file. Protect it and its backups, or give the key in an environment
-variable instead. Axocoatl does not load dotenv files.
+encrypt that file. Protect it and its backups, or sign in to OpenRouter in the browser
+instead (the key then stays in Axocoatl's secret store and the file only names it), or
+give the key in an environment variable. Axocoatl does not load dotenv files.
 </Aside>
 
 ## Default team

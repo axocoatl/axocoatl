@@ -292,6 +292,7 @@ async fn openrouter_without_a_key_says_where_to_get_one_and_saves_nothing() {
     if std::env::var("OPENROUTER_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
         answers.push(Answer::No);
     }
+    answers.push(Answer::Pick(2)); // the hidden prompt
     answers.push(Answer::Text(String::new())); // no key
     let mut o = onboarding(
         &shims,
@@ -316,15 +317,19 @@ async fn openrouter_without_a_key_says_where_to_get_one_and_saves_nothing() {
     );
     assert!(!output.contains("Step 4"), "{output}");
     assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert_eq!(
+        o.steps[0],
+        "Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder \
+         --reviewer openrouter:openai/gpt-oss-120b` and sign in to OpenRouter in your browser \
+         when it asks (add credits at https://openrouter.ai/settings/credits), or create a key \
+         at https://openrouter.ai/settings/keys and enter it at its hidden prompt"
+    );
+    // The browser sign-in is offered first.
     assert!(
-        o.steps[0].starts_with(
-            "Create an OpenRouter API key at https://openrouter.ai/settings/keys and add \
-             credits at https://openrouter.ai/settings/credits, then run `axocoatl onboard \
-             --writer openrouter --writer-model openrouter:qwen/qwen3-coder --reviewer \
-             openrouter:openai/gpt-oss-120b`"
+        output.contains(
+            "? How should Axocoatl get your OpenRouter key? → Enter it at a hidden prompt"
         ),
-        "{:?}",
-        o.steps
+        "{output}"
     );
     assert!(
         output.contains("Nothing was saved: no configuration was written."),

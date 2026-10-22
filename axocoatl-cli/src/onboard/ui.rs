@@ -16,7 +16,8 @@ pub(crate) enum Mode {
     /// A person answers at the terminal.
     Interactive,
     /// `--yes`: every question is answered yes; sudo also needs
-    /// `--allow-sudo`; sign-ins are skipped unless `--connect`.
+    /// `--allow-sudo`; the Claude Code and Codex sign-ins are skipped unless
+    /// `--connect`, and OpenRouter's browser sign-in always is.
     Yes,
     /// `--plan`: nothing changes; every action is printed instead.
     Plan,

@@ -141,8 +141,9 @@ pub enum StartChoice {
 /// `axocoatl onboard`.
 #[derive(Debug, Clone, Default, Args)]
 pub struct OnboardArgs {
-    /// Answer yes to every question (sudo also needs --allow-sudo; sign-ins
-    /// need --connect and a terminal)
+    /// Answer yes to every question (sudo also needs --allow-sudo; the Claude
+    /// Code and Codex sign-ins need --connect and a terminal; sign in to
+    /// OpenRouter first with `axocoatl connect openrouter`)
     #[arg(long, short = 'y')]
     pub yes: bool,
     /// Print what this computer has and every action onboarding would take,
@@ -191,11 +192,11 @@ pub struct OnboardArgs {
     /// Sign in to Claude Code or Codex now (needs a terminal)
     #[arg(long, conflicts_with = "no_connect")]
     pub connect: bool,
-    /// Do not sign in now
+    /// Do not sign in to Claude Code or Codex now
     #[arg(long)]
     pub no_connect: bool,
-    /// Read the OpenRouter key from this environment variable; the
-    /// configuration names the variable, not the key
+    /// Read the OpenRouter key from this environment variable instead of a
+    /// browser sign-in; the configuration names the variable, not the key
     #[arg(long, value_name = "VAR")]
     pub openrouter_key_env: Option<String>,
     /// The workbench port (default 8080, or the first free port after it)
@@ -317,12 +318,7 @@ impl OnboardArgs {
                 })?;
         }
         if let Some(variable) = &self.openrouter_key_env {
-            let valid = !variable.is_empty()
-                && variable
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                && !variable.starts_with(|c: char| c.is_ascii_digit());
-            if !valid {
+            if !is_variable_name(variable) {
                 return Err(format!(
                     "--openrouter-key-env {variable:?} is not an environment variable name"
                 ));
@@ -336,6 +332,13 @@ impl OnboardArgs {
         }
         Ok(())
     }
+}
+
+/// A letter or `_`, then letters, digits or `_`.
+pub(crate) fn is_variable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit())
 }
 
 /// What onboarding prints when it cannot ask and was not told to answer.
@@ -374,6 +377,13 @@ pub(crate) struct Onboarding {
     /// The data directory, when it is not the one the configuration selects
     /// (tests).
     pub(crate) data_dir_override: Option<PathBuf>,
+    /// Step 3D's browser sign-in: `None` for OpenRouter's sign-in page and
+    /// API, opened with this computer's browser; a test's otherwise (used
+    /// once).
+    pub(crate) openrouter_sign_in: Option<(
+        crate::connect_cmd::openrouter::Browser,
+        crate::connect_cmd::openrouter::Endpoints,
+    )>,
     /// What an existing configuration already has, kept by "Update this
     /// setup".
     pub(crate) kept: Kept,
@@ -396,6 +406,11 @@ pub(crate) struct Kept {
     pub(crate) codex_credential: Option<String>,
     /// `providers.openrouter.api_key` as written: a key, or `${NAME}`.
     pub(crate) openrouter_key: Option<zeroize::Zeroizing<String>>,
+    /// `providers.openrouter.api_key_secret`: the secret in Axocoatl's
+    /// secret store that holds the key (`axocoatl connect openrouter`, or
+    /// onboarding's browser sign-in, stores it). It takes the place of
+    /// `api_key`.
+    pub(crate) openrouter_key_secret: Option<String>,
     /// The Ollama models the existing configuration's Agents run, which
     /// "Update this setup" keeps (`config::update` writes onboarding's team
     /// only where there are no Agents). `None` when this run writes that
@@ -449,21 +464,32 @@ impl Kept {
                     })
                     .collect()
             });
-        let openrouter_key = existing
-            .and_then(|existing| existing.providers?.openrouter)
+        let openrouter = existing.and_then(|existing| existing.providers?.openrouter);
+        let openrouter_key_secret = openrouter
+            .as_ref()
+            .and_then(|openrouter| openrouter.get("api_key_secret"))
+            .and_then(serde_json::Value::as_str)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+        let openrouter_key = openrouter
+            .as_ref()
             .and_then(|openrouter| {
                 openrouter
                     .get("api_key")
                     .and_then(serde_json::Value::as_str)
                     .map(|key| zeroize::Zeroizing::new(key.to_string()))
             })
-            .filter(|key| !key.trim().is_empty() && !key.contains("your-key"));
+            .filter(|key| !key.trim().is_empty() && !key.contains("your-key"))
+            // The secret, when one is named, is the key (as the daemon
+            // reads it).
+            .filter(|_| openrouter_key_secret.is_none());
         Self {
             writer,
             writer_model: run.writer,
             reviewer: run.reviewer,
             codex_credential: marker.and_then(|marker| marker.credential),
             openrouter_key,
+            openrouter_key_secret,
             agent_models,
         }
     }
@@ -675,6 +701,7 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
         openrouter_api: openrouter::OPENROUTER_API.to_string(),
         socket_path: axocoatl_daemon::ipc::default_socket_path(),
         data_dir_override: None,
+        openrouter_sign_in: None,
         kept: Kept::default(),
         step_keys: Default::default(),
     };
@@ -1289,6 +1316,10 @@ fn settings(plan: &ConfigPlan) -> Vec<String> {
         Some(KeyRef::Value(_)) => {
             lines.push("OpenRouter key: stored in this owner-only file (never shown)".to_string())
         }
+        Some(KeyRef::Secret(name)) => lines.push(format!(
+            "OpenRouter key: read from Axocoatl's secret store (secret {name}) when Axocoatl \
+             starts, never written in this file"
+        )),
         None => {}
     }
     lines.push(format!("Workbench port: {}", plan.port));

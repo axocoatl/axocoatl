@@ -97,8 +97,9 @@ axocoatl service install --config /absolute/path/to/axocoatl.yaml
 separately. `axocoatl onboard` installs and starts the per-user service only when you
 choose **Always on** in its last steps (or pass `--start service`). It refuses to
 install a service while the configuration reads a hosted-provider key from a shell
-environment variable, which a service does not inherit; give onboarding the key at its
-hidden prompt instead.
+environment variable, which a service does not inherit; for OpenRouter, let onboarding
+sign you in in the browser instead (the key goes to Axocoatl's secret store, which the
+service reads), or give it the key at its hidden prompt.
 </Aside>
 
 ## Supply environment variables
