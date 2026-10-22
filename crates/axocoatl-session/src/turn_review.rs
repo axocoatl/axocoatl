@@ -278,6 +278,95 @@ pub fn describe_change(before: Option<&str>, after: &str, after_complete: bool) 
     described
 }
 
+/// The change a turn made when the capture taken after it could not record
+/// the whole patch against HEAD (`patch_bytes` bytes, more than one capture
+/// records). It says so, names the paths the turn changed, from the lines of
+/// the paths that differ from HEAD the captures recorded (`before`, taken
+/// when the turn began on the same HEAD, and `after`), and shows `prefix`,
+/// the first part of the patch. Bounded to [`MAX_CHANGE_BYTES`].
+pub fn describe_partial_change(
+    before: Option<&str>,
+    after: Option<&str>,
+    prefix: &str,
+    patch_bytes: u64,
+) -> String {
+    let mut text = format!(
+        "[The change is too large to show in full: its patch against HEAD is {patch_bytes} \
+         bytes, more than one repository capture records. Read the files themselves for the \
+         change.]\n"
+    );
+    match after.map(differing_paths) {
+        Some(after) => {
+            let before = before.map(differing_paths).unwrap_or_default();
+            let changed: Vec<String> = after
+                .iter()
+                .filter(|(path, entry)| before.get(*path) != Some(entry))
+                .map(|(path, (kind, _))| match kind.as_str() {
+                    "deleted" => format!("{path} (deleted)"),
+                    "link" => format!("{path} (symbolic link)"),
+                    _ => path.clone(),
+                })
+                .collect();
+            let reverted: Vec<&String> = before
+                .keys()
+                .filter(|path| !after.contains_key(*path))
+                .collect();
+            if changed.is_empty() && reverted.is_empty() {
+                text.push_str("\nThe turn changed no files.\n");
+            }
+            if !changed.is_empty() {
+                text.push_str("\nThe files the turn changed:\n");
+                for path in changed {
+                    text.push_str(&path);
+                    text.push('\n');
+                }
+            }
+            if !reverted.is_empty() {
+                text.push_str(
+                    "\nThese files had uncommitted changes when the turn began and now match \
+                     HEAD again:\n",
+                );
+                for path in reverted {
+                    text.push_str(path);
+                    text.push('\n');
+                }
+            }
+        }
+        None => text.push_str("\nThe capture could not list the changed files either.\n"),
+    }
+    text.push_str(&format!(
+        "\nThe first {} bytes of the patch against HEAD, which can include uncommitted changes \
+         made before the turn:\n{prefix}",
+        prefix.len()
+    ));
+    let mut described = bounded(&text, MAX_CHANGE_BYTES);
+    if described.len() < text.len() {
+        described.push_str(" Read the files themselves for the rest of the change.");
+    }
+    described
+}
+
+/// The paths a capture's lines of the paths that differ from HEAD name
+/// (`<base64 path>\t<mode>\t<kind>\t<digest>`), each with its kind and the
+/// rest of its line.
+fn differing_paths(lines: &str) -> std::collections::BTreeMap<String, (String, String)> {
+    use base64::Engine as _;
+    lines
+        .lines()
+        .filter_map(|line| {
+            let (encoded, rest) = line.split_once('\t')?;
+            let path = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .ok()?;
+            let kind = rest.split('\t').nth(1)?.to_owned();
+            Some((
+                String::from_utf8_lossy(&path).into_owned(),
+                (kind, rest.to_owned()),
+            ))
+        })
+        .collect()
+}
+
 /// Why the reviewer's view of the tree does not bind its verdict to
 /// `candidate`, the tree it was given, or `None` when it does. `before` and
 /// `after` are the trees the reviewer's own captures recorded when it
@@ -703,6 +792,70 @@ mod tests {
             large.len()
         )));
         assert!(cut.ends_with("the rest of the change.]"));
+    }
+
+    /// A change too large for one capture is described honestly: the
+    /// reviewer is told it is not shown in full and how large it is, given
+    /// the files the turn changed (not those it found changed and left
+    /// alone) and the first part of the patch, and the whole stays bounded.
+    #[test]
+    fn a_change_too_large_to_record_is_named_not_shown_as_whole() {
+        use base64::Engine as _;
+        let line = |path: &str, kind: &str, digest: char| {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(path);
+            match kind {
+                "deleted" => format!("{encoded}\t0\tdeleted\tmissing\n"),
+                _ => format!(
+                    "{encoded}\t644\t{kind}\t{}\n",
+                    digest.to_string().repeat(64)
+                ),
+            }
+        };
+        let before = [line("notes.txt", "file", 'a'), line("old.txt", "file", 'b')].concat();
+        let after = [
+            line("notes.txt", "file", 'a'),
+            line("src/lib.rs", "file", 'c'),
+            line("test_fix", "file", 'd'),
+            line("gone.rs", "deleted", '0'),
+        ]
+        .concat();
+        let prefix = "diff --git a/src/lib.rs b/src/lib.rs\n-a\n+b\n";
+        let change = describe_partial_change(Some(&before), Some(&after), prefix, 9_437_184);
+        assert!(
+            change.starts_with(
+                "[The change is too large to show in full: its patch against HEAD is 9437184 bytes"
+            ),
+            "{change}"
+        );
+        assert!(
+            change
+                .contains("The files the turn changed:\ngone.rs (deleted)\nsrc/lib.rs\ntest_fix\n"),
+            "{change}"
+        );
+        assert!(
+            !change.contains("notes.txt"),
+            "an earlier change is not the turn's: {change}"
+        );
+        assert!(
+            change.contains("now match HEAD again:\nold.txt\n"),
+            "{change}"
+        );
+        assert!(change.ends_with(&format!(
+            "The first {} bytes of the patch against HEAD, which can include uncommitted changes made before the turn:\n{prefix}",
+            prefix.len()
+        )));
+        let unlisted = describe_partial_change(None, None, prefix, 6_000_000);
+        assert!(unlisted.contains("could not list the changed files either"));
+        assert!(
+            !describe_partial_change(Some(&after), Some(&after), "", 6_000_000)
+                .contains("The files the turn changed")
+        );
+        let many: String = (0..4000)
+            .map(|index| line(&format!("generated/file-{index}.bin"), "file", 'e'))
+            .collect();
+        let cut = describe_partial_change(None, Some(&many), prefix, 6_000_000);
+        assert!(cut.len() < MAX_CHANGE_BYTES + 512);
+        assert!(cut.ends_with("Read the files themselves for the rest of the change."));
     }
 
     /// A verdict binds only when every tree the reviewer saw is the one it

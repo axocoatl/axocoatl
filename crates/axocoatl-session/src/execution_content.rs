@@ -61,8 +61,9 @@ use repository_snapshot::StandingRepositoryCheck;
 pub use repository_snapshot::{
     is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
     RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES,
-    MAX_COMPARED_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND,
-    REPOSITORY_SNAPSHOT_COMMAND_V1, REPOSITORY_SNAPSHOT_COMMAND_V2,
+    MAX_COMPARED_PATH_BYTES, MAX_PATCH_PREFIX_BYTES, MAX_RECORDED_PATCH_BYTES,
+    REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND, REPOSITORY_SNAPSHOT_COMMAND_V1,
+    REPOSITORY_SNAPSHOT_COMMAND_V2, REPOSITORY_SNAPSHOT_COMMAND_V3,
 };
 
 #[path = "execution_content_reattachment.rs"]

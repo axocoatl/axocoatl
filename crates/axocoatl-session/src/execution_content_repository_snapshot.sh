@@ -230,13 +230,59 @@ if [ "$capture_mode" != observe ]; then
 fi
 head_after=$(git rev-parse --verify HEAD 2>/dev/null || printf unborn)
 [ "$head_before" = "$head_after" ]
+if [ "$capture_mode" = compare ]; then
+  # An Agent's shell can reach the kept manifest; only the exact bytes the
+  # host recorded the digest of are compared.
+  if [ ! -f "$baseline/manifest" ] || [ -L "$baseline/manifest" ]; then
+    echo "the kept Before manifest is missing" >&2
+    exit 66
+  fi
+  cp "$baseline/manifest" "$scratch/baseline"
+  kept=$(sha256sum < "$scratch/baseline")
+  if [ "${kept%% *}" != "$expected" ]; then
+    echo "the kept Before manifest differs from the one recorded" >&2
+    exit 66
+  fi
+  sort "$scratch/baseline" "$scratch/judged-before" | uniq -u | cut -f 1 | sort -u > "$scratch/changed"
+fi
 tree=$(sha256sum < "$scratch/before")
 patch=$(sha256sum < "$scratch/patch")
+patch_size=$(wc -c < "$scratch/patch" | tr -d ' ')
+listed_size=0
+[ ! -f "$scratch/changed" ] || listed_size=$(wc -c < "$scratch/changed" | tr -d ' ')
+# What this prints stays within the smallest bound a capture runs under,
+# whatever the change: the 768 KiB of output a check's capture takes (the
+# host's own captures take 1 MiB). 16 KiB of it is kept for the fixed lines,
+# which take under 1 KiB. The 8 KiB manifest prefix takes 10,924 bytes in
+# base64 and, comparing, the changed list its own size: at most 512 KiB, the
+# longest the host accepts, so a longer one is refused here. The patch is
+# printed whole when it is at most the 512 KiB the host records and fits what
+# is left. Otherwise only its first 12 KiB is, the most of a patch the host
+# keeps when it cannot record it whole: with the whole patch's digest and
+# size beside it, the host records the patch as incomplete, never as file
+# input. The lines of the paths that differ from HEAD take what is left
+# after that, or are left out (below). In all, under 1 KiB + 768 KiB - 16 KiB.
+if [ "$listed_size" -gt 524289 ]; then
+  rm -rf -- "$baseline"
+  echo "the changed paths are more than one capture records" >&2
+  exit 67
+fi
+room=$((786432 - 16384 - 10924 - listed_size))
+if [ "$patch_size" -le 524288 ] && [ $(((patch_size + 2) / 3 * 4)) -le "$room" ]; then
+  shown=$patch_size
+else
+  shown=12288
+fi
+room=$((room - (shown + 2) / 3 * 4))
 printf 'format=2\nhead=%s\ntree=%s\n' "$head_before" "${tree%% *}"
 printf 'manifest_bytes=%s\nmanifest_b64=' "$(wc -c < "$scratch/before" | tr -d ' ')"
 head -c 8192 "$scratch/before" | base64 | tr -d '\n'
-printf '\npatch_sha256=%s\npatch_bytes=%s\npatch_b64=' "${patch%% *}" "$(wc -c < "$scratch/patch" | tr -d ' ')"
-base64 < "$scratch/patch" | tr -d '\n'
+printf '\npatch_sha256=%s\npatch_bytes=%s\npatch_b64=' "${patch%% *}" "$patch_size"
+if [ "$shown" -eq "$patch_size" ]; then
+  base64 < "$scratch/patch" | tr -d '\n'
+else
+  head -c "$shown" "$scratch/patch" | base64 | tr -d '\n'
+fi
 printf '\n'
 case $capture_mode in
   keep)
@@ -247,35 +293,16 @@ case $capture_mode in
     ;;
   compare)
     judged=$(sha256sum < "$scratch/judged-before")
-    # An Agent's shell can reach the kept manifest; only the exact bytes the
-    # host recorded the digest of are compared.
-    if [ ! -f "$baseline/manifest" ] || [ -L "$baseline/manifest" ]; then
-      echo "the kept Before manifest is missing" >&2
-      exit 66
-    fi
-    cp "$baseline/manifest" "$scratch/baseline"
-    kept=$(sha256sum < "$scratch/baseline")
-    if [ "${kept%% *}" != "$expected" ]; then
-      echo "the kept Before manifest differs from the one recorded" >&2
-      exit 66
-    fi
-    sort "$scratch/baseline" "$scratch/judged-before" | uniq -u | cut -f 1 | sort -u > "$scratch/changed"
     printf 'judged=%s\ncompared=%s\nchanged=' "${judged%% *}" "$expected"
     tr '\n' ',' < "$scratch/changed" | sed 's/,$//'
     printf '\n'
     rm -rf -- "$baseline"
     ;;
 esac
-# The lines of the paths that differ from HEAD, when the whole result still
-# fits the 768 KiB a capture's output may take: after the patch, the
-# manifest prefix and, comparing, the changed list, with 16 KiB to spare.
-# Beyond that, or beyond 10,000 paths, they are left out and say so.
-patch_size=$(wc -c < "$scratch/patch" | tr -d ' ')
-listed_size=0
-[ ! -f "$scratch/changed" ] || listed_size=$(wc -c < "$scratch/changed" | tr -d ' ')
+# The lines of the paths that differ from HEAD, when they fit the room left
+# above; beyond that, or beyond 10,000 paths, they are left out and say so.
 differ_count=$(wc -l < "$scratch/differ-lines" | tr -d ' ')
 differ_size=$(wc -c < "$scratch/differ-lines" | tr -d ' ')
-room=$((786432 - 16384 - (patch_size + 2) / 3 * 4 - 10924 - listed_size))
 if [ "$differ_count" -le 10000 ] && [ $(((differ_size + 2) / 3 * 4)) -le "$room" ]; then
   printf 'changed_complete=1\nchanged_b64='
   base64 < "$scratch/differ-lines" | tr -d '\n'

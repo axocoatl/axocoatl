@@ -54,6 +54,7 @@ fn capture(phase: CapturePhase, manifest: Option<&str>) -> CaptureFacts {
         manifest: manifest.map(str::to_string),
         patch: None,
         changed: None,
+        head: None,
     }
 }
 

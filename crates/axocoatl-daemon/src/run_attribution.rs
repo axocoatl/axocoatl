@@ -178,6 +178,8 @@ pub(crate) struct CaptureFacts {
     pub(crate) patch: Option<Vec<u8>>,
     /// The lines of the paths that differ from `HEAD`, when recorded.
     pub(crate) changed: Option<String>,
+    /// The `HEAD` the capture saw; `None` for an unborn one.
+    pub(crate) head: Option<String>,
 }
 
 impl CaptureFacts {
@@ -216,6 +218,7 @@ impl CaptureFacts {
                 .then(|| snapshot.manifest_prefix.clone()),
             patch,
             changed: snapshot.changed_manifest.clone(),
+            head: snapshot.head.clone(),
         }
     }
 
@@ -303,6 +306,19 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
             Ok(paths) => ActivationChanges::Changed(paths),
             Err(reason) => ActivationChanges::Unknown(reason),
         };
+    }
+    // A change whose patch is larger than one capture records, in a
+    // repository whose manifest is too: on the same HEAD, a path that differs
+    // from it in neither capture is as in HEAD in both, so the paths whose
+    // lines differ between the captures' lines of the paths that differ from
+    // HEAD are the ones the activation changed.
+    if let (Some(before_lines), Some(after_lines)) = (&before.changed, &after.changed) {
+        if before.head == after.head {
+            return match manifest_changes(before_lines, after_lines) {
+                Ok(paths) => ActivationChanges::Changed(paths),
+                Err(reason) => ActivationChanges::Unknown(reason),
+            };
+        }
     }
     ActivationChanges::Unknown(
         "its captures are larger than the recorded manifest and patch bounds, so they cannot be compared"

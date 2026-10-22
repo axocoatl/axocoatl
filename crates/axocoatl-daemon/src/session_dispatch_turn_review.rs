@@ -10,8 +10,9 @@ use super::*;
 use axocoatl_session::execution_content::{ActivationRepositorySnapshot, RepositorySnapshotPhase};
 use axocoatl_session::turn_checks::{group_of, CheckGroup};
 use axocoatl_session::turn_review::{
-    binding_failure, bounded, describe_change, parse_verdict, review_condition_id,
-    review_criterion, review_node, ReviewCriterion, ReviewProof, ReviewVerdict, MAX_ANSWER_BYTES,
+    binding_failure, bounded, describe_change, describe_partial_change, parse_verdict,
+    review_condition_id, review_criterion, review_node, ReviewCriterion, ReviewProof,
+    ReviewVerdict, MAX_ANSWER_BYTES,
 };
 use base64::Engine;
 
@@ -273,15 +274,38 @@ impl DispatchState {
                      or change files, so there is no change to show."
                 .to_owned(),
             Some(after) => {
-                let Some(after_patch) = patch(after) else {
-                    return Ok(Err(NOT_CAPTURED));
-                };
                 let moved = before
                     .as_ref()
                     .is_some_and(|before| before.head != after.head);
-                let earlier = before.as_ref().filter(|_| !moved).and_then(patch);
-                let mut change =
-                    describe_change(earlier.as_deref(), &after_patch, after.patch_complete);
+                let earlier = before.as_ref().filter(|_| !moved);
+                // A patch too large for one capture is never shown as if it
+                // were whole: the reviewer is told so, and given the files
+                // the turn changed and the first part of the patch.
+                let mut change = if after.patch_complete {
+                    let Some(after_patch) = patch(after) else {
+                        return Ok(Err(NOT_CAPTURED));
+                    };
+                    let mut change = describe_change(
+                        earlier.and_then(patch).as_deref(),
+                        &after_patch,
+                        after.patch_complete,
+                    );
+                    if earlier.is_some_and(|before| !before.patch_complete) {
+                        change = format!(
+                            "The capture taken when the turn began could not record its whole \
+                             patch, so this is every uncommitted change against HEAD, including \
+                             any made before the turn.\n{change}"
+                        );
+                    }
+                    change
+                } else {
+                    describe_partial_change(
+                        earlier.and_then(|before| before.changed_manifest.as_deref()),
+                        after.changed_manifest.as_deref(),
+                        &after.patch_prefix,
+                        after.patch_bytes,
+                    )
+                };
                 if moved {
                     change = format!(
                         "HEAD moved during the turn, so this is every uncommitted change against \
