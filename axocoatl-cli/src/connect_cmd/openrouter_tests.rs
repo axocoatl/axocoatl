@@ -17,8 +17,8 @@ use super::openrouter_pkce::challenge_for;
 use super::{exit, Failure, Interrupt};
 
 /// A key of OpenRouter's shape, unique to these tests.
-const KEY: &str = "sk-or-v1-0f1e2d3c4b5a69788796a5b4c3d2e1f0TESTKEYfedcba9876543210ab";
-const CODE: &str = "the-authorization-code";
+pub(crate) const KEY: &str = "sk-or-v1-0f1e2d3c4b5a69788796a5b4c3d2e1f0TESTKEYfedcba9876543210ab";
+pub(crate) const CODE: &str = "the-authorization-code";
 
 fn model(id: &str, tools: bool, output: &[&str], prompt: &str, completion: &str) -> Value {
     let parameters: Vec<&str> = if tools {
@@ -59,7 +59,7 @@ fn key_answer() -> Value {
 }
 
 /// A fake OpenRouter: the catalog, the exchange and the key's description.
-async fn openrouter(exchange: ResponseTemplate, key: ResponseTemplate) -> MockServer {
+pub(crate) async fn openrouter(exchange: ResponseTemplate, key: ResponseTemplate) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/models"))
@@ -81,15 +81,15 @@ async fn openrouter(exchange: ResponseTemplate, key: ResponseTemplate) -> MockSe
     server
 }
 
-fn issued() -> ResponseTemplate {
+pub(crate) fn issued() -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({"key": KEY, "user_id": "user_1"}))
 }
 
-fn described() -> ResponseTemplate {
+pub(crate) fn described() -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(key_answer())
 }
 
-fn endpoints(server: &MockServer) -> Endpoints {
+pub(crate) fn endpoints(server: &MockServer) -> Endpoints {
     Endpoints {
         auth_page: format!("{}/auth", server.uri()),
         api: Api::for_test(&format!("{}/api/v1", server.uri()), Duration::from_secs(5)),
@@ -98,12 +98,12 @@ fn endpoints(server: &MockServer) -> Endpoints {
 
 /// What the fake browser saw: the sign-in page's address.
 #[derive(Default)]
-struct Seen {
+pub(crate) struct Seen {
     address: Mutex<Option<String>>,
 }
 
 impl Seen {
-    fn query(&self, name: &str) -> Option<String> {
+    pub(crate) fn query(&self, name: &str) -> Option<String> {
         let address = self.address.lock().unwrap().clone()?;
         reqwest::Url::parse(&address)
             .ok()?
@@ -112,14 +112,14 @@ impl Seen {
             .map(|(_, value)| value.into_owned())
     }
 
-    fn opened(&self) -> bool {
+    pub(crate) fn opened(&self) -> bool {
         self.address.lock().unwrap().is_some()
     }
 }
 
 /// A browser that, given the sign-in page, returns to its callback with
 /// the query `answer(state)` (`None`: it never returns).
-fn browser(
+pub(crate) fn browser(
     answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
 ) -> (Browser, Arc<Seen>) {
     let seen = Arc::new(Seen::default());
@@ -146,7 +146,7 @@ fn browser(
 }
 
 /// A browser that signs in and returns OpenRouter's code with the state.
-fn signing_in() -> (Browser, Arc<Seen>) {
+pub(crate) fn signing_in() -> (Browser, Arc<Seen>) {
     browser(|state| Some(format!("code={CODE}&state={state}")))
 }
 
@@ -156,7 +156,7 @@ fn data_root() -> tempfile::TempDir {
     directory
 }
 
-fn stored(data_dir: &Path, name: &str) -> Option<String> {
+pub(crate) fn stored(data_dir: &Path, name: &str) -> Option<String> {
     axocoatl_daemon::secret_store::lock_secrets(data_dir, false)
         .unwrap()
         .and_then(|lock| lock.read(name).unwrap())
@@ -180,6 +180,7 @@ fn request(
         browser,
         sign_in_time,
         endpoints,
+        retry: None,
     }
 }
 
@@ -1125,6 +1126,7 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
         Some("openai/gpt-oss-120b"),
         browser,
         endpoints(&server),
+        "axocoatl onboard --writer openrouter",
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1145,6 +1147,7 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
         Some("qwen/qwen3-coder"),
         browser,
         endpoints(&server),
+        "axocoatl onboard --writer openrouter",
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1152,6 +1155,30 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
     .unwrap_err();
     assert_eq!(refused.code, exit::USAGE);
     assert!(!seen.opened());
+    // A failure names onboarding's command, not `connect`'s, to run again.
+    let directory = tempfile::tempdir().unwrap();
+    let data_dir = directory.path().join("data");
+    let (cancelling, _) = self::browser(|_| Some("error=access_denied".to_string()));
+    let cancelled = onboarding_sign_in(
+        &data_dir,
+        None,
+        Some("openai/gpt-oss-120b"),
+        cancelling,
+        endpoints(&server),
+        "axocoatl onboard --writer openrouter",
+        &mut Vec::new(),
+        &Interrupt::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(cancelled.code, exit::NO_TOKEN);
+    assert_eq!(
+        cancelled.message,
+        "The OpenRouter sign-in was cancelled in the browser (OpenRouter said: access_denied), \
+         so no key was made and nothing was stored. Run `axocoatl onboard --writer openrouter` \
+         again to retry."
+    );
+    assert_eq!(stored(&data_dir, OPENROUTER_SECRET), None);
 }
 
 /// A key or another value on `connect openrouter`'s command line is never
@@ -1579,6 +1606,7 @@ async fn the_callers_interrupt_stops_the_onboarding_sign_in() {
         Some("openai/gpt-oss-120b"),
         browser,
         endpoints(&server),
+        "axocoatl onboard --writer openrouter",
         &mut Vec::new(),
         &interrupt,
     )
@@ -1609,6 +1637,8 @@ fn the_onboarding_sign_in_leaves_signals_to_the_process() {
             None,
             None,
             true,
+            "axocoatl onboard",
+            &mut std::io::stderr(),
         ));
         // Reached only if a signal stopped the sign-in instead of the
         // process: the parent sees a normal exit and fails.

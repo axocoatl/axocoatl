@@ -136,7 +136,7 @@ Every finding had to come with an executable reproduction that a validator re-ra
 | An example `axocoatl run` summary: a `pages.py` fix "approved after 2 of 3 rounds by ollama:gpt-oss:20b", 412,907 input tokens | `README.md`, marketing home | It was written to show the format; no run printed it. | A summary labelled as the format, not a measurement (see Not measured). |
 | "A local writer. A stronger reviewer." and "a local writer can be reviewed by a stronger model" for the setup the commands use | marketing home, `README.md`, `llms.txt`, docs index card, `configure/cross-model-review` (also "Bigger local model", "Strong reviewer") | The commands' reviewer, `gpt-oss:20b`, is smaller than the 30B writer and unmeasured; only the gpt-oss 120B reviewer was measured (R2, R7). | "A different reviewer"; the measured 120B results keep their wording. |
 | "If the project stopped tomorrow, the executable you have would keep running" | marketing why page | 1.4.0 refused the Ollama Homebrew installed within days, because native Ollama Sessions accepted only the audited release line; 1.5.0 still refuses a new major Ollama release. | "Your receipts keep verifying offline with the executable you have" and the Ollama version policy as it is: 0.40.6 and later 0.x releases, a newer minor only through the contract probes, a new major release needing a newer Axocoatl. |
-| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | No hosted CI runner has run `axocoatl run`; workbench turns get no receipt. | "From your shell"; "every `axocoatl run` that finishes". |
+| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | When it was withdrawn, no hosted CI runner had run `axocoatl run`. The 1.5.0 release gate's CI leg now runs it on GitHub's Ubuntu runners, but only against a scripted model server, so a CI job with real models is still not verified. Workbench turns get no receipt. | "From your shell"; "every `axocoatl run` that finishes". |
 | A hosted reviewer through OpenRouter presented as part of the measured cross-model result | docs `configure/cross-model-review` (description and introduction), `understand/what-we-measured` ("How this maps to Axocoatl"), docs index card, `README.md` and `llms.txt` measured sections, marketing home and concepts pages | The measured cross-model result (R2, R7) used a local gpt-oss 120B reviewer. No OpenRouter reviewer was measured. | How to configure an OpenRouter reviewer stays documented; every page that cites the measured result says the reviewer was local and that OpenRouter reviewers were not measured. |
 
 ## Not measured
@@ -159,18 +159,14 @@ quality or performance claims about them.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and
   onboarding offers on a 48 GB Mac. It is smaller than its writer. How well it reviews has
   not been measured, and the pages that name it as a reviewer say so.
-- The `axocoatl run` summary on the README and the marketing home page shows the format of
-  the summary `axocoatl run fix` prints (a small Go repository whose check is
+  The local pair (`qwen3-coder:30b` and `gpt-oss:20b`) ran end to end on a 48 GB Mac in
+  the 1.5.0 release gate (path `C1-local` in `docs/RELEASE_GATE.md`; the signed evidence
+  bundle is under `release-evidence/1.5.0/`). That shows the pair runs there, not how well
+  it reviews.
+- The `axocoatl run` summary on the README and the marketing home page is an example of
+  the format `axocoatl run fix` prints (a small Go repository whose check is
   `go test ./...`, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing), not a
   measurement.
-<!-- VERIFIED-PENDING: restate from the final live runs -->
-<!--
-- The pair has run end to end on a 48 GB Mac (the run below).
-- The summary is the standard output of one run, copied verbatim: `axocoatl run fix` on
-  the 1.5.0 release candidate, Ollama 0.40.6, on a 48 GB Mac set up from a clean install
-  by `axocoatl onboard`; its receipt verified. Re-capture it from a run of the final
-  build, and name that build here.
--->
 - Speed of helpers or of parallel workers through Axocoatl (no speed claims).
 - Whether the default team, or any team, beats one Agent through Axocoatl beyond T1.
 

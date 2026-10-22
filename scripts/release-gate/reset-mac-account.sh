@@ -5,7 +5,8 @@
 # It runs only as the configured gate account (GATE_ACCOUNT, default
 # axo-newuser), never as root, and never as an account that owns the
 # machine's Homebrew. It stops this account's axocoatl daemons and removes
-# only this account's Axocoatl, Podman and Ollama state. It never touches the
+# only this account's Axocoatl, Podman and Ollama state (with --keep-models,
+# Ollama's downloaded models stay, but not its settings). It never touches the
 # gate's signing key (~/.axocoatl-gate-signer, or $GATE_SIGNER_DIR), so the
 # key listed in .axocoatl/gate-keys keeps signing. Homebrew packages are
 # uninstalled only with --dedicated-machine, on a Mac that exists for the
@@ -13,13 +14,17 @@
 #
 # Usage: reset-mac-account.sh [--keep-models] [--dedicated-machine]
 #                             [--dry-run] [--yes]
-#        reset-mac-account.sh --print-paths
-#   --keep-models        keep ~/.ollama (saves the 33 GB download; the run's
-#                        evidence then says "models cached")
+#        reset-mac-account.sh --print-paths [--keep-models]
+#   --keep-models        keep ~/.ollama's downloaded models (saves the 33 GB
+#                        download; the run's evidence then says "models
+#                        cached"), but still remove Ollama's settings,
+#                        ~/.ollama/server.json (onboarding writes it to turn
+#                        cloud models off) and onboarding's backups of it
 #   --dedicated-machine  also `brew uninstall podman ollama`
 #   --dry-run            print what would be removed, change nothing
 #   --yes                do not ask for the account name to confirm
-#   --print-paths        print the paths a reset removes under this HOME and
+#   --print-paths        print the paths a reset removes under this HOME (with
+#                        --keep-models, the ones that reset removes) and
 #                        exit; changes nothing and runs for any account
 set -u
 
@@ -60,8 +65,25 @@ reset_paths() {
     "$HOME/axocoatl-gate-work"
 }
 
+# Ollama's state: all of ~/.ollama, or with --keep-models only its settings
+# (server.json, where onboarding turns cloud models off, and onboarding's
+# backups of it), so the next onboarding finds cloud models on, as a new
+# user's Ollama has them.
+ollama_paths() {
+  if [ "$keep_models" = 1 ]; then
+    printf '%s\n' "$HOME/.ollama/server.json"
+    for backup in "$HOME"/.ollama/server.json.bak-*; do
+      [ -e "$backup" ] && printf '%s\n' "$backup"
+    done
+  else
+    printf '%s\n' "$HOME/.ollama"
+  fi
+  return 0
+}
+
 if [ "$print_paths" = 1 ]; then
   reset_paths
+  ollama_paths
   exit 0
 fi
 
@@ -104,9 +126,9 @@ fi
 while IFS= read -r path; do
   [ -e "$path" ] && add "rm -rf $path"
 done < <(reset_paths)
-if [ "$keep_models" = 0 ]; then
-  [ -e "$HOME/.ollama" ] && add "rm -rf $HOME/.ollama"
-fi
+while IFS= read -r path; do
+  [ -e "$path" ] && add "rm -rf $path"
+done < <(ollama_paths)
 if [ "$dedicated" = 1 ] && command -v brew >/dev/null 2>&1; then
   for formula in podman ollama; do
     brew list --formula "$formula" >/dev/null 2>&1 && add "brew services stop $formula" && add "brew uninstall $formula"
@@ -120,7 +142,10 @@ fi
 for action in "${actions[@]+"${actions[@]}"}"; do
   echo "  $action"
 done
-[ "$keep_models" = 1 ] && echo "  (keeping ~/.ollama: the next run's evidence records 'models cached')"
+[ "$keep_models" = 1 ] && echo "  (keeping ~/.ollama's downloaded models: the next run's evidence records 'models cached'; Ollama's settings, ~/.ollama/server.json, are removed, so onboarding turns its cloud models off again)"
+if [ "$dedicated" = 0 ] && { pgrep -u "$(id -u)" -f 'ollama serve' >/dev/null 2>&1 || pgrep -u "$(id -u)" -x Ollama >/dev/null 2>&1; }; then
+  echo "  (this account's Ollama is running and keeps the settings it read until it restarts: stop it, with \`brew services stop ollama\` or by quitting the Ollama app, before the run)"
+fi
 echo "  (keeping the gate's signing key in ${GATE_SIGNER_DIR:-$HOME/.axocoatl-gate-signer})"
 [ "$dry_run" = 1 ] && exit 0
 [ ${#actions[@]} -gt 0 ] || exit 0
@@ -161,9 +186,10 @@ while IFS= read -r path; do
   chmod -R u+w "$path" 2>/dev/null
   run rm -rf "$path"
 done < <(reset_paths)
-if [ "$keep_models" = 0 ] && [ -e "$HOME/.ollama" ]; then
-  run rm -rf "$HOME/.ollama"
-fi
+while IFS= read -r path; do
+  [ -e "$path" ] || continue
+  run rm -rf "$path"
+done < <(ollama_paths)
 if [ "$dedicated" = 1 ] && command -v brew >/dev/null 2>&1; then
   for formula in podman ollama; do
     if brew list --formula "$formula" >/dev/null 2>&1; then

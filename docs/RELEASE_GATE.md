@@ -408,8 +408,10 @@ Once per gate account (most of it persists):
 3. `gh auth login`, and a private throwaway repository named
    `axocoatl-gate-…` (the gate force-resets its `main`) with "Allow GitHub
    Actions to create and approve pull requests" on.
-4. Fund an OpenRouter account. Nobody types, pastes or exports its key: it
-   comes from the browser sign-in, `axocoatl connect openrouter`.
+4. Fund an OpenRouter account. Nobody types, pastes or exports its key:
+   onboarding signs in to OpenRouter in the browser when it asks for the key
+   (the sign-in `axocoatl connect openrouter` runs) and stores the key
+   OpenRouter issues in Axocoatl's secret store, never in the configuration.
 5. On the founder's Mac (Option B): stop the founder's own Ollama
    (`brew services stop ollama`), Podman machine and `:11435` test server for
    the duration, with the founder's agreement; port 11434 and memory are
@@ -420,13 +422,15 @@ Once per gate account (most of it persists):
 Each release, the reset removes Axocoatl's data, and with it the sign-ins.
 The person signs in again in the browser when onboarding asks: Claude
 (`axocoatl connect claude-code`), ChatGPT (`axocoatl connect codex`) and
-OpenRouter (`axocoatl connect openrouter`), as a new user does.
+OpenRouter (onboarding's own browser sign-in, the one `axocoatl connect
+openrouter` runs), as a new user does.
 
 ```bash
 # In the gate account, in a checkout of the release candidate's commit.
 # ~/candidate holds axocoatl-vX.Y.Z-aarch64-apple-darwin.tar.gz and its .sha256
 # (from CI or release-artifact.sh); ~/candidate/site is the staged marketing site.
-# Add --keep-models to keep ~/.ollama, --dedicated-machine on a gate-only Mac.
+# Add --keep-models to keep Ollama's downloaded models, --dedicated-machine on a
+# gate-only Mac.
 scripts/release-gate/reset-mac-account.sh
 scripts/release-gate/newuser-mac.sh --release-dir ~/candidate --site ~/candidate/site \
   --pr-repo OWNER/axocoatl-gate-receipts
@@ -444,13 +448,20 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   - It stops the account's running `axocoatl dev` or `serve`. It then removes
     the account's Axocoatl data (including `~/.axocoatl`, the daemon's socket
     directory on macOS), logs, launch agents, Podman machines and container
-    storage, `~/.local/bin/axocoatl` and, unless `--keep-models`,
-    `~/.ollama` (the next run records "models cached").
+    storage, `~/.local/bin/axocoatl` and `~/.ollama`.
+  - With `--keep-models` it keeps Ollama's downloaded models (the next run
+    records "models cached") and removes only Ollama's settings,
+    `~/.ollama/server.json`, where onboarding turns cloud models off, and
+    onboarding's backups of it (`server.json.bak-*`). The next onboarding
+    then finds cloud models on, as a new user's Ollama has them, and turns
+    them off again. Ollama reads its settings when it starts: when one of the
+    account's Ollama servers is running, the plan says to stop it first
+    (`--dedicated-machine` stops and uninstalls it).
   - Only with `--dedicated-machine` does it `brew uninstall podman ollama`.
   - It never touches `~/.axocoatl-gate-signer`.
   - It shows the plan and asks for the account name first. `--dry-run` only
-    shows the plan; `--print-paths` lists the paths a reset removes and
-    changes nothing.
+    shows the plan; `--print-paths` lists the paths a reset removes (with
+    `--keep-models`, the paths that reset removes) and changes nothing.
   - Podman or Ollama installed from their own `.pkg` or app need the admin
     password to remove, and are left in place.
 - `newuser-mac.sh`:
@@ -468,9 +479,12 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   - It runs, in order, the paths `local`, `claude-code`, `codex`,
     `openrouter` and `workbench` (C2: `local` and `openrouter`). The person
     answers every onboarding consent prompt live, and the transcript is the
-    evidence that the prompts read correctly. A `--yes` rerun is allowed for
-    later commits of the same release; its OpenRouter path signs in with
-    `axocoatl connect openrouter`.
+    evidence that the prompts read correctly. On the `openrouter` path,
+    onboarding asks how to get the key; the person chooses the browser
+    sign-in (the default), and onboarding stores the key OpenRouter issues as
+    the secret `openrouter`. A `--yes` rerun is allowed for later commits of
+    the same release; its OpenRouter path signs in first with `axocoatl
+    connect openrouter`, and onboarding then uses that key without asking.
   - Optional paths: `workbench-chromium`, `recovery` (`podman machine stop`,
     then a run must start the machine) and `real-repo`.
   - Each step's wall time and download (interface counters) and the free
@@ -582,14 +596,20 @@ model download dominates unless models are cached.
   - Onboarding runs interactively with `--start none`, and the gate starts
     `axocoatl dev` itself on the port onboarding wrote to `server.port`
     (8080 when it is free). Pass `--port N` to choose one.
-  - Answer yes when onboarding asks to install Podman with apt, to add a
-    subuid range if one is missing, and to install Ollama with its official
-    installer and the systemd cloud-off drop-in, each with `sudo`.
-  - Choose OpenRouter models: a CPU-only VM cannot run a 30B model. Connect
-    OpenRouter in the browser (`axocoatl connect openrouter`); never type,
-    paste or export the key. The sign-in's callback is a loopback port in the
-    VM. Open the printed link in a browser that can reach it; Lima forwards
-    a guest's loopback ports to the host by default.
+  - Answer yes when onboarding asks to install Podman with apt and to add a
+    subuid range if one is missing, each with `sudo`.
+  - Choose OpenRouter to write and review: a CPU-only VM cannot run a 30B
+    model. Onboarding then installs no Ollama, which it does only when a
+    local model is chosen.
+  - When onboarding asks how to get the OpenRouter key, choose the browser
+    sign-in (the default). Do not run `axocoatl connect openrouter` first:
+    `--live` refuses an account that already has Axocoatl state, so the
+    sign-in happens inside onboarding. Never type, paste or export the key.
+    The sign-in's callback is a loopback port in the VM: open the link
+    onboarding prints in a browser that can reach it. Lima forwards a guest's
+    loopback ports to the host by default; for a cloud VM, forward the port
+    first (`ssh -L PORT:127.0.0.1:PORT`; onboarding prints that command when
+    the VM has no `xdg-open`).
   - Then the README's command, without its `--model` options so that the
     models onboarding configured are used, runs on every fixture, followed
     by the receipt and record checks. `--command TEXT` runs another command

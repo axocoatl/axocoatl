@@ -5,7 +5,7 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.0] - Unreleased
+## [1.5.0] - 2026-10-22
 
 ### Workbench first run
 - **The first screen shows readiness.** `GET /api/readiness` runs `axocoatl doctor`'s
@@ -142,11 +142,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     credential (`codex-chatgpt` or `codex-openai`) on the run command instead of `auto`.
   - OpenRouter: separate writer (default `qwen/qwen3-coder`) and reviewer (default
     `openai/gpt-oss-120b`) models, the same model refused, the writer's output limit 4096
-    (it was 2048 for every Agent), the key from an environment variable or a hidden
-    prompt, and the key and both models checked before anything is written. Without an
-    OpenRouter key nothing is saved, and the step left gives the full `axocoatl onboard`
-    command again: the writer (`--writer claude-code`, `--writer codex` or a local
-    `--writer-model`), the reviewer and, when one was named, `--openrouter-key-env VAR`.
+    (it was 2048 for every Agent), and the key and both models checked before anything
+    is written. The key comes from a browser sign-in: at a terminal with no key yet,
+    onboarding offers **Sign in to OpenRouter in your browser (recommended)** first,
+    which runs `axocoatl connect openrouter`'s OAuth PKCE flow inline (the models checked
+    in OpenRouter's catalog, the sign-in page opened and its address printed, the
+    browser's return to a loopback port, which a Lima VM forwards to the host), stores
+    the key OpenRouter issues as the secret `openrouter` without showing it, and writes
+    `api_key_secret: openrouter` and `openrouter_billing: credits`, never the key. A key
+    connected before with `axocoatl connect openrouter` (the secret the configuration
+    names in `api_key_secret`, or `openrouter` when it names no key), when the secret
+    store holds it as doctor checks, is used without asking, at a terminal and under
+    `--yes`; one OpenRouter refuses is a step left that connects again. An environment
+    variable (`--openrouter-key-env VAR`, `OPENROUTER_API_KEY`, or one named at the
+    terminal) and a hidden prompt remain the other ways. Under `--yes` with no key,
+    nothing is asked and the step left says to run `axocoatl connect openrouter`, then
+    the same `axocoatl onboard` command. Without an OpenRouter key nothing is saved, and
+    the step left gives the full `axocoatl onboard` command again: the writer (`--writer
+    claude-code`, `--writer codex` or a local `--writer-model`), the reviewer and, when
+    one was named, `--openrouter-key-env VAR`.
   - The configuration holds `run.models`, the defaults `axocoatl run` uses for
     `writer_model` and `reviewer_model`, a `# Writer:` comment naming who writes (and
     Codex's credential), and the first free port from 8080 in `server.port`. An existing
@@ -175,8 +189,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subordinate ids now fail (they were warnings followed by "All required checks
   passed"), rootless is always probed, and a stopped machine is OK because it starts on
   first use. Doctor, and onboarding's own check, warn when Podman on macOS is a release
-  other than 5.8 or 6.1 ("has not been tested with Axocoatl on macOS yet (5.8 and 6.1
-  are)"), and when Podman on Linux is 4.3 to 4.8 ("(4.9 is)"); 1.4.0's doctor and
+  other than 6.1, the one Homebrew installs ("has not been tested with Axocoatl on macOS
+  yet (6.1 is)"), and when Podman on Linux is 4.3 to 4.8 ("(4.9 is)"); 1.4.0's doctor and
   onboarding named no Podman release as tested. Each configured Ollama model shows its
   size against memory and the context Ollama loads it with (below 16384 fails); the
   Writers section shows built recipe images, stored credential names and the `claude`,
@@ -325,14 +339,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `axocoatl validate`; and the quickstarts name the loadout that matches the writer chosen
   in onboarding (`fix` for a local or OpenRouter writer, `fix-claude-code` or `fix-codex`
   otherwise).
-- **The public pages say what is not yet verified and what a run needs.**
-  <!-- VERIFIED-PENDING: restate from the final live runs -->
-  <!--
-  - **The public pages say what has been tested.** End to end: macOS 26 on Apple silicon
-  (48 GB) with rootless Podman 6.1.4 and 5.8, and Ubuntu 24.04 on arm64 with rootless
-  Podman 4.9.3; in CI: Ubuntu 24.04 on x86_64 with rootless Podman 4.9.3. The pages also
-  name the memory the local pair was tested on (48 GB).
-  -->
+- **The public pages say what the release gate verified, what is not yet verified and
+  what a run needs.** The README, `llms.txt`, the install pages and the security page
+  list what the 1.5.0 release gate ran on the release commit (see Verified, below), and
+  the README, the install pages, the onboarding page and `docs/CLAIMS.md` say that the
+  local pair (`qwen3-coder:30b` and `gpt-oss:20b`) ran end to end on a 48 GB Mac in it.
   Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora
   with SELinux and WSL2 are labelled "not yet verified", and the install command says it
   runs in macOS, Linux or WSL2, not PowerShell. The pages name the prerequisites (a
@@ -348,22 +359,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "a different reviewer", not a stronger one: it is smaller than its writer and has not
   been measured. The example run summary on the README and the home page, which 1.4.0
   labelled as an example (a `pages.py` fix whose review asked for changes once), is
-  replaced by the summary a run of an earlier 1.5.0 build printed: `axocoatl run fix` on
-  a small Go repository, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing. Until
-  the final build's runs restate where it came from, the pages label it only as the
-  format `axocoatl run fix` prints, not a measurement. The why page no longer says the
-  executable keeps working if the project stops: a new major Ollama release needs a
-  newer Axocoatl. `axocoatl run` is "from your shell", not
-  "a shell or a CI job", and only `axocoatl run` gets a receipt, not every run. The
-  Codex API-key route (`connect codex --api-key`) is out of the quickstart and marked
-  not yet tested live.
-  <!-- VERIFIED-PENDING: restate from the final live runs -->
-  <!--
-  The example run summary is now the real output of one run: `axocoatl run fix` on a
-  small Go repository, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing on Ollama
-  0.40.6, on a 48 GB Mac set up from a clean install by `axocoatl onboard`; its receipt
-  verified. Re-capture it from a run of the final build.
-  -->
+  replaced by another example in 1.5.0's format: `axocoatl run fix` on a small Go
+  repository, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing. The pages label it
+  as an example of the format `axocoatl run fix` prints, not a measurement. The why page
+  no longer says the executable keeps working if the project stops: a new major Ollama
+  release needs a newer Axocoatl. `axocoatl run` is "from your shell", not "a shell or a
+  CI job", and only `axocoatl run` gets a receipt, not every run. The Codex API-key route
+  (`connect codex --api-key`) is out of the quickstart and marked not yet tested live.
 - **The verify-receipt workflow in the docs no longer fails every pull request without a
   receipt.** Its example sets `require-receipt: false`, so pull requests from people,
   Dependabot and the one that adds the workflow pass with a notice; a strict variant
@@ -442,7 +444,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--remove` deletes it and its line in the configuration, keeping the line while
   Agents still use OpenRouter. It never stores into, sends or removes a secret another
   command owns (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key).
-  Onboarding can call its sign-in, which leaves signal handling to the process.
+  Onboarding's OpenRouter step runs the same sign-in, which leaves signal handling to
+  the process; a failure there names the `axocoatl onboard` command to run again.
 - **`api_key_secret` for hosted providers.** `providers.<name>.api_key_secret` names a
   secret in the data root's store in place of `api_key`, so the key is not in the
   configuration file; the daemon reads it when it starts and logs, without a value,
@@ -799,62 +802,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Domain` named another site, which browsers refused, is now kept host-only.
 
 ### Verified
-<!-- VERIFIED-PENDING: restate from the final live runs -->
-<!--
-- **The release candidate was verified live on clean machines.** On macOS 26.6 on an
-  Apple M5 Pro with 48 GB, wiped of Podman, Ollama and Axocoatl, the published install
-  command installed 1.5.0, and `axocoatl onboard` installed Podman 6.1.4 and Ollama 0.40.6
-  with Homebrew, created a 6 CPU / 8 GiB applehv machine, turned Ollama's cloud models
-  off, pulled `qwen3-coder:30b` and `gpt-oss:20b` (about 33 GB), probed both at a
-  32,768-token context, wrote the configuration, and passed its first-run sample fix with
-  a verified receipt. There `axocoatl run fix` (`qwen3-coder:30b` writing, `gpt-oss:20b`
-  reviewing), `fix-claude-code` (Claude Code 2.1.292) and `fix-codex` (Codex 0.160.1)
-  each passed on Node.js (`npm ci`), Python (`pip install -e '.[test]'`, pytest), Go and
-  Rust repositories, every receipt verified against the computer's key and the checkout;
-  `axocoatl connect claude-code`, `connect codex` (ChatGPT sign-in) and
-  `connect openrouter` signed in through the browser, and `fix-claude-code` with an
-  OpenRouter `openai/gpt-oss-120b` reviewer passed on Python. On Ubuntu 24.04 (arm64 VM,
-  a fresh user, rootless Podman 4.9.3, Landlock ABI 4, the models served from the Mac's
-  Ollama), `fix` passed on Node.js, Python, Go and Rust.
-
-Also restate from the final runs (not yet run on the integrated build):
-- `connect openrouter` signed in to a real OpenRouter account through the browser (the
-  founder did this live on 2026-10-20 during the 1.5.0 verification; the sign-in code
-  in `connect_cmd/openrouter*` is unchanged since 583320b, apart from two
-  `allow(dead_code)` attributes fix150/r3-onboard removes because doctor now calls
-  `doctor_key_line`; onboarding's OpenRouter step and doctor's key check changed).
-- The macOS product-gate legs at fix150/r4-browser 064124dd:
-  - WebKit: 264 tests, 263 passed, 0 failed, 1 skipped (test 8, which needs
-    AXOCOATL_REFERENCE_RUNTIME_IMAGE).
-  - Chromium: the same counts.
-  - On darwin WebKit, "Preview browser contract" asserts the Safari Domain=localhost
-    behaviour, and signed-out.test.mjs asserts that the Path=/api sign-out (51 cookies of
-    4,000 bytes and 9 smaller ones) ends at the signed-out message after one reload.
-- That the product-browser CI legs and the release browser gate ran
-  preview-cookies.test.mjs (not skipped) on GitHub's ubuntu-24.04 and ubuntu-24.04-arm
-  runners.
-- The example run summary on the README and the home page (re-capture it from a run of
-  the final build; its `fix@1` digest, 54394b32…, is the SHA-256 of
-  `crates/axocoatl-config/loadouts/fix.yaml` as it stands after round 4), the 48 GB
-  statements on /install, in the docs' install and onboarding pages and in
-  `docs/CLAIMS.md`, and the README's "That pair has run end to end on a 48 GB Mac".
-- The product's own messages that name what was tested, which the pending markers do not
-  cover because they are code: onboarding's "runs end to end on 48 GB" and "The local
-  pair Axocoatl has tested … runs on 48 GB of memory" (`ollama_setup.rs`,
-  `onboard/ollama.rs`), "(4.9 tested)" and "(4.9 is)", "(5.8 and 6.1 are)", "the
-  provider Axocoatl is tested with" and "6 CPUs / 8 GiB is" (`onboard/sandbox.rs`,
-  `podman_report.rs`, `podman.rs`). Confirm the final runs still back each, or change
-  the code before the tag, and with it this file's `axocoatl doctor` entry, which quotes
-  "(5.8 and 6.1 are)" and "(4.9 is)".
-- The "Claims withdrawn" entry's sentence "Until the final build's runs restate where it
-  came from, the pages label it only as the format `axocoatl run fix` prints": change it
-  together with the example run summary.
-- That Safari > Settings > Privacy > Manage Website Data removes the `Domain=localhost`
-  cookies (the Security entries, the docs and the workbench's signed-out message say
-  so; the journeys clear the cookies with Playwright instead): the `C1-workbench-webkit`
-  path in Safari.
-- The release date: this heading and the site's changelog page say `Unreleased`.
--->
+- **The release commit went from the published install command to passing, signed runs**
+  in the release gate (`docs/RELEASE_GATE.md`): for a new user on GitHub's Ubuntu
+  runners and in an Ubuntu 24.04 VM, and on a Mac reset for the gate, which kept its
+  downloaded models and its Homebrew. Each path's transcript, wall times and downloads,
+  and the versions of Podman, Ollama, Claude Code and Codex it ran, are in the evidence
+  bundle under `release-evidence/1.5.0/`, signed by a key in `.axocoatl/gate-keys`.
+  - In CI (a push run of `ci.yml` on `main`), on GitHub's ubuntu-24.04 (x86_64) and
+    ubuntu-24.04-arm runners: a brand-new `HOME` and the README's install command
+    against the release archive just built. Then, with Podman already on the runner
+    (the workflow installs it when the image lacks it), `axocoatl onboard` with no
+    terminal (`--yes`, no first-run sample) against a scripted model server standing in
+    for Ollama 0.40.6 with cloud models off, `axocoatl doctor`, `axocoatl dev`, and
+    `axocoatl run fix` on every fixture in `tests/fixtures/newuser` (`node-plain`,
+    `node-deps`, `python-pytest`, `rust` and `go`): the README's command, and on
+    `node-plain`, onboarding's first-run sample, the command that fixture's own README
+    gives. Each receipt and record verified. On the ubuntu-22.04 runner, onboarding
+    refused Podman 3.4.4. The macOS plumbing passed on arm64 and Intel runners, as did
+    the rest of CI: the native gate on Linux, the browser regressions in Chromium on
+    x86_64 and aarch64 and in WebKit on x86_64, the docs and marketing sites, and the
+    audits.
+  - On a Mac (Apple M5 Pro, 48 GB, macOS 26.6) with Axocoatl, its data, Podman and its
+    machines, and Ollama uninstalled (the downloaded models kept): the site's install
+    command as written, then `axocoatl onboard` with every prompt answered live and
+    recorded. With local models, onboarding installed Podman and Ollama with Homebrew
+    after asking, created the Podman machine, turned Ollama's cloud models off, chose
+    `qwen3-coder:30b` to write and `gpt-oss:20b` to review (already downloaded), and
+    passed its first-run sample fix. `axocoatl run fix` then passed on every fixture
+    (the README's command, and on `node-plain` its own README's), each receipt and record
+    verified. After each setup on the Mac, `axocoatl doctor` said ready.
+  - Claude Code, signed in through the browser (`axocoatl connect claude-code`): the home
+    page's `fix-claude-code` command passed on `node-deps` and `python-pytest`, each
+    receipt verified, and with `--keep pr` opened a pull request on a throwaway GitHub
+    repository, where the docs' verify-receipt Action, pinned to the release commit,
+    passed. A run with `anthropic:opus` as the reviewer was refused with exit 3 and left
+    no Session.
+  - Codex, billed to the ChatGPT plan (ChatGPT sign-in in the browser): the site's
+    `fix-codex` command passed on `node-deps` and `python-pytest`, each receipt verified.
+  - OpenRouter, connected through the browser from onboarding (its browser sign-in; no
+    key typed), with different writer and reviewer models: `axocoatl run fix` passed on
+    `node-deps` and `python-pytest`, and `fix-claude-code` with the OpenRouter reviewer
+    on `node-deps`, each receipt verified.
+  - The workbench in Safari, from the sign-in link to a commit: Open workspace refused
+    the home folder and accepted the repository, a new Session started, Team & budget
+    came pre-filled and Apply worked, one turn edited a file, Source Control showed
+    "Last turn 1", a commit was made with the account's Git identity, and Ctrl+C stopped
+    `axocoatl dev` with exit 0.
+  - On Ubuntu 24.04 (aarch64) in a Lima VM, as a new user made with `adduser`: onboarding,
+    answered live, installed Podman with apt and added a range of subordinate ids if the
+    user had none, each with `sudo` after asking, and connected OpenRouter through the
+    browser from onboarding (its browser sign-in; no key typed). It did not install
+    Ollama: it does that only when a local model is chosen. `axocoatl doctor` said
+    ready, and with the OpenRouter models onboarding configured, the README's command
+    without `--model` passed on every fixture (on `node-plain`, that fixture's own
+    README's command), each receipt and record verified.
 
 ## [1.4.0] - 2026-10-14
 

@@ -70,11 +70,14 @@ impl ModelRef {
 
 /// Where the OpenRouter key comes from. A value is written to the
 /// owner-only config; a variable is written as `${VAR}` and read from the
-/// environment of whatever starts Axocoatl.
+/// environment of whatever starts Axocoatl; a secret (the browser
+/// sign-in's) is named in `api_key_secret` and read from Axocoatl's secret
+/// store, so the key is never in the file.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum KeyRef {
     Value(zeroize::Zeroizing<String>),
     Env(String),
+    Secret(String),
 }
 
 impl std::fmt::Debug for KeyRef {
@@ -82,21 +85,31 @@ impl std::fmt::Debug for KeyRef {
         match self {
             KeyRef::Value(_) => formatter.write_str("KeyRef::Value(<hidden>)"),
             KeyRef::Env(name) => write!(formatter, "KeyRef::Env({name})"),
+            KeyRef::Secret(name) => write!(formatter, "KeyRef::Secret({name})"),
         }
     }
 }
 
 impl KeyRef {
-    /// What the configuration holds: the key, or `${NAME}`.
-    fn raw(&self) -> zeroize::Zeroizing<String> {
+    /// What `api_key` holds: the key, or `${NAME}`; `None` for a secret,
+    /// which `api_key_secret` names instead.
+    fn raw(&self) -> Option<zeroize::Zeroizing<String>> {
         match self {
-            KeyRef::Value(key) => key.clone(),
-            KeyRef::Env(name) => zeroize::Zeroizing::new(format!("${{{name}}}")),
+            KeyRef::Value(key) => Some(key.clone()),
+            KeyRef::Env(name) => Some(zeroize::Zeroizing::new(format!("${{{name}}}"))),
+            KeyRef::Secret(_) => None,
         }
     }
 
-    fn yaml(&self) -> String {
-        yaml_string(&self.raw())
+    /// The entry under `providers.openrouter`: `api_key: …` or
+    /// `api_key_secret: NAME`.
+    fn entry(&self) -> String {
+        match self {
+            KeyRef::Secret(name) => format!("api_key_secret: {name}"),
+            KeyRef::Value(_) | KeyRef::Env(_) => {
+                format!("api_key: {}", yaml_string(&self.raw().unwrap_or_default()))
+            }
+        }
     }
 }
 
@@ -212,10 +225,15 @@ fn max_tokens(provider: Provider, writer: bool) -> u32 {
     }
 }
 
-/// The `providers:` lines (without the key).
+/// The `providers:` lines: the key, or the secret that holds it (the lines
+/// `axocoatl connect openrouter` writes).
 fn providers_block(plan: &ConfigPlan) -> String {
     let mut text = String::from("providers:\n");
-    if plan.openrouter_key.is_some() {
+    let secret = match &plan.openrouter_key {
+        Some(KeyRef::Secret(name)) => Some(name),
+        _ => None,
+    };
+    if plan.openrouter_key.is_some() && secret.is_none() {
         text.push_str("  openrouter_billing: credits\n");
     }
     if let Some(base_url) = &plan.ollama_base_url {
@@ -224,8 +242,10 @@ fn providers_block(plan: &ConfigPlan) -> String {
             yaml_string(base_url)
         ));
     }
-    if let Some(key) = &plan.openrouter_key {
-        text.push_str(&format!("  openrouter:\n    api_key: {}\n", key.yaml()));
+    match (&plan.openrouter_key, secret) {
+        (_, Some(name)) => text.push_str(&crate::connect_cmd::openrouter::provider_yaml(name)),
+        (Some(key), None) => text.push_str(&format!("  openrouter:\n    {}\n", key.entry())),
+        (None, None) => {}
     }
     text
 }
@@ -342,11 +362,16 @@ fn agents_block(plan: &ConfigPlan) -> String {
 
 /// A whole new configuration.
 pub(crate) fn render(plan: &ConfigPlan) -> String {
-    let openrouter_note = if plan.openrouter_key.is_some() {
-        "# OpenRouter uses your normal API key and OpenRouter credits.\n\
-         # BYOK is not supported for native Session execution.\n"
-    } else {
-        ""
+    let openrouter_note = match &plan.openrouter_key {
+        Some(KeyRef::Secret(name)) => format!(
+            "# OpenRouter's key is in Axocoatl's secret store (secret {name}), never in this \
+             file.\n# OpenRouter credits pay; BYOK is not supported for native Session \
+             execution.\n"
+        ),
+        Some(_) => "# OpenRouter uses your normal API key and OpenRouter credits.\n\
+                    # BYOK is not supported for native Session execution.\n"
+            .to_string(),
+        None => String::new(),
     };
     let run = run_block(plan);
     format!(
@@ -538,28 +563,48 @@ pub(crate) fn update(
         }
     }
     match (&plan.openrouter_key, has_openrouter) {
+        // The browser sign-in's secret: named as `axocoatl connect
+        // openrouter` names it, once the rest is updated (below).
+        (Some(KeyRef::Secret(_)), _) => {}
         (Some(key), false) => missing_providers.push(format!(
-            "  openrouter_billing: credits\n  openrouter:\n    api_key: {}",
-            key.yaml()
+            "  openrouter_billing: credits\n  openrouter:\n    {}",
+            key.entry()
         )),
         (Some(key), true) => {
             // This run chose a key (another variable, or a value typed at
-            // the hidden prompt): it replaces the configured one in place.
-            let configured = existing
+            // the hidden prompt): it replaces the configured one, or the
+            // secret named in its place, where it is.
+            let openrouter = existing
                 .providers
                 .as_ref()
-                .and_then(|providers| providers.openrouter.as_ref())
+                .and_then(|providers| providers.openrouter.as_ref());
+            let configured = openrouter
                 .and_then(|openrouter| openrouter.get("api_key"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string);
-            if configured.as_deref() != Some(key.raw().as_str()) {
-                let line = format!("    api_key: {}", key.yaml());
+            let names_secret =
+                openrouter.is_some_and(|openrouter| openrouter.get("api_key_secret").is_some());
+            let raw = key.raw().unwrap_or_default();
+            if configured.as_deref() != Some(raw.as_str()) || names_secret {
+                let line = format!("    {}", key.entry());
                 if let Some(providers) = top_block(&lines, "providers") {
                     if let Some(openrouter) = child_block(&lines, providers, "openrouter") {
-                        match (openrouter.0 + 1..openrouter.1)
-                            .find(|&index| lines[index].trim_start().starts_with("api_key:"))
-                        {
-                            Some(index) => lines[index] = line,
+                        // A configuration names a key or a secret, never
+                        // both.
+                        let entries: Vec<usize> = (openrouter.0 + 1..openrouter.1)
+                            .filter(|&index| {
+                                let entry = lines[index].trim_start();
+                                entry.starts_with("api_key:")
+                                    || entry.starts_with("api_key_secret:")
+                            })
+                            .collect();
+                        match entries.split_first() {
+                            Some((&first, rest)) => {
+                                lines[first] = line;
+                                for &index in rest.iter().rev() {
+                                    lines.remove(index);
+                                }
+                            }
                             None => lines.insert(openrouter.0 + 1, line),
                         }
                     }
@@ -624,7 +669,17 @@ pub(crate) fn update(
         }
     }
 
-    let text = from_lines(&lines);
+    let mut text = from_lines(&lines);
+    // The browser sign-in's secret, named as `axocoatl connect openrouter`
+    // names it: `openrouter_billing: credits` and `api_key_secret`, any key
+    // written in the file removed, every other line kept.
+    if let Some(KeyRef::Secret(name)) = &plan.openrouter_key {
+        text = crate::connect_cmd::openrouter::plan_connect(&text, name)
+            .map_err(|reason| {
+                format!("providers.openrouter cannot be pointed at the secret {name}: {reason}")
+            })?
+            .text;
+    }
     axocoatl_config::parse_config(&text, path)
         .map_err(|error| format!("the updated configuration would not load: {error}"))?;
     Ok(text)
@@ -698,16 +753,31 @@ pub(crate) fn redacted_lines(text: &str) -> Vec<String> {
             } else {
                 lines.push(hidden());
             }
-        } else if SECRET_KEYS.contains(&key_name.as_str())
-            && !value.is_empty()
-            && !value.trim_matches('"').trim_matches('\'').starts_with("${")
-        {
+        } else if is_secret_value(&key_name, value) {
             lines.push(hidden());
         } else {
             lines.push(line.to_string());
         }
     }
     lines
+}
+
+/// Whether the value of `key_name` (lower case) is hidden: a secret key's,
+/// unless it is a `${VARIABLE}` reference, and an `api_key_secret` that
+/// is not a secret's name (a key written where the name belongs; a name is
+/// shown).
+fn is_secret_value(key_name: &str, value: &str) -> bool {
+    fn unquoted(text: &str) -> &str {
+        text.trim().trim_matches('"').trim_matches('\'')
+    }
+    if SECRET_KEYS.contains(&key_name) {
+        return !value.is_empty() && !unquoted(value).starts_with("${");
+    }
+    if key_name == "api_key_secret" {
+        let name = unquoted(value.split(" #").next().unwrap_or_default());
+        return !name.is_empty() && axocoatl_config::shown_secret_name(name) != name;
+    }
+    false
 }
 
 /// One entry of a secret block, hidden: `- (hidden)` or `Name: (hidden)`.
@@ -964,6 +1034,93 @@ mod tests {
         assert!(!shown.join("\n").contains("sk-or-v1-typed"));
         let back = update(&updated, &plan, Path::new("c.yaml")).unwrap();
         assert_eq!(back, written);
+    }
+
+    /// A key from the browser sign-in is a secret the configuration names
+    /// (`api_key_secret`), as `axocoatl connect openrouter` writes it: a
+    /// new file has `connect`'s lines, an update replaces a key written in
+    /// the file (or a variable) by the name and back, and a name is shown
+    /// while a key written where the name belongs is not.
+    #[test]
+    fn a_signed_in_key_is_a_secret_the_configuration_names() {
+        let secret = ConfigPlan {
+            openrouter_key: Some(KeyRef::Secret("openrouter".into())),
+            ..openrouter_plan()
+        };
+        assert_eq!(
+            format!("{:?}", secret.openrouter_key),
+            "Some(KeyRef::Secret(openrouter))"
+        );
+        let written = render(&secret);
+        assert!(
+            written.contains(&format!(
+                "providers:\n{}",
+                crate::connect_cmd::openrouter::provider_yaml("openrouter")
+            )),
+            "{written}"
+        );
+        assert!(written.starts_with(
+            "# Axocoatl — OpenRouter setup\n# OpenRouter's key is in Axocoatl's secret store \
+             (secret openrouter), never in this file.\n"
+        ));
+        assert!(!written.contains("api_key:"), "{written}");
+        let config = axocoatl_config::parse_config(&written, Path::new("c.yaml")).unwrap();
+        let openrouter = config.providers.openrouter.unwrap();
+        assert_eq!(openrouter.api_key_secret.as_deref(), Some("openrouter"));
+        assert_eq!(
+            config.providers.openrouter_billing,
+            Some(axocoatl_config::OpenRouterBilling::Credits)
+        );
+        assert_eq!(
+            update(&written, &secret, Path::new("c.yaml")).unwrap(),
+            written
+        );
+        // A variable, then a key typed at the hidden prompt, give way to the
+        // secret, and the secret to them.
+        let typed = ConfigPlan {
+            openrouter_key: Some(KeyRef::Value(zeroize::Zeroizing::new(
+                "sk-or-v1-typed".to_string(),
+            ))),
+            ..openrouter_plan()
+        };
+        for old in [render(&openrouter_plan()), render(&typed)] {
+            let updated = update(&old, &secret, Path::new("c.yaml")).unwrap();
+            assert!(!updated.contains("api_key:"), "{updated}");
+            assert!(!updated.contains("sk-or-v1-typed"), "{updated}");
+            assert_eq!(updated.matches("api_key_secret: openrouter").count(), 1);
+            let config = axocoatl_config::parse_config(&updated, Path::new("c.yaml")).unwrap();
+            assert_eq!(
+                config
+                    .providers
+                    .openrouter
+                    .unwrap()
+                    .api_key_secret
+                    .as_deref(),
+                Some("openrouter")
+            );
+            let shown = diff_redacted(&old, &updated).join("\n");
+            assert!(
+                shown.contains("+     api_key_secret: openrouter"),
+                "{shown}"
+            );
+            assert!(!shown.contains("sk-or-v1-typed"), "{shown}");
+        }
+        let back = update(&written, &typed, Path::new("c.yaml")).unwrap();
+        assert!(!back.contains("api_key_secret"), "{back}");
+        let config = axocoatl_config::parse_config(&back, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            config.providers.openrouter.unwrap().api_key.expose_secret(),
+            "sk-or-v1-typed"
+        );
+        // A key written where the name belongs is hidden; a name is not.
+        let shown = redacted_lines(
+            "providers:\n  openrouter:\n    api_key_secret: sk-or-v1-0123456789abcdef0123\n  \
+             openai:\n    api_key_secret: \"openai-key\"\n",
+        )
+        .join("\n");
+        assert!(!shown.contains("sk-or-v1-0123456789abcdef0123"), "{shown}");
+        assert!(shown.contains("    api_key_secret: (hidden)"), "{shown}");
+        assert!(shown.contains("api_key_secret: \"openai-key\""), "{shown}");
     }
 
     /// Every secret the configuration can hold is hidden in what onboarding

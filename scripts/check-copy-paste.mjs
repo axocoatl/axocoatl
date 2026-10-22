@@ -82,7 +82,7 @@ const WITHDRAWN = [
   [/nothing (?:ever )?leaves (?:your|the) (?:machine|computer)/i, '"nothing leaves your machine": the first daemon start downloads an embedding model, and hosted writers and reviewers send code out'],
   [/\bfully offline\b/i, '"fully offline": hosted providers and downloads use the network'],
   [/stopped tomorrow|keep(?:s)? (?:on )?working if the project stops/i, 'the "keeps working if the project stops" claim: a new major Ollama release needs a newer Axocoatl'],
-  [/from a shell or (?:a )?CI(?: job)?\b/i, '"from a shell or a CI job": no hosted CI runner has run axocoatl run; say "from your shell"'],
+  [/from a shell or (?:a )?CI(?: job)?\b/i, '"from a shell or a CI job": CI runs axocoatl run only against a scripted model server, so a CI job with real models is not verified; say "from your shell"'],
   [/\bevery finished run\b/i, '"every finished run": only axocoatl run gets a receipt, workbench turns do not'],
 ];
 

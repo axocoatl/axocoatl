@@ -43,11 +43,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MIN_PODMAN_VERSION: (u64, u64) = (4, 3);
 /// The Podman Axocoatl is tested with on Linux (Ubuntu 24.04's).
 pub const TESTED_LINUX_PODMAN: (u64, u64) = (4, 9);
-/// The Podman minor releases Axocoatl is tested with on macOS (6.1 is what
-/// Homebrew installs for onboarding today).
-pub const TESTED_MACOS_PODMAN: &[(u64, u64)] = &[(5, 8), (6, 1)];
+/// The Podman minor releases Axocoatl is tested with on macOS: 6.1, what
+/// Homebrew installs for onboarding today and what the release gate's Mac runs
+/// (`docs/RELEASE_GATE.md`). Doctor and onboarding warn about any other.
+pub const TESTED_MACOS_PODMAN: &[(u64, u64)] = &[(6, 1)];
 
-/// "5.8 is", or "5.8 and 6.1 are": the tested macOS releases, for a warning.
+/// "6.1 is" (or "A and B are" when more than one release is listed): the
+/// tested macOS releases, for a warning.
 fn tested_macos_text() -> String {
     let versions: Vec<String> = TESTED_MACOS_PODMAN
         .iter()
@@ -1655,7 +1657,8 @@ mod tests {
     use super::*;
     use crate::podman::machine_spec;
 
-    /// `podman info --format json` of Podman 5.8 in a macOS machine.
+    /// `podman info --format json` of Podman 6.1 in a macOS machine, whose
+    /// Podman is another patch release than the client's.
     const MAC_INFO: &str = r#"{"host":{"arch":"arm64","kernel":"7.2.5-200.fc44.aarch64",
         "distribution":{"distribution":"fedora","variant":"coreos","version":"44"},
         "security":{"rootless":true,"selinuxEnabled":true},"serviceIsRemote":true,
@@ -1663,10 +1666,11 @@ mod tests {
         {"container_id":1,"host_id":100000,"size":1000000}],
         "uidmap":[{"container_id":0,"host_id":501,"size":1},
         {"container_id":1,"host_id":100000,"size":1000000}]}},
-        "version":{"APIVersion":"5.8.9","Version":"5.8.9"},
-        "Client":{"Version":"5.8.2"}}"#;
+        "version":{"APIVersion":"6.1.2","Version":"6.1.2"},
+        "Client":{"Version":"6.1.4"}}"#;
 
-    /// Podman 5.8.2's `machine list --format json`.
+    /// `machine list --format json`, with the memory as a string (the number
+    /// Podman 6 may print instead is read below too).
     const MAC_LIST: &str = r#"[{"Name":"podman-machine-default","Default":true,"Running":true,
         "VMType":"applehv","CPUs":6,"Memory":"8589934592","DiskSize":"107374182400"}]"#;
 
@@ -1688,7 +1692,7 @@ mod tests {
         );
         PodmanReport {
             readiness: PodmanReadiness::Ready,
-            client_version: Some("5.8.2".to_string()),
+            client_version: Some("6.1.4".to_string()),
             runtime: Some(parse_runtime_info(MAC_INFO.as_bytes()).unwrap()),
             machines,
             default_provider: Some("applehv".to_string()),
@@ -1702,7 +1706,7 @@ mod tests {
     #[test]
     fn info_list_and_inspect_are_read() {
         let info = parse_runtime_info(MAC_INFO.as_bytes()).unwrap();
-        assert_eq!(info.server_version.as_deref(), Some("5.8.9"));
+        assert_eq!(info.server_version.as_deref(), Some("6.1.2"));
         assert_eq!(info.rootless, Some(true));
         assert_eq!(info.uid_ranges, Some(2));
         assert_eq!(info.distribution.as_deref(), Some("fedora 44"));
@@ -1739,21 +1743,28 @@ mod tests {
         assert_eq!(findings[0].level, Level::Ok);
         assert_eq!(
             findings[0].detail,
-            "Podman 5.8.2 ready (runs 5.8.9; machine podman-machine-default: applehv, rootless, \
+            "Podman 6.1.4 ready (runs 6.1.2; machine podman-machine-default: applehv, rootless, \
              6 CPUs / 8 GiB; kernel 7.2.5-200.fc44.aarch64), needed for every Session and every \
              axocoatl run"
         );
     }
 
-    /// Podman 6.1, what Homebrew installs for onboarding, is tested on macOS
-    /// too: no version warning.
+    /// Only 6.1, what Homebrew installs for onboarding, is tested on macOS:
+    /// Podman 5.8, which an Intel Mac is pointed to, warns.
     #[test]
-    fn podman_6_1_on_a_mac_is_tested() {
+    fn podman_5_8_on_a_mac_is_not_tested() {
         let mut report = mac_report();
-        report.client_version = Some("6.1.4".to_string());
+        report.client_version = Some("5.8.2".to_string());
         let findings = findings(&report, &platform(true));
-        assert_eq!(findings.len(), 1, "{findings:?}");
-        assert_eq!(findings[0].level, Level::Ok);
+        let levels: Vec<(&str, Level)> = findings.iter().map(|f| (f.name, f.level)).collect();
+        assert_eq!(
+            levels,
+            [("Podman", Level::Ok), ("Podman version", Level::Warn)]
+        );
+        assert_eq!(
+            findings[1].detail,
+            "Podman 5.8.2 has not been tested with Axocoatl on macOS yet (6.1 is)"
+        );
     }
 
     #[test]
@@ -1891,9 +1902,9 @@ mod tests {
                 ("Machine provider", Level::Warn),
             ]
         );
-        assert!(list[1].detail.contains(
-            "Podman 6.2.0 has not been tested with Axocoatl on macOS yet (5.8 and 6.1 are)"
-        ));
+        assert!(list[1]
+            .detail
+            .contains("Podman 6.2.0 has not been tested with Axocoatl on macOS yet (6.1 is)"));
         assert_eq!(
             list[2].fix.as_deref(),
             Some("podman machine stop && podman machine set --memory 8192 && podman machine start")

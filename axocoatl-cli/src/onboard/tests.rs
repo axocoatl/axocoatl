@@ -363,6 +363,7 @@ fn onboarding(shims: &Shims, ui: Ui, facts: Facts, mut args: OnboardArgs) -> Onb
         openrouter_api: "http://127.0.0.1:9/never".to_string(),
         socket_path: home.join("no-daemon.sock"),
         data_dir_override: Some(home.join("data")),
+        openrouter_sign_in: None,
         kept: Kept::default(),
         step_keys: Default::default(),
     }
@@ -3659,8 +3660,8 @@ async fn update_keeps_the_writer_and_the_models_the_setup_has() {
 
 /// Updating an OpenRouter setup uses the key it has: under --yes the
 /// `${VARIABLE}` it names, with nothing to change; at the terminal, "no"
-/// to keeping it asks for a key at the hidden prompt, which replaces the
-/// reference in place and is never shown.
+/// to keeping it asks how to give a key, and one entered at the hidden
+/// prompt replaces the reference in place and is never shown.
 #[cfg(unix)]
 #[tokio::test]
 async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
@@ -3724,6 +3725,7 @@ async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
                 answers.push(Answer::No);
             }
             answers.extend([
+                Answer::Pick(2), // the hidden prompt
                 Answer::Text("sk-or-typed-at-the-prompt".into()),
                 Answer::Yes,     // write the change
                 Answer::Pick(2), // start it later
@@ -4359,3 +4361,4 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
 }
 
 mod interactive;
+mod openrouter_sign_in;

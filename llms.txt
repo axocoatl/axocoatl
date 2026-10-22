@@ -177,7 +177,26 @@ Install from Cargo instead with `cargo install axocoatl-cli` and Rust 1.88 or
 newer. Native Windows is not a release target; Windows users run Axocoatl inside WSL2 (not yet
 verified).
 
-<!-- VERIFIED-PENDING: restate here what the final live runs verified (template: CHANGELOG.md, 1.5.0, Verified) -->
+What the 1.5.0 release gate verified on the release commit, from the published install
+command to passing runs, every receipt verified (each path's transcript, times,
+downloads and tool versions are in the signed evidence bundle under
+release-evidence/1.5.0/ in the repository):
+
+- macOS 26.6 on Apple silicon (48 GB), with Axocoatl, Podman and Ollama uninstalled
+  first (the downloaded models kept): onboarding installed Podman and Ollama with
+  Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn
+  (OpenRouter through onboarding's browser sign-in). `axocoatl run fix` with
+  qwen3-coder:30b writing and gpt-oss:20b reviewing passed on Node.js (with and without
+  dependencies), Python (pytest), Rust and Go repositories; `fix-claude-code`,
+  `fix-codex` and `fix` with OpenRouter models passed on Node.js and Python; the
+  workbench in Safari went from the sign-in link to a commit.
+- Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed Podman with apt
+  and added a range of subordinate ids if the user had none, each with sudo after
+  asking, and connected OpenRouter through its own browser sign-in; with those
+  OpenRouter models, `axocoatl run fix` passed on the same repositories.
+- CI, Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with
+  no terminal against a scripted model server (Podman already on the runner, no
+  first-run sample), and `axocoatl run fix` on the same repositories.
 
 Onboarding offers the local pair, qwen3-coder:30b writing and gpt-oss:20b reviewing, from
 48 GB of memory, unless models already installed fit and make a pair, which come first;

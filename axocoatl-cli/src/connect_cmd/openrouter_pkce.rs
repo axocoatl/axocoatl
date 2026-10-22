@@ -398,12 +398,13 @@ const SIGNED_IN_PAGE: &str = "<h1>Signed in to OpenRouter</h1><p>Axocoatl receiv
      sign-in and is getting the key and checking it now. You can close this tab and go back to \
      the terminal.</p>";
 const CANCELLED_PAGE: &str = "<h1>Sign-in cancelled</h1><p>OpenRouter returned no sign-in, so \
-     Axocoatl stored nothing. You can close this tab; run <code>axocoatl connect \
-     openrouter</code> again to retry.</p>";
+     Axocoatl stored nothing. You can close this tab; run the Axocoatl command you signed in \
+     from (<code>axocoatl connect openrouter</code> or <code>axocoatl onboard</code>) again to \
+     retry.</p>";
 const WRONG_STATE_PAGE: &str = "<h1>Not this sign-in</h1><p>This answer was not for the \
      sign-in the Axocoatl command waiting here started, so it was not used. That sign-in is \
-     still waiting: finish it in the browser tab it opened, or run <code>axocoatl connect \
-     openrouter</code> again.</p>";
+     still waiting: finish it in the browser tab it opened, or run that command \
+     (<code>axocoatl connect openrouter</code> or <code>axocoatl onboard</code>) again.</p>";
 const NOT_HERE_PAGE: &str = "<h1>Axocoatl</h1><p>Nothing here.</p>";
 
 #[cfg(test)]
