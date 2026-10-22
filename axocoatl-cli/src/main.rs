@@ -1056,7 +1056,7 @@ fn config_uses_process_environment(config_yaml: &str) -> bool {
 fn reject_uninherited_service_environment(config_yaml: &str) -> Result<(), &'static str> {
     if config_uses_process_environment(config_yaml) {
         Err(
-            "the background service does not inherit shell environment variables, and the configuration reads a key from one; run `axocoatl onboard --update` and enter the key at its hidden prompt, or start Axocoatl with `axocoatl dev` from a shell that has the variable",
+            "the background service does not inherit shell environment variables, and the configuration reads a key from one; sign in with `axocoatl connect openrouter` (it stores the key without showing it) or run `axocoatl onboard --update`, or start Axocoatl with `axocoatl dev` from a shell that has the variable",
         )
     } else {
         Ok(())

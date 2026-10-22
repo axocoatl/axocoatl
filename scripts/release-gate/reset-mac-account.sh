@@ -68,8 +68,14 @@ reset_paths() {
 # Ollama's state: all of ~/.ollama, or with --keep-models only its settings
 # (server.json, where onboarding turns cloud models off, and onboarding's
 # backups of it), so the next onboarding finds cloud models on, as a new
-# user's Ollama has them.
+# user's Ollama has them. Either way, also Homebrew's service environment
+# for Ollama (services/ollama.env, where onboarding sets the context length),
+# under $XDG_CONFIG_HOME/homebrew or ~/.homebrew as Homebrew reads it.
 ollama_paths() {
+  local services
+  for services in "${XDG_CONFIG_HOME:-$HOME/.config}/homebrew/services" "$HOME/.homebrew/services"; do
+    [ -e "$services/ollama.env" ] && printf '%s\n' "$services/ollama.env"
+  done
   if [ "$keep_models" = 1 ]; then
     printf '%s\n' "$HOME/.ollama/server.json"
     for backup in "$HOME"/.ollama/server.json.bak-*; do
