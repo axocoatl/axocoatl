@@ -300,7 +300,13 @@ test('closed native history exposes exact rewind boundary while preserving evide
   const requests=[];
   try {
     await page.route('**/native-rewind-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body></body></html>'}));
-    await page.route('**/api/sessions/history-session/turns?history_version=2',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(rows)}));
+    // After the rewind the history reloads, and shows "Loading…" (no turns)
+    // until that read answers; the reload is answered late here, so the
+    // journey cannot read the list while it is loading.
+    await page.route('**/api/sessions/history-session/turns?history_version=2',async route=>{
+      if(requests.length)await new Promise(resolve=>setTimeout(resolve,500));
+      return route.fulfill({contentType:'application/json',body:JSON.stringify(rows)});
+    });
     await page.route('**/api/sessions/history-session/rewind',route=>{requests.push(route.request().postDataJSON());rows=rows.slice(0,1);return route.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,turns:rows})});});
     await page.goto(`${runtime.baseUrl}/native-rewind-fixture`);
     await page.evaluate(async()=>{await import('/ui/session-history.js');const history=document.createElement('ax-session-history');document.body.append(history);history.show({sessionId:'history-session',sessionName:'Native History',rewindEnabled:true});});
@@ -309,6 +315,7 @@ test('closed native history exposes exact rewind boundary while preserving evide
     assert.equal(await boundary.isEnabled(),true);await boundary.click();
     await history.locator('[data-action="confirm-rewind"]').click();
     await history.locator('.turn[data-turn-id="native-turn"]').waitFor({state:'detached'});
+    await history.locator('.turn[data-turn-id="prior-turn"]').waitFor();
     assert.deepEqual(requests,[{keep_through_turn_id:'prior-turn'}]);
     assert.equal(await history.locator('.turn').count(),1);
   } finally {await context.close();}
