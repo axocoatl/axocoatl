@@ -230,22 +230,27 @@
           <li>A Preview app's server can no longer set a cookie for <code>localhost</code>
               through the Preview proxies: they remove the <code>Domain</code> attribute
               from its <code>Set-Cookie</code> headers.</li>
-          <li>In Safari the workbench keeps every Preview embedded: it offers no Open full
-              preview, the Preview frame cannot open windows, and no link in the
-              workbench opens a Preview's address in a tab of its own. In Safari on macOS
-              the script of a Preview open in its own tab can set a cookie for
-              <code>localhost</code> that reaches the workbench and every other Session's
-              Preview.</li>
-          <li>Known issue: a Preview whose address you open in a Safari tab yourself
-              (typed, pasted, or Command-clicked inside the Preview) still can. It cannot
-              sign in or read the workbench's cookies, but enough such cookies to fill the
-              about 200 KB Safari sends with a request can sign that browser out of the
-              workbench's API (with <code>Path=/api</code>, until localhost's data is
-              removed in Safari's settings) or out of the whole workbench (with
-              <code>Path=/</code>; signing in again works until the Preview writes them
-              again), and with <code>Path=/ws</code> they stop its live updates. For
-              Sessions whose code you do not trust, do not open their Previews in a
-              Safari tab; for a full-page Preview, use a Chromium-based browser
+          <li>In Safari a Preview never runs top-level. Safari on macOS lets a page on a
+              <code>*.localhost</code> address that runs in its own tab set a cookie for
+              <code>localhost</code> that reaches the workbench and every Session's
+              Preview. The daemon now answers a Preview page that Safari would open in a
+              tab or window of its own, however it got there (a link, a redirect,
+              Command-click, a typed address), with a page that says why, and never asks
+              the app. The workbench offers no Open full preview there, and the Preview
+              frame cannot open windows. Measured in Playwright's WebKit on macOS, not in
+              Safari itself or on iPhone or iPad.</li>
+          <li>The legacy Preview path, on the workbench's own address, now answers a
+              browser only for <code>fetch()</code>, and no longer passes on the app's
+              cookies. A link to it let the app store cookies for <code>localhost</code>
+              (measured in Playwright's Chromium and WebKit).</li>
+          <li>Known issue: a page Axocoatl does not serve, such as a development server you
+              run yourself on a <code>*.localhost</code> address, can still set such
+              cookies in Safari. It cannot sign in or read the workbench's cookies, but
+              enough of them to fill the about 200 KB Safari sends with a request can sign
+              that browser out of the workbench's API (with <code>Path=/api</code>, until
+              localhost's data is removed in Safari's settings) or out of the whole
+              workbench (with <code>Path=/</code>), and with <code>Path=/ws</code> they
+              stop its live updates
               (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
               Measured in Playwright's WebKit, not in Safari itself.</li>
         </ul>

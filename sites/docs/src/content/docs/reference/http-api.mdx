@@ -86,9 +86,12 @@ its own browser storage/cookie origin. Modern browsers can block ordinary app
 cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
 cookies work without becoming shared sibling cookies. Safari on macOS also
-lets a top-level Preview page's script set a `Domain=localhost` cookie, and
-sends it to the workbench and to every other Preview, so in Safari the
-workbench keeps Previews embedded and offers no **Open full preview**
+lets a top-level page's script on a `*.localhost` address set a
+`Domain=localhost` cookie, and sends it to the workbench and to every Preview,
+so in Safari a Preview never runs top-level: the daemon answers a request for
+a Preview page Safari would show in a tab or window of its own with `403` and a
+page that says why, and the workbench keeps Previews embedded and offers no
+**Open full preview**
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
 for the exact `/` workbench document on a loopback IP literal redirects to
 `localhost` on the same listener and preserves the query. API, health, and
@@ -847,8 +850,8 @@ text is bounded. Attempts do not receive these references.
 | GET | `/api/sessions/{id}/tasks` | Background task and terminal state |
 | POST | `/api/sessions/{id}/tasks` | `{command, interactive?, rows?, cols?}`; uses or reconstructs the already-Ready sandbox and never prepares an unreviewed environment implicitly |
 | GET (WS) | `/api/sessions/{id}/terminals/{tid}/ws` | Raw PTY output as binary; input binary/text; resize JSON |
-| Any HTTP method | `/api/sessions/{id}/proxy/{port}` | Legacy response-sandboxed Preview proxy root |
-| Any HTTP method | `/api/sessions/{id}/proxy/{port}/{*tail}` | Legacy response-sandboxed Preview proxy path |
+| Any HTTP method | `/api/sessions/{id}/proxy/{port}` | Legacy response-sandboxed Preview proxy root, for programs and `fetch()` |
+| Any HTTP method | `/api/sessions/{id}/proxy/{port}/{*tail}` | Legacy response-sandboxed Preview proxy path, for programs and `fetch()` |
 
 File resolution rejects paths outside the canonical Session root. Tree, read,
 and write execute through the Ready sandbox: local Podman operates on the
@@ -870,19 +873,28 @@ proxy forwards an application's `Set-Cookie` headers without their `Domain`
 attribute, so the browser keeps each one host-only on that Preview origin; the
 rest of the header is unchanged. Whether a page's script may set a
 parent-domain cookie such as `Domain=localhost` is browser policy: Chromium and
-WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level
-Preview page and sends it to the workbench and to every other Preview. The
-workbench never runs a Preview top-level in Safari; someone who opens a
-Preview's address in a Safari tab does
+WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level page
+on a `*.localhost` address and sends it to the workbench and to every Preview.
+So when the request comes from Safari's engine (by its `User-Agent`: Safari on
+a Mac, and every browser on iPhone and iPad) and is for a page of its own
+(`Sec-Fetch-Dest: document`, or any navigation that is not a frame; from a
+Safari too old to send Fetch Metadata, any request for a page), a Preview Host
+answers `403` with a page that says why and links to the workbench, and the
+app is never asked
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). The
 proxy forwards request cookies other than Axocoatl's; on a WebSocket upgrade,
 only those that are visible ASCII, which is all the handshake to the app can
 carry. Both proxies remove `axocoatl-token-*` cookies
 from forwarded requests and drop upstream `Set-Cookie` headers that would set
 one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
-authentication and never forwards Axocoatl credential headers. Its sandboxed
-page has an opaque origin, so its subresource requests carry no SameSite=Strict
-cookie; use it with a header credential.
+authentication and never forwards Axocoatl credential headers. It shares the
+workbench's origin, so in every browser it answers only `fetch()` and
+`XMLHttpRequest` (`Sec-Fetch-Dest: empty`): a page, frame, script, image or
+other request a browser would show or run gets `403` and a line of text, and
+the app is not asked. Programs that send no Fetch Metadata are served; use a
+header credential. It forwards none of the app's `Set-Cookie` headers, and every
+response carries `Content-Security-Policy: sandbox` without
+`allow-same-origin`.
 
 ## Session Git and Checks
 

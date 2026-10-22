@@ -76,8 +76,10 @@ virtual URL top-level, where its host-only cookies work; it never opens the
 logical sandbox `localhost` address. It is not offered in Safari, or in any
 browser on iPhone or iPad: there a Preview in its own tab could set cookies
 for the workbench and for other Sessions, so Previews stay in the pane and
-cannot open windows, and a line under the address says so. Use the workbench
-in another browser for a full-page Preview
+cannot open windows, and a line under the address says so. In Safari the
+daemon also refuses a Preview page that would run in a tab of its own, however
+it was opened (a link, Command-click, or the address typed), with a page that
+says why. Use the workbench in another browser for a full-page Preview
 ([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). Requests sent through the Preview virtual
 Host cannot fall through to the workbench control API; an absolute cross-origin
 control request still follows the operator's configured CORS and authentication
