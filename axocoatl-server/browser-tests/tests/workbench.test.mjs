@@ -2452,6 +2452,22 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
   }
 });
 
+// Safari's engine on a Mac keeps a Preview embedded (static/ui/preview-embedding.js):
+// its frame may not open windows and Open full preview is not offered,
+// because a top-level Preview there can set Domain=localhost cookies. Every
+// other engine (Chromium, WebKit on Linux) keeps popups and Open full preview.
+const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
+const EMBEDDED_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-modals';
+const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for the workbench and for other Sessions, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
+const keepsPreviewsEmbedded = () => process.platform === 'darwin'
+  && browser.browserType().name() === 'webkit';
+
+/** Pages `context` opens within `ms`, beyond those it had. */
+async function pagesOpenedWithin(context, before, ms = 750) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  return context.pages().filter((candidate) => !before.has(candidate)).map((candidate) => candidate.url());
+}
+
 test('Preview app code cannot cross from its dedicated origin into the workbench', async () => {
   const session = runtime.fixtures.alpha.sessions[0];
   const ready = structuredClone(session);
@@ -2578,7 +2594,7 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
     assert.equal(await page.locator('body').getAttribute('data-preview-escaped'), null);
     assert.equal(
       previewSandbox,
-      'allow-scripts allow-same-origin allow-forms allow-popups allow-modals',
+      keepsPreviewsEmbedded() ? EMBEDDED_PREVIEW_SANDBOX : PREVIEW_SANDBOX,
     );
     assert.equal(await page.locator('#browser').evaluate((element) =>
       element.shadowRoot.querySelector('[data-act="open"]') === null), true);
@@ -2621,52 +2637,20 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
       { state: session.environment.state, generation: session.environment.generation },
     );
 
-    // The response-level CSP is the second boundary: even if someone pastes
-    // an authenticated proxy URL into a top-level tab, that document receives
-    // an opaque origin and cannot read a control-plane response.
+    // The legacy proxy path shares the workbench's origin. Someone who pastes
+    // an authenticated proxy URL into a top-level tab gets the daemon's
+    // refusal in every engine, and the app is never asked
+    // (src/preview_document.rs); before, that page ran with an opaque origin
+    // (the path's CSP sandbox) and could not read a control-plane response.
+    // This is the real daemon: nothing is routed here.
     const directPage = await context.newPage();
     const directProxyPath = `/api/sessions/${session.id}/proxy/3000/direct-security-proof`;
-    const directControlResponses = [];
-    directPage.on('response', (response) => {
-      if (response.request().method() === 'POST'
-          && new URL(response.url()).pathname === rebuildPath) {
-        directControlResponses.push(response.status());
-      }
-    });
-    await directPage.route(`**${directProxyPath}`, (route) => route.fulfill({
-      status: 200,
-      contentType: 'text/html',
-      headers: {
-        'content-security-policy': 'sandbox allow-scripts allow-forms allow-popups allow-modals',
-        'x-content-type-options': 'nosniff',
-        'referrer-policy': 'no-referrer',
-      },
-      body: `<!doctype html><body><script>
-        (async () => {
-          let apiReadable = false;
-          try {
-            const response = await fetch(${JSON.stringify(rebuildPath)}, { method: 'POST' });
-            await response.text();
-            apiReadable = true;
-          } catch {}
-          globalThis.__directPreviewSecurityResult = {
-            opaqueOrigin: window.origin === 'null',
-            apiReadable,
-          };
-        })();
-      </script></body>`,
-    }));
     const directResponse = await directPage.goto(`${runtime.baseUrl}${directProxyPath}`);
-    assert.equal(
-      directResponse?.headers()['content-security-policy'],
-      'sandbox allow-scripts allow-forms allow-popups allow-modals',
-    );
-    await directPage.waitForFunction(() => globalThis.__directPreviewSecurityResult != null);
-    assert.deepEqual(
-      await directPage.evaluate(() => globalThis.__directPreviewSecurityResult),
-      { opaqueOrigin: true, apiReadable: false },
-    );
-    assert.ok(directControlResponses.every((status) => status === 403));
+    assert.equal(directResponse?.status(), 403);
+    assert.equal(directResponse.headers()['content-type'], 'text/plain; charset=utf-8');
+    assert.equal(directResponse.headers()['content-security-policy'], "sandbox; default-src 'none'");
+    assert.match(await directPage.locator('body').textContent(),
+      /^The legacy Preview path serves a Session's app only to fetch\(\) and XMLHttpRequest/);
     await directPage.close();
     assertNoBrowserErrors();
   } finally {
@@ -2679,17 +2663,21 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // Safari's WebKit on macOS lets a top-level page on <name>.localhost set a
   // Domain=localhost cookie, which it then sends to localhost and to every
   // other <name>.localhost (measured in Playwright WebKit on macOS).
-  // Chromium refuses it, and so does WebKit on Linux (libsoup). Axocoatl
-  // cannot stop a page's script from setting one; operate/security.mdx says
-  // what such a cookie can and cannot do. The full-page step below sets a
-  // cookie that is not ASCII, forged token and signed-in cookies and 40 of
-  // 1 KB, and asserts the workbench stays signed in with them.
-  // preview-cookies.test.mjs asserts the same against a real Preview app
-  // behind the real proxy, and what that app receives; signed-out.test.mjs,
-  // the 51 large and 9 filler Path=/api cookies that do sign Safari out of
-  // the API.
-  const safariSharesLocalhostCookies = process.platform === 'darwin'
-    && browser.browserType().name() === 'webkit';
+  // Chromium refuses it, and so does WebKit on Linux (libsoup). So in WebKit
+  // on macOS the workbench never runs a Preview top-level: the full-page step
+  // below asserts there that Open full preview is not offered and that the
+  // Preview's own code cannot open itself in a window. Elsewhere it opens the
+  // full Preview, whose script tries a cookie that is not ASCII, forged token
+  // and signed-in cookies and 40 of 1 KB for Domain=localhost, and asserts
+  // the browser refuses them. In every engine the workbench stays signed in.
+  // The Preview here is served by Playwright, so the daemon never sees its
+  // requests. preview-cookies.test.mjs asserts the same against a real
+  // Preview app behind the real proxy, and that in Safari the daemon refuses
+  // a Preview page that would run top-level (typed, redirected, or opened by
+  // a real Command-click in the frame); signed-out.test.mjs, the 51 large and
+  // 9 filler Path=/api cookies that a page on another *.localhost address can
+  // set to sign Safari out of the API.
+  const safariKeepsPreviewsEmbedded = keepsPreviewsEmbedded();
   const {
     context, page, browserErrors, browserRequests, assertNoBrowserErrors,
   } = await openSession(session);
@@ -3040,7 +3028,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       crossPreviewWritable: false,
       origin: previewOrigin,
     });
-    assert.equal(previewSandbox, 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
+    assert.equal(previewSandbox,
+      safariKeepsPreviewsEmbedded ? EMBEDDED_PREVIEW_SANDBOX : PREVIEW_SANDBOX);
     assert.equal(new URL(await iframe.getAttribute('src')).origin, previewOrigin);
     assert.equal(await page.locator('body').getAttribute('data-preview-escaped'), null);
     assert.ok(fixtureRequests.some((request) =>
@@ -3111,45 +3100,119 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     const embeddedAtWorkbench = await cookieEcho.cookieAt(context, 'localhost');
     assert.equal(/preview-(?:parent-attempt|host-only)=/.test(embeddedAtWorkbench), false);
 
-    // Modern browsers block ordinary third-party cookies in the embedded
-    // Preview. The explicit full-preview action opens this exact virtual URL
-    // top-level (never the logical localhost address), where normal host-only
-    // app cookies work without regaining access to the workbench origin.
     const fullPreviewButton = page.locator('ax-browser [data-act="open-full"]');
-    assert.equal(await fullPreviewButton.getAttribute('href'), `${previewOrigin}/app`);
-    assert.equal(await fullPreviewButton.getAttribute('target'), '_blank');
-    assert.equal(await fullPreviewButton.getAttribute('rel'), 'noopener noreferrer');
-    assert.equal(await fullPreviewButton.getAttribute('aria-disabled'), 'false');
-    await page.locator('[data-session-view="browser"]').click();
-    await fullPreviewButton.waitFor({ state: 'visible' });
-    const pagesBeforeFullPreview = new Set(context.pages());
-    await fullPreviewButton.evaluate((link) => link.addEventListener('click', () => {
-      window.__fullPreviewLinkClicked = true;
-    }, { once: true }));
-    await fullPreviewButton.click();
-    assert.equal(await page.evaluate(() => window.__fullPreviewLinkClicked), true);
-    let fullPreviewPage = null;
-    for (let attempt = 0; attempt < 100 && !fullPreviewPage; attempt += 1) {
-      fullPreviewPage = context.pages().find((candidate) =>
-        !pagesBeforeFullPreview.has(candidate)) || null;
-      if (!fullPreviewPage) await new Promise((resolve) => setTimeout(resolve, 25));
+    const embeddedNote = page.locator('ax-browser .embedded-note');
+    if (safariKeepsPreviewsEmbedded) {
+      // Safari: no route in the UI runs this Preview top-level. Open full
+      // preview has no address, says why, and a click opens nothing.
+      await page.locator('[data-session-view="browser"]').click();
+      await fullPreviewButton.waitFor({ state: 'visible' });
+      assert.equal(await fullPreviewButton.getAttribute('href'), null);
+      assert.equal(await fullPreviewButton.getAttribute('target'), null);
+      assert.equal(await fullPreviewButton.getAttribute('aria-disabled'), 'true');
+      assert.match(await fullPreviewButton.getAttribute('title'), PREVIEW_STAYS_EMBEDDED);
+      assert.equal(await embeddedNote.isVisible(), true);
+      assert.match(await embeddedNote.textContent(), PREVIEW_STAYS_EMBEDDED);
+      assert.equal(await fullPreviewButton.getAttribute('aria-describedby'), 'embedded-note');
+      const pagesBeforeClick = new Set(context.pages());
+      await fullPreviewButton.click();
+      assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeClick), []);
+      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+
+      // Nor can the Preview's own code. A real click on its target=_blank
+      // link opens nothing. On a real click in the frame its window.open of
+      // its own address returns null, navigating the workbench's tab is
+      // refused, and a form aimed at a new window opens nothing.
+      await previewFrame.evaluate(() => {
+        const add = (html) => document.body.insertAdjacentHTML('beforeend', html);
+        add(`<a id="blank-self" href="${location.href}" target="_blank">New window</a>`);
+        add(`<form id="form-self" action="${location.href}" target="_blank"></form>`);
+        add('<button id="open-self" type="button">Open myself</button>');
+        add('<a id="meta-self" href="/landed">Command-click</a>');
+        add('<button id="meta-click" type="button">Command-click from script</button>');
+        document.querySelector('#open-self').addEventListener('click', () => {
+          let opened = 'not tried';
+          try {
+            opened = window.open(location.href, '_blank') === null ? 'null' : 'a window';
+          } catch (error) { opened = `threw ${error.name}`; }
+          let topNavigation = 'not tried';
+          try {
+            top.location.href = location.href;
+            topNavigation = 'assigned';
+          } catch (error) { topNavigation = `threw ${error.name}`; }
+          document.querySelector('#form-self').submit();
+          globalThis.__openSelfResult = { opened, topNavigation };
+        });
+        document.querySelector('#meta-click').addEventListener('click', () => {
+          document.querySelector('#meta-self').dispatchEvent(new MouseEvent('click', {
+            bubbles: true, cancelable: true, view: window, metaKey: true,
+          }));
+        });
+      });
+      const pagesBeforeFrameAttempts = new Set(context.pages());
+      await previewFrame.locator('#blank-self').click();
+      await previewFrame.locator('#open-self').click();
+      assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeFrameAttempts, 1500), []);
+      assert.deepEqual(await previewFrame.evaluate(() => globalThis.__openSelfResult),
+        { opened: 'null', topNavigation: 'threw SecurityError' });
+      // WebKit also reports the refused navigation of the workbench's tab as
+      // a page error; it is the refusal asserted just above.
+      for (let index = browserErrors.length - 1; index >= 0; index -= 1) {
+        if (/The frame attempting navigation of the top-level window is sandboxed/.test(browserErrors[index])) {
+          browserErrors.splice(index, 1);
+        }
+      }
+      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(previewFrame.url()).pathname, '/app');
+      // A Command-click the Preview's script makes up stays in the frame: it
+      // navigates the frame itself (the fixture answers /landed with 404),
+      // never a new tab.
+      await previewFrame.locator('#meta-click').click({ noWaitAfter: true });
+      await previewFrame.waitForURL(`${previewOrigin}/landed`);
+      assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeFrameAttempts), []);
+      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
+    } else {
+      // Modern browsers block ordinary third-party cookies in the embedded
+      // Preview. The explicit full-preview action opens this exact virtual URL
+      // top-level (never the logical localhost address), where normal host-only
+      // app cookies work without regaining access to the workbench origin.
+      assert.equal(await fullPreviewButton.getAttribute('href'), `${previewOrigin}/app`);
+      assert.equal(await fullPreviewButton.getAttribute('target'), '_blank');
+      assert.equal(await fullPreviewButton.getAttribute('rel'), 'noopener noreferrer');
+      assert.equal(await fullPreviewButton.getAttribute('aria-disabled'), 'false');
+      assert.equal(await embeddedNote.isVisible(), false);
+      await page.locator('[data-session-view="browser"]').click();
+      await fullPreviewButton.waitFor({ state: 'visible' });
+      const pagesBeforeFullPreview = new Set(context.pages());
+      await fullPreviewButton.evaluate((link) => link.addEventListener('click', () => {
+        window.__fullPreviewLinkClicked = true;
+      }, { once: true }));
+      await fullPreviewButton.click();
+      assert.equal(await page.evaluate(() => window.__fullPreviewLinkClicked), true);
+      let fullPreviewPage = null;
+      for (let attempt = 0; attempt < 100 && !fullPreviewPage; attempt += 1) {
+        fullPreviewPage = context.pages().find((candidate) =>
+          !pagesBeforeFullPreview.has(candidate)) || null;
+        if (!fullPreviewPage) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(fullPreviewPage, `full Preview did not open; pages=${context.pages()
+        .map((candidate) => candidate.url()).join(',')}`);
+      await fullPreviewPage.waitForLoadState('domcontentloaded');
+      await fullPreviewPage.waitForFunction(() => globalThis.__topLevelCookieResult != null);
+      assert.equal(fullPreviewPage.url(), `${previewOrigin}/app`);
+      assert.notEqual(fullPreviewPage.url(), 'http://localhost:3000/app');
+      const topLevelCookieResult = await fullPreviewPage.evaluate(() =>
+        globalThis.__topLevelCookieResult);
+      assert.equal(topLevelCookieResult.openerIsNull, true);
+      assert.equal(topLevelCookieResult.cookies.includes('preview-host-only=from-a'), true);
+      assert.equal(
+        topLevelCookieResult.cookies.includes('preview-parent-attempt=from-a'),
+        false,
+        `Domain=localhost from a top-level Preview: ${topLevelCookieResult.cookies}`,
+      );
+      await fullPreviewPage.close();
     }
-    assert.ok(fullPreviewPage, `full Preview did not open; pages=${context.pages()
-      .map((candidate) => candidate.url()).join(',')}`);
-    await fullPreviewPage.waitForLoadState('domcontentloaded');
-    await fullPreviewPage.waitForFunction(() => globalThis.__topLevelCookieResult != null);
-    assert.equal(fullPreviewPage.url(), `${previewOrigin}/app`);
-    assert.notEqual(fullPreviewPage.url(), 'http://localhost:3000/app');
-    const topLevelCookieResult = await fullPreviewPage.evaluate(() =>
-      globalThis.__topLevelCookieResult);
-    assert.equal(topLevelCookieResult.openerIsNull, true);
-    assert.equal(topLevelCookieResult.cookies.includes('preview-host-only=from-a'), true);
-    assert.equal(
-      topLevelCookieResult.cookies.includes('preview-parent-attempt=from-a'),
-      safariSharesLocalhostCookies,
-      `Domain=localhost from a top-level Preview: ${topLevelCookieResult.cookies}`,
-    );
-    await fullPreviewPage.close();
 
     // What the browser now sends to the workbench's host, to this Session's
     // other Preview port and to another Session's Preview, read from the
@@ -3176,10 +3239,12 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     for (const cookie of [atWorkbench, ...atPreviews]) {
       assert.equal(cookie.includes('preview-host-only='), false, cookieNames(cookie));
     }
-    // Its Domain=localhost cookies: refused (Chromium, WebKit on Linux), or,
-    // in Safari on macOS, sent to the workbench and to every other Preview,
-    // forged axocoatl-token-* cookies included. The Preview proxies strip
-    // those before an app sees them (preview-cookies.test.mjs).
+    // Its Domain=localhost cookies reach nothing: Chromium and WebKit on
+    // Linux refuse them, and Safari on macOS never ran the Preview top-level
+    // to set them. (From a Preview address someone opens in its own Safari
+    // tab they would reach the workbench and every other Preview, forged
+    // axocoatl-token-* cookies included; the Preview proxies strip those
+    // before an app sees them: preview-cookies.test.mjs.)
     for (const cookie of [atWorkbench, ...atPreviews]) {
       const sent = pairs(cookie);
       for (const [label, present] of [
@@ -3188,15 +3253,15 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
         ['non-ASCII junk', sent.some((pair) => /^junk=[^\x00-\x7f]/.test(pair))],
         ['flood', sent.filter((pair) => pair.startsWith('flood-')).length === 40],
       ]) {
-        assert.equal(present, safariSharesLocalhostCookies, `${label}: ${cookieNames(cookie)}`);
+        assert.equal(present, false, `${label}: ${cookieNames(cookie)}`);
       }
     }
     for (const cookie of atPreviews) {
-      assert.equal(pairs(cookie).includes(signedIn), safariSharesLocalhostCookies, cookieNames(cookie));
+      assert.equal(pairs(cookie).includes(signedIn), false, cookieNames(cookie));
     }
     assert.equal(
       pairs(atWorkbench).filter((pair) => pair === signedIn).length,
-      safariSharesLocalhostCookies ? 2 : 1,
+      1,
       cookieNames(atWorkbench),
     );
 
@@ -3245,6 +3310,170 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   } finally {
     await context.close();
     await cookieEcho?.close();
+  }
+});
+
+test('in Safari no link, window.open or terminal link in the workbench opens a Preview top-level; elsewhere they open as before', async (t) => {
+  // The routes by which the workbench could put a Preview's address in a tab
+  // of its own, besides Open full preview (the "Preview browser contract"
+  // journey): a Markdown link in the conversation (an Agent can echo the
+  // address a picked element came from), any other link (a web-search
+  // citation here), window.open (the file editor opens links with it), and a
+  // link a program prints in the Terminal (OSC 8). Each is tried with real
+  // clicks: plain, Command-click, middle click, context menu, drag.
+  const session = runtime.fixtures.alpha.sessions[0];
+  const embedded = keepsPreviewsEmbedded();
+  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  try {
+    const listenerPort = new URL(runtime.baseUrl).port;
+    const previewHost = `${session.id}-p3000.localhost:${listenerPort}`;
+    const previewUrl = `http://${previewHost}/routes`;
+    await context.route((url) => url.host === previewHost, (route) => route.fulfill({
+      status: 200, contentType: 'text/html', body: '<!doctype html><title>Preview</title>',
+    }));
+    // Each refusal tells the shell (ui/preview-embedding.js), which says why.
+    await page.evaluate(() => {
+      window.__refusals = 0;
+      addEventListener('preview-stays-embedded', () => { window.__refusals += 1; });
+    });
+    const refusals = () => page.evaluate(() => window.__refusals);
+    // Outside Safari, `mustOpen` routes open the address in every engine; a
+    // Command-click or middle click opens a tab as that engine decides
+    // (WebKit on Linux, for one, has its own rules), so for those only what
+    // did open is checked.
+    const expectOpened = async (before, what, refusalsBefore, mustOpen = true) => {
+      const opened = await pagesOpenedWithin(context, before);
+      assert.equal(await refusals(), refusalsBefore + (embedded ? 1 : 0), `${what}: refusals`);
+      if (embedded) {
+        assert.deepEqual(opened, [], `${what} opened a Preview top-level in Safari`);
+      } else {
+        if (mustOpen) assert.ok(opened.length >= 1, `${what} opened nothing outside Safari`);
+        for (const extra of context.pages().filter((candidate) => !before.has(candidate))) {
+          await extra.waitForURL(previewUrl).catch(() => {});
+          assert.equal(extra.url(), previewUrl, what);
+          await extra.close();
+        }
+      }
+    };
+
+    // Markdown: in Safari the link keeps its text and loses its address.
+    const markdown = await page.evaluate((url) => {
+      const host = document.createElement('div');
+      host.innerHTML = mdRender(`[the app](${url}) and ${url} and [the docs](https://docs.axocoatl.ai/)`);
+      return [...host.querySelectorAll('a')].map((link) => ({
+        text: link.textContent, href: link.getAttribute('href'),
+        target: link.getAttribute('target'), title: link.getAttribute('title'),
+      }));
+    }, previewUrl);
+    assert.equal(markdown.length, 3, JSON.stringify(markdown));
+    for (const link of markdown.slice(0, 2)) {
+      if (embedded) {
+        assert.equal(link.href, null, JSON.stringify(link));
+        assert.equal(link.target, null, JSON.stringify(link));
+        assert.match(link.title, PREVIEW_STAYS_EMBEDDED);
+      } else {
+        assert.deepEqual([link.href, link.target], [previewUrl, '_blank'], JSON.stringify(link));
+      }
+    }
+    assert.deepEqual([markdown[2].href, markdown[2].target], ['https://docs.axocoatl.ai/', '_blank']);
+
+    // Any other link: a web-search citation in the conversation.
+    await page.evaluate((url) => {
+      const card = document.createElement('div');
+      card.id = 'route-sweep-links';
+      card.style.cssText = 'position:fixed;left:24px;top:24px;z-index:99999;background:#fff;padding:12px';
+      card.innerHTML = renderToolResult('web_search', { results: [{ url, title: 'Preview citation', snippet: '' }] });
+      document.body.append(card);
+      window.__defaultPrevented = [];
+      for (const type of ['contextmenu', 'dragstart']) {
+        document.addEventListener(type, (event) => {
+          if (event.target.closest?.('#route-sweep-links')) window.__defaultPrevented.push([type, event.defaultPrevented]);
+        });
+      }
+    }, previewUrl);
+    const citation = page.locator('#route-sweep-links a');
+    assert.equal(await citation.getAttribute('href'), previewUrl);
+    for (const [what, options, mustOpen] of [
+      ['a click', {}, true],
+      ['a Command-click', { modifiers: ['Meta'] }, false],
+      ['a middle click', { button: 'middle' }, false],
+    ]) {
+      const before = new Set(context.pages());
+      const refusalsBefore = await refusals();
+      await citation.click(options);
+      await expectOpened(before, `${what} on a link to a Preview`, refusalsBefore, mustOpen);
+      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`, what);
+    }
+    // Its context menu (Safari's own holds Open Link in New Tab) and
+    // dragging it out are refused too.
+    const refusalsBeforeMenu = await refusals();
+    await citation.click({ button: 'right' });
+    assert.equal(await refusals(), refusalsBeforeMenu + (embedded ? 1 : 0), 'context menu: refusals');
+    await citation.dragTo(page.locator('#route-sweep-links'), { force: true }).catch(() => {});
+    const prevented = await page.evaluate(() => window.__defaultPrevented);
+    assert.deepEqual(prevented.find(([type]) => type === 'contextmenu'), ['contextmenu', embedded]);
+    const dragged = prevented.find(([type]) => type === 'dragstart');
+    t.diagnostic(`dragstart on the link: ${JSON.stringify(dragged ?? 'not fired by this engine')}`);
+    if (dragged) assert.deepEqual(dragged, ['dragstart', embedded]);
+
+    // window.open, as the file editor opens a link, and as a script would.
+    for (const features of ['noopener', '']) {
+      const before = new Set(context.pages());
+      const refusalsBefore = await refusals();
+      const returned = await page.evaluate(({ url, features: value }) =>
+        window.open(url, '_blank', value || undefined) === null ? 'null' : 'a window', { url: previewUrl, features });
+      if (embedded) assert.equal(returned, 'null', `window.open with "${features}"`);
+      await expectOpened(before, `window.open with "${features}"`, refusalsBefore);
+    }
+    assert.equal(await page.evaluate(() => window.open.name), embedded ? 'openUnlessPreview' : 'open');
+
+    // A link a program prints in the Terminal: OSC 8, on the first row.
+    await page.routeWebSocket(`**/api/sessions/${session.id}/terminals/route-sweep-link/ws`, (socket) => {
+      socket.send(`\x1b]8;;${previewUrl}\x07open the app\x1b]8;;\x07 printed by the Session\r\n`);
+      socket.onMessage(() => {});
+    });
+    await page.evaluate((sessionId) => {
+      const terminal = document.createElement('ax-terminal');
+      terminal.id = 'route-sweep-terminal';
+      terminal.style.cssText = 'position:fixed;left:24px;top:160px;width:640px;height:160px;z-index:99999;background:#000';
+      terminal.session = sessionId;
+      terminal.task = 'route-sweep-link';
+      document.body.append(terminal);
+    }, session.id);
+    const firstRow = page.locator('#route-sweep-terminal .xterm-rows > div').first();
+    // (xterm draws spaces as no-break spaces.)
+    await page.waitForFunction(() => document.querySelector('#route-sweep-terminal')
+      ?.shadowRoot?.querySelector('.xterm-rows')?.textContent.replace(/\u00a0/g, ' ')
+      .includes('open the app printed by the Session'));
+    const row = await firstRow.boundingBox();
+    const dialogs = [];
+    page.on('dialog', (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.accept();
+    });
+    await page.mouse.move(row.x + 24, row.y + row.height / 2);
+    await page.waitForTimeout(250);
+    const beforeTerminal = new Set(context.pages());
+    const refusalsBeforeTerminal = await refusals();
+    await page.mouse.click(row.x + 24, row.y + row.height / 2);
+    await expectOpened(beforeTerminal, 'a Terminal link to a Preview', refusalsBeforeTerminal);
+    // xterm.js asks before it opens a link; in Safari nothing is asked.
+    assert.equal(dialogs.length, embedded ? 0 : 1, JSON.stringify(dialogs));
+
+    // The shell said why, and the workbench is where it was, signed in.
+    const notices = page.locator('#toasts .toast', { hasText: 'Not opened in Safari' });
+    if (embedded) {
+      assert.ok(await notices.count() >= 1, 'Safari said nothing about the refused links');
+      assert.match(await notices.first().locator('.t-body').textContent(), PREVIEW_STAYS_EMBEDDED);
+    } else {
+      assert.equal(await notices.count(), 0);
+      assert.equal(await refusals(), 0);
+    }
+    assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+    assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
+    assertNoBrowserErrors();
+  } finally {
+    await context.close();
   }
 });
 

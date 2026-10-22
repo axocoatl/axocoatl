@@ -1,3 +1,4 @@
+import { announcePreviewStaysEmbedded, KEEPS_PREVIEWS_EMBEDDED, refusesTopLevel } from './preview-embedding.js';
 import { adopt, CODICONS } from './sheets.js';
 
 /**
@@ -25,6 +26,28 @@ import { adopt, CODICONS } from './sheets.js';
 /** The vendored xterm stylesheet. Its rules are selector-based, so unlike the
  *  brand tokens they do not reach into a shadow root on their own. */
 const XTERM_CSS = '/vendor/xterm.css';
+
+/**
+ * How a link a program printed (an OSC 8 hyperlink) opens in Safari. A
+ * program in the Session can print one to a Preview's address, and in Safari
+ * a Preview opened in its own tab can set cookies for the workbench
+ * (preview-embedding.js), so that one is refused and the shell says why.
+ * Any other link opens as xterm.js 5.3.0 opens it by default: after its own
+ * prompt, in a new window with no opener. Other browsers keep that default.
+ */
+const SAFARI_LINK_HANDLER = {
+  activate(_event, uri) {
+    if (refusesTopLevel(uri)) {
+      announcePreviewStaysEmbedded();
+      return;
+    }
+    if (!window.confirm(`Do you want to navigate to ${uri}?\n\nWARNING: This link could potentially be dangerous`)) return;
+    const opened = window.open();
+    if (!opened) return;
+    try { opened.opener = null; } catch { /* as xterm.js does */ }
+    opened.location.href = uri;
+  },
+};
 
 /**
  * Axocoatl's terminal palette.
@@ -155,6 +178,7 @@ export class AxTerminal extends HTMLElement {
       cursorBlink: true,
       cursorStyle: 'block',
       theme: THEME,
+      ...(KEEPS_PREVIEWS_EMBEDDED ? { linkHandler: SAFARI_LINK_HANDLER } : {}),
     });
     const fit = window.FitAddon?.FitAddon ? new window.FitAddon.FitAddon() : null;
     if (fit) term.loadAddon(fit);

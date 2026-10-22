@@ -7021,16 +7021,18 @@ const MAX_PREVIEW_REQUEST_BODY: usize = 64 * 1024 * 1024;
 const MAX_PREVIEW_HTML_BODY: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PreviewHostTarget {
-    session_id: String,
-    logical_port: u16,
+pub(crate) struct PreviewHostTarget {
+    pub(crate) session_id: String,
+    pub(crate) logical_port: u16,
 }
 
 /// Parse `<session>-p<port>.localhost[:listener-port]`. Session ids are
 /// generated as DNS-safe `ses-<uuid>` labels; accepting nothing else keeps the
 /// Host boundary deterministic and prevents an invalid Preview host from ever
 /// falling through to the workbench router.
-fn preview_target_from_headers(headers: &HeaderMap) -> Result<Option<PreviewHostTarget>, ()> {
+pub(crate) fn preview_target_from_headers(
+    headers: &HeaderMap,
+) -> Result<Option<PreviewHostTarget>, ()> {
     let Some(raw_host) = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -7323,8 +7325,10 @@ fn rewrite_preview_location(value: &HeaderValue) -> HeaderValue {
 /// Attributes are split at `;` and named by the text before `=`, trimmed
 /// and compared without case, as browsers parse them (RFC 6265 5.2).
 ///
-/// This closes only the server path: script on a top-level Preview page can
-/// still set a `Domain=localhost` cookie in Safari (operate/security.mdx).
+/// This closes only the server path. Script on a top-level page on a
+/// `*.localhost` address can still set a `Domain=localhost` cookie in Safari;
+/// so Safari never gets a Preview as a top-level page
+/// ([`crate::preview_document`], operate/security.mdx).
 /// `None` (the cookie is dropped) only if the remaining bytes were not a
 /// header value, which cannot happen for bytes taken from one.
 fn host_only_preview_cookie(value: &HeaderValue) -> Option<HeaderValue> {
@@ -7604,7 +7608,11 @@ async fn proxy_preview_http_to_port(
         if name == header::SET_COOKIE {
             // Session code cannot plant or replace the workbench sign-in
             // cookie, and the app's own cookies stay on its Preview origin.
-            if crate::auth::sets_local_token_cookie(value) {
+            // The legacy path answers from the workbench's own host, where an
+            // app's cookie would reach the workbench, so it forwards none.
+            if crate::auth::sets_local_token_cookie(value)
+                || matches!(mode, PreviewProxyMode::LegacyOpaque { .. })
+            {
                 continue;
             }
             if let Some(value) = host_only_preview_cookie(value) {
@@ -7808,11 +7816,14 @@ async fn bridge_preview_websocket(
 }
 
 /// Compatibility proxy URL retained for older callers. The product iframe uses
-/// the per-Session/per-port Preview host; this path remains response-sandboxed
-/// because it shares the workbench origin. It sits behind API auth: Axocoatl
-/// cookies and credential headers are never forwarded, and subresources the
-/// sandboxed (opaque-origin) page loads carry no SameSite=Strict cookie, so
-/// browser use needs a header credential.
+/// the per-Session/per-port Preview host; this path shares the workbench
+/// origin. It sits behind API auth, and Axocoatl cookies and credential
+/// headers are never forwarded. A browser reaches it only with `fetch()` or
+/// `XMLHttpRequest`: its route middleware
+/// ([`crate::preview_document::refuse_legacy_preview_page`]) refuses every
+/// page, frame, script, image or other request a browser would show, run or
+/// embed. Every response is still sandboxed (opaque origin) for a client too
+/// old to send Fetch Metadata, and none forwards the app's `Set-Cookie`.
 pub async fn session_browser_proxy(
     State(state): State<AppState>,
     Path((session_id, port, tail)): Path<(String, u16, String)>,
@@ -9093,6 +9104,8 @@ mod tests {
     #[test]
     fn preview_proxy_uses_strict_virtual_origin_and_resolved_transport() {
         const BROWSER_JS: &str = include_str!("../static/ui/browser.js");
+        const PREVIEW_EMBEDDING_JS: &str = include_str!("../static/ui/preview-embedding.js");
+        const TERMINAL_JS: &str = include_str!("../static/ui/terminal.js");
         const AXO_TAP_JS: &str = include_str!("../static/axo-tap.js");
 
         assert_eq!(
@@ -9194,15 +9207,30 @@ mod tests {
 
         assert!(LEGACY_PREVIEW_SANDBOX_CSP.starts_with("sandbox "));
         assert!(!LEGACY_PREVIEW_SANDBOX_CSP.contains("allow-same-origin"));
+        // The Preview frame's sandbox: popups everywhere but Safari, where a
+        // window the Preview opened would run it top-level and Open full
+        // preview never gets an address (static/ui/preview-embedding.js).
+        assert!(BROWSER_JS.contains("f.setAttribute('sandbox', PREVIEW_SANDBOX)"));
         assert!(BROWSER_JS.contains(
-            "f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals')"
+            "const PREVIEW_SANDBOX = KEEPS_PREVIEWS_EMBEDDED\n  ? 'allow-scripts allow-same-origin allow-forms allow-modals'\n  : 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';"
         ));
+        assert!(!BROWSER_JS.contains("allow-top-navigation"));
+        assert!(!BROWSER_JS.contains("allow-popups-to-escape-sandbox"));
         assert!(BROWSER_JS.contains("-p${port}.localhost"));
         assert!(!BROWSER_JS.contains(".preview.localhost"));
         assert!(BROWSER_JS.contains("data-act=\"open-full\""));
         assert!(BROWSER_JS.contains("target=\"_blank\" rel=\"noopener noreferrer\""));
         assert!(BROWSER_JS.contains("this.#openFull.href = fullPreviewUrl"));
+        assert!(BROWSER_JS.contains(
+            "const fullPreviewUrl = KEEPS_PREVIEWS_EMBEDDED ? '' : this.fullPreviewUrl();"
+        ));
         assert!(!BROWSER_JS.contains("window.open("));
+        assert!(PREVIEW_EMBEDDING_JS.contains(
+            "export const KEEPS_PREVIEWS_EMBEDDED = isSafariEngineOnApple(globalThis.navigator);"
+        ));
+        assert!(TERMINAL_JS
+            .contains("...(KEEPS_PREVIEWS_EMBEDDED ? { linkHandler: SAFARI_LINK_HANDLER } : {}),"));
+        assert!(DASHBOARD_HTML.contains("guardTopLevelPreviews(window);"));
         assert!(DASHBOARD_HTML.contains("!url.hostname.endsWith('.localhost')"));
         assert!(DASHBOARD_HTML.contains("e.origin !== expectedOrigin"));
         assert!(DASHBOARD_HTML.contains("creation?.discovered_ids"));
@@ -9652,6 +9680,132 @@ mod tests {
         assert!(binary_headers.starts_with("get /assets/blob.bin?download=1 http/1.1\r\n"));
         assert!(binary_headers.contains(&format!("host: {virtual_host}\r\n")));
         assert!(binary_headers.contains("accept-encoding: identity\r\n"));
+    }
+
+    /// The legacy path answers from the workbench's own host: a real app's
+    /// `Set-Cookie` never reaches the browser there, and every response is
+    /// sandboxed. Its redirect to a Preview origin passes through unchanged;
+    /// only programs and `fetch()` get one, because a browser's navigation to
+    /// this path is refused before the app is asked
+    /// (`preview_document::refuse_legacy_preview_page`), and Safari's
+    /// navigation to a Preview origin is refused there.
+    #[tokio::test]
+    async fn legacy_preview_proxy_forwards_no_app_cookie_to_the_workbench_host() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind real legacy Preview upstream");
+        let host_port = listener.local_addr().expect("upstream address").port();
+        let upstream = tokio::spawn(async move {
+            let mut answered = Vec::new();
+            for (location, body) in [
+                ("http://ses-legacy-p3000.localhost:18080/landed", ""),
+                (
+                    "",
+                    "<!doctype html><html><head></head><body>app</body></html>",
+                ),
+            ] {
+                let (mut socket, _) = listener.accept().await.expect("accept legacy request");
+                let mut received = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                while !received.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = socket.read(&mut chunk).await.expect("read legacy request");
+                    assert!(read > 0);
+                    received.extend_from_slice(&chunk[..read]);
+                }
+                let status = if location.is_empty() {
+                    "200 OK"
+                } else {
+                    "302 Found"
+                };
+                let location = if location.is_empty() {
+                    String::new()
+                } else {
+                    format!("Location: {location}\r\n")
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n{location}Content-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nSet-Cookie: app_session=alpha; Path=/; HttpOnly\r\nSet-Cookie: flood-0=xxxx; Path=/api\r\nSet-Cookie: shared=from-a; Domain=localhost; Path=/\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write legacy response");
+                answered.push(String::from_utf8_lossy(&received).to_lowercase());
+            }
+            answered
+        });
+
+        let legacy = PreviewProxyMode::LegacyOpaque {
+            base: "/api/sessions/ses-legacy/proxy/3000/".into(),
+        };
+        let target = PreviewHostTarget {
+            session_id: "ses-legacy".into(),
+            logical_port: 3000,
+        };
+        let request = |path: &str| {
+            axum::http::Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/sessions/ses-legacy/proxy/3000/{path}"))
+                .header(header::HOST, "localhost:18080")
+                .header(header::AUTHORIZATION, "Bearer workbench-token")
+                .header(
+                    header::COOKIE,
+                    "axocoatl-token-18080=secret; app_session=alpha",
+                )
+                .body(axum::body::Body::empty())
+                .expect("build legacy request")
+        };
+        for (path, status) in [("redirect", StatusCode::FOUND), ("", StatusCode::OK)] {
+            let response = proxy_preview_http_to_port(
+                target.clone(),
+                path.to_string(),
+                request(path),
+                legacy.clone(),
+                host_port,
+            )
+            .await;
+            assert_eq!(response.status(), status, "{path}");
+            assert!(
+                response.headers().get(header::SET_COOKIE).is_none(),
+                "{path}: {:?}",
+                response.headers().get_all(header::SET_COOKIE)
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_SECURITY_POLICY)
+                    .and_then(|value| value.to_str().ok()),
+                Some(LEGACY_PREVIEW_SANDBOX_CSP)
+            );
+            if status == StatusCode::FOUND {
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(header::LOCATION)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("http://ses-legacy-p3000.localhost:18080/landed")
+                );
+            } else {
+                let body = axum::body::to_bytes(response.into_body(), MAX_PREVIEW_HTML_BODY)
+                    .await
+                    .expect("collect legacy HTML");
+                assert_eq!(
+                    String::from_utf8(body.to_vec()).unwrap(),
+                    r#"<!doctype html><html><head><base href="/api/sessions/ses-legacy/proxy/3000/"></head><body>app<script src="/axo-tap.js"></script></body></html>"#
+                );
+            }
+        }
+        for received in upstream.await.expect("legacy upstream joins") {
+            assert!(!received.contains("authorization:"), "{received}");
+            assert!(!received.contains("axocoatl-token"), "{received}");
+            assert!(
+                received.contains("cookie: app_session=alpha\r\n"),
+                "{received}"
+            );
+            assert!(received.contains("host: localhost:3000\r\n"), "{received}");
+        }
     }
 
     #[tokio::test]

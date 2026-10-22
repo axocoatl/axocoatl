@@ -16,8 +16,12 @@ import {
 // it sends at about 200 KB, puts the longest-path cookies first and skips
 // each one that no longer fits, so the smaller ones fill what the large ones
 // leave (the large ones alone still leave room for the token cookie), and
-// the token cookie is left off every API request and still sent to `/`. A
-// full-page Preview's script can set those cookies (operate/security.mdx).
+// the token cookie is left off every API request and still sent to `/`.
+// Any page on a `*.localhost` address that runs top-level can set those
+// cookies, for `Domain=localhost`. In Safari that is never a Preview, which
+// the daemon serves only inside the workbench (src/preview_document.rs), but
+// it can be another development server on such an address
+// (operate/security.mdx).
 // The shell used to reload itself without end there. Its code now reloads
 // at most once a minute, and otherwise says this browser is signed out and
 // how to sign in again. These journeys pin one automatic reload, then the
@@ -26,8 +30,9 @@ import {
 //
 // The first and third journeys make the API answer 401 with Playwright, and
 // the second clears the browser's cookies. The last two set the cookies from
-// a full-page Preview origin, against the real daemon: with Path=/api and
-// with Path=/ws. In WebKit on macOS, which keeps them, they assert what the
+// a top-level page on another `*.localhost` address that Playwright serves,
+// against the real daemon: with Path=/api and with Path=/ws. In WebKit on
+// macOS, which keeps them, they assert what the
 // person then sees; in Chromium and WebKit on Linux, that the cookies are
 // refused and the workbench works.
 const engines = await browserEngines();
@@ -105,24 +110,23 @@ async function signedInContext(browser) {
 }
 
 /**
- * Open the fixture Session's Preview top-level (as Open full preview does),
- * served here by Playwright as the "Preview browser contract" journey serves
- * it, and set from its script, for localhost with `cookiePath`, 51 cookies of
- * 4,000 bytes and then smaller ones down to 8 bytes. WebKit skips a cookie
- * that no longer fits under its cap and goes on with the next, so the
- * smaller ones fill what is left and no room remains for the token cookie,
- * whatever its length.
+ * Open a page on another `*.localhost` address top-level (a development
+ * server Axocoatl does not serve; in Safari the daemon never serves a
+ * Preview as a page of its own), served here by Playwright, and set from its
+ * script, for localhost with `cookiePath`, 51 cookies of 4,000 bytes and then
+ * smaller ones down to 8 bytes. WebKit skips a cookie that no longer fits
+ * under its cap and goes on with the next, so the smaller ones fill what is
+ * left and no room remains for the token cookie, whatever its length.
  */
-async function fillCookieHeaderFromFullPreview(context, cookiePath) {
-  const session = runtime.fixtures.alpha.sessions[0];
-  const previewOrigin = `http://${session.id}-p3000.localhost:${port()}`;
-  const fromPreview = (url) => url.origin === previewOrigin;
-  await context.route(fromPreview, (route) => route.fulfill({
-    status: 200, contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Preview</title>',
+async function fillCookieHeaderFromLocalhostPage(context, cookiePath) {
+  const otherOrigin = `http://another-app.localhost:${port()}`;
+  const fromOther = (url) => url.origin === otherOrigin;
+  await context.route(fromOther, (route) => route.fulfill({
+    status: 200, contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Another app</title>',
   }));
   const preview = await context.newPage();
   try {
-    await preview.goto(`${previewOrigin}/`);
+    await preview.goto(`${otherOrigin}/`);
     await preview.evaluate((cookiePath) => {
       const attributes = `; Domain=localhost; Path=${cookiePath}; Max-Age=3600`;
       for (let i = 0; i < 51; i += 1) document.cookie = `fill-${i}=${'x'.repeat(4000)}${attributes}`;
@@ -132,7 +136,7 @@ async function fillCookieHeaderFromFullPreview(context, cookiePath) {
     }, cookiePath);
   } finally {
     await preview.close();
-    await context.unroute(fromPreview);
+    await context.unroute(fromOther);
   }
   const stored = await context.cookies(`http://localhost:${port()}${cookiePath}/`);
   return stored.filter((cookie) => cookie.name.startsWith('fill-') || cookie.name.startsWith('fit-')).length;
@@ -229,13 +233,13 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: the large and filler cookies a full-page Preview sets for localhost with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
+  test(`${engine.name}: the large and filler cookies a top-level *.localhost page sets for localhost with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
     const safariSharesLocalhostCookies = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';
     try {
       const context = await signedInContext(browser);
-      const stored = await fillCookieHeaderFromFullPreview(context, '/api');
+      const stored = await fillCookieHeaderFromLocalhostPage(context, '/api');
       // Safari on macOS keeps the 60 cookies for localhost; Chromium and
       // WebKit on Linux refuse every one.
       assert.equal(stored, safariSharesLocalhostCookies ? 60 : 0);
@@ -289,13 +293,13 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: the large and filler cookies a full-page Preview sets for localhost with Path=/ws keep Safari's live connection from opening, while the API answers`, { timeout: 180_000 }, async () => {
+  test(`${engine.name}: the large and filler cookies a top-level *.localhost page sets for localhost with Path=/ws keep Safari's live connection from opening, while the API answers`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
     const safariSharesLocalhostCookies = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';
     try {
       const context = await signedInContext(browser);
-      assert.equal(await fillCookieHeaderFromFullPreview(context, '/ws'), safariSharesLocalhostCookies ? 60 : 0);
+      assert.equal(await fillCookieHeaderFromLocalhostPage(context, '/ws'), safariSharesLocalhostCookies ? 60 : 0);
       const page = await context.newPage();
       const loads = documentLoads(page);
       const sockets = [];

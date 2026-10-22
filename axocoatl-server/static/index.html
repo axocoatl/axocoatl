@@ -96,7 +96,9 @@
      that no longer fits; so cookies set for localhost with Path=/api, 51 of
      4,000 bytes and then smaller ones that fill what is left, leave the token
      cookie off API requests alone (the large ones by themselves still leave
-     room for it). A full-page Preview's script can set them. So this page
+     room for it). Script on any page of a *.localhost address that runs in a
+     tab of its own can set them (in Safari never a Preview's: the daemon
+     refuses that, src/preview_document.rs). So this page
      reloads at most once a minute, and only when sessionStorage can record
      when it did; otherwise it shows, over the page, that this browser is
      signed out and how to sign in again. -->
@@ -139,7 +141,7 @@
         <div id="signed-out-text">
           <p>Axocoatl's API answered 401 to this page: this browser did not send it a valid sign-in cookie.</p>
           <p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
-          <p>In Safari, if this comes back after you sign in, a page open in Safari (a full-page Preview, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
+          <p>In Safari, if this comes back after you sign in, a page open in Safari (another app on a localhost address, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
         </div>
         <button type="button" class="btn">Reload</button>
       </div>`;
@@ -201,6 +203,7 @@
   import '/ui/settings.js';
   import '/ui/terminal.js';
   import '/ui/browser.js';
+  import { guardTopLevelPreviews, refusesTopLevel, PREVIEW_STAYS_EMBEDDED } from '/ui/preview-embedding.js';
   import { loadMonaco, monacoIfLoaded } from '/ui/editor.js';
   import { MODULES as AX_MODULES } from '/ui/launcher.js';
   import { SETTINGS_SECTIONS as AX_SETTINGS_SECTIONS } from '/ui/settings.js';
@@ -208,6 +211,13 @@
   // the settings dialog do — one source, so a new module appears everywhere.
   window.PALETTE_MODULES = AX_MODULES;
   window.PALETTE_SETTINGS = AX_SETTINGS_SECTIONS;
+  // In Safari no link, window.open or Markdown link in the workbench opens a
+  // Preview's address in a tab of its own (ui/preview-embedding.js). Other
+  // browsers are unchanged: the guard installs nothing and Markdown links
+  // keep their addresses.
+  guardTopLevelPreviews(window);
+  window.axRefusesTopLevel = refusesTopLevel;
+  window.axPreviewStaysEmbedded = PREVIEW_STAYS_EMBEDDED;
   // One AMD load for the page: the diff editor in the shell shares it.
   window.axLoadMonaco = loadMonaco;
   window.axMonacoIfLoaded = monacoIfLoaded;
@@ -644,6 +654,11 @@ function toast(title, body, kind = 'info', ms = 3500) {
   $('#toasts').appendChild(t);
   setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .25s'; setTimeout(() => t.remove(), 260); }, ms);
 }
+// Safari only: a link to a Preview's address was not opened in a tab of its
+// own (ui/preview-embedding.js). Say why.
+window.addEventListener('preview-stays-embedded', (event) => {
+  toast('Not opened in Safari', event.detail?.reason || '', 'info', 9000);
+});
 
 // ───── In-app modal (axoModal) ─────
 // Reusable, promise-based dialog. NEVER use alert/prompt/confirm — they
@@ -900,9 +915,17 @@ const MD = window.markdownit({
   },
 });
 // Open links in a new tab (safely) — matches the manual citation links.
+// In Safari a link to a Preview's address (any *.localhost page) keeps its
+// text and loses its address, so neither a click nor Safari's own Open Link
+// in New Tab can run that Preview in a tab of its own (ui/preview-embedding.js).
 const _mdLinkOpen = MD.renderer.rules.link_open
   || ((tokens, idx, options, env, self) => self.renderToken(tokens, idx, options));
 MD.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  if (window.axRefusesTopLevel?.(tokens[idx].attrGet('href') || '')) {
+    tokens[idx].attrs = (tokens[idx].attrs || []).filter(([name]) => name !== 'href');
+    tokens[idx].attrSet('title', window.axPreviewStaysEmbedded || '');
+    return _mdLinkOpen(tokens, idx, options, env, self);
+  }
   tokens[idx].attrSet('target', '_blank');
   tokens[idx].attrSet('rel', 'noopener noreferrer');
   return _mdLinkOpen(tokens, idx, options, env, self);

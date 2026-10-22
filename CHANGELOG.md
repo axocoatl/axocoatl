@@ -708,7 +708,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a request, longest path first, and skips each one that no longer fits. So cookies a
   page sets for `localhost` with `Path=/api`, 51 of 4,000 bytes and then smaller ones that
   fill what is left, leave the sign-in cookie off API requests (the 51 large ones alone
-  still leave room for it). A full-page Preview's script can set them. The page then
+  still leave room for it). Script on a page of a `*.localhost` address that runs in a
+  tab of its own can set them (in Safari that is no longer ever a Preview: see
+  Security). The page then
   reloaded without end (167 times in 20 seconds in Playwright WebKit 26.4). It now
   reloads at most once a minute, and only when it can record that in the tab's session
   storage. Otherwise it shows "This browser is signed out" over the page, with how to
@@ -750,21 +752,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The documentation site's build moves to vite 8.3.4 for GHSA-587h-7wmj-h5pm (its
   development server's editor launch on Windows). Nothing of the site's build ships in
   Axocoatl.
-- **Safari on macOS lets a full-page Preview's script set a cookie for `localhost`.**
-  This happens on a Preview page opened with **Open full preview**, or in a window the
-  Preview opens itself on a click (the Preview frame allows popups). The page's script
-  can set a `Domain=localhost` cookie. Safari then sends it to the workbench on every
-  port and to every other Session's Preview. The Preview proxies forward it to the app,
-  because they strip only `axocoatl-token-*` cookies. Chromium and WebKit on Linux refuse
-  a `Domain=localhost` cookie, and Safari gives an embedded Preview no cookies at all.
-  Until this changes, use a Chromium-based browser for Sessions whose code you do not
-  trust ([Security: Safari shares `Domain=localhost`
-  cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
-  Measured in Playwright WebKit 26.4 on macOS, not in Safari itself.
-  - Safari sends it before the other app's own cookie of the same name, so it can plant
-    a value in another Session's app.
-  - It can also pass values to another top-level Preview, and make a development server
-    answer 431 (Safari sends about 200 KB of cookies).
+- **In Safari a Preview never runs top-level.** Safari on macOS lets a page on a
+  `*.localhost` address that runs in a tab of its own set a `Domain=localhost` cookie
+  from script, and then sends it to the workbench on every port and to every other
+  Session's Preview. Chromium and WebKit on Linux refuse such a cookie, and Safari gives
+  an embedded Preview no cookies at all. Before, a Preview did run top-level in Safari:
+  from **Open full preview**, from a window its code opened when you clicked in it, and
+  from its address opened in a tab. Now the daemon answers every request for a Preview
+  page that Safari would show in a tab or window of its own with `403` and a short page
+  that says why and links to the workbench, and never asks the app. That holds whatever
+  led there: a link, a redirect, Command-click on a link inside the Preview (Safari
+  opens a new tab whatever the frame's sandbox says), the context menu, or an address
+  typed or pasted. The page runs no script and sets no cookie. The Preview in the
+  workbench's pane (`Sec-Fetch-Dest: iframe`) works as before.
+  - The daemon recognizes Safari's engine by its user agent: `AppleWebKit` on a Mac
+    without a Chromium or Firefox token, and every browser on iPhone and iPad. A Safari
+    older than 16.4 does not say whether a page is for a frame or a tab, so it gets the
+    refusal page for the embedded Preview too.
+  - The workbench says so before you try. It offers no **Open full preview**: the
+    control stays disabled, and a line under the Preview's address says why. The Preview
+    frame may not open windows (no `allow-popups`), so the Preview's own `window.open`,
+    `target="_blank"` links and forms open nothing. No link in the workbench opens a
+    `*.localhost` address in a tab of its own: a Markdown link to one in the conversation
+    loses its address, and clicks, middle clicks, the context menu and dragging on any
+    other such link are refused, as are `window.open` (the file editor's links) and a
+    link a program prints in the Terminal.
+  - Other browsers keep **Open full preview**, popups and their links.
+
+  Measured in Playwright WebKit 27.2 on macOS: a typed Preview address, a redirect from
+  another site to one, and a real Command-click on a Preview link inside the Preview's
+  frame and inside the Files view's frame each got the refusal page, and no cookie was
+  set. Not measured in Safari itself, or on iPhone or iPad. A page Axocoatl does not
+  serve that runs top-level on a `*.localhost` address in Safari can still set such
+  cookies: a development server you run yourself, a Session's app opened directly at the
+  loopback port it is published on (the workbench never shows it), or a service worker
+  a Preview registered while it ran top-level before this release (not measured). It no
+  longer reaches a Session's app, because Safari would send its cookies to a Preview
+  only with a top-level request. What it can do to the workbench ([Security: Safari
+  shares `Domain=localhost`
+  cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies);
+  measured in Playwright WebKit 26.4 on macOS):
   - It cannot sign in, read the workbench's host-only HttpOnly cookies, or reach
     `127.0.0.1`.
   - It can sign the workbench out of its API. Such cookies with `Path=/api`, 51 of 4,000
@@ -774,8 +801,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     removed in Safari > Settings > Privacy > Manage Website Data.
   - The same cookies with `Path=/` sign that browser out of the workbench entirely: the
     sign-in cookie stays off every request, so the workbench shows the sign-in page.
-    Signing in again works until the Preview's code writes the cookies again; remove
-    localhost's data in Safari's settings and close that Preview.
+    Signing in again works until the page's code writes the cookies again; remove
+    localhost's data in Safari's settings and close that page.
   - The same cookies with `Path=/ws` keep the workbench's live connection from opening:
     the status bar keeps saying it is reconnecting.
   - A cookie that is not ASCII no longer signs the workbench out (see below). A forged
@@ -786,6 +813,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Like any page open in Safari, it can sign out a browser that signed in a few seconds
     earlier and has no workbench page open, by writing about 1,000 cookies at once:
     WebKit then drops every cookie it holds.
+- **The legacy Preview path no longer serves a browser a page, and forwards no app
+  cookie.** `/api/sessions/{id}/proxy/{port}` reaches a Session's app from the
+  workbench's own origin, behind its sign-in. A link to it, which the workbench's Safari
+  guard does not refuse because it is not a `*.localhost` address, opened the app's page
+  there. The page ran with an opaque origin (the path sends `Content-Security-Policy:
+  sandbox` without `allow-same-origin`), so its script could not use the workbench's
+  API. But the app's `Set-Cookie` headers were stored for `localhost`, the workbench's
+  host, `Path=/api` included, and the app's redirect to its own Preview address opened
+  that Preview top-level, in Safari too. Measured in Playwright 1.64.1's Chromium and
+  WebKit on macOS. In every browser the path now answers only `fetch()` and
+  `XMLHttpRequest` (`Sec-Fetch-Dest: empty`) and programs that send no Fetch Metadata.
+  A page, frame, script, image or anything else a browser would show or run there gets
+  `403` and a line of text, and the app is not asked. The path forwards none of the
+  app's `Set-Cookie` headers.
 - **A cookie that is not ASCII no longer signs Safari out of the workbench.** The daemon
   read each `Cookie` header as text and skipped one that was not visible ASCII, token
   cookie included. In Safari on macOS any top-level Preview page could set `junk=é;

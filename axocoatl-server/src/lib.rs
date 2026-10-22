@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod middleware;
+pub mod preview_document;
 pub mod routes;
 
 use std::sync::Arc;
@@ -396,13 +397,19 @@ pub fn build_router(
             "/api/sessions/{id}/terminals/{tid}/ws",
             get(routes::session_terminal_ws),
         )
+        // The legacy Preview path shares the workbench's origin: a browser
+        // may reach it only with fetch() or XMLHttpRequest.
         .route(
             "/api/sessions/{id}/proxy/{port}",
-            any(routes::session_browser_proxy_root),
+            any(routes::session_browser_proxy_root).layer(axum::middleware::from_fn(
+                preview_document::refuse_legacy_preview_page,
+            )),
         )
         .route(
             "/api/sessions/{id}/proxy/{port}/{*tail}",
-            any(routes::session_browser_proxy),
+            any(routes::session_browser_proxy).layer(axum::middleware::from_fn(
+                preview_document::refuse_legacy_preview_page,
+            )),
         )
         .route("/axo-tap.js", get(routes::axo_tap_script))
         .route("/brand/{file}", get(routes::brand_asset))
@@ -526,6 +533,11 @@ pub fn build_router(
         .layer(axum::middleware::from_fn_with_state(
             preview_state,
             routes::preview_host_boundary,
+        ))
+        // In front of it: in Safari, a Preview is never served as a page of
+        // its own, whatever led there (preview_document.rs).
+        .layer(axum::middleware::from_fn(
+            preview_document::refuse_top_level_preview,
         ))
         // Outermost request ownership: a shutdown notification drops every
         // in-flight HTTP handler, including Preview routing and runtime
