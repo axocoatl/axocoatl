@@ -520,31 +520,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipping it.
 
 ### Fixed
-- **A change too large for one repository capture no longer stops the turn.** A writer
-  that left two compiled test programs (4.6 MB each) in the repository root, seen in the
-  release gate on the Rust fixture with `qwen3-coder:30b`, made the capture after it fail
-  with "repository command output is incomplete or exceeds its capture bound; partial
-  bytes cannot become file input": the capture printed the whole patch against `HEAD`,
-  every untracked file included, where its output may take 1 MiB (768 KiB around the
-  checks). The turn paused, the required checks and the review never ran, and the run
-  ended needing attention, saying only "A turn ended needing attention". A capture now
-  prints a patch whole up to 512 KiB, the most the host records, and a larger one as its
-  SHA-256, its size and its first 12 KiB, so its whole output stays under 768 KiB
-  whatever the change; that prefix is kept only as text to show, never as a patch
-  anything applies or reads files from. Such a change's checks run on its tree as any
-  change's do. The reviewer is told the change is too large to show in full, with its
-  size, the files the turn changed and the first part of the patch. Keep, Source
-  Control's Last turn and receipts attribute it from the lines of the changed paths that
-  each capture still records, compared on the same `HEAD`, when neither the manifest nor
-  the patch fits, and a receipt names each file with its digest as before. A write-scope
-  comparison listing more changed paths than the 512 KiB the host accepts is refused by
-  the capture itself, as the host refused it. Turns admitted with the earlier capture
-  keep it for their checks. A patch larger than 64 MiB, the limit on a capture's
-  temporary files (an 80 MiB untracked file, for example), still cannot be captured.
-  When a capture around the checks cannot record the repository, the checks' readiness
-  in the workbench and the run's Needs attention line now say why ("A turn ended
-  needing attention: The repository could not be captured around the checks, so they
-  establish nothing: its state could not be recorded (...)").
+- **A change whose patch is too large for one repository capture to print no longer
+  stops the turn, up to a patch of 64 MiB.** A writer that left two compiled test
+  programs (4.6 MB each) in the repository root, seen in the release gate on the Rust
+  fixture with `qwen3-coder:30b`, made the capture after it fail with "repository command
+  output is incomplete or exceeds its capture bound; partial bytes cannot become file
+  input": the capture printed the whole patch against `HEAD`, every untracked file
+  included, where its output may take 1 MiB (768 KiB around the checks). The turn
+  paused, the required checks and the review never ran, and the run ended needing
+  attention, saying only "A turn ended needing attention". A capture now prints a patch
+  whole up to 512 KiB, the most the host records, and a larger one as its SHA-256, its
+  size and its first 12 KiB, so its whole output stays under 768 KiB whatever the
+  change; that prefix is kept only as text to show, never as a patch anything applies or
+  reads files from. Such a change's checks and review run as any change's do, as long as
+  its patch fits the 64 MiB a capture may write to its temporary files: about 49 MiB of
+  new binary file data, which Git's binary patch writes in base85 (more when it
+  compresses). The reviewer is told the change is too large to show in full and how
+  large its patch is, and given at most 200 of the paths the turn changed in 8 KiB,
+  files `HEAD` has first, the rest counted by directory, each name quoted as Git quotes
+  one so none adds a line, then at most 6 KiB of the patch's beginning with the data of
+  binary files left out. That is a few thousand tokens, so a reviewer with a
+  32,768-token context starts: 3,072 generated files listed whole had taken about 22,000
+  tokens. When the capture taken as the turn began did not list its changed paths, the
+  reviewer is given the paths that differ from `HEAD` and told they may include earlier
+  changes. Keep, Source Control's Last turn and receipts attribute such a change from the
+  lines of the changed paths each capture records, compared on the same `HEAD`, when
+  neither the manifest nor the patch fits, and a receipt names each file with its digest
+  as before. A capture records those lines for at most 10,000 paths, and only when they
+  fit its output: a change of more paths (12,288 small files, say) is still checked and
+  reviewed, but what it changed cannot be attributed, so its receipt does not cover it.
+  Such a run, passing or not, now carries the new warning `receipt_incomplete`, which
+  says why, in its summary, JUnit file and record, and the receipt lists it among its
+  own warnings; `axocoatl run --receipt` adds that the receipt does not cover every path
+  the run changed. A write-scope comparison listing more changed paths than the 512 KiB
+  the host accepts is refused by the capture itself, as the host refused it. Turns
+  admitted with the earlier capture keep it for their checks. A patch past 64 MiB (an
+  80 MiB untracked file, for example) still cannot be captured, and the turn needs
+  attention; it now says so: "A turn ended needing attention: The repository could not
+  be captured around the checks, so they establish nothing: its state could not be
+  recorded (The change is larger than Axocoatl records: its patch against HEAD passes
+  the 64 MiB a capture may write, about 49 MiB of new binary file data)." Any capture
+  around the checks that cannot record the repository is named the same way, with its
+  reason, in the checks' readiness in the workbench and the run's Needs attention line.
 - **Onboarding and doctor read the user's subordinate ids from `/etc/subuid` and
   `/etc/subgid`.** They judged the range only from `podman info`, which reports the user
   namespace Podman's pause process already holds. After a user's range was removed
