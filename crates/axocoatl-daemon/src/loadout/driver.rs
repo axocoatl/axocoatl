@@ -551,9 +551,14 @@ pub async fn run_to_outcome_with(
         None => outcome.error.is_none() && !interrupted,
     };
     outcome.finished_at_ms = now_ms();
+    let turn_attention_reason = report
+        .turns
+        .last()
+        .and_then(|turn| turn.attention_reason.clone());
     outcome.decide(VerdictInputs {
         fail_on_findings: report.fail_on_findings,
         turn_needs_attention,
+        turn_attention_reason: turn_attention_reason.as_deref(),
         budget_exhausted: wall_clock_ran_out,
         interrupted,
     });

@@ -465,7 +465,7 @@ impl SessionDispatchController {
                             if !epoch_runs(contract, &ready) {
                                 return Ok(false);
                             }
-                            let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":capture.reference,"passed":false,"reason":NOT_CAPTURED}).to_string();
+                            let proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":capture.reference,"passed":false,"reason":not_captured(&[&capture.content])}).to_string();
                             return state.record_check_readiness(epoch, activations, proof, false);
                         }
                         observations.push(capture);
@@ -602,7 +602,12 @@ impl SessionDispatchController {
                 let passed = failure.is_none();
                 let mut proof = serde_json::json!({"kind":"required_check_readiness","turn_id":snapshot.turn_id(),"required_checks":checks,"activations":activations,"before":before.reference,"after":after.reference,"candidate_sha256":after.content.tree_sha256,"checks":results,"check_candidates":command_candidates,"passed":passed});
                 if let Some(reason) = failure {
-                    proof["reason"] = reason.into();
+                    proof["reason"] = if reason == NOT_CAPTURED {
+                        not_captured(&[&before.content, &after.content])
+                    } else {
+                        reason.to_owned()
+                    }
+                    .into();
                 }
                 return state.record_check_readiness(epoch, activations, proof.to_string(), passed);
             }
@@ -631,6 +636,29 @@ const OLDER_TREE: &str = "Some checks ran on an older tree than the current one.
      them all again.";
 const ACCEPTED_AFTER_CAPTURE: &str = "An Agent finished after the checks captured the repository, \
      so they did not run on its result. Continue runs them again.";
+
+/// [`NOT_CAPTURED`], saying why when one of `captures` recorded it: the
+/// repository's state could not be recorded, and the capture's own reason
+/// without the host's internal layers.
+fn not_captured(captures: &[&ActivationRepositorySnapshot]) -> String {
+    let Some(mut cause) = captures
+        .iter()
+        .find_map(|capture| capture.unavailable.as_deref())
+    else {
+        return NOT_CAPTURED.into();
+    };
+    while let Some(rest) = cause
+        .strip_prefix("Session dispatch: ")
+        .or_else(|| cause.strip_prefix("IO error: "))
+    {
+        cause = rest;
+    }
+    format!(
+        "The repository could not be captured around the checks, so they establish nothing: \
+         its state could not be recorded ({}). Continue runs them again.",
+        cause.trim_end_matches('.')
+    )
+}
 
 /// Why recorded results do not establish readiness, or `None` when they do:
 /// every capture and command passed, each command ran on the candidate its

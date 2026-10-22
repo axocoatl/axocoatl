@@ -517,6 +517,29 @@ fn turn_state(state: &str) -> TurnState {
     }
 }
 
+/// Why a turn that did not complete needs a person, when its record says in
+/// words: the readiness of its required checks that failed, such as a
+/// repository that could not be captured around them, and why. A run ends
+/// its turn, so the workbench's hint to Continue is left out.
+fn attention_reason(
+    view: &crate::session_control_plane::SessionTurnControlPlane,
+) -> Option<String> {
+    if turn_state(&view.state) == TurnState::Completed {
+        return None;
+    }
+    let readiness = view
+        .required_check_readiness
+        .as_ref()
+        .filter(|readiness| readiness.state == "failed")?;
+    let reason: String = readiness
+        .reason
+        .split_inclusive(". ")
+        .filter(|sentence| !sentence.contains("Continue"))
+        .collect();
+    let reason = reason.trim();
+    (!reason.is_empty()).then(|| reason.to_owned())
+}
+
 /// How the Outcome names the model of a node whose retained definition has
 /// `provider` and `model`, as [`crate::loadout::team_plan::model_identity`]
 /// names a loadout's Agents. An external writer's retained definition names
@@ -763,7 +786,7 @@ pub fn observation_from_control_plane(
         session_id: view.session_id.clone(),
         turn_id: view.turn_id.clone(),
         state: turn_state(&view.state),
-        attention_reason: None,
+        attention_reason: attention_reason(view),
         nodes,
         checks: checks_out,
         review,
@@ -3849,6 +3872,62 @@ mod tests {
         });
         let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
         assert_eq!(observed.checks[0].candidate_sha256, None);
+    }
+
+    /// A turn that needs attention because its checks' readiness failed
+    /// carries that reason in words, without the workbench's hint to
+    /// Continue, which a run does not offer; a completed turn, or one whose
+    /// readiness did not fail, carries none.
+    #[test]
+    fn a_turn_needing_attention_carries_why_its_checks_are_not_ready() {
+        use crate::session_control_plane::EvidenceValue;
+        let mut view = projection(
+            "needs_attention",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "failed".into(),
+            reason: "The repository could not be captured around the checks, so they establish \
+                     nothing: its state could not be recorded (repository command did not \
+                     complete normally). Continue runs them again."
+                .into(),
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(observed.state, TurnState::NeedsAttention);
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some(
+                "The repository could not be captured around the checks, so they establish \
+                 nothing: its state could not be recorded (repository command did not complete \
+                 normally)."
+            )
+        );
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "failed".into(),
+            reason: "A check failed. Fix the cause, then Continue to run the checks again.".into(),
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some("A check failed.")
+        );
+        view.required_check_readiness.as_mut().unwrap().state = "not_run".into();
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(observed.attention_reason, None);
+        let mut completed = projection(
+            "completed",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        completed.required_check_readiness = view.required_check_readiness.clone();
+        completed.required_check_readiness.as_mut().unwrap().state = "failed".into();
+        let observed = observation_from_control_plane(&completed, &[], None, &HashMap::new());
+        assert_eq!(observed.attention_reason, None);
     }
 
     /// An activation that failed with an empty recorded reason ends with
