@@ -2454,13 +2454,16 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
 
 // Safari's engine on a Mac keeps a Preview embedded (static/ui/preview-embedding.js):
 // its frame may not open windows and Open full preview is not offered,
-// because a top-level Preview there can set Domain=localhost cookies. Every
-// other engine (Chromium, WebKit on Linux) keeps popups and Open full preview.
+// because a top-level Preview there can set Domain=localhost cookies. Chromium
+// keeps popups and Open full preview. Playwright's WebKit is taken for Safari
+// on Linux too: it sends Safari's Mac user agent there as well, the only
+// thing the daemon sees (src/preview_document.rs), and the workbench decides
+// as the daemon does.
 const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
 const EMBEDDED_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-modals';
 const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for the workbench and for other Sessions, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
-const keepsPreviewsEmbedded = () => process.platform === 'darwin'
-  && browser.browserType().name() === 'webkit';
+const SAFARI_MAC_USER_AGENT = /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X [\d_]+\) AppleWebKit\/[\d.]+ \(KHTML, like Gecko\) Version\/[\d.]+ Safari\/[\d.]+$/;
+const keepsPreviewsEmbedded = () => browser.browserType().name() === 'webkit';
 
 /** Pages `context` opens within `ms`, beyond those it had. */
 async function pagesOpenedWithin(context, before, ms = 750) {
@@ -2663,13 +2666,15 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // Safari's WebKit on macOS lets a top-level page on <name>.localhost set a
   // Domain=localhost cookie, which it then sends to localhost and to every
   // other <name>.localhost (measured in Playwright WebKit on macOS).
-  // Chromium refuses it, and so does WebKit on Linux (libsoup). So in WebKit
-  // on macOS the workbench never runs a Preview top-level: the full-page step
-  // below asserts there that Open full preview is not offered and that the
-  // Preview's own code cannot open itself in a window. Elsewhere it opens the
-  // full Preview, whose script tries a cookie that is not ASCII, forged token
-  // and signed-in cookies and 40 of 1 KB for Domain=localhost, and asserts
-  // the browser refuses them. In every engine the workbench stays signed in.
+  // Chromium refuses it, and so does WebKit on Linux (libsoup). So in Safari
+  // the workbench never runs a Preview top-level, and Playwright's WebKit is
+  // taken for Safari on Linux too (keepsPreviewsEmbedded): the full-page step
+  // below asserts in WebKit that Open full preview is not offered and that
+  // the Preview's own code cannot open itself in a window. In Chromium it
+  // opens the full Preview, whose script tries a cookie that is not ASCII,
+  // forged token and signed-in cookies and 40 of 1 KB for Domain=localhost,
+  // and asserts the browser refuses them. In every engine the workbench stays
+  // signed in.
   // The Preview here is served by Playwright, so the daemon never sees its
   // requests. preview-cookies.test.mjs asserts the same against a real
   // Preview app behind the real proxy, and that in Safari the daemon refuses
@@ -3323,8 +3328,32 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
   // clicks: plain, Command-click, middle click, context menu, drag.
   const session = runtime.fixtures.alpha.sessions[0];
   const embedded = keepsPreviewsEmbedded();
-  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  // Where no Chrome is installed (Linux, CI), Playwright runs Chromium as its
+  // headless shell, which crashes the renderer of a tab that a middle click
+  // (or, on Linux, a Control-click) opens in the background for another site
+  // (chrome-headless-shell 156.0.8078.4, on Linux and macOS alike): the tab
+  // never becomes a page, and the next call that reaches every page of the
+  // context (routeWebSocket below) fails with "Target crashed". Chromium
+  // itself, in its new headless mode, opens that tab, so in Chromium this
+  // journey runs there, as it does in Chrome on a Mac.
+  const sweepBrowser = !embedded && !(await resolveChromiumExecutable())
+    ? await chromium.launch({ headless: true, channel: 'chromium' })
+    : null;
+  let context;
   try {
+    context = await newAuthorizedContext(sweepBrowser ?? browser, { viewport: { width: 1280, height: 800 } });
+  } catch (error) {
+    await sweepBrowser?.close();
+    throw error;
+  }
+  try {
+    const { page, assertNoBrowserErrors } = await openSessionInContext(context, session, runtime, null);
+    // WebKit is taken for Safari wherever it runs because it says it is
+    // Safari on a Mac (on Linux, navigator.platform still names Linux).
+    const userAgent = await page.evaluate(() => navigator.userAgent);
+    assert.equal(SAFARI_MAC_USER_AGENT.test(userAgent), embedded, userAgent);
+    assert.equal(await page.evaluate(async () =>
+      (await import('/ui/preview-embedding.js')).KEEPS_PREVIEWS_EMBEDDED), embedded);
     const listenerPort = new URL(runtime.baseUrl).port;
     const previewHost = `${session.id}-p3000.localhost:${listenerPort}`;
     const previewUrl = `http://${previewHost}/routes`;
@@ -3338,9 +3367,8 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
     });
     const refusals = () => page.evaluate(() => window.__refusals);
     // Outside Safari, `mustOpen` routes open the address in every engine; a
-    // Command-click or middle click opens a tab as that engine decides
-    // (WebKit on Linux, for one, has its own rules), so for those only what
-    // did open is checked.
+    // Command-click or middle click opens a tab as that engine decides, so
+    // for those only what did open is checked.
     const expectOpened = async (before, what, refusalsBefore, mustOpen = true) => {
       const opened = await pagesOpenedWithin(context, before);
       assert.equal(await refusals(), refusalsBefore + (embedded ? 1 : 0), `${what}: refusals`);
@@ -3474,6 +3502,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
     assertNoBrowserErrors();
   } finally {
     await context.close();
+    await sweepBrowser?.close();
   }
 });
 

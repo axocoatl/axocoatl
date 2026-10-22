@@ -264,7 +264,10 @@ its page makes are served as before. Other browsers are unchanged and keep
   Mac without a Chromium or Firefox token (Safari, and apps that show pages
   with WebKit), and every browser on iPhone and iPad, which all use Safari's
   engine. A Safari whose user agent was changed to another browser's is taken
-  for that browser.
+  for that browser, and a browser that sends Safari's user agent is taken for
+  Safari wherever it runs: Playwright's WebKit on Linux does. Chrome and
+  Firefox on Linux, and WebKitGTK and WPE with their default user agent, name
+  Linux in theirs and keep **Open full preview**.
 - Safari 16.4 and later say whether a request is for a page of its own
   (`Sec-Fetch-Dest: document`) or for a frame. An older Safari does not say,
   so it gets the refusal page for the embedded Preview too.

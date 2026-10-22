@@ -21,10 +21,15 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // and no cookie is set. The embedded Preview still works, and Chromium opens
 // a Preview top-level as before.
 //
+// The daemon knows Safari by its user agent alone, and Playwright's WebKit
+// sends Safari's Mac user agent on Linux too, so there it is refused like
+// Safari (safariRefusesTopLevelPreviews) while its cookie jar still refuses
+// Domain=localhost cookies (safariSharesLocalhostCookies is macOS only).
+//
 // The first journeys set, from a top-level page on a *.localhost address, a
 // cookie that is not ASCII, a forged axocoatl-token-<port> and -signed-in
-// cookie, and 40 cookies of 1 KB, all for Domain=localhost. Outside Safari
-// that page is the Preview, opened top-level (page.goto). In Safari it is a
+// cookie, and 40 cookies of 1 KB, all for Domain=localhost. In Chromium
+// that page is the Preview, opened top-level (page.goto). In WebKit it is a
 // page Axocoatl does not serve (the cookie echo at forge.localhost), as any
 // other development server on a *.localhost address could be, because the
 // daemon refuses the Preview there. They assert, in every engine:
@@ -59,7 +64,8 @@ if (imageMissing && process.env.AXOCOATL_E2E_REQUIRE_NODE_IMAGE === '1') {
 
 // The Session's app: one Node server on ports 3000 and 5000 that records the
 // Cookie headers of every request and WebSocket upgrade it receives (as
-// Latin-1, so a byte outside ASCII survives) and lists them at /__seen.
+// Latin-1, so a byte outside ASCII survives), and each request's User-Agent,
+// and lists them at /__seen.
 // /set-cookies answers with Set-Cookie headers that ask for Domain=localhost,
 // the way an app's server can.
 const APP = String.raw`
@@ -81,7 +87,7 @@ for (const port of [3000, 5000]) {
       response.end(JSON.stringify(seen));
       return;
     }
-    seen.push({ port, path: url.pathname, cookie: cookieOf(request) });
+    seen.push({ port, path: url.pathname, cookie: cookieOf(request), userAgent: request.headers['user-agent'] || '' });
     const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' };
     if (url.pathname === '/set-cookies') {
       headers['set-cookie'] = [
@@ -124,12 +130,21 @@ let session;
 let listenerPort;
 // A page on a *.localhost address that Axocoatl does not serve.
 let echo;
+// WebKit on macOS shares those cookies; WebKit on Linux refuses them.
 let safariSharesLocalhostCookies = false;
-// Where Safari shares those cookies, the workbench keeps Previews embedded
-// (static/ui/preview-embedding.js) and the daemon refuses a Preview page that
-// would run top-level (src/preview_document.rs).
+// In WebKit, which says it is Safari on a Mac on either system, the
+// workbench keeps Previews embedded (static/ui/preview-embedding.js) and the
+// daemon refuses a Preview page that would run top-level
+// (src/preview_document.rs).
 let safariKeepsPreviewsEmbedded = false;
 let safariRefusesTopLevelPreviews = false;
+// Except for a tab WebKit opens on its own, on a Command-click (Control on
+// Linux): Playwright gives Safari's Mac user agent only to the pages it
+// opens or that a page opens, and on Linux the first request of such a tab
+// carries WebKit's own (X11; Linux), as any WebKit on Linux does. The daemon
+// serves that request as it serves WebKit on Linux, whose cookie jar refuses
+// Domain=localhost cookies. On macOS that request says Safari on a Mac.
+let browserOpenedTabsSaySafari = false;
 
 const previewHost = (port) => `${session.id}-p${port}.localhost`;
 const previewOrigin = (port) => `http://${previewHost(port)}:${listenerPort}`;
@@ -218,10 +233,11 @@ before(async () => {
   }
   const executablePath = await resolveChromiumExecutable();
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
-  safariSharesLocalhostCookies = process.platform === 'darwin'
-    && browser.browserType().name() === 'webkit';
-  safariKeepsPreviewsEmbedded = safariSharesLocalhostCookies;
-  safariRefusesTopLevelPreviews = safariSharesLocalhostCookies;
+  const webkit = browser.browserType().name() === 'webkit';
+  safariSharesLocalhostCookies = process.platform === 'darwin' && webkit;
+  safariKeepsPreviewsEmbedded = webkit;
+  safariRefusesTopLevelPreviews = webkit;
+  browserOpenedTabsSaySafari = safariSharesLocalhostCookies;
   echo = await startCookieEcho();
 });
 
@@ -547,26 +563,31 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     // frame opens a new tab in every engine, whatever the frame's sandbox
     // says (Safari's too, without allow-popups). In Safari the daemon answers
     // that tab with its refusal page and never asks the app, so nothing of
-    // the app runs top-level and no cookie is set. Elsewhere the tab shows
-    // the app, whose script runs and sets a host-only cookie (the browser
-    // refuses its Domain=localhost one).
+    // the app runs top-level and no cookie is set. Elsewhere, WebKit on Linux
+    // included (browserOpenedTabsSaySafari), the tab shows the app, whose
+    // script runs and sets a host-only cookie (the browser refuses its
+    // Domain=localhost one).
     // (Playwright's WebKit reports no request or response for a tab the
-    // browser opened this way, so the page itself is asserted.)
+    // browser opened this way, so the page itself, and what the app received,
+    // are asserted.)
     const cmdClicked = `${previewOrigin(3000)}/top-cmd-clicked`;
     const opened = context.waitForEvent('page', { timeout: 15_000 });
     await frame.locator('#self-link').click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
     const tab = await opened;
     await tab.waitForLoadState('load');
     assert.equal(tab.url(), cmdClicked);
-    const cmdClickReachedApp = (await appSeen())
-      .some((request) => request.port === 3000 && request.path === '/top-cmd-clicked');
-    if (safariRefusesTopLevelPreviews) {
+    const cmdClickAtApp = (await appSeen())
+      .find((request) => request.port === 3000 && request.path === '/top-cmd-clicked');
+    if (browserOpenedTabsSaySafari) {
       await assertRefusalPage(tab);
-      assert.equal(cmdClickReachedApp, false);
+      assert.equal(cmdClickAtApp, undefined);
       assert.deepEqual(await cookiesFromTopLevelApps(context), []);
     } else {
       assert.equal(await tab.title(), 'preview 3000/top-cmd-clicked');
-      assert.equal(cmdClickReachedApp, true);
+      assert.ok(cmdClickAtApp, 'the Command-click did not reach the app');
+      if (safariRefusesTopLevelPreviews) {
+        assert.match(cmdClickAtApp.userAgent, /^Mozilla\/5\.0 \(X11; Linux [^)]+\) AppleWebKit\//);
+      }
       assert.deepEqual(await cookiesFromTopLevelApps(context), [`ran-top-level-host@${previewHost(3000)}`]);
     }
     await tab.close();
@@ -576,6 +597,7 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     // workbench's link guard does not see. WebKit and Chromium on macOS both
     // open a tab from it (Playwright 1.64.1), and in Safari the daemon
     // answers that tab with its refusal page. Whatever opens is that address.
+    // (On Linux, WebKit's tab says WebKit on Linux, as above.)
     const filesClicked = `${previewOrigin(3000)}/top-files-clicked`;
     await workbench.evaluate(() => openFile('links.html'));
     const filesFrame = workbench.frameLocator('iframe.file-preview');
@@ -589,7 +611,7 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
       await filesTab.waitForLoadState('load');
       assert.equal(filesTab.url(), filesClicked);
     }
-    if (safariRefusesTopLevelPreviews) {
+    if (browserOpenedTabsSaySafari) {
       assert.equal(filesTabs.length, 1, 'WebKit opens a tab for a Command-click in a sandboxed frame');
       await assertRefusalPage(filesTabs[0]);
       assert.equal((await appSeen()).some((request) => request.path === '/top-files-clicked'), false);
