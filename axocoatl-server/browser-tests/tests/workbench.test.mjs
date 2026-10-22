@@ -3328,8 +3328,26 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
   // clicks: plain, Command-click, middle click, context menu, drag.
   const session = runtime.fixtures.alpha.sessions[0];
   const embedded = keepsPreviewsEmbedded();
-  const { context, page, assertNoBrowserErrors } = await openSession(session);
+  // Where no Chrome is installed (Linux, CI), Playwright runs Chromium as its
+  // headless shell, which crashes the renderer of a tab that a middle click
+  // (or, on Linux, a Control-click) opens in the background for another site
+  // (chrome-headless-shell 156.0.8078.4, on Linux and macOS alike): the tab
+  // never becomes a page, and the next call that reaches every page of the
+  // context (routeWebSocket below) fails with "Target crashed". Chromium
+  // itself, in its new headless mode, opens that tab, so in Chromium this
+  // journey runs there, as it does in Chrome on a Mac.
+  const sweepBrowser = !embedded && !(await resolveChromiumExecutable())
+    ? await chromium.launch({ headless: true, channel: 'chromium' })
+    : null;
+  let context;
   try {
+    context = await newAuthorizedContext(sweepBrowser ?? browser, { viewport: { width: 1280, height: 800 } });
+  } catch (error) {
+    await sweepBrowser?.close();
+    throw error;
+  }
+  try {
+    const { page, assertNoBrowserErrors } = await openSessionInContext(context, session, runtime, null);
     // WebKit is taken for Safari wherever it runs because it says it is
     // Safari on a Mac (on Linux, navigator.platform still names Linux).
     const userAgent = await page.evaluate(() => navigator.userAgent);
@@ -3484,6 +3502,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
     assertNoBrowserErrors();
   } finally {
     await context.close();
+    await sweepBrowser?.close();
   }
 });
 

@@ -407,7 +407,12 @@ the Preview and failure paths called out below.
   nothing, and the workbench says why. In Chromium nothing is refused: a click,
   `window.open` and the Terminal link open the address as before (the
   Terminal after xterm.js's own prompt), and whatever a Command-click or middle
-  click opens, as that engine decides, is that address.
+  click opens, as that engine decides, is that address. Where no Chrome is
+  installed (Linux, CI), this journey runs Chromium in its new headless mode
+  (`channel: 'chromium'`): Playwright's Chromium headless shell
+  (156.0.8078.4) crashes the renderer of a tab a middle click opens in the
+  background for another site, and the crashed tab then fails the journey's
+  next call that reaches every page (`routeWebSocket`, "Target crashed").
 - `preview-embedding.test.mjs` checks, without a browser, which browsers keep
   a Preview embedded (Safari's engine on macOS, iOS and iPadOS, by
   `navigator.vendor`, then the platform or the user agent, so Playwright's
