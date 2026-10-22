@@ -14,7 +14,10 @@
  *   workbench (chat, citations, the file editor's links) from opening a
  *   `*.localhost` address in a tab or window of its own;
  * - `<ax-terminal>` does the same for links a program prints.
- * Every other browser keeps its behaviour. This module only decides; it
+ * Every other browser keeps its behaviour. The daemon refuses a Preview page
+ * that would run top-level in Safari anyway, however it was opened
+ * (src/preview_document.rs, which decides by the user agent); this keeps the
+ * workbench from offering one and says why. This module only decides; it
  * changes nothing until a caller asks it to.
  */
 

@@ -96,8 +96,9 @@
      that no longer fits; so cookies set for localhost with Path=/api, 51 of
      4,000 bytes and then smaller ones that fill what is left, leave the token
      cookie off API requests alone (the large ones by themselves still leave
-     room for it). A Preview's script can set them when the Preview runs in a
-     tab of its own. So this page
+     room for it). Script on any page of a *.localhost address that runs in a
+     tab of its own can set them (in Safari never a Preview's: the daemon
+     refuses that, src/preview_document.rs). So this page
      reloads at most once a minute, and only when sessionStorage can record
      when it did; otherwise it shows, over the page, that this browser is
      signed out and how to sign in again. -->
@@ -140,7 +141,7 @@
         <div id="signed-out-text">
           <p>Axocoatl's API answered 401 to this page: this browser did not send it a valid sign-in cookie.</p>
           <p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
-          <p>In Safari, if this comes back after you sign in, a page open in Safari (a Preview opened in its own tab, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
+          <p>In Safari, if this comes back after you sign in, a page open in Safari (another app on a localhost address, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
         </div>
         <button type="button" class="btn">Reload</button>
       </div>`;
