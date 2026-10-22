@@ -13,7 +13,9 @@ pub const REPOSITORY_CAPTURE_SCRIPT: &str =
 /// repository, and nothing the repository configures can run a program. Its
 /// output stays within the smallest capture bound whatever the change: a
 /// patch larger than [`MAX_RECORDED_PATCH_BYTES`] is recorded by its digest,
-/// its size and its first [`MAX_PATCH_PREFIX_BYTES`].
+/// its size and its first [`MAX_PATCH_PREFIX_BYTES`]. A patch that reaches
+/// the 64 MiB limit on its temporary files (about 49 MiB of new binary file
+/// data) ends it with exit code 68: a change larger than it records.
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot.sh")
@@ -1012,6 +1014,41 @@ mod tests {
         );
         assert_eq!(field(&output, "patch_bytes"), whole.len().to_string());
         assert_eq!(field(&output, "changed_complete"), "1");
+    }
+
+    /// A patch that reaches the 64 MiB limit on a capture's temporary files
+    /// stops the capture with its own exit code, 68, which the host reads as
+    /// a change larger than Axocoatl records, in every mode: 50 MiB of new
+    /// random file data does (Git's binary patch writes 52 bytes as a line of
+    /// 67), and 49 MiB is still captured, as any change too large to record
+    /// whole.
+    #[test]
+    fn a_patch_past_the_temporary_file_limit_is_named_as_too_large() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        let baseline = field(&kept, "baseline").to_owned();
+        let expected = field(&kept, "judged").to_owned();
+        random_file(&root.join("big.bin"), 49 * 1024 * 1024, 21);
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        let size: u64 = field(&output, "patch_bytes").parse().unwrap();
+        assert!(size > 63 * 1024 * 1024 && size < 64 * 1024 * 1024, "{size}");
+        assert_eq!(field(&output, "changed_complete"), "1");
+        random_file(&root.join("big.bin"), 50 * 1024 * 1024, 21);
+        for mode in [
+            "capture_mode=observe\n".to_owned(),
+            format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
+        ] {
+            let (code, output, stderr) =
+                run_command(root, &format!("{mode}{REPOSITORY_CAPTURE_SCRIPT}"));
+            assert_eq!(code, 68, "{stderr}");
+            assert!(
+                stderr.contains("the patch is larger than one capture records"),
+                "{stderr}"
+            );
+            assert_eq!(output, "");
+        }
+        let _ = std::fs::remove_dir_all(&baseline);
     }
 
     /// A comparison whose changed list is long leaves the patch less room,

@@ -277,12 +277,20 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
     };
     for (name, capture) in [("Before", before), ("After", after)] {
         if !capture.usable() {
+            // The capture's own reason, without the host's internal layers.
+            let mut reason = capture
+                .unavailable
+                .as_deref()
+                .unwrap_or("no tree was recorded");
+            while let Some(rest) = reason
+                .strip_prefix("Session dispatch: ")
+                .or_else(|| reason.strip_prefix("IO error: "))
+            {
+                reason = rest;
+            }
             return ActivationChanges::Unknown(format!(
                 "its {name} capture is unavailable ({})",
-                capture
-                    .unavailable
-                    .as_deref()
-                    .unwrap_or("no tree was recorded")
+                reason.trim_end_matches('.')
             ));
         }
     }

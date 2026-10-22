@@ -23,6 +23,16 @@ esac
 # Limit temporary artifact growth (512-byte blocks) independently from the
 # tool's output bound.
 ulimit -f 131072
+# A patch that reaches that limit (64 MiB: about 49 MiB of new binary file
+# data, which Git's binary patch writes in base85) is a change larger than a
+# capture records, and the capture says so.
+patch_failed() {
+  if [ "$(wc -c < "$scratch/patch" | tr -d ' ')" -ge 67108864 ]; then
+    echo "the patch is larger than one capture records" >&2
+    exit 68
+  fi
+  exit "$1"
+}
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
 # The host has already authorized this exact working root. Different sandbox
@@ -185,7 +195,8 @@ if [ "$head_before" = unborn ]; then
 else
   GIT_INDEX_FILE=$scratch/patch-index git read-tree "$head_before"
   GIT_INDEX_FILE=$scratch/patch-index \
-    git diff --no-ext-diff --no-textconv --binary "$head_before" -- > "$scratch/patch"
+    git diff --no-ext-diff --no-textconv --binary "$head_before" -- > "$scratch/patch" ||
+    patch_failed "$?"
 fi
 # Preserve untracked additions in the protected patch too. Paths are arguments,
 # never shell source.
@@ -197,7 +208,7 @@ xargs -0 -r sh -c '
     code=$?
     [ "$code" -le 1 ] || exit "$code"
   done
-' sh < "$scratch/untracked" >> "$scratch/patch"
+' sh < "$scratch/untracked" >> "$scratch/patch" || patch_failed "$?"
 # Every path whose state differs from HEAD, with its manifest line, whatever
 # the repository's size: what a run can have changed, as this capture saw it.
 # A path the differences name that the manifest does not hold is gone, and

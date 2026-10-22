@@ -501,6 +501,19 @@ fn a_capture_that_could_not_record_the_repository_says_why() {
     );
     assert_eq!(not_captured(&[&tree, &capture(None, None)]), NOT_CAPTURED);
     assert_eq!(not_captured(&[]), NOT_CAPTURED);
+    // A change whose patch reached the limit on a capture's temporary files
+    // is named as larger than Axocoatl records.
+    failed.unavailable = Some(format!(
+        "Session dispatch: {}",
+        super::super::repository_snapshot::TOO_LARGE_TO_CAPTURE
+    ));
+    assert_eq!(
+        not_captured(&[&tree, &failed]),
+        "The repository could not be captured around the checks, so they establish nothing: \
+         its state could not be recorded (The change is larger than Axocoatl records: its patch \
+         against HEAD passes the 64 MiB a capture may write, about 49 MiB of new binary file \
+         data). Continue runs them again."
+    );
 }
 
 /// Readiness does not count an Agent whose result was accepted after the

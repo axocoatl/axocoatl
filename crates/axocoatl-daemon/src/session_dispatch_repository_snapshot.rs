@@ -1158,6 +1158,12 @@ pub(crate) fn judged_changed_paths(
     (compared.before_sha256 == *before).then(|| compared.changed_paths.clone())
 }
 
+/// Why a capture whose patch reached the 64 MiB limit on its temporary
+/// files (exit 68) recorded nothing.
+pub(super) const TOO_LARGE_TO_CAPTURE: &str = "The change is larger than Axocoatl records: its \
+     patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new binary file \
+     data";
+
 pub(super) fn parse_capture(
     value: &serde_json::Value,
     observation: &mut ActivationRepositorySnapshot,
@@ -1168,6 +1174,10 @@ pub(super) fn parse_capture(
     // records (`MAX_COMPARED_PATH_BYTES` in base64) refuses it.
     if matches!(mode, CaptureMode::Compare { .. }) && exit_code == Some(67) {
         return Err(error("Repository capture changed too many paths to record"));
+    }
+    // A patch that reached the limit on a capture's temporary files.
+    if exit_code == Some(68) {
+        return Err(error(TOO_LARGE_TO_CAPTURE));
     }
     if exit_code != Some(0)
         || value
@@ -1701,6 +1711,16 @@ changed_b64={encoded}
             failure.contains("failed or its result was truncated"),
             "{failure}"
         );
+        // A patch that reached the limit on a capture's temporary files says
+        // the change is larger than Axocoatl records, in every mode.
+        let too_large =
+            serde_json::json!({"stdout": "", "exit_code": 68, "stdout_truncated": false});
+        for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
+            let failure = parse_capture(&too_large, &mut observation(), mode)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(failure, format!("Session dispatch: {TOO_LARGE_TO_CAPTURE}"));
+        }
     }
 
     fn view(content: ActivationRepositorySnapshot) -> ActivationRepositorySnapshotView {
