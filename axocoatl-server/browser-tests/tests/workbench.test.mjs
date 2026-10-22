@@ -2637,52 +2637,20 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
       { state: session.environment.state, generation: session.environment.generation },
     );
 
-    // The response-level CSP is the second boundary: even if someone pastes
-    // an authenticated proxy URL into a top-level tab, that document receives
-    // an opaque origin and cannot read a control-plane response.
+    // The legacy proxy path shares the workbench's origin. Someone who pastes
+    // an authenticated proxy URL into a top-level tab gets the daemon's
+    // refusal in every engine, and the app is never asked
+    // (src/preview_document.rs); before, that page ran with an opaque origin
+    // (the path's CSP sandbox) and could not read a control-plane response.
+    // This is the real daemon: nothing is routed here.
     const directPage = await context.newPage();
     const directProxyPath = `/api/sessions/${session.id}/proxy/3000/direct-security-proof`;
-    const directControlResponses = [];
-    directPage.on('response', (response) => {
-      if (response.request().method() === 'POST'
-          && new URL(response.url()).pathname === rebuildPath) {
-        directControlResponses.push(response.status());
-      }
-    });
-    await directPage.route(`**${directProxyPath}`, (route) => route.fulfill({
-      status: 200,
-      contentType: 'text/html',
-      headers: {
-        'content-security-policy': 'sandbox allow-scripts allow-forms allow-popups allow-modals',
-        'x-content-type-options': 'nosniff',
-        'referrer-policy': 'no-referrer',
-      },
-      body: `<!doctype html><body><script>
-        (async () => {
-          let apiReadable = false;
-          try {
-            const response = await fetch(${JSON.stringify(rebuildPath)}, { method: 'POST' });
-            await response.text();
-            apiReadable = true;
-          } catch {}
-          globalThis.__directPreviewSecurityResult = {
-            opaqueOrigin: window.origin === 'null',
-            apiReadable,
-          };
-        })();
-      </script></body>`,
-    }));
     const directResponse = await directPage.goto(`${runtime.baseUrl}${directProxyPath}`);
-    assert.equal(
-      directResponse?.headers()['content-security-policy'],
-      'sandbox allow-scripts allow-forms allow-popups allow-modals',
-    );
-    await directPage.waitForFunction(() => globalThis.__directPreviewSecurityResult != null);
-    assert.deepEqual(
-      await directPage.evaluate(() => globalThis.__directPreviewSecurityResult),
-      { opaqueOrigin: true, apiReadable: false },
-    );
-    assert.ok(directControlResponses.every((status) => status === 403));
+    assert.equal(directResponse?.status(), 403);
+    assert.equal(directResponse.headers()['content-type'], 'text/plain; charset=utf-8');
+    assert.equal(directResponse.headers()['content-security-policy'], "sandbox; default-src 'none'");
+    assert.match(await directPage.locator('body').textContent(),
+      /^The legacy Preview path serves a Session's app only to fetch\(\) and XMLHttpRequest/);
     await directPage.close();
     assertNoBrowserErrors();
   } finally {
@@ -2702,11 +2670,13 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // full Preview, whose script tries a cookie that is not ASCII, forged token
   // and signed-in cookies and 40 of 1 KB for Domain=localhost, and asserts
   // the browser refuses them. In every engine the workbench stays signed in.
-  // preview-cookies.test.mjs asserts the same against a real Preview app
-  // behind the real proxy, and, from a Preview address opened in its own tab
-  // (what remains possible in Safari), what that app receives;
-  // signed-out.test.mjs, the 51 large and 9 filler Path=/api cookies that do
-  // sign Safari out of the API.
+  // The Preview here is served by Playwright, so the daemon never sees its
+  // requests. preview-cookies.test.mjs asserts the same against a real
+  // Preview app behind the real proxy, and that in Safari the daemon refuses
+  // a Preview page that would run top-level (typed, redirected, or opened by
+  // a real Command-click in the frame); signed-out.test.mjs, the 51 large and
+  // 9 filler Path=/api cookies that a page on another *.localhost address can
+  // set to sign Safari out of the API.
   const safariKeepsPreviewsEmbedded = keepsPreviewsEmbedded();
   const {
     context, page, browserErrors, browserRequests, assertNoBrowserErrors,

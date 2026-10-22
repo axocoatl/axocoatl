@@ -7,7 +7,9 @@ import { createServer } from 'node:http';
 // localhost, or a Preview origin. It shows what the browser sends, before any
 // Preview proxy sees it (and a WebKit route handler is never shown the Cookie
 // header). Node reads header bytes as Latin-1, so a byte outside ASCII comes
-// back as the character with that code.
+// back as the character with that code. It answers every path with a small
+// page, so `http://<name>.localhost:<its port>/` is also a page on a
+// `*.localhost` address that Axocoatl does not serve.
 export async function startCookieEcho() {
   const requests = [];
   const handler = (request, response) => {
@@ -29,6 +31,7 @@ export async function startCookieEcho() {
   try { await listen(ipv6, port, '::1'); servers.push(ipv6); } catch {}
   let next = 0;
   return {
+    port,
     /** The Cookie header a top-level navigation to `host` carries. */
     async cookieAt(context, host) {
       next += 1;
