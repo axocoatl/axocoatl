@@ -113,6 +113,10 @@ pub(crate) struct RunPath {
     /// is set up and that the setup did not choose: not ready, but nothing
     /// failed either.
     pub(crate) set_up: bool,
+    /// What the setup chose (its writer, the workbench): `false` for an
+    /// optional writer, which, partly set up and not ready, is a warning
+    /// (`!`), not a failure (`✗`), so a ready setup never lists a `✗`.
+    pub(crate) required: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1881,18 +1885,20 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
     let sandbox_blocker = (!sandbox_ok).then(|| "the sandbox is not ready".to_string());
     let mut ready_for = Vec::new();
     let reviewer = run.reviewer.as_deref();
-    let mut path = |command: &str, problems: Vec<String>, detail: String, set_up: bool| {
-        ready_for.push(RunPath {
-            command: command.to_string(),
-            ok: problems.is_empty(),
-            detail: if problems.is_empty() {
-                detail
-            } else {
-                problems.join("; ")
-            },
-            set_up,
-        });
-    };
+    let mut path =
+        |command: &str, problems: Vec<String>, detail: String, set_up: bool, required: bool| {
+            ready_for.push(RunPath {
+                command: command.to_string(),
+                ok: problems.is_empty(),
+                detail: if problems.is_empty() {
+                    detail
+                } else {
+                    problems.join("; ")
+                },
+                set_up,
+                required,
+            });
+        };
     let reviewer_problem = || -> Option<String> {
         match reviewer {
             None => Some(match other {
@@ -1940,6 +1946,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 reviewer.unwrap_or("-")
             ),
             true,
+            true,
         );
     }
     let codex_command = match &codex_credential {
@@ -1966,6 +1973,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             problems,
             format!("reviewer {}", reviewer.unwrap_or("-")),
             set_up,
+            writer.chosen,
         );
     }
     if let Some(config) = &config {
@@ -1979,7 +1987,13 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             if lead.provider == "ollama" || lead.provider == "openrouter" {
                 problems.extend(model_ok(&spec).err());
             }
-            path("workbench Sessions", problems, format!("Lead {spec}"), true);
+            path(
+                "workbench Sessions",
+                problems,
+                format!("Lead {spec}"),
+                true,
+                true,
+            );
         }
     }
 
@@ -2499,13 +2513,15 @@ pub(crate) fn summary(report: &Report) -> String {
                 .join(", ")
         ));
         for path in &report.ready_for {
-            // An optional writer not set up is not a failure: neutral.
+            // An optional writer not set up is not a failure: neutral; one
+            // partly set up is a warning.
             out.push_str(&format!(
                 "  {} {} ({})\n",
-                match (path.ok, path.set_up) {
-                    (true, _) => "✓",
-                    (false, true) => "✗",
-                    (false, false) => "·",
+                match (path.ok, path.set_up, path.required) {
+                    (true, _, _) => "✓",
+                    (false, _, true) => "✗",
+                    (false, true, false) => "!",
+                    (false, false, false) => "·",
                 },
                 path.command,
                 path.detail
@@ -2932,12 +2948,14 @@ mod tests {
                     ok: !fail,
                     detail: "writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b".into(),
                     set_up: true,
+                    required: true,
                 },
                 RunPath {
                     command: "axocoatl run fix-codex".into(),
                     ok: false,
                     detail: "not connected: run `axocoatl connect codex`".into(),
                     set_up: true,
+                    required: false,
                 },
                 RunPath {
                     command: "axocoatl run fix-claude-code".into(),
@@ -2946,6 +2964,7 @@ mod tests {
                              connect claude-code`"
                         .into(),
                     set_up: false,
+                    required: false,
                 },
             ],
         }
@@ -2983,8 +3002,11 @@ mod tests {
         assert!(ready.contains(
             "  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)"
         ));
+        // An optional writer partly set up is a warning: a ready setup
+        // lists no ✗.
         assert!(ready
-            .contains("  ✗ axocoatl run fix-codex (not connected: run `axocoatl connect codex`)"));
+            .contains("  ! axocoatl run fix-codex (not connected: run `axocoatl connect codex`)"));
+        assert!(!ready.contains('✗'), "{ready}");
         // An optional writer nothing of is set up is neutral, not a failure.
         assert!(
             ready.contains(

@@ -404,8 +404,9 @@ after it, written to `server.port` (`--port` chooses one).
 
 Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor), without loading
 again the models Step 3 just loaded, and says exactly what is ready. A `·` marks a
-writer you have not set up, which is optional, not a failure; its command builds the
-writer's image and signs in, and leaves the configuration as it is (`axocoatl onboard
+writer you have not set up, which is optional, not a failure, and a `!` one you set up
+only in part (its image without its sign-in, say); its command builds the writer's
+image and signs in, and leaves the configuration as it is (`axocoatl onboard
 --update --writer claude-code` would also record Claude Code as this setup's writer, drop
 `run.models.writer` and move the team's Agents to the reviewer's model):
 
