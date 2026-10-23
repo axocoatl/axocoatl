@@ -39,6 +39,11 @@
 //                                         markup; 1: one does; 2: the
 //                                         answers cannot be read, or there
 //                                         are fewer than the verdict needs
+//   node record-answers.mjs --export FILE  the same check on a Session's
+//                                         JSON export (GET
+//                                         /api/sessions/ID/export?format=json):
+//                                         exit 0, 1 or 2 as above; it needs
+//                                         at least one accepted answer
 //   node record-answers.mjs --repo-head RECORD
 //                                         the commit the run started from
 //                                         (manifest repo_head); exit 2 when
@@ -168,6 +173,28 @@ export function checkRecord(bytes) {
   return { status: 0, line: `${answers.length} accepted answers in the record (verdict ${verdict}) hold no tool-call markup` };
 }
 
+/** The same check on a Session's JSON export, a list of history entries
+ *  (or an object holding one as `history`), which must hold at least one
+ *  accepted answer: the workbench's Session after its turn. */
+export function checkExport(text) {
+  let answers;
+  try {
+    const parsed = JSON.parse(text);
+    answers = acceptedAnswers(Array.isArray(parsed) ? parsed : parsed?.history);
+  } catch (error) {
+    return { status: 2, line: `cannot read the Session's accepted answers: ${error.message}` };
+  }
+  const bad = answers.filter((answer) => MARKUP.test(answer.text));
+  if (bad.length) {
+    const first = bad[0];
+    const at = first.text.search(MARKUP);
+    const excerpt = JSON.stringify(first.text.slice(Math.max(0, at - 60), at + 140));
+    return { status: 1, line: `${bad.length} of ${answers.length} accepted answers hold tool-call markup; ${first.where}: ${excerpt}` };
+  }
+  if (!answers.length) return { status: 2, line: 'the Session holds no accepted answer' };
+  return { status: 0, line: `${answers.length} accepted answers in the Session hold no tool-call markup` };
+}
+
 /** The commit the run started from (manifest repo_head). */
 export function repoHead(bytes) {
   const head = only(readRecord(bytes), 'manifest')?.repo_head;
@@ -176,10 +203,26 @@ export function repoHead(bytes) {
 }
 
 function main(argv) {
+  if (argv[0] === '--export') {
+    if (argv.length !== 2) {
+      console.log('usage: record-answers.mjs --export FILE');
+      return 2;
+    }
+    let text;
+    try {
+      text = readFileSync(argv[1], 'utf8');
+    } catch (error) {
+      console.log(`cannot read the Session's accepted answers: ${error.message}`);
+      return 2;
+    }
+    const { status, line } = checkExport(text);
+    console.log(line);
+    return status;
+  }
   const head = argv[0] === '--repo-head';
   const files = head ? argv.slice(1) : argv;
   if (files.length !== 1) {
-    console.log('usage: record-answers.mjs [--repo-head] RECORD');
+    console.log('usage: record-answers.mjs [--repo-head|--export] RECORD');
     return 2;
   }
   let bytes;

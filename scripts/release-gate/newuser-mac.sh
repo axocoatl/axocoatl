@@ -1017,11 +1017,34 @@ path_workbench() {
   expected=$(git config --global user.name 2>/dev/null)
   gate_check "the commit is authored by this account's identity" "author: ${author:-no commit}" -- \
     sh -c '[ -n "$1" ] && [ "$1" != "New User <new-user@example.invalid>" ] && { [ -z "$2" ] || case "$1" in "$2 "*) true ;; *) false ;; esac; }' gate "$author" "$expected"
+  workbench_markup_check "$repo"
   if [ "$browser" = webkit ] && [ -n "$link" ]; then
     safari_preview_steps "$link" "$repo"
   fi
   stop_daemon
   path_end
+}
+
+# workbench_markup_check REPO: no accepted answer of the workbench Session on
+# REPO holds tool-call markup a model wrote as text (gate_markup_check's rule,
+# for the Lead's turn), read from the Session's JSON export.
+workbench_markup_check() {
+  local name="no tool-call markup in the workbench Session's accepted answers" found id out="$GATE_TMP/workbench-export.json" line
+  if ! found=$(session_for "$1"); then
+    gate_record "$name" fail '' '' '' "no open Session on $1"
+    return 1
+  fi
+  id=${found%%$'\t'*}
+  if ! gate_api_get "/api/sessions/$id/export?format=json" "$out"; then
+    gate_record "$name" fail '' '' '' "cannot export Session $id: $(head -c 200 "$out" | tr '\n' ' ')"
+    return 1
+  fi
+  if line=$(node "$gate_dir/record-answers.mjs" --export "$out" 2>&1); then
+    gate_record "$name" pass '' '' '' "$line"
+  else
+    gate_record "$name" fail '' '' '' "$line"
+    return 1
+  fi
 }
 
 path_recovery() {

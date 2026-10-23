@@ -197,9 +197,10 @@ these steps.
   - `axocoatl service uninstall: not installed, its unit removed`
 <!-- release-gate:required-steps:end -->
 
-Every run on a fixture or a real repository, and the `--keep pr` run, also
-checks that no accepted output of the run holds tool-call markup a model
-wrote as text (`<function=` or `</tool_call>`). A turn that ended on such
+Every run on a fixture or a real repository, the `--keep pr` run, and the
+workbench paths' Session turn (read from the Session's JSON export,
+`record-answers.mjs --export`) also check that no accepted output holds
+tool-call markup a model wrote as text (`<function=` or `</tool_call>`). A turn that ended on such
 text ran nothing it meant to run. The check
 (`scripts/release-gate/record-answers.mjs` and `gate_markup_check` in
 `lib.sh`) needs no daemon:

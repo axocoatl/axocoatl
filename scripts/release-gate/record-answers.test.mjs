@@ -13,7 +13,7 @@ import path from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { acceptedAnswers, checkRecord, readRecord, repoHead } from './record-answers.mjs';
+import { acceptedAnswers, checkExport, checkRecord, readRecord, repoHead } from './record-answers.mjs';
 import { bundleText, history, record } from './testdata/record-bundle.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -148,4 +148,13 @@ test('the command prints one line and exits 0, 1 or 2', () => {
   assert.deepEqual([absent.status, absent.stdout.trim()], [2, `cannot read the run's accepted answers: ${path.join(scratch, 'absent.jsonl')} does not exist`]);
   assert.deepEqual([run('--repo-head', clean).status, run('--repo-head', clean).stdout], [0, `${'b'.repeat(40)}\n`]);
   assert.equal(run().status, 2);
+});
+
+test('a Session export is checked the same way and needs an accepted answer', () => {
+  assert.equal(checkExport(JSON.stringify(history('Fixed it.', 'VERDICT: APPROVE'))).status, 0);
+  assert.equal(checkExport(JSON.stringify({ history: history(SLIP, 'VERDICT: APPROVE') })).status, 1);
+  const none = history('a', 'b');
+  for (const activation of none[0].turn.activations) activation.currently_accepted = false;
+  assert.equal(checkExport(JSON.stringify(none)).status, 2);
+  assert.equal(checkExport('not json').status, 2);
 });
