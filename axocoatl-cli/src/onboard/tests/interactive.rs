@@ -175,17 +175,14 @@ async fn a_12_gb_computer_is_not_offered_models_that_do_not_fit() {
         shims.calls()
     );
     assert_eq!(o.steps.len(), 2, "{:?}", o.steps);
-    // This run writes the team, whose Agents run the model: `--replace`
-    // (`--update` would keep them), with the writer named so Step 1 is not
-    // asked again.
+    // This run writes the team, which `--update` moves with the models,
+    // with the writer named so Step 1 is not asked again.
     assert_eq!(
         o.steps[0],
         "qwen3-coder:30b (18.6 GB) is too large for this computer's 12 GB, so it was not \
-         pulled: choose a smaller model with `axocoatl onboard --replace --writer ollama`, or a \
-         hosted writer and reviewer with `axocoatl onboard --replace --writer openrouter` (or \
-         `--writer claude-code`, or `--writer codex`) (--replace backs up the configuration and \
-         writes the team for the new models; --update would keep the Agents that run \
-         qwen3-coder:30b)",
+         pulled: choose a smaller model with `axocoatl onboard --update --writer ollama`, or a \
+         hosted writer and reviewer with `axocoatl onboard --update --writer openrouter` (or \
+         `--writer claude-code`, or `--writer codex`)",
         "{:?}",
         o.steps
     );
@@ -695,14 +692,12 @@ async fn doctor_does_not_tell_a_small_computer_to_pull_a_model_too_large_for_it(
                 "qwen3-coder:30b is not pulled, and at 18.6 GB it is too large for this \
                  computer's 12 GB"
             );
-            // The Agents onboarding wrote run it, and `--update` keeps
-            // Agents: `--replace` is the command that moves them.
+            // The Agents onboarding wrote run it, and `--update` moves
+            // them with the models.
             assert_eq!(
                 fix,
-                "Choose a smaller model (`axocoatl onboard --replace --writer ollama`), or use \
-                 OpenRouter for it (`axocoatl onboard --replace --writer openrouter`) (`--update` \
-                 would keep the Agents that run qwen3-coder:30b; `--replace` backs this \
-                 configuration up first)"
+                "Choose a smaller model (`axocoatl onboard --update --writer ollama`), or use \
+                 OpenRouter for it (`axocoatl onboard --update --writer openrouter`)"
             );
             assert!(!fix.contains("ollama pull"), "{fix}");
         } else {

@@ -267,13 +267,13 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    free here.` A model too large for this computer's memory is named in that question,
    and Enter does not pull it; `--yes` pulls it only with `--pull`. Its step left names
    `axocoatl onboard` with the writer you chose, so it does not ask again who writes: a
-   smaller model with `axocoatl onboard --replace --writer ollama`, or a hosted writer and
-   reviewer with `axocoatl onboard --replace --writer openrouter` (or `--writer
+   smaller model with `axocoatl onboard --update --writer ollama`, or a hosted writer and
+   reviewer with `axocoatl onboard --update --writer openrouter` (or `--writer
    claude-code`, or `--writer codex`); for Claude Code and Codex, a smaller reviewer, or
-   `--reviewer openrouter:openai/gpt-oss-120b`. It says `--replace`, which backs the
-   configuration up and writes the team for the new models, when an Agent in the
-   configuration runs the model: `--update` keeps a configuration's Agents and changes
-   only `run.models`, so it would leave them on it. Otherwise it says `--update`. With
+   `--reviewer openrouter:openai/gpt-oss-120b`. `--update` moves the Agents onboarding
+   wrote, and `run.models`, to the new models. It says `--replace`, which backs the
+   configuration up and writes the team for the new models, when an Agent that `--update`
+   keeps as it is (one you edited, or your own) runs the model. With
    `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
    step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
@@ -406,8 +406,8 @@ Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor), without loa
 again the models Step 3 just loaded, and says exactly what is ready. A `·` marks a
 writer you have not set up, which is optional, not a failure; its command builds the
 writer's image and signs in, and leaves the configuration as it is (`axocoatl onboard
---update --writer claude-code` would also record Claude Code as this setup's writer and
-drop `run.models.writer`):
+--update --writer claude-code` would also record Claude Code as this setup's writer, drop
+`run.models.writer` and move the team's Agents to the reviewer's model):
 
 ```text
 Ready for: axocoatl run fix, workbench Sessions
@@ -516,12 +516,17 @@ With a configuration already there, onboarding offers:
 
 - **Update this setup** (the default, and what `--yes` does): keep the file, back it
   up, and change only what is missing or what this run chose: a provider section it
-  needs, the OpenRouter key when you chose another, `run`, and `server.port`. The
-  writer, the run models, the Codex credential and the OpenRouter key the setup has are
-  kept unless a flag names others (a key connected in the browser is used without
-  asking); `axocoatl onboard --update --port 8081` changes only
-  the port. Everything else, comments included, stays as it was, and the change is
-  shown as a diff first, with every secret value hidden.
+  needs, the OpenRouter key when you chose another, `run`, `server.port`, and the
+  models of the Agents onboarding wrote. The writer, the run models, the Codex
+  credential and the OpenRouter key the setup has are kept unless a flag names others
+  (a key connected in the browser is used without asking); `axocoatl onboard --update
+  --port 8081` changes only the port. When the models change, the Agents onboarding
+  wrote (Lead, Scout, Reviewer and the Assistant, as it writes them) move to them, each
+  where it is in the file. An Agent you edited (its prompt, tools or another field, or
+  a model that is not the one onboarding gave it), and an Agent of your own, stay as
+  they are, and onboarding names the Agents of its team it kept. Everything else,
+  comments included, stays as it was, and the change is shown as a diff first, with
+  every secret value hidden.
 - **Replace it**: write a new configuration; the old file is backed up first and is
   not shown (only the new file is, with its key hidden).
 - **Leave it unchanged**: check the file as it is (Step 5) and stop: exit 0 when it is

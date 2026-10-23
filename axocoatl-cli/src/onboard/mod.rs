@@ -413,10 +413,11 @@ pub(crate) struct Kept {
     /// onboarding's browser sign-in, stores it). It takes the place of
     /// `api_key`.
     pub(crate) openrouter_key_secret: Option<String>,
-    /// The Ollama models the existing configuration's Agents run, which
-    /// "Update this setup" keeps (`config::update` writes onboarding's team
-    /// only where there are no Agents). `None` when this run writes that
-    /// team: no configuration, Replace, or one without Agents.
+    /// The Ollama models run by the existing configuration's Agents that
+    /// "Update this setup" keeps as they are: the person's own and those of
+    /// onboarding's team edited by hand (`config::update` moves onboarding's
+    /// own to the models chosen). `None` when this run writes the team: no
+    /// configuration, Replace, or one without Agents.
     pub(crate) agent_models: Option<Vec<String>>,
 }
 
@@ -440,32 +441,7 @@ impl Kept {
         let existing = config::read_existing(text).ok();
         let agent_models = existing
             .as_ref()
-            .filter(|existing| !existing.agents.is_empty())
-            .map(|existing| {
-                // As doctor reads them: an Agent without a model runs
-                // providers.ollama.model, else llama3.2.
-                let default_model = existing
-                    .providers
-                    .as_ref()
-                    .and_then(|providers| providers.ollama.as_ref())
-                    .and_then(|ollama| ollama.model.clone())
-                    .unwrap_or_else(|| "llama3.2".to_string());
-                existing
-                    .agents
-                    .iter()
-                    .filter(|agent| {
-                        agent.get("provider").and_then(serde_json::Value::as_str) == Some("ollama")
-                    })
-                    .map(|agent| {
-                        agent
-                            .get("model")
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|model| !model.is_empty())
-                            .map(str::to_string)
-                            .unwrap_or_else(|| default_model.clone())
-                    })
-                    .collect()
-            });
+            .and_then(|existing| config::kept_agent_models(existing, text));
         let openrouter = existing.and_then(|existing| existing.providers?.openrouter);
         let openrouter_key_secret = openrouter
             .as_ref()
@@ -499,23 +475,22 @@ impl Kept {
 
 impl Onboarding {
     /// How `axocoatl onboard` runs again to put other models in place of
-    /// `models`, and why: `--replace` when the configuration this run
-    /// writes has an Agent on one of them (onboarding's own team, or an
-    /// Agent "Update this setup" keeps), since `--update` keeps the Agents
-    /// and changes only `run.models`; else `--update`.
+    /// `models`, and why: `--replace` when an Agent "Update this setup"
+    /// keeps as it is (one edited by hand, or the person's own) runs one of
+    /// them; else `--update`, which moves onboarding's team and `run.models`
+    /// to the new models.
     pub(crate) fn model_change(&self, models: &[&str]) -> (&'static str, String) {
-        let agents_run = match &self.kept.agent_models {
-            None => true,
-            Some(kept) => models
+        let agents_run = self.kept.agent_models.as_ref().is_some_and(|kept| {
+            models
                 .iter()
-                .any(|model| kept.iter().any(|kept| kept == model)),
-        };
+                .any(|model| kept.iter().any(|kept| kept == model))
+        });
         if agents_run {
             (
                 "--replace",
                 format!(
                     " (--replace backs up the configuration and writes the team for the new \
-                     models; --update would keep the Agents that run {})",
+                     models; --update would keep the Agents you edited, which run {})",
                     models.join(" and ")
                 ),
             )
@@ -1239,11 +1214,15 @@ fn config_plan(
 /// its replacement, after showing the change and backing the old file up.
 fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig) -> bool {
     let path = o.paths.config_path.clone();
+    let mut kept = Vec::new();
     let (old, new) = match existing {
         ExistingConfig::None => (None, config::render(plan)),
         ExistingConfig::Replace(old) => (Some(old.clone()), config::render(plan)),
         ExistingConfig::Update(old) => match config::update(old, plan, &path) {
-            Ok(new) => (Some(old.clone()), new),
+            Ok(updated) => {
+                kept = updated.kept;
+                (Some(old.clone()), updated.text)
+            }
             Err(error) => {
                 o.step_left(format!(
                     "{error}: run `axocoatl onboard --replace` (the old file is backed up first)"
@@ -1252,6 +1231,19 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             }
         },
     };
+    // Agents of onboarding's team edited by hand stay as they are.
+    if !kept.is_empty() {
+        let agents: Vec<String> = kept
+            .iter()
+            .map(|(id, model)| format!("{id} on {model}"))
+            .collect();
+        o.ui.say(format!(
+            "  Kept as you edited {}: {} (the rest of onboarding's team moves to the models \
+             chosen; `axocoatl onboard --replace` writes the whole team again)",
+            if kept.len() == 1 { "it" } else { "them" },
+            agents.join(", ")
+        ));
+    }
     if let Some(old) = &old {
         if config::diff(old, &new).is_empty() {
             o.ui.ok(format!("{} already has this setup", path.display()));

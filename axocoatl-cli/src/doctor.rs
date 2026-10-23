@@ -993,10 +993,11 @@ fn ollama_models(
 
 /// How `axocoatl onboard` changes the Ollama model `model` of a
 /// configuration without asking again who writes, or switching the writer.
-/// `axocoatl onboard --update` keeps the Agents a configuration has and
-/// changes only `run.models` (and the providers and port), so while an
-/// Agent runs `model` the command is `--replace`, which backs the file up
-/// and writes the team for the new models. The writer is always named
+/// `axocoatl onboard --update` moves the Agents onboarding wrote and
+/// `run.models` to the new models and keeps every other Agent as it is (one
+/// edited by hand, or the person's own), so while such an Agent runs
+/// `model` the command is `--replace`, which backs the file up and writes
+/// the team for the new models. The writer is always named
 /// (`--writer`), so Step 1 is not asked again and `--yes` does not choose
 /// another; with `--replace`, which keeps nothing, a writer model that
 /// stays is named too.
@@ -1017,9 +1018,11 @@ struct ModelChange {
 }
 
 impl ModelChange {
+    /// `kept`: the Ollama models of the Agents `--update` keeps as they are
+    /// ([`onboard_config::kept_agent_models`]).
     fn new(
         model: &str,
-        config: &axocoatl_config::AxocoatlConfig,
+        kept: &[String],
         run: &onboard_config::RunModels,
         writer: Option<&str>,
     ) -> Self {
@@ -1028,14 +1031,14 @@ impl ModelChange {
                 .and_then(|spec| ModelRef::parse(spec).ok())
                 .is_some_and(|spec| spec.provider == Provider::Ollama && spec.model == model)
         };
-        let agents = agent_ollama_models(config).any(|(agent, _)| agent == model);
+        let agents = kept.iter().any(|kept| kept == model);
         let reviewer_only = runs(&run.reviewer) && !runs(&run.writer);
         let (mode, why) = if agents {
             (
                 "--replace",
                 format!(
-                    " (`--update` would keep the Agents that run {model}; `--replace` backs this \
-                     configuration up first)"
+                    " (`--update` would keep the Agents you edited, which run {model}; \
+                     `--replace` backs this configuration up first)"
                 ),
             )
         } else {
@@ -1175,7 +1178,7 @@ pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
 /// change the default one ([`OtherConfig`]).
 fn too_large_fix(
     model: &str,
-    config: &axocoatl_config::AxocoatlConfig,
+    kept: &[String],
     run: &onboard_config::RunModels,
     writer: Option<&str>,
     other: Option<OtherConfig<'_>>,
@@ -1186,7 +1189,7 @@ fn too_large_fix(
             other.in_file()
         );
     }
-    let change = ModelChange::new(model, config, run, writer);
+    let change = ModelChange::new(model, kept, run, writer);
     let hosted = format!(
         " --reviewer openrouter:{}",
         crate::onboard::openrouter::DEFAULT_REVIEWER
@@ -1226,7 +1229,7 @@ fn too_large_fix(
 /// configuration that is not the default one, [`OtherConfig`]).
 fn unreadable_model_fix(
     model: &str,
-    config: &axocoatl_config::AxocoatlConfig,
+    kept: &[String],
     run: &onboard_config::RunModels,
     writer: Option<&str>,
     other: Option<OtherConfig<'_>>,
@@ -1238,7 +1241,7 @@ fn unreadable_model_fix(
             other.in_file()
         );
     }
-    let change = ModelChange::new(model, config, run, writer);
+    let change = ModelChange::new(model, kept, run, writer);
     let another = match change.writer.as_deref() {
         None => {
             return format!(
@@ -1479,13 +1482,24 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 ),
                 cli_version,
             };
+            // The models of the Agents `onboard --update` keeps as they are.
+            let kept = text
+                .as_deref()
+                .ok()
+                .and_then(|text| {
+                    onboard_config::kept_agent_models(
+                        &onboard_config::read_existing(text).ok()?,
+                        text,
+                    )
+                })
+                .unwrap_or_default();
             let fixes: BTreeMap<String, ModelFixes> = wanted
                 .keys()
                 .map(|model| {
                     let writer = chosen_writer.as_deref();
                     let fixes = ModelFixes {
-                        too_large: too_large_fix(model, config, &run, writer, other),
-                        unreadable: unreadable_model_fix(model, config, &run, writer, other),
+                        too_large: too_large_fix(model, &kept, &run, writer, other),
+                        unreadable: unreadable_model_fix(model, &kept, &run, writer, other),
                     };
                     (model.clone(), fixes)
                 })
@@ -2565,9 +2579,19 @@ mod tests {
         }
     }
 
-    fn parsed(text: &str) -> (axocoatl_config::AxocoatlConfig, onboard_config::RunModels) {
+    /// The configuration in `text`, the models of the Agents `onboard
+    /// --update` keeps as they are, and its run defaults.
+    fn parsed(
+        text: &str,
+    ) -> (
+        axocoatl_config::AxocoatlConfig,
+        Vec<String>,
+        onboard_config::RunModels,
+    ) {
         (
             axocoatl_config::parse_config(text, Path::new("config.yaml")).unwrap(),
+            onboard_config::kept_agent_models(&onboard_config::read_existing(text).unwrap(), text)
+                .unwrap_or_default(),
             onboard_config::run_models(text),
         )
     }
@@ -2575,74 +2599,87 @@ mod tests {
     /// A Claude Code (or Codex) setup whose local reviewer is too large for
     /// this computer: the fix moves the reviewer to OpenRouter and keeps
     /// the writer (it used to say `--writer openrouter`, which replaces
-    /// Claude Code). It says `--replace`, since `--update` keeps the Agents
-    /// that run the model, so doctor would still check it: shown here with
-    /// the configuration each command writes.
+    /// Claude Code). It says `--update`, which moves the Agents onboarding
+    /// wrote with `run.models`, so doctor no longer checks the model: shown
+    /// here with the configuration the command writes.
     #[test]
     fn a_too_large_reviewer_moves_only_the_reviewer() {
         let local = ModelRef::new(Provider::Ollama, "gpt-oss:20b");
         let hosted = ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b");
         for writer in ["claude-code", "codex"] {
             let written = onboard_config::render(&plan(writer, None, local.clone()));
-            let (config, run) = parsed(&written);
+            let (_, kept, run) = parsed(&written);
+            assert!(kept.is_empty(), "{kept:?}");
             assert_eq!(
-                too_large_fix("gpt-oss:20b", &config, &run, Some(writer), None),
+                too_large_fix("gpt-oss:20b", &kept, &run, Some(writer), None),
                 format!(
-                    "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer \
+                    "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer \
                      {writer} --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller \
-                     reviewer (`axocoatl onboard --replace --writer {writer}`) (`--update` would \
-                     keep the Agents that run gpt-oss:20b; `--replace` backs this configuration \
-                     up first)"
+                     reviewer (`axocoatl onboard --update --writer {writer}`)"
                 )
             );
             let moved = plan(writer, None, hosted.clone());
-            // --update: run.models moves, the Agents stay on gpt-oss:20b.
+            // --update: run.models and the Agents move off gpt-oss:20b.
             let updated =
                 onboard_config::update(&written, &moved, Path::new("config.yaml")).unwrap();
-            let (config, run) = parsed(&updated);
+            assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+            let (config, _, run) = parsed(&updated.text);
             assert_eq!(
                 run.reviewer.as_deref(),
                 Some("openrouter:openai/gpt-oss-120b")
             );
-            assert!(ollama_models(&config, &run).contains_key("gpt-oss:20b"));
-            // --replace: a new file for the new models.
-            let (config, run) = parsed(&onboard_config::render(&moved));
             assert!(ollama_models(&config, &run).is_empty());
+            // The Agents as --replace writes them.
+            assert_eq!(
+                onboard_config::read_existing(&onboard_config::render(&moved))
+                    .unwrap()
+                    .agents,
+                onboard_config::read_existing(&updated.text).unwrap().agents
+            );
         }
 
         // A local writer that fits, with a reviewer that does not.
         let writer = ModelRef::new(Provider::Ollama, "qwen3-coder:30b");
         let written = onboard_config::render(&plan("ollama", Some(writer), local));
-        let (config, run) = parsed(&written);
+        let (_, kept, run) = parsed(&written);
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama"), None),
+            too_large_fix("gpt-oss:20b", &kept, &run, Some("ollama"), None),
+            "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer ollama \
+             --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller reviewer \
+             (`axocoatl onboard --update --writer ollama`)"
+        );
+        // The writer (Lead) model keeps the writer's fix, naming the
+        // writer so `--update` does not ask Step 1 again.
+        assert_eq!(
+            too_large_fix("qwen3-coder:30b", &kept, &run, Some("ollama"), None),
+            "Choose a smaller model (`axocoatl onboard --update --writer ollama`), or use \
+             OpenRouter for it (`axocoatl onboard --update --writer openrouter`)"
+        );
+        assert_eq!(
+            unreadable_model_fix("qwen3-coder:30b", &kept, &run, Some("ollama"), None),
+            "Check the model with `ollama run qwen3-coder:30b`, or choose another (`axocoatl \
+             onboard --update --writer ollama`)"
+        );
+        assert_eq!(
+            unreadable_model_fix("gpt-oss:20b", &kept, &run, Some("ollama"), None),
+            "Check the model with `ollama run gpt-oss:20b`, or choose another reviewer \
+             (`axocoatl onboard --update --writer ollama`)"
+        );
+        // A Reviewer edited by hand (its prompt) stays as it is with
+        // --update: then the fix is --replace, which names the writer model.
+        let edited = written.replace(
+            "Report each defect with file:line",
+            "Report each defect with its file and line",
+        );
+        let (_, kept, run) = parsed(&edited);
+        assert_eq!(kept, ["gpt-oss:20b"]);
+        assert_eq!(
+            too_large_fix("gpt-oss:20b", &kept, &run, Some("ollama"), None),
             "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`), or \
              choose a smaller reviewer (`axocoatl onboard --replace --writer ollama --writer-model \
-             ollama:qwen3-coder:30b`) (`--update` would keep the Agents that run gpt-oss:20b; \
-             `--replace` backs this configuration up first)"
-        );
-        // The writer (Lead) model keeps the writer's fix, naming the
-        // writer so `--replace` does not ask Step 1 again.
-        assert_eq!(
-            too_large_fix("qwen3-coder:30b", &config, &run, Some("ollama"), None),
-            "Choose a smaller model (`axocoatl onboard --replace --writer ollama`), or use \
-             OpenRouter for it (`axocoatl onboard --replace --writer openrouter`) (`--update` \
-             would keep the Agents that run qwen3-coder:30b; `--replace` backs this \
-             configuration up first)"
-        );
-        assert_eq!(
-            unreadable_model_fix("qwen3-coder:30b", &config, &run, Some("ollama"), None),
-            "Check the model with `ollama run qwen3-coder:30b`, or choose another (`axocoatl \
-             onboard --replace --writer ollama`) (`--update` would keep the Agents that run \
-             qwen3-coder:30b; `--replace` backs this configuration up first)"
-        );
-        assert_eq!(
-            unreadable_model_fix("gpt-oss:20b", &config, &run, Some("ollama"), None),
-            "Check the model with `ollama run gpt-oss:20b`, or choose another reviewer \
-             (`axocoatl onboard --replace --writer ollama --writer-model ollama:qwen3-coder:30b`) \
-             (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
-             configuration up first)"
+             ollama:qwen3-coder:30b`) (`--update` would keep the Agents you edited, which run \
+             gpt-oss:20b; `--replace` backs this configuration up first)"
         );
     }
 
@@ -2656,9 +2693,9 @@ mod tests {
                     \"http://localhost:11434\"\n  openrouter:\n    api_key: \
                     \"${OPENROUTER_API_KEY}\"\nrun:\n  models:\n    writer: \
                     \"openrouter:qwen/qwen3-coder\"\n    reviewer: \"ollama:gpt-oss:20b\"\n";
-        let (config, run) = parsed(text);
+        let (_, kept, run) = parsed(text);
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None),
+            too_large_fix("gpt-oss:20b", &kept, &run, Some("openrouter"), None),
             "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer openrouter \
              --reviewer openrouter:openai/gpt-oss-120b`)"
         );
@@ -2682,17 +2719,17 @@ mod tests {
             "provider: openrouter\n    model: \"openai/gpt-oss-120b\"",
             "provider: ollama\n    model: \"gpt-oss:20b\"",
         );
-        let (config, run) = parsed(&text);
+        let (config, kept, run) = parsed(&text);
         assert!(ollama_models(&config, &run).contains_key("gpt-oss:20b"));
-        let fix = too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None);
+        let fix = too_large_fix("gpt-oss:20b", &kept, &run, Some("openrouter"), None);
         assert_eq!(
             fix,
             "Use OpenRouter for it (`axocoatl onboard --replace --writer openrouter \
-             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents that \
-             run gpt-oss:20b; `--replace` backs this configuration up first)"
+             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents you \
+             edited, which run gpt-oss:20b; `--replace` backs this configuration up first)"
         );
         // That command writes the team on OpenRouter: no Ollama model is left.
-        let (config, run) = parsed(&onboard_config::render(&plan(
+        let (config, _, run) = parsed(&onboard_config::render(&plan(
             "openrouter",
             Some(ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder")),
             ModelRef::new(Provider::OpenRouter, "openai/gpt-oss-120b"),
@@ -2700,18 +2737,18 @@ mod tests {
         assert!(ollama_models(&config, &run).is_empty());
 
         // An OpenRouter writer whose run reviewer and Reviewer Agent are
-        // local (hand-edited): the reviewer moves, the writer model stays.
-        let (config, run) = parsed(&onboard_config::render(&plan(
+        // local, as onboarding writes them: the reviewer moves with
+        // --update, which keeps the writer model.
+        let (_, kept, run) = parsed(&onboard_config::render(&plan(
             "openrouter",
             Some(ModelRef::new(Provider::OpenRouter, "qwen/qwen3-coder")),
             local,
         )));
+        assert!(kept.is_empty(), "{kept:?}");
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("openrouter"), None),
-            "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer openrouter \
-             --writer-model openrouter:qwen/qwen3-coder --reviewer openrouter:openai/gpt-oss-120b`) \
-             (`--update` would keep the Agents that run gpt-oss:20b; `--replace` backs this \
-             configuration up first)"
+            too_large_fix("gpt-oss:20b", &kept, &run, Some("openrouter"), None),
+            "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer openrouter \
+             --reviewer openrouter:openai/gpt-oss-120b`)"
         );
 
         // No `# Writer:` comment and no run.models.writer: who writes is not
@@ -2720,26 +2757,26 @@ mod tests {
                     \"gpt-oss:20b\"\nproviders:\n  ollama:\n    base_url: \
                     \"http://localhost:11434\"\nrun:\n  models:\n    reviewer: \
                     \"ollama:gpt-oss:20b\"\n";
-        let (config, run) = parsed(text);
+        let (_, kept, run) = parsed(text);
         assert_eq!(onboard_config::writer_marker(text), None);
         let expected = "Name a smaller model (or an OpenRouter one) in place of gpt-oss:20b in \
                         this configuration, or write a new one (this one is backed up first) \
                         with `axocoatl onboard --replace --writer WRITER`, where WRITER is \
                         claude-code, codex, ollama or openrouter";
         assert_eq!(
-            too_large_fix("gpt-oss:20b", &config, &run, None, None),
+            too_large_fix("gpt-oss:20b", &kept, &run, None, None),
             expected
         );
         crate::paste_safe::assert_paste_safe(expected);
         crate::paste_safe::assert_paste_safe(&unreadable_model_fix(
             "gpt-oss:20b",
-            &config,
+            &kept,
             &run,
             None,
             None,
         ));
         assert!(
-            unreadable_model_fix("gpt-oss:20b", &config, &run, None, None).starts_with(
+            unreadable_model_fix("gpt-oss:20b", &kept, &run, None, None).starts_with(
                 "Check the model with `ollama run gpt-oss:20b`, or name another model in place \
                  of gpt-oss:20b in this configuration"
             )
@@ -2756,7 +2793,7 @@ mod tests {
             Some("claude-code"),
             Some("openrouter"),
         ] {
-            let too_large = too_large_fix("gpt-oss:20b", &config, &run, writer, other);
+            let too_large = too_large_fix("gpt-oss:20b", &kept, &run, writer, other);
             assert_eq!(
                 too_large,
                 format!(
@@ -2766,7 +2803,7 @@ mod tests {
                     default.display()
                 )
             );
-            let unreadable = unreadable_model_fix("gpt-oss:20b", &config, &run, writer, other);
+            let unreadable = unreadable_model_fix("gpt-oss:20b", &kept, &run, writer, other);
             assert_eq!(
                 unreadable,
                 format!(
@@ -2792,9 +2829,9 @@ mod tests {
             "    reviewer: \"ollama:gpt-oss:20b\"\n",
             "    writer: \"ollama:qwen3-coder:30b\"\n    reviewer: \"ollama:gpt-oss:20b\"\n",
         );
-        let (config, run) = parsed(&text);
+        let (_, kept, run) = parsed(&text);
         assert!(
-            too_large_fix("gpt-oss:20b", &config, &run, Some("ollama"), None).starts_with(
+            too_large_fix("gpt-oss:20b", &kept, &run, Some("ollama"), None).starts_with(
                 "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`)"
             )
@@ -2802,7 +2839,7 @@ mod tests {
 
         // A Claude Code setup with an Agent on a local model that is not the
         // reviewer (hand-edited): the writer stays Claude Code.
-        let (config, run) = parsed(
+        let (_, kept, run) = parsed(
             &onboard_config::render(&plan(
                 "claude-code",
                 None,
@@ -2815,11 +2852,11 @@ mod tests {
             ),
         );
         assert_eq!(
-            too_large_fix("qwen3-coder:30b", &config, &run, Some("claude-code"), None),
+            too_large_fix("qwen3-coder:30b", &kept, &run, Some("claude-code"), None),
             "Choose a smaller model (`axocoatl onboard --replace --writer claude-code`), or use \
              OpenRouter for it (`axocoatl onboard --replace --writer claude-code --reviewer \
-             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents that run \
-             qwen3-coder:30b; `--replace` backs this configuration up first)"
+             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents you edited, which \
+             run qwen3-coder:30b; `--replace` backs this configuration up first)"
         );
     }
 

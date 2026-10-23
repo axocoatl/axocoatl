@@ -439,6 +439,256 @@ pub(crate) fn read_existing(text: &str) -> Result<Existing, String> {
     axocoatl_config::yaml::from_str::<Existing>(text).map_err(|error| error.to_string())
 }
 
+/// The ids of the Agents onboarding writes: the default team and the chat
+/// Assistant.
+const TEAM_IDS: [&str; 4] = ["lead", "scout", "reviewer", "assistant"];
+
+/// The prompts onboarding wrote in earlier releases (1.4.0 and the 1.5.0
+/// candidates), which a configuration written then still holds: such an
+/// Agent is onboarding's, not one edited by hand.
+const EARLIER_PROMPTS: [(&str, &str); 3] = [
+    (
+        "lead",
+        "You own this change. 1. Look first: find the relevant files and tests for code you do \
+         not know. If you have helpers, ask scout to find them. 2. Make the change. 3. Run the \
+         check command from the project instructions (AXOCOATL.md), or the tests, and fix \
+         failures. 4. Check your diff against the task. If you have helpers, ask reviewer to \
+         review it. Fix each defect found. Then summarize what you changed.",
+    ),
+    (
+        "scout",
+        "Answer the lead's question with file paths, line numbers and short evidence. Change \
+         nothing.",
+    ),
+    (
+        "reviewer",
+        "Review the described change. Check it against the task and against every contract and \
+         edge case the docs, comments and tests describe, one by one. Report each defect with \
+         file:line, or say you found none. Change nothing.",
+    ),
+];
+
+/// What an Agent's provider, model and output limit are: onboarding sets
+/// them from the models chosen, and moves them with the models.
+const MODEL_FIELDS: [&str; 3] = ["provider", "model", "sampling"];
+
+/// The Agent `id` as onboarding writes it now, as read.
+fn template_agent(id: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let model = ModelRef::new(Provider::Ollama, "model");
+    let plan = ConfigPlan {
+        ollama_base_url: None,
+        openrouter_key: None,
+        lead: model.clone(),
+        reviewer: model,
+        run_writer: None,
+        run_reviewer: None,
+        port: 8080,
+        note: String::new(),
+        writer: "ollama",
+        codex_credential: None,
+    };
+    read_existing(&agents_block(&plan))
+        .ok()?
+        .agents
+        .into_iter()
+        .find(|agent| agent.get("id").and_then(serde_json::Value::as_str) == Some(id))?
+        .as_object()
+        .cloned()
+}
+
+/// An Agent's `provider` and `model`.
+fn agent_model(agent: &serde_json::Value) -> Option<(String, String)> {
+    let field = |name: &str| agent.get(name).and_then(serde_json::Value::as_str);
+    Some((field("provider")?.to_string(), field("model")?.to_string()))
+}
+
+/// The provider and model onboarding writes for the Agent `id` of a
+/// configuration whose run defaults are `run` and whose writer is `writer`
+/// (its `# Writer:` comment): the reviewer's for Reviewer; for Lead, Scout
+/// and the Assistant the writer's, or the reviewer's when Claude Code or
+/// Codex writes. `None` when the configuration does not say.
+fn expected_model(id: &str, run: &RunModels, writer: Option<&str>) -> Option<(String, String)> {
+    let spec = match id {
+        "reviewer" => run.reviewer.as_deref(),
+        _ if matches!(writer, Some("claude-code" | "codex")) => run.reviewer.as_deref(),
+        _ => run.writer.as_deref(),
+    }?;
+    let model = ModelRef::parse(spec).ok()?;
+    Some((model.provider.id().to_string(), model.model))
+}
+
+/// What onboarding wrote in an existing configuration: its run defaults,
+/// its writer, and its Lead when that is onboarding's.
+struct Written<'a> {
+    run: RunModels,
+    writer: Option<String>,
+    agents: &'a [serde_json::Value],
+}
+
+impl<'a> Written<'a> {
+    fn of(existing: &'a Existing, text: &str) -> Self {
+        Self {
+            run: existing
+                .run
+                .as_ref()
+                .map(|run| run.models.clone())
+                .unwrap_or_default(),
+            writer: writer_marker(text).map(|marker| marker.writer),
+            agents: &existing.agents,
+        }
+    }
+
+    /// Whether `agent` is one onboarding wrote and nobody edited by hand:
+    /// one of its ids, with only the fields onboarding writes, each as it
+    /// writes it (its prompt as this release or an earlier one wrote it),
+    /// on an `ollama` or `openrouter` model with at most
+    /// `sampling.max_tokens`, and on the model onboarding writes for it
+    /// ([`expected_model`]; for a configuration without run defaults, Scout
+    /// and the Assistant on the Lead's). Its provider, model and output limit
+    /// are what moves with the models chosen.
+    fn by_onboarding(&self, agent: &serde_json::Value) -> bool {
+        let Some(id) = agent.get("id").and_then(serde_json::Value::as_str) else {
+            return false;
+        };
+        if !as_written(agent) {
+            return false;
+        }
+        let model = agent_model(agent);
+        match expected_model(id, &self.run, self.writer.as_deref()) {
+            Some(expected) => model.as_ref() == Some(&expected),
+            None if matches!(id, "scout" | "assistant") => self
+                .agents
+                .iter()
+                .find(|lead| lead.get("id").and_then(serde_json::Value::as_str) == Some("lead"))
+                .filter(|lead| as_written(lead))
+                .is_none_or(|lead| agent_model(lead) == model),
+            None => true,
+        }
+    }
+
+    /// The Agents "Update this setup" keeps as they are: the person's own,
+    /// and onboarding's that were edited by hand.
+    fn kept(&self) -> Vec<&'a serde_json::Value> {
+        self.agents
+            .iter()
+            .filter(|agent| !self.by_onboarding(agent))
+            .collect()
+    }
+}
+
+/// Whether `agent` has the shape onboarding writes for its id: the fields
+/// it writes, each as it writes it, but the provider, the model and
+/// `sampling` (with `max_tokens` alone), which follow the models chosen.
+fn as_written(agent: &serde_json::Value) -> bool {
+    let Some(object) = agent.as_object() else {
+        return false;
+    };
+    let Some(id) = object.get("id").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    if !TEAM_IDS.contains(&id) {
+        return false;
+    }
+    let Some(template) = template_agent(id) else {
+        return false;
+    };
+    let fields = |map: &serde_json::Map<String, serde_json::Value>| {
+        map.keys()
+            .filter(|key| !MODEL_FIELDS.contains(&key.as_str()))
+            .cloned()
+            .collect::<std::collections::BTreeSet<String>>()
+    };
+    if fields(object) != fields(&template) {
+        return false;
+    }
+    let same = template.iter().all(|(key, value)| {
+        MODEL_FIELDS.contains(&key.as_str())
+            || object.get(key) == Some(value)
+            || (key == "system_prompt"
+                && EARLIER_PROMPTS.iter().any(|(earlier, prompt)| {
+                    *earlier == id
+                        && object.get(key).and_then(serde_json::Value::as_str) == Some(prompt)
+                }))
+    });
+    let sampling = match object.get("sampling") {
+        None => true,
+        Some(sampling) => sampling
+            .as_object()
+            .is_some_and(|sampling| sampling.keys().all(|key| key == "max_tokens")),
+    };
+    let provider = matches!(
+        object.get("provider").and_then(serde_json::Value::as_str),
+        Some("ollama" | "openrouter")
+    );
+    same && sampling && provider && object.get("model").is_some()
+}
+
+/// The Ollama models run by the Agents "Update this setup" keeps as they
+/// are, the person's own and onboarding's edited by hand, as doctor reads
+/// them (an Agent without a model runs `providers.ollama.model`, else
+/// llama3.2); `None` without any Agents (onboarding writes its team).
+pub(crate) fn kept_agent_models(existing: &Existing, text: &str) -> Option<Vec<String>> {
+    if existing.agents.is_empty() {
+        return None;
+    }
+    let default_model = existing
+        .providers
+        .as_ref()
+        .and_then(|providers| providers.ollama.as_ref())
+        .and_then(|ollama| ollama.model.clone())
+        .unwrap_or_else(|| "llama3.2".to_string());
+    Some(
+        Written::of(existing, text)
+            .kept()
+            .into_iter()
+            .filter(|agent| {
+                agent.get("provider").and_then(serde_json::Value::as_str) == Some("ollama")
+            })
+            .map(|agent| {
+                agent
+                    .get("model")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| default_model.clone())
+            })
+            .collect(),
+    )
+}
+
+/// The lines of the Agent `id` in the `agents:` block `range` of `lines`:
+/// from its `  - id: ID` line to the line before the next item, comment or
+/// top-level key, without the blank lines at its end.
+fn agent_lines(lines: &[String], range: (usize, usize), id: &str) -> Option<(usize, usize)> {
+    let start = (range.0 + 1..range.1).find(|&index| {
+        lines[index]
+            .strip_prefix("  - id:")
+            .is_some_and(|rest| rest.trim().trim_matches('"').trim_matches('\'') == id)
+    })?;
+    let mut end = start + 1;
+    while end < range.1
+        && !lines[end].starts_with("  - ")
+        && !lines[end].starts_with("  #")
+        && (lines[end].is_empty() || lines[end].starts_with(' '))
+    {
+        end += 1;
+    }
+    while end > start + 1 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    Some((start, end))
+}
+
+/// "Update this setup": the new text, and the Agents of onboarding's team it
+/// kept as they are because they were edited by hand, though the models
+/// chosen now differ from theirs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Updated {
+    pub(crate) text: String,
+    /// `(id, provider:model)` of each such Agent.
+    pub(crate) kept: Vec<(String, String)>,
+}
+
 /// The top-level block `key:` in `lines`: its first line and the line after
 /// its last (comments and blank lines before the next top-level key belong
 /// to the next block).
@@ -504,14 +754,17 @@ pub(crate) fn update(
     old: &str,
     plan: &ConfigPlan,
     path: &std::path::Path,
-) -> Result<String, String> {
+) -> Result<Updated, String> {
     let existing = read_existing(old).map_err(|error| {
         format!("the existing configuration cannot be read ({error}); choose Replace instead")
     })?;
     let mut lines = to_lines(old);
+    let mut kept = Vec::new();
 
-    // Agents: only when there are none (no `agents:`, or an empty one such
-    // as `agents: []`, which the team replaces).
+    // Agents: the team when there are none (no `agents:`, or an empty one
+    // such as `agents: []`, which the team replaces); else the Agents
+    // onboarding wrote move to the models chosen now, each where it is,
+    // and every other Agent stays as it is.
     if existing.agents.is_empty() {
         let team = to_lines(agents_block(plan).trim_end());
         match lines.iter().position(|line| line.starts_with("agents:")) {
@@ -522,6 +775,41 @@ pub(crate) fn update(
             None => {
                 lines.push(String::new());
                 lines.extend(team);
+            }
+        }
+    } else {
+        let team = to_lines(&agents_block(plan));
+        let written = Written::of(&existing, old);
+        for agent in &existing.agents {
+            let Some(id) = agent
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| TEAM_IDS.contains(id))
+            else {
+                continue;
+            };
+            let chosen = if id == "reviewer" {
+                &plan.reviewer
+            } else {
+                &plan.lead
+            };
+            let moves = written.by_onboarding(agent);
+            let block = top_block(&lines, "agents")
+                .and_then(|range| agent_lines(&lines, range, id))
+                .filter(|_| moves);
+            let new = agent_lines(&team, (0, team.len()), id);
+            match (block, new) {
+                (Some((start, end)), Some((from, to))) => {
+                    lines.splice(start..end, team[from..to].iter().cloned());
+                }
+                _ => {
+                    let current = agent_model(agent)
+                        .map(|(provider, model)| format!("{provider}:{model}"))
+                        .unwrap_or_default();
+                    if current != chosen.spec() {
+                        kept.push((id.to_string(), current));
+                    }
+                }
             }
         }
     }
@@ -682,7 +970,7 @@ pub(crate) fn update(
     }
     axocoatl_config::parse_config(&text, path)
         .map_err(|error| format!("the updated configuration would not load: {error}"))?;
-    Ok(text)
+    Ok(Updated { text, kept })
 }
 
 /// A line diff of `old` and `new`: `-` removed, `+` added, unchanged lines
@@ -1007,7 +1295,7 @@ mod tests {
         let written = render(&plan);
         assert!(written.contains("api_key: \"${OPENROUTER_API_KEY}\""));
         assert_eq!(
-            update(&written, &plan, Path::new("c.yaml")).unwrap(),
+            update(&written, &plan, Path::new("c.yaml")).unwrap().text,
             written
         );
         let typed = ConfigPlan {
@@ -1016,7 +1304,7 @@ mod tests {
             ))),
             ..plan.clone()
         };
-        let updated = update(&written, &typed, Path::new("c.yaml")).unwrap();
+        let updated = update(&written, &typed, Path::new("c.yaml")).unwrap().text;
         let config = axocoatl_config::parse_config(&updated, Path::new("c.yaml")).unwrap();
         assert_eq!(
             config.providers.openrouter.unwrap().api_key.expose_secret(),
@@ -1032,7 +1320,7 @@ mod tests {
             ]
         );
         assert!(!shown.join("\n").contains("sk-or-v1-typed"));
-        let back = update(&updated, &plan, Path::new("c.yaml")).unwrap();
+        let back = update(&updated, &plan, Path::new("c.yaml")).unwrap().text;
         assert_eq!(back, written);
     }
 
@@ -1072,7 +1360,7 @@ mod tests {
             Some(axocoatl_config::OpenRouterBilling::Credits)
         );
         assert_eq!(
-            update(&written, &secret, Path::new("c.yaml")).unwrap(),
+            update(&written, &secret, Path::new("c.yaml")).unwrap().text,
             written
         );
         // A variable, then a key typed at the hidden prompt, give way to the
@@ -1084,7 +1372,7 @@ mod tests {
             ..openrouter_plan()
         };
         for old in [render(&openrouter_plan()), render(&typed)] {
-            let updated = update(&old, &secret, Path::new("c.yaml")).unwrap();
+            let updated = update(&old, &secret, Path::new("c.yaml")).unwrap().text;
             assert!(!updated.contains("api_key:"), "{updated}");
             assert!(!updated.contains("sk-or-v1-typed"), "{updated}");
             assert_eq!(updated.matches("api_key_secret: openrouter").count(), 1);
@@ -1105,7 +1393,7 @@ mod tests {
             );
             assert!(!shown.contains("sk-or-v1-typed"), "{shown}");
         }
-        let back = update(&written, &typed, Path::new("c.yaml")).unwrap();
+        let back = update(&written, &typed, Path::new("c.yaml")).unwrap().text;
         assert!(!back.contains("api_key_secret"), "{back}");
         let config = axocoatl_config::parse_config(&back, Path::new("c.yaml")).unwrap();
         assert_eq!(
@@ -1192,7 +1480,7 @@ mod tests {
         let old = "# my notes\nagents:\n  - id: mine\n    name: \"Mine\"\n    provider: ollama\n    model: \"qwen3:8b\"\n\nproviders:\n  ollama:\n    base_url: \"http://localhost:11434\"\n\nserver:\n  port: 8080\n  host: \"127.0.0.1\"\n";
         let mut plan = openrouter_plan();
         plan.ollama_base_url = Some("http://localhost:11434".into());
-        let new = update(old, &plan, Path::new("config.yaml")).unwrap();
+        let new = update(old, &plan, Path::new("config.yaml")).unwrap().text;
         assert!(
             new.starts_with("# my notes\nagents:\n  - id: mine\n"),
             "{new}"
@@ -1221,7 +1509,7 @@ mod tests {
         assert!(changes.iter().all(|line| !line.contains("id: mine")));
 
         // Updating again replaces run instead of adding a second one.
-        let again = update(&new, &plan, Path::new("config.yaml")).unwrap();
+        let again = update(&new, &plan, Path::new("config.yaml")).unwrap().text;
         assert_eq!(again.matches("\nrun:\n").count(), 1, "{again}");
         assert_eq!(again, new);
     }
@@ -1233,12 +1521,12 @@ mod tests {
         let plan = local_plan();
         let written = render(&plan);
         assert_eq!(
-            update(&written, &plan, Path::new("c.yaml")).unwrap(),
+            update(&written, &plan, Path::new("c.yaml")).unwrap().text,
             written
         );
         let mut other = plan.clone();
         other.run_reviewer = Some(ModelRef::new(Provider::Ollama, "gpt-oss:120b"));
-        let updated = update(&written, &other, Path::new("c.yaml")).unwrap();
+        let updated = update(&written, &other, Path::new("c.yaml")).unwrap().text;
         assert_eq!(
             diff(&written, &updated),
             [
@@ -1253,7 +1541,7 @@ mod tests {
         let old = "providers:\n  ollama:\n    base_url: \"http://localhost:11434\"\n";
         let mut plan = local_plan();
         plan.ollama_base_url = Some("http://127.0.0.1:11440".into());
-        let new = update(old, &plan, Path::new("c.yaml")).unwrap();
+        let new = update(old, &plan, Path::new("c.yaml")).unwrap().text;
         let config = axocoatl_config::parse_config(&new, Path::new("c.yaml")).unwrap();
         assert_eq!(
             config.providers.ollama.as_ref().unwrap().base_url,
@@ -1265,10 +1553,110 @@ mod tests {
             .contains("choose Replace"));
     }
 
+    /// "Update this setup" moves the Agents onboarding wrote to the models
+    /// chosen now, each where it is, and keeps any Agent edited by hand, or
+    /// the person's own, as it is, saying which of onboarding's it kept.
+    #[test]
+    fn update_moves_the_team_onboarding_wrote_and_keeps_edited_agents() {
+        let old = render(&local_plan());
+        let mut new_plan = local_plan();
+        new_plan.lead = ModelRef::new(Provider::Ollama, "devstral:24b");
+        new_plan.run_writer = Some(new_plan.lead.clone());
+        new_plan.reviewer = ModelRef::new(Provider::Ollama, "qwen3:32b");
+        new_plan.run_reviewer = Some(new_plan.reviewer.clone());
+        let updated = update(&old, &new_plan, Path::new("c.yaml")).unwrap();
+        assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        // As --replace writes it, every comment and line where it was.
+        assert_eq!(updated.text, render(&new_plan));
+        let changes = diff(&old, &updated.text);
+        assert!(
+            changes.contains(&"-     model: \"qwen3-coder:30b\"".to_string())
+                && changes.contains(&"+     model: \"devstral:24b\"".to_string())
+                && changes.contains(&"+     model: \"qwen3:32b\"".to_string()),
+            "{changes:?}"
+        );
+
+        // Scout's prompt edited by hand, and an Agent of the person's own:
+        // both stay as they are; Scout is said, the person's own is not.
+        let edited = old
+            .replace(
+                "Answer the lead's question with file paths",
+                "Answer with file paths",
+            )
+            .replace(
+                "agents:\n",
+                "agents:\n  - id: mine\n    name: \"Mine\"\n    provider: ollama\n    model: \
+                 \"qwen3-coder:30b\"\n",
+            );
+        let updated = update(&edited, &new_plan, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            updated.kept,
+            [("scout".to_string(), "ollama:qwen3-coder:30b".to_string())]
+        );
+        let config = axocoatl_config::parse_config(&updated.text, Path::new("c.yaml")).unwrap();
+        assert_eq!(agent(&config, "lead").model, "devstral:24b");
+        assert_eq!(agent(&config, "assistant").model, "devstral:24b");
+        assert_eq!(agent(&config, "reviewer").model, "qwen3:32b");
+        assert_eq!(agent(&config, "scout").model, "qwen3-coder:30b");
+        assert!(agent(&config, "scout")
+            .system_prompt
+            .as_deref()
+            .unwrap()
+            .starts_with("Answer with file paths"));
+        assert_eq!(agent(&config, "mine").model, "qwen3-coder:30b");
+
+        // A Reviewer whose model was changed by hand (it no longer runs
+        // run.models.reviewer) is the person's choice too.
+        let moved = old.replacen("model: \"gpt-oss:20b\"", "model: \"qwen3:8b\"", 1);
+        let updated = update(&moved, &new_plan, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            updated.kept,
+            [("reviewer".to_string(), "ollama:qwen3:8b".to_string())]
+        );
+
+        // Moving to OpenRouter gives each Agent OpenRouter's output limit.
+        let hosted = update(&old, &openrouter_plan(), Path::new("c.yaml")).unwrap();
+        let config = axocoatl_config::parse_config(&hosted.text, Path::new("c.yaml")).unwrap();
+        assert_eq!(agent(&config, "lead").provider, "openrouter");
+        assert_eq!(agent(&config, "reviewer").sampling.max_tokens, Some(2048));
+        assert_eq!(agent(&config, "assistant").sampling.max_tokens, Some(2048));
+        assert_eq!(agent(&config, "scout").sampling.max_tokens, Some(4096));
+    }
+
+    /// A team written by 1.4.0 (the same Agents, with no `# Writer:` line
+    /// or run defaults) is onboarding's, and moves; an Agent with a field
+    /// onboarding never writes is the person's.
+    #[test]
+    fn a_team_written_by_1_4_moves_and_an_extra_field_is_an_edit() {
+        let old = render(&local_plan());
+        let start = old.find("# Defaults for `axocoatl run`").unwrap();
+        let end = old.find("server:").unwrap();
+        let earlier = format!("{}{}", &old[..start], &old[end..]);
+        assert_eq!(writer_marker(&earlier), None);
+        let mut plan = local_plan();
+        plan.lead = ModelRef::new(Provider::Ollama, "devstral:24b");
+        let updated = update(&earlier, &plan, Path::new("c.yaml")).unwrap();
+        assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        let config = axocoatl_config::parse_config(&updated.text, Path::new("c.yaml")).unwrap();
+        assert_eq!(agent(&config, "lead").model, "devstral:24b");
+        assert_eq!(agent(&config, "scout").model, "devstral:24b");
+        let extra = earlier.replace(
+            "    role: autonomous\n",
+            "    role: autonomous\n    description: \"mine\"\n",
+        );
+        let updated = update(&extra, &plan, Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            updated.kept,
+            [("lead".to_string(), "ollama:qwen3-coder:30b".to_string())]
+        );
+    }
+
     /// An empty `agents: []` gets the default team in its place.
     #[test]
     fn update_fills_an_empty_agents_list() {
-        let new = update("agents: []\n", &local_plan(), Path::new("c.yaml")).unwrap();
+        let new = update("agents: []\n", &local_plan(), Path::new("c.yaml"))
+            .unwrap()
+            .text;
         let config = axocoatl_config::parse_config(&new, Path::new("c.yaml")).unwrap();
         assert_eq!(config.agents.len(), 4);
         assert_eq!(new.matches("agents:").count(), 1, "{new}");
