@@ -3336,7 +3336,7 @@ mod tests {
         let empty = std::env::join_paths([bin.path().join("empty")]).unwrap();
         let socket = bin.path().join("docker.sock");
         std::fs::write(&socket, b"").unwrap();
-        let said = docker_engine(Some(&empty), &[socket.clone()], None, None).unwrap();
+        let said = docker_engine(Some(&empty), std::slice::from_ref(&socket), None, None).unwrap();
         assert!(said.contains(&socket.display().to_string()), "{said}");
         let own = Path::new("/run/user/501/podman/podman.sock");
         let docker_host =
