@@ -10,7 +10,7 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         bounded_redacted, http_client, network_error, read_error_text, read_json, SseDecoder,
-        StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
+        StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     validate_response_tool_call, ChatRequest, ChatResponse, FinishReason, LlmProvider,
@@ -409,6 +409,10 @@ impl MistralProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for MistralProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         "mistral"
     }
@@ -586,10 +590,8 @@ impl LlmProvider for MistralProvider {
             let mut pending_finish = None;
             let mut saw_sentinel = false;
             let mut tool_call_ids = std::collections::BTreeMap::<usize, String>::new();
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             'response: loop {
-                let next = deadlines.next(&mut bytes, total_deadline, "mistral").await?;
+                let next = deadlines.next(&mut bytes, "mistral").await?;
                 let Some(chunk) = next else {
                     for event in decoder.finish()? {
                         let (terminal, events) = parse_mistral_sse_data(&event.data)?;

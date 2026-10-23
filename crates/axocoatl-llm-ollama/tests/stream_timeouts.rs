@@ -123,3 +123,132 @@ fn a_local_model_server_gets_ten_minutes_to_start_by_default() {
     assert_eq!(StreamTimeouts::LOCAL.first_token, Duration::from_secs(600));
     assert_eq!(StreamTimeouts::LOCAL.idle, Duration::from_secs(90));
 }
+
+/// End-to-end: needs a live Ollama that nothing else uses, with
+/// `AXOCOATL_LIVE_OLLAMA_MODEL` pulled and not loaded (`ollama stop` it
+/// first). A one-second first-token timeout passes while Ollama loads the
+/// model; the call fails naming the setting, and closing the connection
+/// makes Ollama abort the load (Ollama 0.40.8 logs "client connection
+/// closed before llama-server finished loading, aborting load"): the model
+/// is not loaded afterwards. Run with:
+///
+/// ```text
+/// AXOCOATL_LIVE_OLLAMA_URL=http://127.0.0.1:11434 AXOCOATL_LIVE_OLLAMA_MODEL=gpt-oss:20b \
+///   cargo test -p axocoatl-llm-ollama --test stream_timeouts -- --ignored --exact \
+///   giving_up_on_a_load_makes_a_live_ollama_abort_it
+/// ```
+#[tokio::test]
+#[ignore = "needs a live Ollama: AXOCOATL_LIVE_OLLAMA_URL and AXOCOATL_LIVE_OLLAMA_MODEL"]
+async fn giving_up_on_a_load_makes_a_live_ollama_abort_it() {
+    let base_url = std::env::var("AXOCOATL_LIVE_OLLAMA_URL").expect("AXOCOATL_LIVE_OLLAMA_URL");
+    let model = std::env::var("AXOCOATL_LIVE_OLLAMA_MODEL").expect("AXOCOATL_LIVE_OLLAMA_MODEL");
+    let loaded = || async {
+        let ps: serde_json::Value = reqwest::get(format!("{base_url}/api/ps"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        ps["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|loaded| loaded["name"] == model.as_str())
+    };
+    assert!(
+        !loaded().await,
+        "{model} is loaded already: `ollama stop` it"
+    );
+    let provider = NativeOllamaProvider::connect(NativeOllamaConfig {
+        base_url: base_url.clone(),
+        model: model.clone(),
+        context_tokens: 8192,
+        max_output_tokens: 32,
+        max_response_bytes: 64 * 1024,
+    })
+    .await
+    .unwrap()
+    .with_stream_timeouts(StreamTimeouts {
+        first_token: Duration::from_secs(1),
+        idle: Duration::from_secs(60),
+    });
+    let started = std::time::Instant::now();
+    let error = provider
+        .chat(ChatRequest::simple("Say ready."))
+        .await
+        .unwrap_err()
+        .to_string();
+    println!("gave up after {:?}: {error}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+    assert!(error.contains("first-token timeout"), "{error}");
+    // Loading a model this size takes longer than this wait: had Ollama
+    // gone on loading it, it would be loaded by now.
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    assert!(!loaded().await, "Ollama went on loading {model}");
+}
+
+/// End-to-end: needs a live Ollama with `AXOCOATL_LIVE_OLLAMA_MODEL`
+/// loaded at `AXOCOATL_LIVE_OLLAMA_CONTEXT` tokens (as `ollama ps` shows
+/// it, so that this call does not load it again). A two-second first-token
+/// timeout passes before the answer starts (while Ollama reads the long
+/// prompt, or while the request waits for the model's one slot); the call
+/// fails naming the setting, and closing the connection makes Ollama
+/// abandon the answer: Ollama 0.40.8 logs "aborting completion request due
+/// to client closing the connection" and ends the request after about the
+/// timeout. Run with:
+///
+/// ```text
+/// AXOCOATL_LIVE_OLLAMA_URL=http://127.0.0.1:11434 AXOCOATL_LIVE_OLLAMA_MODEL=qwen3-coder:30b \
+///   AXOCOATL_LIVE_OLLAMA_CONTEXT=32768 cargo test -p axocoatl-llm-ollama --test stream_timeouts \
+///   -- --ignored --exact giving_up_on_an_answer_makes_a_live_ollama_stop_it
+/// ```
+#[tokio::test]
+#[ignore = "needs a live Ollama: AXOCOATL_LIVE_OLLAMA_URL, _MODEL and _CONTEXT"]
+async fn giving_up_on_an_answer_makes_a_live_ollama_stop_it() {
+    let base_url = std::env::var("AXOCOATL_LIVE_OLLAMA_URL").expect("AXOCOATL_LIVE_OLLAMA_URL");
+    let model = std::env::var("AXOCOATL_LIVE_OLLAMA_MODEL").expect("AXOCOATL_LIVE_OLLAMA_MODEL");
+    let context: usize = std::env::var("AXOCOATL_LIVE_OLLAMA_CONTEXT")
+        .expect("AXOCOATL_LIVE_OLLAMA_CONTEXT")
+        .parse()
+        .unwrap();
+    let ps: serde_json::Value = reqwest::get(format!("{base_url}/api/ps"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        ps["models"].as_array().unwrap().iter().any(|loaded| {
+            loaded["name"] == model.as_str() && loaded["context_length"] == context
+        }),
+        "{model} is not loaded at {context} tokens: {ps}"
+    );
+    let provider = NativeOllamaProvider::connect(NativeOllamaConfig {
+        base_url,
+        model,
+        context_tokens: context,
+        max_output_tokens: 32,
+        max_response_bytes: 64 * 1024,
+    })
+    .await
+    .unwrap()
+    .with_stream_timeouts(StreamTimeouts {
+        first_token: Duration::from_secs(2),
+        idle: Duration::from_secs(60),
+    });
+    // About 20,000 tokens of prompt: several seconds to read.
+    let prompt = format!(
+        "{}\nHow many times does the word harbor appear above?",
+        "The harbor lights flicker over the quiet water while the night shift counts crates. "
+            .repeat(1300)
+    );
+    let started = std::time::Instant::now();
+    let error = provider
+        .chat(ChatRequest::simple(&prompt))
+        .await
+        .unwrap_err()
+        .to_string();
+    println!("gave up after {:?}: {error}", started.elapsed());
+    assert!(started.elapsed() < Duration::from_secs(4), "{error}");
+    assert!(error.contains("first-token timeout"), "{error}");
+}

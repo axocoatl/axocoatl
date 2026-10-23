@@ -1426,6 +1426,8 @@ async fn receipts_child_body() {
     assert!(!String::from_utf8_lossy(&opened.payload).contains("not-a-real-token"));
     assert_eq!(predicate.sandbox.network, "egress");
     assert_eq!(predicate.sandbox.backend, "podman");
+    // The Session's container never started, so no caps are recorded.
+    assert_eq!(predicate.sandbox.limits, None);
     assert_eq!(
         predicate.run.task_sha256,
         axocoatl_session::receipt::sha256_hex(manifest.task.as_bytes())
@@ -1455,6 +1457,25 @@ async fn receipts_child_body() {
     );
     // The same key signs the next run; the receipt is written once.
     assert!(store.write_receipt(&run_id, b"{}\n").is_err());
+
+    // The caps the Session's container got, as its record keeps them once
+    // it is Ready (here without the CPU cap), are the next receipt's
+    // sandbox.limits. The Session's environment is put back afterwards: no
+    // container ever ran it.
+    let environment = session.environment.clone();
+    let limits = crate::bootstrap::recorded_resource_limits(
+        axocoatl_isolation::container_host::ResourceCaps {
+            memory: true,
+            cpus: false,
+            pids: true,
+        },
+    );
+    daemon
+        .session_store
+        .lock()
+        .await
+        .set_environment_ready(&session.id, None, None, Vec::new(), Some(limits.clone()))
+        .unwrap();
 
     // A run whose model Ollama served: the Outcome records the version
     // and the receipt names it in the Agent's program version, a field the
@@ -1495,6 +1516,25 @@ async fn receipts_child_body() {
         .unwrap();
     daemon.finish_loadout_run(&served.run_id, &outcome).unwrap();
     let opened = open_receipt(&daemon.loadout_run_receipt(&served.run_id).unwrap()).unwrap();
+    assert_eq!(opened.statement.predicate.sandbox.limits, Some(limits));
+    assert!(axocoatl_session::receipt::describe(&opened.statement)
+        .iter()
+        .any(|line| line
+            == "Resource caps: memory 2g, 512 processes; not applied, this host does not \
+                delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)"));
+    daemon
+        .session_store
+        .lock()
+        .await
+        .set_environment(
+            &session.id,
+            environment.state,
+            environment.effective_image,
+            environment.runtime,
+            environment.setup_results,
+            environment.error,
+        )
+        .unwrap();
     assert_eq!(
         opened.statement.predicate.agents[0].program_version,
         Some(format!(

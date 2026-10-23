@@ -17,7 +17,7 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         bounded_redacted, http_client, network_error, read_error_text, read_json,
-        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
+        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
@@ -238,6 +238,10 @@ impl OpenAiProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for OpenAiProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
@@ -351,10 +355,8 @@ impl LlmProvider for OpenAiProvider {
             let mut pending_finish = None;
             let mut saw_sentinel = false;
             let mut tool_call_ids = std::collections::BTreeMap::<usize, String>::new();
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             'response: loop {
-                let next = deadlines.next(&mut bytes, total_deadline, &provider_id).await?;
+                let next = deadlines.next(&mut bytes, &provider_id).await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

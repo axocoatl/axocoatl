@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use axocoatl_llm_ollama::{ollama_version_note, ollama_version_refusal, LOCAL_FIRST_TOKEN_TIMEOUT};
+use axocoatl_llm_ollama::{ollama_version_note, ollama_version_refusal};
 
 use super::config::{ModelRef, Provider};
 use super::detect::{self, OllamaServer, OllamaService, Wsl};
@@ -1340,10 +1340,11 @@ async fn context(
         o.ui.say("  would load each model once to read its context and run the contract probes");
         return read;
     }
+    let load_timeout = o.ollama_load_timeout();
     let mut low = Vec::new();
     for model in models {
         o.ui.say(format!("  Loading {model} once to read its context…"));
-        match ollama_setup::observed_context(base_url, model, LOCAL_FIRST_TOKEN_TIMEOUT).await {
+        match ollama_setup::observed_context(base_url, model, load_timeout).await {
             Ok((tokens, version)) if tokens >= MIN_CONTEXT_TOKENS => {
                 let unaudited = if axocoatl_llm_ollama::ollama_version_unaudited(&version) {
                     format!("; Ollama {version} is newer than the audited 0.40.6, and the contract probes passed on {model}")
@@ -1371,7 +1372,7 @@ async fn context(
     if set_context(o, &problem).await {
         let mut still = Vec::new();
         for (model, _) in &low {
-            match ollama_setup::observed_context(base_url, model, LOCAL_FIRST_TOKEN_TIMEOUT).await {
+            match ollama_setup::observed_context(base_url, model, load_timeout).await {
                 Ok((tokens, _)) if tokens >= MIN_CONTEXT_TOKENS => {
                     o.ui.ok(format!(
                         "{model}: {tokens}-token context, contract probes passed"

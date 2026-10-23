@@ -344,6 +344,13 @@ pub trait LlmProvider: Send + Sync + 'static {
         None
     }
 
+    /// How long this provider waits for a streamed answer to start and
+    /// between its chunks (`providers.<name>.first_token_timeout_secs` and
+    /// `idle_timeout_secs`), for one that streams with those deadlines.
+    fn stream_timeouts(&self) -> Option<crate::transport::StreamTimeouts> {
+        None
+    }
+
     /// Non-streaming chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
 

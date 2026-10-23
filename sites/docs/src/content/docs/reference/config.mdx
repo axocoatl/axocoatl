@@ -267,11 +267,15 @@ reads the whole prompt first (minutes on a CPU-only computer or for a long promp
 chunks after that: 90 seconds, 1 to 900. A request whose answer is not streamed has the
 first-token timeout, and at least 120 seconds, for the whole answer. For Ollama that
 includes loading a model to read its context, which a native Session does before its
-first call and `axocoatl doctor` does for each model, and the contract probes after it.
+first call and `axocoatl doctor` and `axocoatl onboard` do for each model, and the
+contract probes after it.
 When either passes, the call fails with `first-token timeout` or `stream idle timeout`
 (a load with `did not finish loading`) and the name of the setting, and Axocoatl closes
-the connection, so Ollama stops computing that answer or loading that model. A streamed
-answer ends after 15 minutes in any case.
+the connection, which makes Ollama abandon that answer or that model's load (Ollama
+0.40.8 logs "aborting completion request due to client closing the connection" and
+"client connection closed before llama-server finished loading, aborting load"). Once a
+streamed answer has started, it ends 15 minutes after its first chunk in any case
+(`stream total timeout`), however long the first-token timeout is.
 
 Native Sessions accept reviewed local Ollama profiles or eligible OpenRouter-credit
 profiles, reasoning models included. `openrouter_billing: credits` declares credit

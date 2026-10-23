@@ -430,6 +430,9 @@ pub(crate) struct ExistingOllama {
     /// The model an Agent without one runs.
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// How long a model may take to load and start its answer.
+    #[serde(default)]
+    pub(crate) first_token_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

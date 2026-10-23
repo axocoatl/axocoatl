@@ -1718,3 +1718,114 @@ async fn leaked_dependency_volumes_are_reaped_by_their_own_daemon_only() {
     run_reap_phase(DEPENDENCY_REAP_TEST, "b2", &data_b, &b, &shared).await;
     drop(cleanup);
 }
+
+/// A started Session's record says which resource caps its container got
+/// (`environment.resource_limits`, which a run's notes and receipt read):
+/// those `podman info` says this host can apply, as `podman container
+/// inspect` shows them on the container.
+///
+/// ```text
+/// cargo test -p axocoatl-daemon --lib \
+///   a_started_session_records_the_caps_its_container_got -- --ignored
+/// ```
+///
+/// Set AXOCOATL_E2E_MODEL_CACHE to a directory with the all-MiniLM-L6-v2
+/// files to avoid downloading the embedding model.
+#[tokio::test]
+#[ignore = "requires rootless Podman and docker.io/library/alpine:3.20"]
+async fn a_started_session_records_the_caps_its_container_got() {
+    if std::env::var_os(CHILD).is_none() {
+        run_child(
+            "bootstrap::session_native_lifecycle::lifecycle_tests::a_started_session_records_the_caps_its_container_got",
+            copy_model_cache,
+        )
+        .await;
+        return;
+    }
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = load_config(config_dir.path(), &server.uri()).await;
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_dir.path().join("axocoatl.yaml"));
+    let outside = tempfile::Builder::new()
+        .prefix("axocoatl-caps-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let repo = outside.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# Caps\n").unwrap();
+    let cleanup = Cleanup(std::sync::Mutex::new(Vec::new()));
+    let session = daemon
+        .create_session_with_environment(
+            "caps",
+            &repo.display().to_string(),
+            SessionMode::SingleAgent {
+                agent_id: HELPER.into(),
+            },
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+    cleanup.0.lock().unwrap().push(session.id.clone());
+    assert_eq!(
+        session.environment.state,
+        SessionEnvironmentState::Ready,
+        "{:?}",
+        session.environment
+    );
+    let caps = axocoatl_isolation::container_host::container_host()
+        .await
+        .map_or(
+            axocoatl_isolation::container_host::ResourceCaps::ALL,
+            |host| host.caps,
+        );
+    let recorded = session
+        .environment
+        .resource_limits
+        .clone()
+        .expect("a started Session records its caps");
+    assert_eq!(recorded, crate::bootstrap::recorded_resource_limits(caps));
+    let inspected = tokio::process::Command::new("podman")
+        .args([
+            "container",
+            "inspect",
+            "--format",
+            "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}",
+            &format!("axo-ses-{}", session.id),
+        ])
+        .output()
+        .await
+        .unwrap();
+    assert!(inspected.status.success(), "{inspected:?}");
+    let applied: Vec<i64> = String::from_utf8_lossy(&inspected.stdout)
+        .split_whitespace()
+        .map(|value| value.parse().unwrap())
+        .collect();
+    println!("recorded {recorded:?}; the container has {applied:?}");
+    // 2g, 2 CPUs and 512 processes where applied, as recorded.
+    for (cap, value, expected) in [
+        (caps.memory, applied[0], 2 * 1024 * 1024 * 1024),
+        (caps.cpus, applied[1], 2_000_000_000),
+        (caps.pids, applied[2], 512),
+    ] {
+        assert_eq!(value == expected, cap, "{applied:?} for {recorded:?}");
+    }
+    // The record keeps them.
+    assert_eq!(
+        daemon
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .environment
+            .resource_limits,
+        Some(recorded)
+    );
+    daemon.close_session(&session.id).await.unwrap();
+    daemon.shutdown().await.unwrap();
+    drop(cleanup);
+}

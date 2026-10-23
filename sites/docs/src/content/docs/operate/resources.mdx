@@ -51,7 +51,8 @@ When one is missing, the default `require_resource_limits: false` starts the
 container without that cap (the others still apply), logs a warning, and records
 it in the Session and in a run's notes and receipt; `axocoatl doctor` prints how
 to delegate it. Set the flag to `true` when failing closed is safer than running
-without a limit.
+without a limit: no Session, browser, service-forwarder, egress or managed SearXNG
+container then starts without every cap.
 
 ## Count Attempt concurrency
 

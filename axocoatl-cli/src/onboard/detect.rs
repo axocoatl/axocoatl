@@ -1680,10 +1680,10 @@ mod tests {
         assert!(glob_matches("/usr/bin/[x", "/usr/bin/[x"));
     }
 
-    /// Whether dnf installs files without their file capabilities, as
-    /// dnf5 5.2.18 in fedora:42 reads its configuration (`dnf
-    /// --dump-main-config`): the last `tsflags` of a file's [main], added up
-    /// across dnf.conf and dnf5's drop-ins.
+    /// pacman's `NoExtract` and `NoUpgrade`, as pacman.conf(5) has pacman
+    /// read them: only in `[options]` (of pacman.conf and the files it
+    /// includes there), each pattern matched against the path without its
+    /// leading `/`, the last match winning.
     #[test]
     fn pacmans_noextract_and_noupgrade_are_read_as_pacman_reads_them() {
         let root = tempfile::tempdir().unwrap();
@@ -1749,6 +1749,10 @@ mod tests {
         assert!(pacman_kept(root.path(), "NoExtract", "/usr/bin/newgidmap").is_some());
     }
 
+    /// Whether dnf installs files without their file capabilities, as
+    /// dnf5 5.2.18 in fedora:42 reads its configuration (`dnf
+    /// --dump-main-config`): the last `tsflags` of a file's [main], added up
+    /// across dnf.conf and dnf5's drop-ins.
     #[test]
     fn dnf_nocaps_is_read_from_its_configuration() {
         let root = tempfile::tempdir().unwrap();

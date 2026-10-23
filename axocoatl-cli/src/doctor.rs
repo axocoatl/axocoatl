@@ -537,8 +537,9 @@ pub(crate) async fn id_map_tools(
 /// gives the mode and file capabilities in its records, without the
 /// capabilities when dnf is set to `nocaps`; pacman skips a path its
 /// `NoExtract` patterns name (removing the file there: pacman 7.1 on Arch
-/// Linux ARM) and writes a file `NoUpgrade` names next to it as `.pacnew`, and gives the file capabilities in the package
-/// (Arch's shadow records newuidmap as mode 755, so its mode says nothing).
+/// Linux ARM), writes a file `NoUpgrade` names next to it as `.pacnew`,
+/// and gives the file capabilities in the package (Arch's shadow records
+/// newuidmap as mode 755, so its mode says nothing).
 /// The same reason for both helpers is said once, naming both.
 async fn reinstall_keeps(
     host: &crate::onboard::host::Host,
@@ -689,24 +690,23 @@ async fn reinstall_keeps(
         ));
     }
     if !excluded.is_empty() {
-        let (them, _, those) = both(excluded.len());
-        let filters = excluded
+        let (them, _, _) = both(excluded.len());
+        let mut filters = excluded
             .iter()
             .map(|(_, line, config)| format!("{line} in {config}"))
             .collect::<Vec<_>>();
-        let mut filters_said = filters.clone();
-        filters_said.dedup();
+        filters.dedup();
+        // One line may leave out both helpers (`/usr/bin/new*map`).
+        let lines = match filters.len() {
+            1 => "that line",
+            _ => "those lines",
+        };
         keeps.push(format!(
             "{package}'s {} {} removed, and dpkg is set to leave {them} out ({}), so \
-             reinstalling {package} does not write {them}: remove {those} {}, {then}",
+             reinstalling {package} does not write {them}: remove {lines}, {then}",
             paths(&excluded),
             if excluded.len() == 1 { "was" } else { "were" },
-            filters_said.join("; "),
-            if filters_said.len() == 1 {
-                "line"
-            } else {
-                "lines"
-            }
+            filters.join("; "),
         ));
     }
     if !overridden.is_empty() {

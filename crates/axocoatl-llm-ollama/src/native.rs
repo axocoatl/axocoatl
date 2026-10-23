@@ -25,7 +25,6 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         network_error, validated_endpoint, StreamDeadlines, StreamTimeouts, RESPONSE_TIMEOUT,
-        STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     validate_required_tool_call_id, validate_response_tool_call, AccountedChatOutcome, ChatRequest,
@@ -628,7 +627,6 @@ impl NativeOllamaProvider {
         let mut state = NativeResponse::new(self.config.model.clone(), request, cap, token_limit);
         let stream = async_stream::stream! {
             if too_long { yield Err(protocol("response exceeds its byte limit")); return; }
-            let deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
             let mut pending = Vec::new();
             let mut received = 0usize;
             let mut records = 0usize;
@@ -637,7 +635,7 @@ impl NativeOllamaProvider {
             // is not lost; nothing in it runs.
             let mut failure = None;
             'read: loop {
-                let next = match deadlines.next(&mut bytes, deadline, PROVIDER).await {
+                let next = match deadlines.next(&mut bytes, PROVIDER).await {
                     Ok(value) => value,
                     Err(error) => { failure = Some(error); break 'read; }
                 };
@@ -722,6 +720,10 @@ impl NativeOllamaProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for NativeOllamaProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         PROVIDER
     }

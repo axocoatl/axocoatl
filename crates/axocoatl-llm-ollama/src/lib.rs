@@ -26,7 +26,7 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         bounded_redacted, direct_http_client, network_error, read_error_text, read_json,
-        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
+        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     validate_required_tool_call_id, validate_response_tool_call, validate_stream_terminal,
@@ -426,6 +426,10 @@ impl OllamaProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for OllamaProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         "ollama"
     }
@@ -661,12 +665,8 @@ impl LlmProvider for OllamaProvider {
             let mut saw_sentinel = false;
             let mut structured_tool_call_ids = std::collections::BTreeMap::<usize, String>::new();
             let mut recovered_tool_call_count = 0usize;
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             'response: loop {
-                let next = deadlines
-                    .next(&mut byte_stream, total_deadline, "ollama")
-                    .await?;
+                let next = deadlines.next(&mut byte_stream, "ollama").await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

@@ -15,7 +15,7 @@ use crate::OpenAiProvider;
 use axocoatl_core::{MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_llm::transport::{
     http_client, network_error, read_error_text, read_json, validated_endpoint, SseDecoder,
-    StreamDeadlines, StreamTimeouts, MAX_STREAM_BYTES, RESPONSE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
+    StreamDeadlines, StreamTimeouts, MAX_STREAM_BYTES, RESPONSE_TIMEOUT,
 };
 use axocoatl_llm::{
     provider_tool_metadata, validate_chat_response, validate_response_tool_call,
@@ -380,6 +380,10 @@ fn replay_reasoning(request: &ChatRequest, body: &mut Value) -> Result<usize, Pr
 
 #[async_trait::async_trait]
 impl LlmProvider for NativeOpenRouterProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.inner.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         PROVIDER
     }

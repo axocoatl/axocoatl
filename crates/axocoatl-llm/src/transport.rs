@@ -30,9 +30,10 @@ pub const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 pub const LOCAL_FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(600);
 /// The longest `first_token_timeout_secs` a provider block accepts.
 pub const MAX_FIRST_TOKEN_TIMEOUT: Duration = Duration::from_secs(3600);
-/// Absolute lifetime of one streaming response. The byte cap bounds retained
-/// memory, while this deadline also stops a peer that drips tiny chunks often
-/// enough to evade the idle timer indefinitely.
+/// Absolute lifetime of one streaming response from its first chunk (the
+/// first-token timeout bounds the wait for that chunk). The byte cap bounds
+/// retained memory, while this deadline also stops a peer that drips tiny
+/// chunks often enough to evade the idle timer indefinitely.
 pub const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const ERROR_MARKER: &str = "\n[truncated: provider error exceeded the 64 KiB safety limit]";
@@ -139,15 +140,22 @@ impl StreamTimeouts {
     }
 }
 
-/// The deadlines of one streamed answer, from the moment its request is sent.
+/// The deadlines of one streamed answer, from the moment its request is sent:
+/// its first chunk within the first-token timeout, each later one within the
+/// idle timeout, and the whole answer within [`STREAM_TOTAL_TIMEOUT`] of its
+/// first chunk, so a first-token timeout longer than that total is usable.
 /// Dropping the response when one passes closes its connection, which is how
-/// the server learns to stop: Ollama ends the request, and its generation, when
-/// its client goes.
+/// the server learns to stop: Ollama 0.40.8 aborts the answer ("aborting
+/// completion request due to client closing the connection"), or a load it
+/// has not finished, when its client goes.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamDeadlines {
     timeouts: StreamTimeouts,
     /// When the first chunk is due; `None` once it came.
     first_chunk: Option<tokio::time::Instant>,
+    /// When the answer must have ended: [`STREAM_TOTAL_TIMEOUT`] after its
+    /// first chunk; `None` until that chunk came.
+    end: Option<tokio::time::Instant>,
 }
 
 impl StreamDeadlines {
@@ -156,6 +164,7 @@ impl StreamDeadlines {
         Self {
             timeouts,
             first_chunk: Some(tokio::time::Instant::now() + timeouts.first_token),
+            end: None,
         }
     }
 
@@ -173,13 +182,13 @@ impl StreamDeadlines {
             .map_err(|_| first_token_timeout(provider, self.timeouts.first_token))
     }
 
-    /// [`next_stream_item`] with the first chunk due by the first-token
-    /// deadline (or `idle` after the headers, when that is later) and every
-    /// later one `idle` after the one before.
+    /// The next item of `stream`: the first chunk due by the first-token
+    /// deadline (or `idle` after the headers, when that is later), every
+    /// later one `idle` after the one before, and none after
+    /// [`STREAM_TOTAL_TIMEOUT`] from the first.
     pub async fn next<S>(
         &mut self,
         stream: &mut S,
-        total_deadline: tokio::time::Instant,
         provider: &str,
     ) -> Result<Option<S::Item>, ProviderError>
     where
@@ -188,16 +197,17 @@ impl StreamDeadlines {
         let timeouts = self.timeouts;
         let idle = tokio::time::Instant::now() + timeouts.idle;
         let Some(first) = self.first_chunk else {
-            return next_stream_item_by(stream, total_deadline, idle, provider, || {
+            return next_stream_item_by(stream, self.end, idle, provider, || {
                 idle_timeout(provider, timeouts.idle)
             })
             .await;
         };
-        let item = next_stream_item_by(stream, total_deadline, first.max(idle), provider, || {
+        let item = next_stream_item_by(stream, None, first.max(idle), provider, || {
             first_token_timeout(provider, timeouts.first_token)
         })
         .await?;
         self.first_chunk = None;
+        self.end = Some(tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT);
         Ok(item)
     }
 }
@@ -221,9 +231,11 @@ fn idle_timeout(provider: &str, after: Duration) -> ProviderError {
     ))
 }
 
+/// The next item of `stream`, due by `due` (else `late`) and, once the
+/// answer has started, by its `end`.
 async fn next_stream_item_by<S>(
     stream: &mut S,
-    total_deadline: tokio::time::Instant,
+    end: Option<tokio::time::Instant>,
     due: tokio::time::Instant,
     provider: &str,
     late: impl FnOnce() -> ProviderError,
@@ -231,10 +243,18 @@ async fn next_stream_item_by<S>(
 where
     S: Stream + Unpin,
 {
-    tokio::time::timeout_at(total_deadline, tokio::time::timeout_at(due, stream.next()))
-        .await
-        .map_err(|_| ProviderError::Stream(format!("{provider} stream total timeout")))?
-        .map_err(|_| late())
+    let item = tokio::time::timeout_at(due, stream.next());
+    match end {
+        Some(end) => tokio::time::timeout_at(end, item).await.map_err(|_| {
+            ProviderError::Stream(format!(
+                "{provider} stream total timeout: the answer did not end within {} minutes of \
+                 its start",
+                STREAM_TOTAL_TIMEOUT.as_secs() / 60
+            ))
+        })?,
+        None => item.await,
+    }
+    .map_err(|_| late())
 }
 
 /// Pull one stream item subject to both a fixed response-wide deadline and a
@@ -943,15 +963,14 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut bytes = response.bytes_stream();
-        let total = tokio::time::Instant::now() + Duration::from_secs(10);
         // Due by the first-token deadline, though later than `idle` after
         // the headers.
-        let first = deadlines.next(&mut bytes, total, "test").await.unwrap();
+        let first = deadlines.next(&mut bytes, "test").await.unwrap();
         assert_eq!(first.unwrap().unwrap().as_ref(), b"first");
-        let second = deadlines.next(&mut bytes, total, "test").await.unwrap();
+        let second = deadlines.next(&mut bytes, "test").await.unwrap();
         assert_eq!(second.unwrap().unwrap().as_ref(), b"second");
         let started = tokio::time::Instant::now();
-        let error = deadlines.next(&mut bytes, total, "test").await.unwrap_err();
+        let error = deadlines.next(&mut bytes, "test").await.unwrap_err();
         assert!(started.elapsed() < Duration::from_millis(500));
         let message = error.to_string();
         assert!(message.contains("test stream idle timeout"), "{message}");
@@ -959,7 +978,7 @@ mod tests {
             message.contains("providers.test.idle_timeout_secs"),
             "{message}"
         );
-        // Giving up closes the connection: the server stops the request.
+        // Giving up closes the connection, which the server sees.
         drop(bytes);
         assert!(closed_soon(closed).await, "the connection stayed open");
     }
@@ -1009,11 +1028,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let mut bytes = response.bytes_stream();
-        let total = tokio::time::Instant::now() + Duration::from_secs(10);
-        let error = deadlines
-            .next(&mut bytes, total, "ollama")
-            .await
-            .unwrap_err();
+        let error = deadlines.next(&mut bytes, "ollama").await.unwrap_err();
         assert!(started.elapsed() >= Duration::from_millis(290));
         assert!(error.to_string().contains("first-token timeout"), "{error}");
         drop(bytes);
@@ -1032,6 +1047,47 @@ mod tests {
         assert_eq!(short.idle, Duration::from_secs(10));
         // A buffered answer always has at least the old deadline.
         assert_eq!(short.buffered(), RESPONSE_TIMEOUT);
+    }
+
+    /// The whole answer has [`STREAM_TOTAL_TIMEOUT`] from its first chunk,
+    /// so a first-token timeout above it is usable: an answer that starts
+    /// after 20 minutes is read, and one that then drips a chunk a minute
+    /// ends 15 minutes later, saying so.
+    #[tokio::test(start_paused = true)]
+    async fn the_total_deadline_runs_from_the_first_chunk() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(20 * 60)).await;
+            while sender.send(()).await.is_ok() {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+        let mut stream = tokio_stream::wrappers::ReceiverStream::new(receiver);
+        let mut deadlines = StreamDeadlines::start(StreamTimeouts {
+            first_token: Duration::from_secs(3600),
+            idle: STREAM_IDLE_TIMEOUT,
+        });
+        let started = tokio::time::Instant::now();
+        assert_eq!(deadlines.next(&mut stream, "test").await.unwrap(), Some(()));
+        let first = started.elapsed();
+        assert!(first >= Duration::from_secs(20 * 60), "{first:?}");
+        let error = loop {
+            match deadlines.next(&mut stream, "test").await {
+                Ok(item) => assert_eq!(item, Some(())),
+                Err(error) => break error,
+            }
+        };
+        let after_first = started.elapsed() - first;
+        assert!(
+            after_first >= STREAM_TOTAL_TIMEOUT
+                && after_first < STREAM_TOTAL_TIMEOUT + Duration::from_secs(1),
+            "{after_first:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "Streaming error: test stream total timeout: the answer did not end within 15 minutes \
+             of its start"
+        );
     }
 
     #[tokio::test(start_paused = true)]
