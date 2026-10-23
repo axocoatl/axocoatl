@@ -6436,12 +6436,19 @@ mod tests {
             .unwrap_or(false)
     }
 
+    /// The pid the child wrote to `path`, once its whole line is there: the
+    /// shell makes the file before it writes the pid, so a file without its
+    /// newline yet is read again.
     #[cfg(unix)]
     async fn wait_for_pid(path: &Path) -> u32 {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
-            if let Ok(value) = tokio::fs::read_to_string(path).await {
-                return value.trim().parse().expect("child should record its pid");
+            if let Some(pid) = tokio::fs::read_to_string(path)
+                .await
+                .ok()
+                .and_then(|value| value.strip_suffix('\n')?.parse().ok())
+            {
+                return pid;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
@@ -6464,7 +6471,7 @@ mod tests {
     fn sleeping_command(pid_file: &Path) -> Command {
         let mut command = Command::new("sh");
         command
-            .args(["-c", "printf %s $$ > \"$1\"; exec sleep 30", "sh"])
+            .args(["-c", "printf '%s\\n' $$ > \"$1\"; exec sleep 30", "sh"])
             .arg(pid_file);
         command
     }
