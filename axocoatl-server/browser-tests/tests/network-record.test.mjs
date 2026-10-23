@@ -200,6 +200,29 @@ test('requests on egress routes show what each asked for and how it ended', asyn
   }
 });
 
+test('a request the route to Ollama refused because its cloud features were not off says so', async () => {
+  const conn = 'g1:8';
+  const host = 'ollama.host.axocoatl.internal';
+  const extra = [
+    line(10, { kind: 'open', conn, decision: 'allow', rule: 'host_ollama', host, port: 443, conn_kind: 'connect', addrs: ['127.0.0.1'], token: '0123456789abcdef', binding: agent, scope: 'session', policy_revision: 1 }),
+    line(11, { kind: 'request', conn, seq_in_conn: 1, method: 'POST', path: '/api/chat', host, decision: 'deny', reason: 'ollama_cloud_not_off' }),
+  ];
+  const { context, page, calls, errors } = await setup({ extra });
+  try {
+    const dialog = page.getByRole('dialog', { name: 'Session network', exact: true });
+    await dialog.getByRole('heading', { name: 'Requests on routes', exact: true }).waitFor();
+    const rows = dialog.locator('table.requests tbody tr');
+    assert.equal(await rows.count(), 1);
+    assert.equal(await rows.nth(0).getAttribute('data-decision'), 'deny');
+    await rows.nth(0).getByText('ollama_cloud_not_off', { exact: true }).waitFor();
+    await rows.nth(0).getByText('Ollama on this computer did not report its cloud features off when asked just before this request, so nothing was sent to it.', { exact: true }).waitFor();
+    assert.equal(calls.length, 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    await context.close();
+  }
+});
+
 test('connections are listed newest first, and in a hardened Session each names its program', async () => {
   const curl = { pid: 412, uid: 1000, gid: 1000, exe: '/usr/bin/curl', exe_sha256: 'ab'.repeat(32), ancestors: ['/bin/bash', '/axocoatl-exec-supervisor'] };
   const git = { pid: 413, uid: 1000, gid: 1000, exe: '/usr/libexec/git-core/git-remote-http', exe_sha256: 'cd'.repeat(32), ancestors: ['/usr/bin/git', '/bin/bash'] };

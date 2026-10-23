@@ -583,22 +583,35 @@ fn hint(reason: &str, host: &str, port: u16) -> String {
 /// a local copy of a cloud model (`ollama cp gpt-oss:20b-cloud mygpt`) keeps
 /// its cloud host under a name the route cannot recognize, and a cloud-enabled
 /// Ollama would send it to ollama.com. A Session's decision point is opened
-/// with the route only when Ollama reports cloud disabled.
+/// with the route only when Ollama reports cloud disabled, and the route
+/// asks again before each request it sends
+/// ([`host_ollama_cloud_refusal_for`]).
 pub(crate) async fn host_ollama_cloud_refusal(port: u16) -> Option<String> {
+    let base = format!("http://127.0.0.1:{port}");
+    let observed = axocoatl_llm_ollama::check_native_ollama_server(&base)
+        .await
+        .map(|check| check.cloud)
+        .map_err(|error| error.to_string());
+    host_ollama_cloud_refusal_for(port, observed.as_ref().map_err(String::as_str))
+}
+
+/// [`host_ollama_cloud_refusal`] for the cloud mode Ollama at
+/// `127.0.0.1:port` reported, or why it did not answer.
+pub(crate) fn host_ollama_cloud_refusal_for(
+    port: u16,
+    observed: Result<&axocoatl_llm_ollama::OllamaCloudMode, &str>,
+) -> Option<String> {
     use axocoatl_llm_ollama::OllamaCloudMode;
     const TURN_OFF: &str = "Turn Ollama's cloud features off (start it with OLLAMA_NO_CLOUD=1, \
          or add {\"disable_ollama_cloud\": true} to ~/.ollama/server.json of the user that runs \
          it) and restart Ollama, or remove sandbox.egress.host_ollama and run axocoatl network \
          reload";
-    let base = format!("http://127.0.0.1:{port}");
-    let found = match axocoatl_llm_ollama::check_native_ollama_server(&base).await {
-        Ok(check) => match check.cloud {
-            OllamaCloudMode::Disabled { .. } => return None,
-            OllamaCloudMode::Enabled => "has its cloud features on".to_string(),
-            OllamaCloudMode::Unreported => {
-                "does not report its cloud mode (GET /api/status)".to_string()
-            }
-        },
+    let found = match observed {
+        Ok(OllamaCloudMode::Disabled { .. }) => return None,
+        Ok(OllamaCloudMode::Enabled) => "has its cloud features on".to_string(),
+        Ok(OllamaCloudMode::Unreported) => {
+            "does not report its cloud mode (GET /api/status)".to_string()
+        }
         Err(error) => format!("did not answer GET /api/status ({error})"),
     };
     Some(format!(

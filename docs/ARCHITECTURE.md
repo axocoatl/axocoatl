@@ -889,7 +889,11 @@ and recorded like any route. It allows only Ollama's inference and model listing
 (`egress_broker::rules::HOST_OLLAMA_RULES`), refusing pulls, pushes, creates, copies,
 deletes, blobs, the account endpoints and web search and fetch, and checks bodies with
 `provider_fetch::check_ollama`, which refuses a cloud model (a tag that is `cloud` or
-ends in `-cloud`) that Ollama would run on `ollama.com`.
+ends in `-cloud`) that Ollama would run on `ollama.com`. The decision point opens with the
+route only when Ollama reports its cloud features disabled
+(`session_egress::host_ollama_cloud_refusal`), and the broker asks `GET /api/status`
+again before each request (`UpstreamConnector::host_ollama_cloud_mode`), refusing with
+`ollama_cloud_not_off` while Ollama does not report them disabled.
 
 ## Automations
 
