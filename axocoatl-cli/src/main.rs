@@ -10,6 +10,7 @@ mod ollama_setup;
 mod onboard;
 #[cfg(test)]
 mod paste_safe;
+mod proxy_env;
 mod receipt_cmd;
 mod recipe_cmd;
 mod run_cmd;
@@ -520,8 +521,18 @@ fn connect_parse_error(error: &clap::Error, argv: &[std::ffi::OsString]) -> Opti
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Before the runtime starts any thread: every HTTP client reads the
+    // proxy variables when it is built.
+    proxy_env::keep_this_computer_off_proxies();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("the async runtime starts")
+        .block_on(run_cli())
+}
+
+async fn run_cli() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => exit_for_parse_error(error, &std::env::args_os().collect::<Vec<_>>()),

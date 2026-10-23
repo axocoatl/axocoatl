@@ -172,13 +172,17 @@ Axocoatl 1.5.0 does not support an HTTP proxy (`HTTPS_PROXY`, `HTTP_PROXY`,
   through a proxy, a run cannot install its dependencies or reach a model API from the
   sandbox. `axocoatl doctor` and `axocoatl onboard` warn when `HTTPS_PROXY`,
   `HTTP_PROXY` or `ALL_PROXY` is set.
-- Requests to this computer (from `axocoatl run` and the other commands to the daemon,
-  and to Ollama and a Session's Preview) never use a proxy, whatever the variables say,
-  so the daemon's API token never reaches one.
-- Requests the daemon and the CLI make themselves to hosts on the internet (a native
-  Agent's model calls to OpenRouter or another hosted provider, onboarding's checks of
-  OpenRouter's catalog) follow the proxy variables and `NO_PROXY`, as the HTTP library
-  Axocoatl uses reads them. None of this has been tested behind a proxy.
+- Requests to this computer (`localhost`, `127.0.0.0/8` and `::1`) never use a proxy,
+  whatever the variables say: when one is set, Axocoatl adds these to `NO_PROXY` for
+  itself. That covers `axocoatl run` and the other commands' requests to the daemon, so
+  its API token never reaches a proxy, a Session's Preview, and a model provider,
+  webhook or MCP server whose address is on this computer (such as a `base_url` for LM
+  Studio). Requests to Ollama never use a proxy either, wherever Ollama runs.
+- Every other request the daemon and the CLI make themselves (a native Agent's model
+  calls to OpenRouter or another hosted provider, onboarding's checks of OpenRouter's
+  catalog, a webhook or an MCP server on another computer) follows the proxy variables
+  and `NO_PROXY`, as the HTTP library Axocoatl uses reads them. None of this has been
+  tested behind a proxy.
 
 Neither has a VPN that the Podman machine's network (gvproxy, on macOS) must use been
 tested. The installer resolves the latest release with one request to
