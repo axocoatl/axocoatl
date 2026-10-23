@@ -11,7 +11,7 @@ use crate::connect_cmd::openrouter_tests::{
 
 /// The models onboarding suggests, which the fake catalog lists.
 const AGAIN: &str = "axocoatl onboard --writer openrouter --writer-model \
-                     openrouter:qwen/qwen3-coder --reviewer openrouter:openai/gpt-oss-120b";
+                     openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b";
 
 /// A Mac whose Podman machine runs, with no Ollama: onboarding with `ui`
 /// and `args`, its OpenRouter API the fake's.
@@ -74,7 +74,7 @@ async fn assert_connected_and_ready(o: &Onboarding) {
     assert_eq!(
         config::run_models(&text),
         RunModels {
-            writer: Some("openrouter:qwen/qwen3-coder".into()),
+            writer: Some("openrouter:qwen/qwen3-coder-30b-a3b-instruct".into()),
             reviewer: Some("openrouter:openai/gpt-oss-120b".into()),
         }
     );
@@ -142,7 +142,7 @@ async fn an_interactive_browser_sign_in_stores_the_key_as_a_secret() {
         "{output}"
     );
     for expected in [
-        "  ✓ writer qwen/qwen3-coder",
+        "  ✓ writer qwen/qwen3-coder-30b-a3b-instruct",
         "  ✓ reviewer openai/gpt-oss-120b",
         "  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser \
          then returns to http://127.0.0.1:",
@@ -507,16 +507,27 @@ async fn at_a_terminal_an_unusable_connected_key_signs_in_again() {
 
 /// A model whose every endpoint OpenRouter reports unavailable right now
 /// is said before anything is written: at a terminal another model is
-/// asked for (Enter takes the next one onboarding suggests), and under --yes the step
-/// left says why and names a model to use instead, with nothing saved.
+/// asked for (Enter takes the next one onboarding suggests that can run
+/// now), and under --yes the step left says why and names that model, with
+/// nothing saved.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_model_openrouter_reports_unavailable_is_said_before_the_setup_is_written() {
-    use crate::onboard::openrouter::{ALTERNATE_WRITER, DEFAULT_WRITER};
+    use crate::connect_cmd::openrouter_tests::mount_unavailable;
+    use crate::onboard::openrouter::{DEFAULT_WRITER, SUGGESTED};
     for interactive in [true, false] {
         let server = openrouter(issued(), described()).await;
-        crate::connect_cmd::openrouter_tests::mount_unavailable(&server, "/api/v1", DEFAULT_WRITER)
-            .await;
+        mount_unavailable(&server, "/api/v1", DEFAULT_WRITER).await;
+        // Under --yes the next suggestion is down too: the one after it is
+        // named.
+        if !interactive {
+            mount_unavailable(&server, "/api/v1", SUGGESTED[1]).await;
+        }
+        let instead = if interactive {
+            SUGGESTED[1]
+        } else {
+            SUGGESTED[2]
+        };
         let shims = Shims::new();
         let ui = if interactive {
             Ui::scripted(vec![
@@ -546,14 +557,13 @@ async fn a_model_openrouter_reports_unavailable_is_said_before_the_setup_is_writ
             assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
             assert!(
                 output.contains(&format!(
-                    "✓ OpenRouter has an endpoint for {ALTERNATE_WRITER} that native Sessions \
-                     can use now"
+                    "✓ OpenRouter has an endpoint for {instead} that native Sessions can use now"
                 )),
                 "{output}"
             );
             assert_eq!(
                 config::run_models(&config_text(&o)).writer.as_deref(),
-                Some(format!("openrouter:{ALTERNATE_WRITER}").as_str())
+                Some(format!("openrouter:{instead}").as_str())
             );
         } else {
             assert_eq!(code, exit::NOT_READY, "{output}");
@@ -562,8 +572,7 @@ async fn a_model_openrouter_reports_unavailable_is_said_before_the_setup_is_writ
             assert!(
                 o.steps[0].ends_with(&format!(
                     "Run `axocoatl onboard` again later, or with another writer model \
-                     (--writer-model openrouter:VENDOR/MODEL, such as \
-                     openrouter:{ALTERNATE_WRITER})"
+                     (--writer-model openrouter:VENDOR/MODEL, such as openrouter:{instead})"
                 )),
                 "{:?}",
                 o.steps
@@ -597,11 +606,14 @@ async fn a_typed_key_moved_to_the_sign_in_is_left_out_of_the_backup() {
     let old = config::render(&config::ConfigPlan {
         ollama_base_url: None,
         openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(OLD.into()))),
-        lead: config::ModelRef::new(config::Provider::OpenRouter, "qwen/qwen3-coder"),
+        lead: config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "qwen/qwen3-coder-30b-a3b-instruct",
+        ),
         reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
         run_writer: Some(config::ModelRef::new(
             config::Provider::OpenRouter,
-            "qwen/qwen3-coder",
+            "qwen/qwen3-coder-30b-a3b-instruct",
         )),
         run_reviewer: Some(config::ModelRef::new(
             config::Provider::OpenRouter,

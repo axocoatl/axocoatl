@@ -38,6 +38,7 @@ fn model(id: &str, tools: bool, output: &[&str], prompt: &str, completion: &str)
 fn catalog() -> Value {
     json!({"data": [
         model("qwen/qwen3-coder", true, &["text"], "0.00000022", "0.00000095"),
+        model("qwen/qwen3-coder-30b-a3b-instruct", true, &["text"], "0.00000007", "0.00000028"),
         model("openai/gpt-oss-120b", true, &["text"], "0.00000005", "0.00000025"),
         model("z-ai/glm-4.6", true, &["text"], "0.0000004", "0.0000016"),
         model("deepseek/deepseek-chat-v3.1", true, &["text"], "0.00000025", "0.00000095"),

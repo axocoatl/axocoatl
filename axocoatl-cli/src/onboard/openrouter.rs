@@ -20,12 +20,9 @@ use super::{Choice, Onboarding};
 
 pub(crate) const OPENROUTER_API: &str = "https://openrouter.ai/api/v1";
 
-/// The writer onboarding suggests: a coding model, the one the release
-/// gate's OpenRouter runs use.
-pub(crate) const DEFAULT_WRITER: &str = "qwen/qwen3-coder";
-/// The writer onboarding suggests when the default cannot run now: another
-/// coding model, which several OpenRouter providers serve.
-pub(crate) const ALTERNATE_WRITER: &str = "deepseek/deepseek-chat-v3.1";
+/// The writer onboarding suggests: Qwen3-Coder 30B-A3B, the model the local
+/// default `qwen3-coder:30b` runs, which several OpenRouter providers serve.
+pub(crate) const DEFAULT_WRITER: &str = "qwen/qwen3-coder-30b-a3b-instruct";
 /// The reviewer onboarding suggests: another vendor's model, the family of
 /// the reviewer Axocoatl has measured (gpt-oss 120B).
 pub(crate) const DEFAULT_REVIEWER: &str = "openai/gpt-oss-120b";
@@ -879,15 +876,41 @@ async fn endpoint_problem(api: &str, key: &str, model: &str) -> Result<Option<St
     }
 }
 
-/// The OpenRouter models onboarding suggests in place of one that cannot
-/// run now, in order: its own suggestions for the writer and the reviewer.
-const SUGGESTED: [&str; 3] = [DEFAULT_WRITER, ALTERNATE_WRITER, DEFAULT_REVIEWER];
+/// The OpenRouter models onboarding offers in place of one that cannot run
+/// now, the first in this order that can run now: the default writer, other
+/// coding models, and the default reviewer.
+pub(crate) const SUGGESTED: [&str; 5] = [
+    DEFAULT_WRITER,
+    "z-ai/glm-4.6",
+    "deepseek/deepseek-chat-v3.1",
+    "qwen/qwen3-coder",
+    DEFAULT_REVIEWER,
+];
+
+/// The first of [`SUGGESTED`] that is not `tried` nor `avoid` (the other
+/// role's model) and that native Sessions can use now, or `None`.
+async fn healthy_suggestion(
+    api: &str,
+    key: &str,
+    tried: &[String],
+    avoid: Option<&str>,
+) -> Option<&'static str> {
+    for candidate in SUGGESTED {
+        if tried.iter().any(|tried| tried == candidate) || Some(candidate) == avoid {
+            continue;
+        }
+        if matches!(endpoint_problem(api, key, candidate).await, Ok(None)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
 
 /// `model` for `role`, once its endpoints show it can run in native
 /// Sessions now. When it cannot, at a terminal another model is asked for
-/// (Enter takes one onboarding suggests, never `avoid`, the other role's
-/// model);
-/// without one, or under `--yes`, the step left says why and what to do.
+/// (Enter takes the first of [`SUGGESTED`] that can run now, never `avoid`,
+/// the other role's model); without one, or under `--yes`, the step left
+/// says why and names that model.
 async fn usable_model(
     o: &mut Onboarding,
     role: &str,
@@ -919,12 +942,8 @@ async fn usable_model(
             }
             Ok(Some(why)) => why,
         };
-        let suggestion = SUGGESTED
-            .iter()
-            .find(|candidate| {
-                !tried.iter().any(|tried| tried == **candidate) && Some(**candidate) != avoid
-            })
-            .copied()
+        let suggestion = healthy_suggestion(&o.openrouter_api, key, &tried, avoid)
+            .await
             .unwrap_or_default();
         if !o.ui.interactive() {
             let flag = if role == "writer" {

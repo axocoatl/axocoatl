@@ -328,7 +328,7 @@ to your OpenRouter account at `https://openrouter.ai/settings/integrations`, so 
 provider bills you and Axocoatl cannot count the cost. Native Sessions refuse it, and a
 new account has none. It asks you to confirm that OpenRouter credits pay and the
 account has no BYOK keys, then asks for two models: the writer (default
-`qwen/qwen3-coder`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
+`qwen/qwen3-coder-30b-a3b-instruct`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
 and refuses the same model for both. The writer's output limit is 4096 tokens.
 
 The key, in this order:
@@ -388,9 +388,11 @@ only while OpenRouter reports it healthy (status 0), since it stays on one endpo
 with no fallback, so a model whose every usable endpoint OpenRouter reports
 unavailable or degraded right now, or that has no endpoint native Sessions can use,
 cannot run now. Onboarding says so, with each endpoint's status and its success rate
-over the last 30 minutes; at a terminal you can name another model (Enter takes a
-model onboarding suggests, such as `deepseek/deepseek-chat-v3.1` for the writer), and with
-`--yes` it is a step left that names one and nothing is saved.
+over the last 30 minutes; at a terminal you can name another model (Enter takes the
+first of `qwen/qwen3-coder-30b-a3b-instruct`, `z-ai/glm-4.6`,
+`deepseek/deepseek-chat-v3.1`, `qwen/qwen3-coder` and `openai/gpt-oss-120b` that can
+run now and is not the other role's model), and with `--yes` it is a step left that
+names that model, and nothing is saved.
 OpenRouter uses your OpenRouter credits; BYOK is not supported for native Sessions.
 
 ### Step 4: the configuration

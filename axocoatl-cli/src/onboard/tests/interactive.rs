@@ -316,7 +316,7 @@ async fn openrouter_without_a_key_says_where_to_get_one_and_saves_nothing() {
     assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
     assert_eq!(
         o.steps[0],
-        "Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder \
+        "Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct \
          --reviewer openrouter:openai/gpt-oss-120b` and sign in to OpenRouter in your browser \
          when it asks (add credits at https://openrouter.ai/settings/credits), or create a key \
          at https://openrouter.ai/settings/keys and enter it at its hidden prompt"

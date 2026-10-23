@@ -2802,7 +2802,7 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            catalog_row("qwen/qwen3-coder"), catalog_row("openai/gpt-oss-120b")
+            catalog_row("qwen/qwen3-coder-30b-a3b-instruct"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
@@ -2856,7 +2856,7 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
             .model
             .clone()
     };
-    assert_eq!(model("lead"), "qwen/qwen3-coder");
+    assert_eq!(model("lead"), "qwen/qwen3-coder-30b-a3b-instruct");
     assert_eq!(model("reviewer"), "openai/gpt-oss-120b");
     assert_ne!(model("lead"), model("reviewer"));
     assert!(text.contains(&format!("api_key: \"${{{variable}}}\"")));
