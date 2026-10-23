@@ -341,7 +341,10 @@ the Preview and failure paths called out below.
   nothing of Axocoatl's written to the repository's configuration.
 - The first screen lists what the first Session still needs, with each fix's
   commands, the rail pill opens the same checklist, and Create session stays
-  blocked while Podman has no machine.
+  blocked while Podman has no machine. Create session waits for the New
+  Session picker's own readiness read (a read that fails blocks nothing; the
+  daemon refuses a Session it cannot prepare), and typing a Session name
+  never enables a Create session that readiness or anything else holds.
 - Quick Open terminates directory-only and cyclic traversal at explicit entry,
   directory, and depth limits, and abandons a build when its Session changes.
 - Source Control attributes a normal turn's absolute-path tool write to **Last
