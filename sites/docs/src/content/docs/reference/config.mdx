@@ -150,7 +150,7 @@ agents:
   - id: coder
     name: Coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     system_prompt: Work in the selected repository and verify changes.
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     writes: [src/, "*.md"]

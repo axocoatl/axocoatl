@@ -234,10 +234,13 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
 
    This also turns off Ollama's web search.
 4. **Models by memory.** Models already installed come first, at any memory size.
-   Among those that fit this computer, onboarding picks a writer (Qwen3-Coder first, then
-   the largest coding model, then the largest other model, vision models last); when
-   another of them is a gpt-oss model or is larger than that writer, it suggests the two,
-   and Enter (or `--yes`) takes them. Any model larger than about 0.65 of this computer's
+   Among those that fit this computer and call tools, onboarding picks a writer
+   (Qwen3-Coder first, then the largest coding model, then the largest other model,
+   vision models last); when another of them is a gpt-oss model or is larger than that
+   writer, it suggests the two, and Enter (or `--yes`) takes them. A model whose
+   `capabilities` Ollama lists without `tools`, or Qwen2.5-Coder, which returns its tool
+   calls as JSON text that never runs, is offered but never suggested, and onboarding
+   says why. Any model larger than about 0.65 of this computer's
    memory is labelled too large and never preselected. With no such pair installed:
 
    | Memory | Writer | Reviewer | What is known |

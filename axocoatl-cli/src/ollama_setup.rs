@@ -132,6 +132,9 @@ pub struct InstalledModel {
     format: String,
     /// `details.runner` as reported (`ggml`, `llamacpp`, `mlx`), lower case.
     runner: String,
+    /// Whether `capabilities` lists `tools`; `None` when the server does not
+    /// list capabilities (before Ollama 0.40).
+    tools: Option<bool>,
 }
 
 impl InstalledModel {
@@ -167,8 +170,13 @@ impl InstalledModel {
                 .and_then(Value::as_str)
                 .is_some_and(|v| !v.is_empty())
         });
+        let tools = record
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .map(|capabilities| capabilities.iter().any(|c| c.as_str() == Some("tools")));
         Some(Self {
             remote,
+            tools,
             size_bytes: record.get("size").and_then(Value::as_u64).unwrap_or(0),
             parameter_size: text("/details/parameter_size"),
             families,
@@ -180,15 +188,7 @@ impl InstalledModel {
 
     /// The name without registry, namespace or tag, in lower case.
     fn base(&self) -> String {
-        let without_tag = match self.name.rsplit_once(':') {
-            Some((base, tag)) if !tag.contains('/') => base,
-            _ => self.name.as_str(),
-        };
-        without_tag
-            .rsplit('/')
-            .next()
-            .unwrap_or(without_tag)
-            .to_ascii_lowercase()
+        base_name(&self.name)
     }
 
     fn tag(&self) -> &str {
@@ -258,6 +258,21 @@ impl InstalledModel {
         self.refusal().is_none() && !self.is_embedding()
     }
 
+    /// Why setup never suggests this model for the default team, whose
+    /// Agents all call tools, though it may be chosen: Ollama does not list
+    /// tool calling for it, or it writes its calls as JSON text, which
+    /// Axocoatl never runs. `None` when it may be suggested.
+    pub fn not_suggested(&self) -> Option<String> {
+        if writes_calls_as_json(&self.name) {
+            return Some(JSON_CALLS.into());
+        }
+        (self.tools == Some(false)).then(|| {
+            "Ollama does not list tool calling for it, and every Agent of the default team calls \
+             tools"
+                .into()
+        })
+    }
+
     /// The model as a choice in a list.
     pub fn label(&self) -> String {
         let mut details = Vec::new();
@@ -312,6 +327,40 @@ pub fn refused_models(models: &[InstalledModel]) -> Vec<(String, String)> {
         .filter(|model| !model.is_remote() && !model.is_embedding())
         .filter_map(|model| model.refusal().map(|why| (model.name.clone(), why)))
         .collect()
+}
+
+/// The installed models offered as team choices that setup never suggests,
+/// each with why ([`InstalledModel::not_suggested`]).
+pub fn unsuggested_models(models: &[InstalledModel]) -> Vec<(String, String)> {
+    candidates(models)
+        .into_iter()
+        .filter_map(|model| model.not_suggested().map(|why| (model.name, why)))
+        .collect()
+}
+
+/// Why a model that writes its tool calls as JSON text cannot work an
+/// Agent's tools.
+const JSON_CALLS: &str = "it returns its tool calls as JSON text instead of Ollama tool calls \
+                          (qwen2.5-coder:14b did in Axocoatl's tests), and Axocoatl never runs a \
+                          call written as JSON";
+
+/// `model` is Qwen2.5-Coder, which returns its tool calls as JSON text
+/// rather than as calls Ollama lifts: they never run.
+fn writes_calls_as_json(model: &str) -> bool {
+    base_name(model).starts_with("qwen2.5-coder")
+}
+
+/// A model name without registry, namespace or tag, in lower case.
+fn base_name(name: &str) -> String {
+    let without_tag = match name.rsplit_once(':') {
+        Some((base, tag)) if !tag.contains('/') => base,
+        _ => name,
+    };
+    without_tag
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_tag)
+        .to_ascii_lowercase()
 }
 
 /// The models offered as team choices, sorted by name.
@@ -371,7 +420,12 @@ pub fn suggest_fitting_team_models(
     )
 }
 
+/// The pair among `candidates` that call tools ([`InstalledModel::not_suggested`]).
 fn suggest_from(candidates: Vec<InstalledModel>) -> Option<TeamModels> {
+    let candidates: Vec<InstalledModel> = candidates
+        .into_iter()
+        .filter(|model| model.not_suggested().is_none())
+        .collect();
     let lead = candidates.iter().min_by(|a, b| {
         lead_tier(a)
             .cmp(&lead_tier(b))
@@ -873,6 +927,10 @@ pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Fin
             format!("Model '{model}' does not report tool calling, and an Agent that uses it lists tools"),
             vec!["Choose a model whose `ollama show` lists the tools capability, or remove the Agent's tools.".to_string()],
         ),
+        Ok(_) if needs_tools && writes_calls_as_json(model) => Finding::warning(
+            format!("Model '{model}' is listed with tool calling, but {JSON_CALLS}; an Agent that uses it lists tools"),
+            vec![format!("Choose a model that returns Ollama tool calls, such as {RECOMMENDED_LEAD_MODEL}, or remove the Agent's tools.")],
+        ),
         Ok(capabilities) => Finding::pass(format!(
             "Model '{model}' is a local GGUF model native Sessions can run ({})",
             [
@@ -987,13 +1045,79 @@ mod tests {
     fn a_coding_lead_beats_a_larger_general_model_which_then_reviews() {
         let installed = models(vec![
             tag("qwen3:32b", "32.8B", 20201253829, "qwen3"),
-            tag("qwen2.5-coder:14b", "14.8B", 8988124298, "qwen2"),
+            tag("devstral:24b", "23.6B", 14333927918, "llama"),
             tag("deepseek-coder:6.7b", "7B", 3827834503, "llama"),
         ]);
         assert_eq!(
             suggested(&installed),
-            ("qwen2.5-coder:14b".into(), "qwen3:32b".into())
+            ("devstral:24b".into(), "qwen3:32b".into())
         );
+    }
+
+    /// Every Agent of the default team calls tools: a model whose calls never
+    /// run is offered as a choice but never suggested, and setup says why.
+    #[test]
+    fn models_whose_tool_calls_never_run_are_offered_but_not_suggested() {
+        let with = |mut tag: Value, capabilities: &[&str]| {
+            tag["capabilities"] = json!(capabilities);
+            tag
+        };
+        let installed = models(vec![
+            with(
+                tag("qwen3:32b", "32.8B", 20201253829, "qwen3"),
+                &["completion", "tools", "thinking"],
+            ),
+            with(
+                tag("qwen2.5-coder:14b", "14.8B", 8988124298, "qwen2"),
+                &["completion", "tools", "insert"],
+            ),
+            with(
+                tag("deepseek-coder:6.7b", "7B", 3827834503, "llama"),
+                &["completion", "insert"],
+            ),
+            // A server that lists no capabilities may still be suggested.
+            tag("qwen3:8b", "8.2B", 5225388164, "qwen3"),
+        ]);
+        assert_eq!(
+            suggested(&installed),
+            ("qwen3:32b".into(), "qwen3:32b".into())
+        );
+        let offered: Vec<_> = candidates(&installed).into_iter().map(|m| m.name).collect();
+        assert_eq!(
+            offered,
+            [
+                "deepseek-coder:6.7b",
+                "qwen2.5-coder:14b",
+                "qwen3:32b",
+                "qwen3:8b"
+            ]
+        );
+        let unsuggested = unsuggested_models(&installed);
+        assert_eq!(
+            unsuggested
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["deepseek-coder:6.7b", "qwen2.5-coder:14b"]
+        );
+        assert!(unsuggested[0].1.contains("does not list tool calling"));
+        assert!(unsuggested[1].1.contains("JSON"));
+        // Only models whose calls never run: nothing to suggest.
+        let only = models(vec![tag(
+            "hf.co/x/Qwen2.5-Coder-32B-GGUF:Q4_K_M",
+            "32B",
+            1,
+            "qwen2",
+        )]);
+        assert_eq!(suggest_team_models(&only), None);
+        // Doctor warns about such a model for an Agent with tools.
+        let shown = json!({"details":{"format":"gguf"},"capabilities":["completion","tools"]});
+        let finding = shown_model_finding("qwen2.5-coder:14b", &shown, true);
+        assert!(finding.ok && finding.warn, "{finding:?}");
+        assert!(finding.label.contains("JSON"), "{finding:?}");
+        assert!(finding.hint[0].contains("qwen3-coder:30b"), "{finding:?}");
+        let finding = shown_model_finding("qwen2.5-coder:14b", &shown, false);
+        assert!(finding.ok && !finding.warn, "{finding:?}");
     }
 
     #[test]

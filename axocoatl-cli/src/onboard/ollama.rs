@@ -954,6 +954,9 @@ async fn choose_models(
     for (name, why) in ollama_setup::refused_models(&installed) {
         o.ui.say(format!("  Not offered: {name}: {why}."));
     }
+    for (name, why) in ollama_setup::unsuggested_models(&installed) {
+        o.ui.say(format!("  Not suggested: {name}: {why}."));
+    }
     let memory = o.facts.memory_bytes;
     let flag = |spec: &Option<String>| {
         spec.as_deref()

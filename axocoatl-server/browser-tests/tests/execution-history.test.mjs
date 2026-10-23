@@ -201,10 +201,13 @@ test('the observed route says how each model response ended',async()=>{
     await page.goto(`${runtime.baseUrl}/response-history-fixture`);
     const view=fixture();const exact=view.activations[2].activation.activation;
     view.activations[2].stream.push({reference:'stream-2',content:{schema_version:1,activation:exact,sequence:2,
-      payload:{kind:'provider_response',finish_reason:'max_tokens',offered_tools:7,tool_calls:0}}});
+      payload:{kind:'provider_response',finish_reason:'max_tokens',offered_tools:7,tool_calls:0}}},
+    {reference:'stream-3',content:{schema_version:1,activation:exact,sequence:3,
+      payload:{kind:'provider_response',finish_reason:'tool_use',offered_tools:1,tool_calls:1}}});
     await page.evaluate(async view=>{const {renderExecutionHistoryTurn}=await import('/ui/execution-history.js');document.querySelector('main').append(renderExecutionHistoryTurn(view,{renderMarkdown:text=>text,onGraph:()=>{}}));},view);
     const route=page.locator('details.chat-reasoning[data-activation-id="activation-3"]');
     assert.equal(await route.locator('pre[data-evidence-ref="stream-2"]').textContent(),'Model response ended: max tokens · 7 tools offered · 0 calls');
+    assert.equal(await route.locator('pre[data-evidence-ref="stream-3"]').textContent(),'Model response ended: tool use · 1 tool offered · 1 call');
   } finally {await context.close();}
 });
 

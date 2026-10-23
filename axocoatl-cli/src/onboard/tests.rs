@@ -2693,6 +2693,61 @@ async fn yes_never_starts_a_pull_that_does_not_fit_the_disk() {
     ));
 }
 
+/// An installed Qwen2.5-Coder returns its tool calls as JSON text, which
+/// never runs: it is not suggested for the default team, and onboarding
+/// says why and suggests the pair for this computer instead.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_model_whose_tool_calls_never_run_is_not_suggested() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen2.5-coder:14b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let mut facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    facts.disk_free_bytes = Some(12_500_000_000);
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    ollama::writer_and_reviewer(&mut o, &mut choice).await;
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Not suggested: qwen2.5-coder:14b: it returns its tool calls as JSON text instead of \
+             Ollama tool calls"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b"),
+        "{output}"
+    );
+    assert_eq!(
+        choice.writer_model.map(|model| model.model).as_deref(),
+        Some("qwen3-coder:30b")
+    );
+}
+
 /// A failed pull shows Ollama's own error and leaves the pull as a step.
 #[cfg(unix)]
 #[tokio::test]

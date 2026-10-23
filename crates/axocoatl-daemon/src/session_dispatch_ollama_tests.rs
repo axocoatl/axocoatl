@@ -347,7 +347,7 @@ async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
     let failure = settled.failure.unwrap();
     assert!(
         failure.contains("call to glob as answer text that Axocoatl cannot run")
-            && failure.contains("done_reason \"stop\" and 1 tools offered"),
+            && failure.contains("done_reason \"stop\" and 1 tool offered"),
         "{failure}"
     );
     // The recorded output, which the workbench reads, says what happened and
@@ -355,7 +355,16 @@ async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
     let recorded = &settled.output.content().output.text;
     let view = axocoatl_session::execution_content::classify_activation_failure(recorded)
         .expect("a host-written activation failure");
-    assert_eq!((view.class, view.next_step), ("provider_error", "continue"));
+    assert_eq!(
+        (view.class, view.next_step),
+        ("unrunnable_tool_call", "continue")
+    );
+    // `axocoatl run` outcomes, receipts and the loadout audit class it as
+    // the model's output, not a provider failure.
+    assert_eq!(
+        crate::loadout::driver::class_of(recorded, None),
+        axocoatl_session::run_outcome::FailureClass::UnrunnableToolCall
+    );
     assert!(
         view.explanation
             .starts_with("The model wrote a tool call as answer text that Axocoatl cannot run"),

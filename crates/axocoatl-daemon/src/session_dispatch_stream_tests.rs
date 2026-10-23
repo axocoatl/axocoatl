@@ -128,6 +128,7 @@ async fn native_actor_stream_is_exact_persisted_before_publication_and_survives_
     assert!(public.contains("stream_text"));
     assert!(public.contains("provider_response"));
     assert!(public.contains("Model response ended: stop"));
+    assert!(public.contains("; 1 call\"") && public.contains("; 0 calls\""));
     assert!(
         !public.contains("\"arguments\":{\"value\":\"actual\"}"),
         "protected arguments are not stream display data"

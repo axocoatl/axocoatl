@@ -18,7 +18,7 @@ agents:
   - id: coder
     name: Coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     system_prompt: |
       Work inside the authorized repository. Make small verified changes and
       report the commands used to check them.
@@ -180,7 +180,7 @@ agents:
   - id: scout
     name: Scout
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     tools: [read_file, list_dir, grep, glob]
     writes: []
     role: worker
@@ -226,13 +226,13 @@ agents:
   - id: docs-writer
     name: Docs writer
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     tools: [read_file, write_file, edit_file, list_dir, grep, glob, bash]
     writes: [docs/, "*.md"]
   - id: reviewer
     name: Reviewer
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: gpt-oss:20b
     tools: [read_file, list_dir, grep, glob, bash]
     writes: []
 ```

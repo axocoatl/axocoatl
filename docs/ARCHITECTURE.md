@@ -524,8 +524,10 @@ read only by the two Ollama providers (`axocoatl-llm-ollama/src/text_calls.rs`):
 Qwen3-Coder `<function=…>` blocks that ends the answer, starts at the first call line outside a
 code fence or HTML block, names only offered tools and fits their parameter schemas, at most 128
 calls, each with an id unique in the Session. JSON is never read as a call. An answer that calls an
-offered tool in a way that cannot run is a refused response (`ProviderError::RefusedResponse`),
-so the activation fails with its reason instead of settling as a final answer. The actor has no
+offered tool in a way that cannot run (a call line that starts no runnable run, a call block after
+other text on its line, a JSON call that ends the answer) is a refused response
+(`ProviderError::RefusedResponse`), so the activation fails with its reason instead of settling as
+a final answer, classed `unrunnable_tool_call`. The actor has no
 text-to-tool path of its own; other providers leave response text non-actionable because their
 native ids, signatures, and block structure cannot be fabricated safely. Every completed provider
 response is recorded in the activation stream as `provider_response` (finish reason, offered
@@ -732,8 +734,8 @@ merged findings lose near duplicates (same file, lines at most 2 apart, similar 
 **Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
 with parsed reports, the review rounds with findings split by id, adjudications, findings
 with their reproduction classification, not-covered entries with a failure class
-(`provider_refusal`, `provider_failure`, `provider_rejected`, `budget`, `blocked`,
-`not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
+(`provider_refusal`, `provider_failure`, `provider_rejected`, `unrunnable_tool_call`,
+`budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
 network summary and Keep. `RunOutcome::decide` sets the verdict and exit code with the
 precedence error (5) > interrupted (6) > checks failed (1) > needs attention (2) > pass
 (0); anything not covered, a check that did not run on the final result, an unanswered
