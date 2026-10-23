@@ -21,20 +21,28 @@ case $capture_mode in
 esac
 # Every capture is additionally owned by the existing 180-second supervisor.
 # Limit temporary artifact growth (512-byte blocks) independently from the
-# tool's output bound.
+# tool's output bound. The patch is never written whole (below), so this
+# limits only the listings, which grow with the number of paths.
 ulimit -f 131072
-# A patch that reaches that limit (64 MiB: about 49 MiB of new binary file
-# data, which Git's binary patch writes in base85) is a change larger than a
-# capture records, and the capture says so.
-patch_failed() {
-  if [ "$(wc -c < "$scratch/patch" | tr -d ' ')" -ge 67108864 ]; then
-    echo "the patch is larger than one capture records" >&2
-    exit 68
-  fi
-  exit "$1"
-}
 scratch=$(mktemp -d)
-trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
+# What the commands below write to standard error is bounded as what the
+# capture prints is: Git can warn once for each file, and ten thousand such
+# lines would pass the bound the host reads standard error within and fail
+# the capture. Its first and last 8 KiB are passed on; the rest is read and
+# dropped, so no command waits on it or fails writing it.
+mkfifo "$scratch/stderr"
+{ head -c 8192; tail -c 8192; } < "$scratch/stderr" >&2 &
+stderr_drain=$!
+exec 3>&2 2> "$scratch/stderr"
+finish() {
+  if [ -n "$stderr_drain" ]; then
+    exec 2>&3 3>&-
+    wait "$stderr_drain" || :
+    stderr_drain=
+  fi
+  rm -rf -- "$scratch"
+}
+trap finish EXIT HUP INT TERM
 # The host has already authorized this exact working root. Different sandbox
 # users may share it; trust only this path for these read-only Git commands.
 capture_root=$(pwd -P)
@@ -78,6 +86,9 @@ git_setting diff.srcPrefix a/
 git_setting diff.dstPrefix b/
 git_setting diff.relative false
 git_setting diff.orderFile /dev/null
+# Line endings are still converted as configured; only the warning Git writes
+# for each file whose conversion would not round-trip is left out.
+git_setting core.safecrlf false
 # Content filters are programs the repository's configuration names; each one
 # it defines is switched off. External diff and text conversion are refused
 # on every diff below.
@@ -191,24 +202,54 @@ fi
 # repository's own index sets on a path cannot hide its change.
 if [ "$head_before" = unborn ]; then
   GIT_INDEX_FILE=$scratch/patch-index git read-tree --empty
-  : > "$scratch/patch"
 else
   GIT_INDEX_FILE=$scratch/patch-index git read-tree "$head_before"
-  GIT_INDEX_FILE=$scratch/patch-index \
-    git diff --no-ext-diff --no-textconv --binary "$head_before" -- > "$scratch/patch" ||
-    patch_failed "$?"
 fi
-# Preserve untracked additions in the protected patch too. Paths are arguments,
-# never shell source.
 GIT_INDEX_FILE=$scratch/patch-index \
   git ls-files --others --exclude-standard -z > "$scratch/untracked"
-xargs -0 -r sh -c '
-  for path do
-    git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null "$path"
-    code=$?
-    [ "$code" -le 1 ] || exit "$code"
-  done
-' sh < "$scratch/untracked" >> "$scratch/patch" || patch_failed "$?"
+# The patch is read once, as Git writes it: its digest and size are taken as
+# it passes, and only its first 512 KiB and one byte are kept, all of it this
+# capture can print. So no change is too large to capture, whatever the size
+# of its patch.
+mkfifo "$scratch/patch-digest" "$scratch/patch-size"
+sha256sum < "$scratch/patch-digest" > "$scratch/patch-sha256" &
+digest_job=$!
+wc -c < "$scratch/patch-size" > "$scratch/patch-bytes" &
+size_job=$!
+{
+  code=0
+  if [ "$head_before" != unborn ]; then
+    GIT_INDEX_FILE=$scratch/patch-index \
+      git diff --no-ext-diff --no-textconv --binary "$head_before" -- || code=$?
+  fi
+  # Preserve untracked additions in the protected patch too. Paths are
+  # arguments, never shell source.
+  if [ "$code" -eq 0 ]; then
+    xargs -0 -r sh -c '
+      for path do
+        git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null "$path"
+        code=$?
+        [ "$code" -le 1 ] || exit "$code"
+      done
+    ' sh < "$scratch/untracked" || code=$?
+  fi
+  echo "$code" > "$scratch/patch-status"
+} | {
+  code=0
+  tee "$scratch/patch-digest" "$scratch/patch-size" || code=$?
+  echo "$code" > "$scratch/tee-status"
+} | {
+  head -c 524289 > "$scratch/patch"
+  cat > /dev/null
+}
+wait "$digest_job"
+wait "$size_job"
+# Git's status, then the copy's: a patch either did not write whole is not
+# recorded.
+for status in patch-status tee-status; do
+  read -r code < "$scratch/$status"
+  [ "$code" -eq 0 ] || exit "$code"
+done
 # Every path whose state differs from HEAD, with its manifest line, whatever
 # the repository's size: what a run can have changed, as this capture saw it.
 # A path the differences name that the manifest does not hold is gone, and
@@ -257,8 +298,8 @@ if [ "$capture_mode" = compare ]; then
   sort "$scratch/baseline" "$scratch/judged-before" | uniq -u | cut -f 1 | sort -u > "$scratch/changed"
 fi
 tree=$(sha256sum < "$scratch/before")
-patch=$(sha256sum < "$scratch/patch")
-patch_size=$(wc -c < "$scratch/patch" | tr -d ' ')
+patch=$(cat "$scratch/patch-sha256")
+patch_size=$(tr -d ' ' < "$scratch/patch-bytes")
 listed_size=0
 [ ! -f "$scratch/changed" ] || listed_size=$(wc -c < "$scratch/changed" | tr -d ' ')
 # What this prints stays within the smallest bound a capture runs under,

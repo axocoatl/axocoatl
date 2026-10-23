@@ -1077,8 +1077,8 @@ prompt: "{task}"
         let run = context(&[], later());
         let reason = "writer (generation 1) in turn turn-1: its After capture lists none of the \
                       paths that differ from HEAD (it lists at most 10,000, within its output), \
-                      and its manifest and patch pass what it records, so the captures cannot \
-                      be compared";
+                      and a patch is not recorded whole (a capture records at most 512 KiB of \
+                      it, within its output), so the captures cannot be compared";
         let host = FakeHost {
             waits: Mutex::new(vec![observation(
                 TurnState::Completed,
@@ -1128,7 +1128,7 @@ prompt: "{task}"
         );
         // Many reasons: the first three, each bounded, and how many more.
         let reasons: Vec<String> = (0..5)
-            .map(|index| format!("activation {index}: {}", "x".repeat(400)))
+            .map(|index| format!("activation {index}: {}", "x".repeat(500)))
             .collect();
         let warning = crate::bootstrap::receipts::receipt_incomplete(&reasons);
         assert!(
@@ -1146,7 +1146,7 @@ prompt: "{task}"
             "{}",
             warning.message
         );
-        assert!(warning.message.len() < 1200, "{}", warning.message.len());
+        assert!(warning.message.len() < 1500, "{}", warning.message.len());
     }
 
     #[tokio::test]

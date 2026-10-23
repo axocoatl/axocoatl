@@ -10,9 +10,10 @@ use super::*;
 use axocoatl_session::execution_content::{ActivationRepositorySnapshot, RepositorySnapshotPhase};
 use axocoatl_session::turn_checks::{group_of, CheckGroup};
 use axocoatl_session::turn_review::{
-    binding_failure, bounded, describe_change, describe_partial_change, fit_description,
-    parse_verdict, review_condition_id, review_criterion, review_node, ChangeBudget,
-    DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof, ReviewVerdict, MAX_ANSWER_BYTES,
+    binding_failure, bounded, describe_change, describe_partial_change, earlier_changes,
+    fit_description, parse_verdict, review_condition_id, review_criterion, review_node,
+    ChangeBudget, DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof, ReviewVerdict,
+    MAX_ANSWER_BYTES,
 };
 use base64::Engine;
 
@@ -429,30 +430,68 @@ impl DispatchState {
                     let Some(after_patch) = patch(after) else {
                         return Ok(Err(NOT_CAPTURED));
                     };
-                    let mut change = describe_change(
-                        earlier.and_then(patch).as_deref(),
-                        &after_patch,
-                        after.patch_complete,
-                        budget,
-                    );
-                    if earlier.is_some_and(|before| !before.patch_complete) {
-                        change.text = format!(
-                            "The capture taken when the turn began could not record its whole \
-                             patch, so this is every uncommitted change against HEAD, including \
-                             any made before the turn.\n{}",
-                            change.text
-                        );
+                    match earlier.filter(|before| !before.patch_complete) {
+                        None => describe_change(
+                            earlier.and_then(patch).as_deref(),
+                            &after_patch,
+                            after.patch_complete,
+                            budget,
+                        ),
+                        // The patch the turn began with is not recorded:
+                        // the change is every uncommitted change, with the
+                        // files that already differed from HEAD named, and
+                        // those that no longer do, from the captures' lines
+                        // of the paths that differ from HEAD.
+                        Some(before) => {
+                            let head = "The capture taken when the turn began could not record \
+                                        its whole patch, so this is every uncommitted change \
+                                        against HEAD, including any made before the turn.\n";
+                            let earlier = match (&before.changed_manifest, &after.changed_manifest)
+                            {
+                                (Some(before), Some(after)) => fit_description(
+                                    earlier_changes(before, after),
+                                    ChangeBudget {
+                                        tokens: budget.tokens / 4,
+                                        count: &review_tokens,
+                                    },
+                                ),
+                                _ => String::new(),
+                            };
+                            let mut change = describe_change(
+                                None,
+                                &after_patch,
+                                after.patch_complete,
+                                ChangeBudget {
+                                    tokens: budget.tokens.saturating_sub(
+                                        review_tokens(head) + review_tokens(&earlier),
+                                    ),
+                                    count: &review_tokens,
+                                },
+                            );
+                            change.text = format!("{head}{}{earlier}", change.text);
+                            change
+                        }
                     }
-                    change
                 } else {
+                    let named = before
+                        .as_ref()
+                        .filter(|before| !moved && before.changed_manifest.is_none())
+                        .and_then(|before| {
+                            let encoded = before.patch_base64.as_deref()?;
+                            let bytes = base64::engine::general_purpose::STANDARD
+                                .decode(encoded)
+                                .ok()?;
+                            crate::run_attribution::patch_paths(&bytes)
+                        });
                     let listed = match (&before, moved) {
                         (Some(before), true) if before.changed_manifest.is_some() => {
                             EarlierPaths::OtherHead
                         }
-                        (Some(before), false) => before
-                            .changed_manifest
-                            .as_deref()
-                            .map_or(EarlierPaths::NotListed, EarlierPaths::Listed),
+                        (Some(before), false) => match (&before.changed_manifest, &named) {
+                            (Some(lines), _) => EarlierPaths::Listed(lines),
+                            (None, Some(named)) => EarlierPaths::Patched(named),
+                            (None, None) => EarlierPaths::NotListed,
+                        },
                         _ => EarlierPaths::NotListed,
                     };
                     DescribedChange {

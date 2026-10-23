@@ -306,8 +306,8 @@ fn a_change_past_the_capture_bounds_is_attributed_from_its_changed_lines_or_says
     assert_eq!(
         attribute_activation(&[before.clone(), moved]),
         ActivationChanges::Unknown(
-            "HEAD moved between its captures, and their manifest and patch are larger than a \
-             capture records, so they cannot be compared"
+            "HEAD moved between its captures, and a patch is not recorded whole (a capture \
+             records at most 512 KiB of it, within its output), so they cannot be compared"
                 .into()
         )
     );
@@ -336,8 +336,9 @@ fn a_change_past_the_capture_bounds_is_attributed_from_its_changed_lines_or_says
             reason,
             format!(
                 "its {name} capture lists none of the paths that differ from HEAD (it lists at \
-                 most 10,000, within its output), and its manifest and patch pass what it \
-                 records, so the captures cannot be compared"
+                 most 10,000, within its output), and a patch is not recorded whole (a capture \
+                 records at most 512 KiB of it, within its output), so the captures cannot be \
+                 compared"
             )
         );
         // With a team node's name and a turn's id, the receipt's warning
@@ -389,18 +390,16 @@ fn last_turn_names_the_changed_paths_or_why_they_are_unknown() {
 
     // An After capture that could not record the repository says why in
     // its own words, without the host's internal layers.
-    let mut too_large = capture(CapturePhase::After, None);
-    too_large.unavailable = Some(
-        "Session dispatch: The change is larger than Axocoatl records: its patch against HEAD \
-         passes the 64 MiB a capture may write, about 49 MiB of new binary file data"
+    let mut unavailable = capture(CapturePhase::After, None);
+    unavailable.unavailable = Some(
+        "Session dispatch: IO error: repository command did not complete normally: TimedOut."
             .into(),
     );
     assert_eq!(
-        attribute_activation(&[capture(CapturePhase::Before, Some(&before)), too_large]),
+        attribute_activation(&[capture(CapturePhase::Before, Some(&before)), unavailable]),
         ActivationChanges::Unknown(
-            "its After capture is unavailable (The change is larger than Axocoatl records: its \
-             patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new \
-             binary file data)"
+            "its After capture is unavailable (repository command did not complete normally: \
+             TimedOut)"
                 .into()
         )
     );

@@ -327,11 +327,10 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
                 Err(reason) => ActivationChanges::Unknown(reason),
             };
         }
-        return ActivationChanges::Unknown(
-            "HEAD moved between its captures, and their manifest and patch are larger than a \
-             capture records, so they cannot be compared"
-                .into(),
-        );
+        return ActivationChanges::Unknown(format!(
+            "HEAD moved between its captures, and {}, so they cannot be compared",
+            patch_not_whole()
+        ));
     }
     // What a capture does not list when more paths differ from HEAD than it
     // lists, or their lines do not fit its output.
@@ -342,10 +341,22 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
     };
     ActivationChanges::Unknown(format!(
         "its {unlisted} capture lists none of the paths that differ from HEAD (it lists at most \
-         {}, within its output), and its manifest and patch pass what it records, so the \
-         captures cannot be compared",
-        grouped_count(axocoatl_session::execution_content::MAX_CHANGED_PATHS)
+         {}, within its output), and {}, so the captures cannot be compared",
+        grouped_count(axocoatl_session::execution_content::MAX_CHANGED_PATHS),
+        patch_not_whole()
     ))
+}
+
+/// Why neither the captures' manifests nor their patches compare: one of
+/// the patches is not recorded whole, with the limit that decides it. (Only
+/// a repository far smaller than any a run changes has a manifest small
+/// enough to record whole.)
+fn patch_not_whole() -> String {
+    format!(
+        "a patch is not recorded whole (a capture records at most {} KiB of it, within its \
+         output)",
+        axocoatl_session::execution_content::MAX_RECORDED_PATCH_BYTES / 1024
+    )
 }
 
 /// `count` with a comma between each group of three digits, as `10,000`.
@@ -439,6 +450,16 @@ fn patch_changes(before: &[u8], after: &[u8]) -> Result<BTreeSet<String>, String
         }
     }
     Ok(changed)
+}
+
+/// Every path a complete capture patch names, as [`block_paths`] reads
+/// each of its blocks; `None` when one cannot be read.
+pub(crate) fn patch_paths(patch: &[u8]) -> Option<BTreeSet<String>> {
+    let mut paths = BTreeSet::new();
+    for (header, block) in patch_blocks(patch).ok()? {
+        paths.extend(block_paths(&header, &block).ok()?);
+    }
+    Some(paths)
 }
 
 fn patch_blocks(patch: &[u8]) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, String> {

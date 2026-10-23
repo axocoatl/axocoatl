@@ -293,8 +293,8 @@ pub fn describe_change(
     let mut reverted_note = String::new();
     if !reverted.is_empty() {
         reverted_note.push_str(
-            "\nThese files had uncommitted changes when the turn began and now match HEAD \
-             again:\n",
+            "\nThese files had uncommitted changes when the turn began and no longer differ \
+             from HEAD (changed back, or new and since removed):\n",
         );
         let mut room = MAX_LISTED_PATH_BYTES;
         let mut listed = 0;
@@ -751,6 +751,10 @@ const MAX_DIRECTORY_NAME_BYTES: usize = 120;
 pub enum EarlierPaths<'a> {
     /// Its lines of them, on the HEAD the capture after the turn saw.
     Listed(&'a str),
+    /// It did not list them, but recorded its whole patch on that HEAD:
+    /// the paths that patch names (as UTF-8, lossily), without what each
+    /// held.
+    Patched(&'a std::collections::BTreeSet<String>),
     /// It did not list them: there was no such capture, or more paths
     /// differed from HEAD than a capture lists.
     NotListed,
@@ -765,9 +769,11 @@ pub enum EarlierPaths<'a> {
 /// the paths that differ from HEAD the captures recorded (`before`, taken
 /// when the turn began on the same HEAD, and `after`), and shows the
 /// beginning of `prefix`, the first part of the patch, with the data of
-/// binary files left out. Without `before`'s lines it names every path that
-/// differs from HEAD and says those can include changes made before the
-/// turn, and why it cannot tell them apart.
+/// binary files left out. With only the paths `before`'s whole patch names,
+/// it names the paths the turn changed apart from those that already
+/// differed from HEAD, which it may also have changed. Without either it
+/// names every path that differs from HEAD and says those can include
+/// changes made before the turn, and why it cannot tell them apart.
 ///
 /// It is bounded whatever the change: at most [`MAX_LISTED_PATHS`] names in
 /// [`MAX_LISTED_PATH_BYTES`], files HEAD has first (the change's own
@@ -792,10 +798,72 @@ pub fn describe_partial_change(
     };
     let earlier = match before {
         EarlierPaths::Listed(lines) => Some(lines),
-        EarlierPaths::NotListed | EarlierPaths::OtherHead => None,
+        EarlierPaths::Patched(_) | EarlierPaths::NotListed | EarlierPaths::OtherHead => None,
     };
     match (earlier.map(differing_paths), after.map(differing_paths)) {
         (_, None) => text.push_str("\nThe capture could not list the changed files either.\n"),
+        (None, Some(after)) if matches!(before, EarlierPaths::Patched(_)) => {
+            let EarlierPaths::Patched(named) = before else {
+                unreachable!("matched above");
+            };
+            let mut changed: Vec<(&[u8], &str)> = Vec::new();
+            let mut earlier: Vec<(&[u8], &str)> = Vec::new();
+            for (path, (kind, _)) in &after {
+                if named.contains(String::from_utf8_lossy(path).as_ref()) {
+                    earlier.push((path.as_slice(), kind.as_str()));
+                } else {
+                    changed.push((path.as_slice(), kind.as_str()));
+                }
+            }
+            let now: std::collections::BTreeSet<String> = after
+                .keys()
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .collect();
+            let reverted: Vec<(&[u8], &str)> = named
+                .iter()
+                .filter(|name| !now.contains(*name))
+                .map(|name| (name.as_bytes(), "file"))
+                .collect();
+            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() {
+                text.push_str("\nThe turn changed no files.\n");
+            }
+            if !changed.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!("The {} the turn changed:", file_count(changed.len())),
+                    changed,
+                    &in_head,
+                    &mut room,
+                );
+            }
+            if !earlier.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!(
+                        "Files that already had uncommitted changes when the turn began, which \
+                         the turn may also have changed ({}; the capture taken then recorded its \
+                         patch, not each file's state):",
+                        file_count(earlier.len())
+                    ),
+                    earlier,
+                    &in_head,
+                    &mut room,
+                );
+            }
+            if !reverted.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!(
+                        "Files that had uncommitted changes when the turn began and no longer \
+                         differ from HEAD, changed back or new and since removed ({}):",
+                        file_count(reverted.len())
+                    ),
+                    reverted,
+                    &in_head,
+                    &mut room,
+                );
+            }
+        }
         (Some(before), Some(after)) => {
             let changed: Vec<(&[u8], &str)> = after
                 .iter()
@@ -813,7 +881,7 @@ pub fn describe_partial_change(
             if !changed.is_empty() {
                 list_paths(
                     &mut text,
-                    &format!("The {} files the turn changed:", changed.len()),
+                    &format!("The {} the turn changed:", file_count(changed.len())),
                     changed,
                     &in_head,
                     &mut room,
@@ -823,9 +891,9 @@ pub fn describe_partial_change(
                 list_paths(
                     &mut text,
                     &format!(
-                        "These {} files had uncommitted changes when the turn began and now \
-                         match HEAD again:",
-                        reverted.len()
+                        "Files that had uncommitted changes when the turn began and no longer \
+                         differ from HEAD, changed back or new and since removed ({}):",
+                        file_count(reverted.len())
                     ),
                     reverted,
                     &in_head,
@@ -926,6 +994,68 @@ pub fn fit_description(text: String, budget: ChangeBudget<'_>) -> String {
     }
     let end = if fits == 0 { 0 } else { ends[fits - 1] };
     format!("{}{}", &text[..end], note(end))
+}
+
+/// What a change shown whole from the patch the capture after the turn
+/// recorded cannot say when the capture taken as it began recorded no whole
+/// patch: which files already differed from HEAD then, so their sections can
+/// hold earlier changes, and which differed then and no longer do (a file the
+/// turn deleted, or changed back), which no section shows. From the lines of
+/// the paths that differ from HEAD the two captures recorded on one HEAD,
+/// `before` and `after`; empty when there is nothing to say. Bounded as
+/// [`describe_partial_change`] bounds its lists.
+pub fn earlier_changes(before: &str, after: &str) -> String {
+    let before = differing_paths(before);
+    let after = differing_paths(after);
+    let mut text = String::new();
+    let mut room = Listing {
+        names: MAX_LISTED_PATHS,
+        bytes: MAX_LISTED_PATH_BYTES,
+    };
+    let none = std::collections::BTreeSet::new();
+    let earlier: Vec<(&[u8], &str)> = after
+        .iter()
+        .filter(|(path, _)| before.contains_key(*path))
+        .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+        .collect();
+    if !earlier.is_empty() {
+        list_paths(
+            &mut text,
+            &format!(
+                "Files that already had uncommitted changes when the turn began, so their \
+                 sections above can include changes made before it ({}):",
+                file_count(earlier.len())
+            ),
+            earlier,
+            &none,
+            &mut room,
+        );
+    }
+    let reverted: Vec<(&[u8], &str)> = before
+        .keys()
+        .filter(|path| !after.contains_key(*path))
+        .map(|path| (path.as_slice(), "file"))
+        .collect();
+    if !reverted.is_empty() {
+        list_paths(
+            &mut text,
+            &format!(
+                "Files that had uncommitted changes when the turn began and no longer differ \
+                 from HEAD, changed back or new and since removed, so no section above shows \
+                 them ({}):",
+                file_count(reverted.len())
+            ),
+            reverted,
+            &none,
+            &mut room,
+        );
+    }
+    text
+}
+
+/// `count` files, as a heading names them: `1 file`, `2 files`.
+fn file_count(count: usize) -> String {
+    format!("{count} file{}", if count == 1 { "" } else { "s" })
 }
 
 /// What is left of a description's room for names.
@@ -1595,7 +1725,7 @@ mod tests {
         );
         assert!(change
             .text
-            .contains("now match HEAD again:\ndiff --git a/c.txt b/c.txt"));
+            .contains("(changed back, or new and since removed):\ndiff --git a/c.txt b/c.txt"));
         assert_eq!(
             describe_change(Some(&after), &after, true, budget(100_000)),
             DescribedChange {
@@ -1961,7 +2091,7 @@ mod tests {
             "an earlier change is not the turn's: {change}"
         );
         assert!(
-            change.contains("now match HEAD again:\nold.txt\n"),
+            change.contains("changed back or new and since removed (1 file):\nold.txt\n"),
             "{change}"
         );
         let shown = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n-a\n+b\n\
@@ -2010,6 +2140,62 @@ mod tests {
             "{moved}"
         );
         assert!(!moved.contains("did not list"), "{moved}");
+        // With only the paths the capture taken as the turn began names in
+        // its whole patch, the paths the turn changed are told apart from
+        // those that already differed (which it may also have changed), and
+        // those no longer differing are named too.
+        let named: std::collections::BTreeSet<String> =
+            ["notes.txt", "old.txt"].map(String::from).into();
+        let patched =
+            describe_partial_change(EarlierPaths::Patched(&named), Some(&after), "", 6_000_000);
+        assert!(
+            patched.contains(
+                "The 4 files the turn changed:\ngone.rs (deleted)\naaa-generated.bin\nsrc/lib.rs\n\
+                 test_fix\n"
+            ),
+            "{patched}"
+        );
+        assert!(
+            patched.contains(
+                "Files that already had uncommitted changes when the turn began, which the turn \
+                 may also have changed (1 file; the capture taken then recorded its patch, not \
+                 each file's state):\nnotes.txt\n"
+            ),
+            "{patched}"
+        );
+        assert!(
+            patched.contains("changed back or new and since removed (1 file):\nold.txt\n"),
+            "{patched}"
+        );
+        assert!(!patched.contains("did not list"), "{patched}");
+    }
+
+    /// A change shown whole from the capture after the turn, when the one
+    /// taken as it began could not record its patch: from both captures'
+    /// lines, the files that already differed from HEAD are named, and those
+    /// that no longer differ (a new file the turn removed, say), which no
+    /// section of the patch shows.
+    #[test]
+    fn earlier_changes_name_what_a_whole_change_cannot_tell() {
+        let before = [
+            changed_line(b"notes.txt", "file", 'a'),
+            changed_line(b"scratch.txt", "file", 'b'),
+        ]
+        .concat();
+        let after = [
+            changed_line(b"notes.txt", "file", 'e'),
+            changed_line(b"src/lib.rs", "file", 'c'),
+        ]
+        .concat();
+        assert_eq!(
+            earlier_changes(&before, &after),
+            "\nFiles that already had uncommitted changes when the turn began, so their \
+             sections above can include changes made before it (1 file):\nnotes.txt\n\nFiles \
+             that had uncommitted changes when the turn began and no longer differ from HEAD, \
+             changed back or new and since removed, so no section above shows them (1 \
+             file):\nscratch.txt\n"
+        );
+        assert_eq!(earlier_changes("", &after), "");
     }
 
     /// Thousands of changed paths, the most one capture lists (3,072 small
