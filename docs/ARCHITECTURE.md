@@ -240,13 +240,16 @@ reserved in full.
 
 Native provider preparation supports reviewed local Ollama profiles and bounded
 OpenRouter-credit profiles. OpenRouter retains one exact static model and qualified
-endpoint variant, its text/tool capabilities, context/output limits, the catalog's
+endpoint variant (and up to three more healthy endpoints of the model, cheapest first,
+that can take over each of its calls: at least its context and prompt limit, the same
+output limit and reasoning setting, the smallest call within the approved budget), its
+text/tool capabilities, context/output limits, the catalog's
 reasoning contract for a reasoning model, and two decimal price ceilings: the highest
 input rate (prompt, cache read, cache write, every tier) and the highest output rate
 (completion, internal reasoning, every tier), plus any per-request fee. Priced features a
 native request cannot start (web search, image and audio) are retained by name. Those
-metadata are revalidated before each request; the wire request pins the endpoint (never
-a service-tier endpoint), disables fallbacks, the web plugin and context compression,
+metadata are revalidated before each request; the wire request pins one endpoint (never
+a service-tier endpoint), disables OpenRouter's fallbacks, the web plugin and context compression,
 sends the Agent's resolved `reasoning` setting, and supplies `max_tokens` and prompt,
 completion and request price limits. Each call reserves a bound of its own request:
 the body's bytes plus a template allowance and any replayed reasoning tokens for the
@@ -877,10 +880,19 @@ adjudications, findings, not-covered entries, warnings and the run id, and ends 
 envelope in an `<!-- axocoatl-receipt:v1 … -->` block that the body's length cut never
 reaches.
 
-**Runtime policy.** Native provider calls that fail with 429, 5xx, a timeout or a reset
-connection before the provider sent anything are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned
+**Runtime policy.** A native OpenRouter call that its endpoint fails before it produced
+anything (an upstream 429, a 408 or 5xx, a timeout or closed connection, an endpoint
+reported degraded now or whose contract changed) moves at once to the next retained
+endpoint of the same model that can carry it, as a new call reserved at that endpoint's
+prices and checked against the catalog before it is sent; the activation's later calls
+stay there (`provider_retry.rs`, `session_dispatch_provider.rs`, the `EndpointFailover`
+trait). Native provider calls that fail with 429, 5xx, a timeout or a reset connection
+before the provider sent anything, once no endpoint is left to move to, are retried once
+(after the longest `Retry-After` of the round, at most 30 s, or 2 s) on the same pinned
 model, as a new call with its own reservation; 400 to 403, refusals and safety stops are
-not retried. A failed helper, slot or area keeps a classifiable failure so the Outcome
+not retried. A request a provider refused with a status before generating, or never
+sent, settles at zero, so the usage stays exact; a profile retained before failover gains
+up to three such endpoints from the catalog when its activation opens. A failed helper, slot or area keeps a classifiable failure so the Outcome
 lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by default)
 reaches the admitted check definition and the condition permission's bound; 1.2 graphs
 still verify. `sandbox.egress.host_ollama` is an opt-in route from Session containers to a

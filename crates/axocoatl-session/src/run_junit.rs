@@ -989,6 +989,7 @@ mod tests {
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
             ollama_versions: Default::default(),
+            openrouter_endpoints: Default::default(),
             keep: None,
             error: None,
         };
@@ -1228,6 +1229,7 @@ mod tests {
             cost_known: false,
             cost_computed: false,
             retries: 0,
+            unreported: Vec::new(),
         };
         let xml = render_junit(&outcome).unwrap();
         assert!(

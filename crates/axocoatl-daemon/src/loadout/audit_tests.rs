@@ -707,6 +707,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: None,
     };
@@ -2858,6 +2859,7 @@ fn usage(input_tokens: u64, output_tokens: u64, complete: bool) -> RunUsage {
         cost_known: true,
         cost_computed: false,
         retries: 0,
+        unreported: Vec::new(),
     }
 }
 

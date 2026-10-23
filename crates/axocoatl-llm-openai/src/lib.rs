@@ -4,8 +4,9 @@ pub use native_openrouter::{
     catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
     CatalogCallFloor, NativeOpenRouterEfforts, NativeOpenRouterEndpoints,
     NativeOpenRouterObservation, NativeOpenRouterProvider, NativeOpenRouterReasoning,
-    NativeOpenRouterReasoningRequest, UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE,
-    PROMPT_TEMPLATE_ALLOWANCE, REASONING_DETAILS_METADATA, REASONING_TOKENS_METADATA,
+    NativeOpenRouterReasoningRequest, NativeOpenRouterServed, ServedOpenRouterEndpoint,
+    UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
+    REASONING_DETAILS_METADATA, REASONING_TOKENS_METADATA,
 };
 
 use std::pin::Pin;

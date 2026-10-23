@@ -232,7 +232,9 @@ and every public number with its evidence is in [`docs/CLAIMS.md`](docs/CLAIMS.m
   Anthropic, OpenAI, Gemini and Mistral are included on the compatibility path.
 - **Provider failures are handled, and recorded.** A native Session's model call that
   fails with 429, a 5xx status, a timeout or a reset connection before any response
-  arrives is retried once on the same model; 400 to 403 are not retried. An Ollama stream that ends early is retried once, older tool output
+  arrives moves at once to another healthy OpenRouter endpoint of the same model that
+  Team & budget retained, and is otherwise retried once on the same model; 400 to 403
+  are not retried. A refused call costs nothing and the usage stays exact. An Ollama stream that ends early is retried once, older tool output
   is replaced by a short placeholder in later requests, and a request that would
   overflow the context window is trimmed instead of failing.
 

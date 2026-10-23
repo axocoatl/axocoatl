@@ -30,6 +30,9 @@ pub(crate) struct NativeOllamaRuntimeConfiguration {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+// A profile is read for one activation or one review at a time, never held
+// in bulk: the OpenRouter variant's size costs nothing that boxing would save.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum NativeRuntimeConfiguration {
     Ollama(NativeOllamaRuntimeConfiguration),
     OpenRouter(NativeOpenRouterRuntimeConfiguration),
@@ -47,7 +50,50 @@ pub(crate) struct NativeOpenRouterRuntimeConfiguration {
     /// non-reasoning model, which keeps 1.2.0 profiles byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<axocoatl_llm_openai::NativeOpenRouterReasoningRequest>,
+    /// Other healthy endpoints of the model, cheapest first, each retained
+    /// exactly, that a call moves to when the selected one fails it before
+    /// producing anything. Each holds at least the selected endpoint's
+    /// context and prompt limit and fits the same output, reasoning setting
+    /// and approved budget. Empty when no other endpoint fits. Absent
+    /// (`None`) in profiles written before 1.5.0's failover, which stay
+    /// byte-identical; their activations find such endpoints in the catalog
+    /// as they open ([`NativeRuntimeConfiguration::verify_credentials`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failover_observations: Option<Vec<axocoatl_llm_openai::NativeOpenRouterObservation>>,
 }
+/// The OpenRouter endpoints that answered one Session's native calls, by
+/// model, and how many calls each answered. A loadout run's Outcome, notes
+/// and receipt name them.
+#[derive(Default)]
+pub(crate) struct OpenRouterServedLog(
+    std::sync::Mutex<BTreeMap<String, Arc<axocoatl_llm_openai::NativeOpenRouterServed>>>,
+);
+
+impl OpenRouterServedLog {
+    fn for_model(&self, model: &str) -> Arc<axocoatl_llm_openai::NativeOpenRouterServed> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(model.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// Each model at least one endpoint answered, with those endpoints in
+    /// the order they first answered.
+    pub(crate) fn endpoints(
+        &self,
+    ) -> BTreeMap<String, Vec<axocoatl_llm_openai::ServedOpenRouterEndpoint>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .map(|(model, served)| (model.clone(), served.endpoints()))
+            .filter(|(_, endpoints)| !endpoints.is_empty())
+            .collect()
+    }
+}
+
 /// The Ollama versions that served one Session's native calls, by model, as
 /// each provider checked them right before each inference request. A loadout
 /// run's record and receipt name them.
@@ -96,6 +142,9 @@ pub(crate) struct NativeProviderCredentials {
     ///
     /// [`StreamTimeouts::HOSTED`]: axocoatl_llm::transport::StreamTimeouts::HOSTED
     pub(crate) openrouter_timeouts: Option<axocoatl_llm::transport::StreamTimeouts>,
+    /// Where this Session's native OpenRouter providers record the
+    /// endpoints that answered them; absent where nothing reads them.
+    pub(crate) openrouter_served: Option<Arc<OpenRouterServedLog>>,
 }
 
 pub(crate) struct NativeDefinitionPreparation {
@@ -328,7 +377,7 @@ pub(crate) async fn connect_retained_profile(
 ) -> Result<()> {
     serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
         .map_err(error)?
-        .verify_credentials(credentials)
+        .verify_credentials(credentials, None)
         .await
         .map(|_| ())
 }
@@ -402,6 +451,11 @@ impl NativeDefinitionPreparation {
 
     pub(crate) fn model(&self) -> &str {
         &self.config.model
+    }
+
+    /// The definition being prepared.
+    pub(crate) fn config(&self) -> &AgentConfig {
+        &self.config
     }
 
     fn definition_content(&self) -> Result<ActivationEvidenceContent> {
@@ -700,7 +754,7 @@ impl AutonomousActivationFactory for NativeActivationFactory {
         let before = self.resolve(input).map_err(|error| error.to_string())?;
         let provider = before
             .runtime
-            .verify_credentials(&self.credentials)
+            .verify_credentials(&self.credentials, Some(&before.config))
             .await
             .map_err(|error| error.to_string())?;
         // Metadata verification yields. Stop, new epochs, changed grants and

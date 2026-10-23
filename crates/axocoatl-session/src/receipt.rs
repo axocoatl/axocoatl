@@ -198,7 +198,10 @@ pub struct AgentFacts {
     /// The pinned version of an external program; for a native Agent on
     /// Ollama, the Ollama server that served its calls (`ollama 0.40.6`;
     /// several versions comma-separated when Ollama was upgraded during the
-    /// run).
+    /// run); for one on OpenRouter, the endpoints that answered its calls in
+    /// the order they first answered (`openrouter endpoint deepinfra/fp8
+    /// (DeepInfra)`; `openrouter endpoints …`, comma-separated, when a call
+    /// moved to another endpoint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     pub provider: String,
@@ -362,9 +365,10 @@ pub struct ReviewFacts {
     pub provider: String,
     pub model: String,
     pub runtime: String,
-    /// For a native reviewer on Ollama, the Ollama server that served its
-    /// calls (`ollama 0.40.6`), as [`AgentFacts::program_version`] says it.
-    /// Absent otherwise; a verifier that does not know the field ignores it.
+    /// For a native reviewer, the Ollama server that served its calls
+    /// (`ollama 0.40.6`) or the OpenRouter endpoints that answered them, as
+    /// [`AgentFacts::program_version`] says it. Absent otherwise; a verifier
+    /// that does not know the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     /// `approved`, `changes`, ... (the Outcome's review state).

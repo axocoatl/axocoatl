@@ -1541,6 +1541,79 @@ async fn receipts_child_body() {
         serde_json::json!([axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION])
     );
 
+    // A run whose reviewer OpenRouter served, its call moved from one
+    // endpoint to another: the Outcome records both, and the receipt names
+    // them, in the order they first answered, in the review's program
+    // version.
+    let routed = receipt_manifest(&session, &repo, &head);
+    store.create(&routed).unwrap();
+    let mut outcome = ended_outcome(&routed, "the environment failed".into(), Vec::new());
+    let served =
+        |endpoint: &str, provider: &str, calls| axocoatl_session::run_outcome::ServedEndpoint {
+            endpoint: endpoint.into(),
+            provider: provider.into(),
+            calls,
+            moved: 0,
+        };
+    outcome.openrouter_endpoints = [(
+        "openai/gpt-oss-120b".to_string(),
+        vec![
+            served("near-ai/fp4", "Near AI", 1),
+            served("deepinfra/bf16", "DeepInfra", 2),
+        ],
+    )]
+    .into_iter()
+    .collect();
+    outcome.review = Some(axocoatl_session::run_outcome::ReviewOutcome {
+        reviewer: axocoatl_session::run_outcome::ModelIdentity {
+            provider: "openrouter".into(),
+            model: "openai/gpt-oss-120b".into(),
+            runtime: "native".into(),
+        },
+        max_rounds: 3,
+        rounds: Vec::new(),
+        passed: false,
+        state: "not_run".into(),
+        reason: "the environment failed".into(),
+    });
+    daemon
+        .seal_loadout_run(&routed.run_id, &outcome)
+        .await
+        .unwrap();
+    daemon.finish_loadout_run(&routed.run_id, &outcome).unwrap();
+    let opened = open_receipt(&daemon.loadout_run_receipt(&routed.run_id).unwrap()).unwrap();
+    let endpoints = "openrouter endpoints near-ai/fp4 (Near AI), deepinfra/bf16 (DeepInfra)";
+    assert_eq!(
+        opened
+            .statement
+            .predicate
+            .review
+            .as_ref()
+            .and_then(|review| review.program_version.as_deref()),
+        Some(endpoints)
+    );
+    assert!(axocoatl_session::receipt::describe(&opened.statement)
+        .iter()
+        .any(|line| line.starts_with(&format!(
+            "Review by openrouter:openai/gpt-oss-120b ({endpoints}):"
+        ))));
+    let recorded: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            daemon
+                .data_root
+                .path()
+                .join(axocoatl_session::run_record::RUN_RECORD_DIR)
+                .join(&routed.run_id)
+                .join("outcome.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded["openrouter_endpoints"]["openai/gpt-oss-120b"][1],
+        serde_json::json!({"endpoint": "deepinfra/bf16", "provider": "DeepInfra", "calls": 2})
+    );
+
     // A run the daemon restarted during: a receipt its interrupted finish
     // left is replaced by the receipt of the Outcome the restart writes.
     let restarted = receipt_manifest(&session, &repo, &head);
@@ -2430,6 +2503,14 @@ impl crate::loadout::RunHost for LiveHost {
         session_id: &str,
     ) -> std::collections::BTreeMap<String, Vec<String>> {
         self.daemon.loadout_ollama_versions(session_id)
+    }
+
+    async fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>>
+    {
+        self.daemon.loadout_openrouter_endpoints(session_id)
     }
 
     async fn stop_requested(&self, run_id: &str) -> bool {

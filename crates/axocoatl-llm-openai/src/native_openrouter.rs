@@ -1,8 +1,12 @@
 //! Audited OpenRouter text/tool execution. The retained exact endpoint and wire
-//! ceilings are verified before each single inference request; this provider
-//! never retries and never falls back. It states what a Session's retry
-//! policy needs: the status and `Retry-After` of a refused request, and
-//! whether a transport failure was a timeout or a reset connection.
+//! ceilings are verified before each single inference request; each request
+//! pins one endpoint with no OpenRouter fallback, and this provider never
+//! retries. It may hold other endpoints of the same model, each retained
+//! exactly, that a Session moves a call to after the current one failed it
+//! before producing anything ([`EndpointFailover`]); calls stay there. It
+//! states what a Session's retry policy needs: the status and `Retry-After`
+//! of a refused request, whether a transport failure was a timeout or a reset
+//! connection, and whether a failed call is known to have cost nothing.
 //! Requires an operator-declared OpenRouter-credit billing configuration. BYOK
 //! is unsupported; enabling it externally invalidates this execution contract.
 //!
@@ -19,19 +23,24 @@ use axocoatl_llm::transport::{
 };
 use axocoatl_llm::{
     provider_tool_metadata, validate_chat_response, validate_response_tool_call,
-    AccountedChatOutcome, ChatRequest, ChatResponse, FinishReason, LlmProvider,
+    AccountedChatOutcome, ChatRequest, ChatResponse, EndpointFailover, FinishReason, LlmProvider,
     ProviderCapabilities, ProviderError, ProviderExecutionBounds, StreamEvent, ToolCall,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{collections::BTreeMap, pin::Pin};
 use tokio_stream::{Stream, StreamExt};
+#[path = "native_openrouter/failover.rs"]
+mod failover;
 #[path = "native_openrouter/money.rs"]
 mod money;
 #[path = "native_openrouter/observation.rs"]
 mod observation;
 #[path = "native_openrouter/stream.rs"]
 mod stream;
+pub use failover::{NativeOpenRouterServed, ServedOpenRouterEndpoint};
 use observation::CallShape;
 pub use observation::{
     catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
@@ -142,10 +151,18 @@ fn connection_reset(error: &reqwest::Error) -> bool {
 
 pub struct NativeOpenRouterProvider {
     inner: OpenAiProvider,
-    observation: NativeOpenRouterObservation,
+    /// The endpoints calls may go to, each retained exactly: the one Team &
+    /// budget selected, then those retained for failover, cheapest first.
+    /// They serve one model under one reasoning setting and output limit.
+    endpoints: Vec<NativeOpenRouterObservation>,
+    /// The endpoint calls go to now: the first, until a Session moves them.
+    active: AtomicUsize,
     max_output_tokens: usize,
     max_response_bytes: usize,
     reasoning: Option<NativeOpenRouterReasoningRequest>,
+    /// Where the endpoints that answered, and those calls moved away from,
+    /// are recorded, when something reads them.
+    served: Option<Arc<NativeOpenRouterServed>>,
 }
 impl NativeOpenRouterProvider {
     pub async fn connect_observed(
@@ -155,41 +172,75 @@ impl NativeOpenRouterProvider {
         max_response_bytes: usize,
         reasoning: Option<NativeOpenRouterReasoningRequest>,
     ) -> Result<Self, ProviderError> {
-        observation.validate()?;
-        if !observation.accepts_reasoning(reasoning) {
-            return Err(invalid(format!(
-                "the retained reasoning setting is not one {} accepts",
-                observation.model
-            )));
-        }
-        if api_key.is_empty()
-            || max_output_tokens == 0
-            || max_output_tokens > observation.max_output_tokens
-            || observation.response_allowance(max_output_tokens, reasoning)
-                >= observation.context_tokens
-            || !(4096..=16 * 1024 * 1024).contains(&max_response_bytes)
-            || observation
-                .response_refusal(max_output_tokens, reasoning, max_response_bytes)
-                .is_some()
-        {
-            return Err(invalid(
-                "unsupported exact OpenRouter execution bounds or missing credential",
-            ));
-        }
-        observation.minimum_call_bounds(max_output_tokens, reasoning, max_response_bytes)?;
-        let this = Self {
-            inner: OpenAiProvider::with_base_url(
-                api_key,
-                observation.model.clone(),
-                &observation.base_url,
-            )
-            .with_provider_id(PROVIDER),
-            observation,
+        Self::connect_observed_endpoints(
+            vec![observation],
+            api_key,
             max_output_tokens,
             max_response_bytes,
             reasoning,
+        )
+        .await
+    }
+
+    /// A provider over `endpoints`: the selected endpoint first, then the
+    /// others retained for failover. Each must hold the same execution
+    /// bounds; at least one must match OpenRouter's catalog now. Calls start
+    /// on the first.
+    pub async fn connect_observed_endpoints(
+        endpoints: Vec<NativeOpenRouterObservation>,
+        api_key: &str,
+        max_output_tokens: usize,
+        max_response_bytes: usize,
+        reasoning: Option<NativeOpenRouterReasoningRequest>,
+    ) -> Result<Self, ProviderError> {
+        let Some(first) = endpoints.first() else {
+            return Err(invalid("no retained OpenRouter endpoint"));
         };
-        this.verify().await?;
+        for (index, observation) in endpoints.iter().enumerate() {
+            observation.validate()?;
+            if observation.model != first.model
+                || observation.base_url != first.base_url
+                || endpoints[..index]
+                    .iter()
+                    .any(|earlier| earlier.endpoint_tag == observation.endpoint_tag)
+            {
+                return Err(invalid(
+                    "retained OpenRouter endpoints must serve one model, each once",
+                ));
+            }
+            if !observation.accepts_reasoning(reasoning) {
+                return Err(invalid(format!(
+                    "the retained reasoning setting is not one {} accepts",
+                    observation.model
+                )));
+            }
+            if api_key.is_empty()
+                || max_output_tokens == 0
+                || max_output_tokens > observation.max_output_tokens
+                || observation.response_allowance(max_output_tokens, reasoning)
+                    >= observation.context_tokens
+                || !(4096..=16 * 1024 * 1024).contains(&max_response_bytes)
+                || observation
+                    .response_refusal(max_output_tokens, reasoning, max_response_bytes)
+                    .is_some()
+            {
+                return Err(invalid(
+                    "unsupported exact OpenRouter execution bounds or missing credential",
+                ));
+            }
+            observation.minimum_call_bounds(max_output_tokens, reasoning, max_response_bytes)?;
+        }
+        let this = Self {
+            inner: OpenAiProvider::with_base_url(api_key, first.model.clone(), &first.base_url)
+                .with_provider_id(PROVIDER),
+            endpoints,
+            active: AtomicUsize::new(0),
+            max_output_tokens,
+            max_response_bytes,
+            reasoning,
+            served: None,
+        };
+        this.verify_any().await?;
         Ok(this)
     }
     /// Wait for each answer as `timeouts` say (`providers.openrouter`'s
@@ -198,26 +249,56 @@ impl NativeOpenRouterProvider {
         self.inner = self.inner.with_stream_timeouts(timeouts);
         self
     }
-    async fn verify(&self) -> Result<(), ProviderError> {
-        let endpoints = observe_native_openrouter_endpoints(
-            &self.observation.base_url,
+    /// Record each endpoint that answers a call in `served`.
+    pub fn with_served_endpoints(mut self, served: Arc<NativeOpenRouterServed>) -> Self {
+        self.served = Some(served);
+        self
+    }
+    /// The endpoint calls go to now.
+    fn active(&self) -> usize {
+        self.active
+            .load(Ordering::Acquire)
+            .min(self.endpoints.len() - 1)
+    }
+    fn endpoint(&self) -> &NativeOpenRouterObservation {
+        &self.endpoints[self.active()]
+    }
+    /// The endpoint Team & budget selected. The Agent's context is fitted
+    /// to it; every endpoint retained for failover holds at least as much.
+    fn primary(&self) -> &NativeOpenRouterObservation {
+        &self.endpoints[0]
+    }
+    /// What OpenRouter's catalog says of this model's endpoints now. A
+    /// failure is OpenRouter's, before anything was sent.
+    async fn live_endpoints(&self) -> Result<NativeOpenRouterEndpoints, ProviderError> {
+        observe_native_openrouter_endpoints(
+            &self.primary().base_url,
             &self.inner.api_key,
-            &self.observation.model,
+            &self.primary().model,
         )
-        .await?;
-        if endpoints
+        .await
+        .map_err(failover::catalog_unreadable)
+    }
+    /// Whether `observation` still matches `live` and OpenRouter reports it
+    /// healthy; why not, in plain words, when it does not.
+    fn contract_now(
+        &self,
+        observation: &NativeOpenRouterObservation,
+        live: &NativeOpenRouterEndpoints,
+    ) -> Result<(), ProviderError> {
+        if live
             .profiles
             .iter()
-            .any(|profile| self.observation.same_contract(profile))
+            .any(|profile| observation.same_contract(profile))
         {
             return Ok(());
         }
         // The endpoint is the same, but OpenRouter reports it unavailable
         // or degraded right now: said as that, not as a changed contract.
-        if let Some(down) = endpoints
+        if let Some(down) = live
             .unavailable
             .iter()
-            .find(|endpoint| self.observation.same_contract(&endpoint.profile))
+            .find(|endpoint| observation.same_contract(&endpoint.profile))
         {
             return Err(ProviderError::ApiError {
                 provider: PROVIDER.into(),
@@ -225,24 +306,71 @@ impl NativeOpenRouterProvider {
                 message: format!(
                     "OpenRouter reports the endpoint this Session uses for {} as unavailable or \
                      degraded right now ({}). This is OpenRouter's provider status: try again \
-                     later, or choose another model; nothing was sent to the model",
-                    self.observation.model,
-                    down.describe()
+                     later, or choose another model; {}",
+                    observation.model,
+                    down.describe(),
+                    failover::NOTHING_SENT
                 ),
             });
         }
-        if let Some(refusal) = endpoints.refusal(&self.observation.model) {
-            return Err(refusal);
+        if let Some(refusal) = live.refusal(&observation.model) {
+            return Err(failover::with_words(
+                refusal,
+                &format!("; {}", failover::NOTHING_SENT),
+            ));
         }
-        Err(invalid("the retained OpenRouter endpoint, capabilities, price ceiling or token limits changed; review a new profile"))
+        Err(invalid(format!(
+            "the retained OpenRouter endpoint {} of {} {}: its capabilities, price ceiling or \
+             token limits differ now; apply Team & budget again to review a new profile; {}",
+            failover::describe(observation),
+            observation.model,
+            failover::CONTRACT_CHANGED,
+            failover::NOTHING_SENT
+        )))
     }
-    /// The exact request body and its bounds. Every byte of the body counts
-    /// toward the prompt bound: the provider renders the messages and tools,
-    /// and each token of a byte-level tokenizer covers at least one byte.
+    /// Check the current endpoint against the catalog before a call.
+    async fn verify(&self, observation: &NativeOpenRouterObservation) -> Result<(), ProviderError> {
+        let live = self.live_endpoints().await?;
+        self.contract_now(observation, &live)
+    }
+    /// At least one retained endpoint can be used now: the first that
+    /// cannot says why when none can, or, with several, each one does.
+    async fn verify_any(&self) -> Result<(), ProviderError> {
+        let live = self.live_endpoints().await?;
+        let mut failures = Vec::new();
+        for (index, observation) in self.endpoints.iter().enumerate() {
+            match self.contract_now(observation, &live) {
+                Ok(()) => return Ok(()),
+                Err(error) => failures.push((index, error)),
+            }
+        }
+        Err(match failures.len() {
+            1 => failures.remove(0).1,
+            _ => failover::exhausted(&self.endpoints, failures),
+        })
+    }
+    /// Whether `request` fits endpoint `index`'s retained contract.
+    fn carries(&self, index: usize, request: &ChatRequest) -> bool {
+        let observation = &self.endpoints[index];
+        self.body_for(observation, request)
+            .and_then(|(_, shape)| observation.call_bounds(shape, self.max_response_bytes))
+            .is_ok()
+    }
     fn body(&self, request: &ChatRequest) -> Result<(Value, CallShape), ProviderError> {
-        self.validate_request(request)?;
+        self.body_for(self.endpoint(), request)
+    }
+    /// The exact request body to `observation` and its bounds. Every byte of
+    /// the body counts toward the prompt bound: the provider renders the
+    /// messages and tools, and each token of a byte-level tokenizer covers at
+    /// least one byte.
+    fn body_for(
+        &self,
+        observation: &NativeOpenRouterObservation,
+        request: &ChatRequest,
+    ) -> Result<(Value, CallShape), ProviderError> {
+        self.validate_request_for(observation, request)?;
         let output = request.max_tokens.unwrap_or(self.max_output_tokens);
-        let response_tokens = self.observation.response_allowance(output, self.reasoning);
+        let response_tokens = observation.response_allowance(output, self.reasoning);
         let mut normalized = request.clone();
         normalized.max_tokens = Some(output);
         let mut body = serde_json::to_value(self.inner.build_chat_request(&normalized)?)
@@ -256,17 +384,17 @@ impl NativeOpenRouterProvider {
         object.insert(
             "provider".into(),
             json!({
-                "only": [self.observation.endpoint_tag],
-                "order": [self.observation.endpoint_tag],
+                "only": [observation.endpoint_tag],
+                "order": [observation.endpoint_tag],
                 "allow_fallbacks": false,
                 "require_parameters": true,
                 // OpenRouter filters endpoints on their listed image and
                 // audio prices even for a text-only request, so those caps
                 // are left out: the request sends neither.
                 "max_price": {
-                    "prompt": self.observation.prompt_price_per_million,
-                    "completion": self.observation.completion_price_per_million,
-                    "request": self.observation.request_price.as_deref().unwrap_or("0"),
+                    "prompt": observation.prompt_price_per_million,
+                    "completion": observation.completion_price_per_million,
+                    "request": observation.request_price.as_deref().unwrap_or("0"),
                 },
             }),
         );
@@ -299,7 +427,7 @@ impl NativeOpenRouterProvider {
         let prompt_tokens = PROMPT_TEMPLATE_ALLOWANCE
             .saturating_add(bytes)
             .saturating_add(replayed)
-            .min(self.observation.prompt_limit());
+            .min(observation.prompt_limit());
         Ok((
             body,
             CallShape {
@@ -307,6 +435,86 @@ impl NativeOpenRouterProvider {
                 response_tokens,
             },
         ))
+    }
+    /// Whether `request` is one `observation` accepts as retained.
+    fn validate_request_for(
+        &self,
+        observation: &NativeOpenRouterObservation,
+        request: &ChatRequest,
+    ) -> Result<(), ProviderError> {
+        axocoatl_llm::validate_provider_request(request, PROVIDER)?;
+        if request
+            .model_override
+            .as_ref()
+            .is_some_and(|model| model != &observation.model)
+            || request
+                .max_tokens
+                .is_some_and(|limit| limit == 0 || limit > self.max_output_tokens)
+            || request.provider_options.is_some()
+        {
+            return Err(invalid(
+                "request differs from retained OpenRouter route or output ceiling",
+            ));
+        }
+        for message in &request.messages {
+            if !matches!(message.content, axocoatl_core::MessageContent::Text(_)) {
+                return Err(invalid(
+                    "this audited OpenRouter profile accepts only text and local tool messages",
+                ));
+            }
+        }
+        for (needed, present) in [
+            ("temperature", request.temperature.is_some()),
+            ("top_p", request.top_p.is_some()),
+            ("stop", !request.stop_sequences.is_empty()),
+            ("response_format", request.response_format.is_some()),
+        ] {
+            if present && !observation.supported_parameters.iter().any(|p| p == needed) {
+                return Err(invalid(format!(
+                    "retained OpenRouter endpoint does not support {needed}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl EndpointFailover for NativeOpenRouterProvider {
+    fn endpoint_count(&self) -> usize {
+        self.endpoints.len()
+    }
+    fn current_endpoint(&self) -> usize {
+        self.active()
+    }
+    fn fail_over(
+        &self,
+        request: &ChatRequest,
+        error: &ProviderError,
+        tried: &[usize],
+    ) -> Option<(usize, String)> {
+        if !failover::endpoint_failure(error) {
+            return None;
+        }
+        let from = self.active();
+        let count = self.endpoints.len();
+        let next = (1..count)
+            .map(|step| (from + step) % count)
+            .find(|index| !tried.contains(index) && self.carries(*index, request))?;
+        self.active.store(next, Ordering::Release);
+        if let Some(served) = &self.served {
+            served.moved_from(&self.endpoints[from]);
+        }
+        Some((
+            next,
+            format!(
+                "from endpoint {} to endpoint {}",
+                failover::describe(&self.endpoints[from]),
+                failover::describe(&self.endpoints[next])
+            ),
+        ))
+    }
+    fn exhausted(&self, failures: Vec<(usize, ProviderError)>) -> ProviderError {
+        failover::exhausted(&self.endpoints, failures)
     }
 }
 
@@ -384,28 +592,29 @@ impl LlmProvider for NativeOpenRouterProvider {
         PROVIDER
     }
     fn model_id(&self) -> &str {
-        &self.observation.model
+        &self.primary().model
     }
+    /// The selected endpoint's: every endpoint retained for failover holds
+    /// at least its context and prompt limit, so a request fitted to it fits
+    /// each of them.
     fn capabilities(&self) -> ProviderCapabilities {
+        let primary = self.primary();
         // Context fitting reserves the visible output; leave the reasoning
         // allowance and the endpoint's own prompt limit out of the window.
-        let response = self
-            .observation
-            .response_allowance(self.max_output_tokens, self.reasoning);
+        let response = primary.response_allowance(self.max_output_tokens, self.reasoning);
         let reasoning = response - self.max_output_tokens;
         ProviderCapabilities {
             streaming: true,
             tool_calling: true,
-            structured_output: self
-                .observation
+            structured_output: primary
                 .supported_parameters
                 .iter()
                 .any(|p| p == "response_format"),
             vision: false,
             reasoning: reasoning > 0,
             embeddings: false,
-            max_context_tokens: (self.observation.context_tokens.saturating_sub(reasoning)).min(
-                self.observation
+            max_context_tokens: (primary.context_tokens.saturating_sub(reasoning)).min(
+                primary
                     .prompt_limit()
                     .saturating_add(self.max_output_tokens),
             ),
@@ -416,50 +625,11 @@ impl LlmProvider for NativeOpenRouterProvider {
         true
     }
     fn validate_request(&self, request: &ChatRequest) -> Result<(), ProviderError> {
-        axocoatl_llm::validate_provider_request(request, PROVIDER)?;
-        if request
-            .model_override
-            .as_ref()
-            .is_some_and(|model| model != &self.observation.model)
-            || request
-                .max_tokens
-                .is_some_and(|limit| limit == 0 || limit > self.max_output_tokens)
-            || request.provider_options.is_some()
-        {
-            return Err(invalid(
-                "request differs from retained OpenRouter route or output ceiling",
-            ));
-        }
-        for message in &request.messages {
-            if !matches!(message.content, axocoatl_core::MessageContent::Text(_)) {
-                return Err(invalid(
-                    "this audited OpenRouter profile accepts only text and local tool messages",
-                ));
-            }
-        }
-        for (needed, present) in [
-            ("temperature", request.temperature.is_some()),
-            ("top_p", request.top_p.is_some()),
-            ("stop", !request.stop_sequences.is_empty()),
-            ("response_format", request.response_format.is_some()),
-        ] {
-            if present
-                && !self
-                    .observation
-                    .supported_parameters
-                    .iter()
-                    .any(|p| p == needed)
-            {
-                return Err(invalid(format!(
-                    "retained OpenRouter endpoint does not support {needed}"
-                )));
-            }
-        }
-        Ok(())
+        self.validate_request_for(self.endpoint(), request)
     }
     fn execution_bounds(&self, request: &ChatRequest) -> Option<ProviderExecutionBounds> {
         let (_, shape) = self.body(request).ok()?;
-        self.observation
+        self.endpoint()
             .call_bounds(shape, self.max_response_bytes)
             .ok()
     }
@@ -468,17 +638,22 @@ impl LlmProvider for NativeOpenRouterProvider {
         request: &ChatRequest,
         added_prompt_tokens: u64,
     ) -> Option<ProviderExecutionBounds> {
-        let (_, mut shape) = self.body(request).ok()?;
+        let endpoint = self.endpoint();
+        let (_, mut shape) = self.body_for(endpoint, request).ok()?;
         shape.prompt_tokens = shape
             .prompt_tokens
             .saturating_add(usize::try_from(added_prompt_tokens).unwrap_or(usize::MAX))
-            .min(self.observation.prompt_limit());
-        self.observation
-            .call_bounds(shape, self.max_response_bytes)
-            .ok()
+            .min(endpoint.prompt_limit());
+        endpoint.call_bounds(shape, self.max_response_bytes).ok()
     }
     fn response_tokens(&self, _request: &ChatRequest, output: usize) -> usize {
-        self.observation.response_allowance(output, self.reasoning)
+        self.endpoint().response_allowance(output, self.reasoning)
+    }
+    fn endpoint_failover(&self) -> Option<&dyn EndpointFailover> {
+        (self.endpoints.len() > 1).then_some(self as &dyn EndpointFailover)
+    }
+    fn failed_without_charge(&self, error: &ProviderError) -> bool {
+        failover::charge_free(error)
     }
     /// The shared estimate plus the reasoning tokens the request replays,
     /// which its text does not show.
@@ -497,11 +672,11 @@ impl LlmProvider for NativeOpenRouterProvider {
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
-        let (body, shape) = self.body(&request)?;
-        let bounds = self
-            .observation
-            .call_bounds(shape, self.max_response_bytes)?;
-        self.verify().await?;
+        // One endpoint for the whole call, whatever moves later calls.
+        let observation = self.endpoint().clone();
+        let (body, shape) = self.body_for(&observation, &request)?;
+        let bounds = observation.call_bounds(shape, self.max_response_bytes)?;
+        self.verify(&observation).await?;
         let deadlines = StreamDeadlines::start(self.inner.stream_timeouts);
         let response = deadlines
             .headers(
@@ -524,17 +699,21 @@ impl LlmProvider for NativeOpenRouterProvider {
             return Err(ProviderError::ApiError {
                 provider: PROVIDER.into(),
                 status,
-                message: with_retry_after(detail, retry_after),
+                message: with_retry_after(
+                    failover::refusal(&observation, status, &detail),
+                    retry_after,
+                ),
             });
         }
         Ok(stream::decode(
             response,
             deadlines,
             request,
-            self.observation.clone(),
+            observation,
             shape,
             bounds,
             self.inner.api_key.clone(),
+            self.served.clone(),
         ))
     }
 }

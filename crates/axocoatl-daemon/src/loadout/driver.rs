@@ -382,13 +382,19 @@ fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
         usage.cost_known &= turn.usage.cost_known;
         usage.cost_computed |= turn.usage.cost_computed;
         usage.retries = usage.retries.saturating_add(turn.usage.retries);
+        usage
+            .unreported
+            .extend(turn.usage.unreported.iter().cloned());
     }
-    let unobserved = events.iter().any(|event| {
-        matches!(event, RunEvent::TurnStarted { turn_id, .. }
-            if !turns.iter().any(|turn| &turn.turn_id == turn_id))
-    });
-    if unobserved {
-        usage.complete = false;
+    for event in events {
+        if let RunEvent::TurnStarted { turn_id, .. } = event {
+            if !turns.iter().any(|turn| &turn.turn_id == turn_id) {
+                usage.complete = false;
+                usage
+                    .unreported
+                    .push(format!("turn {turn_id}, which the run could not observe"));
+            }
+        }
     }
     let recorded = events
         .iter()
@@ -431,6 +437,7 @@ pub fn empty_outcome(run: &RunContext, started_at_ms: u64) -> RunOutcome {
         usage: RunUsage::default(),
         network: Default::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: None,
     }
@@ -566,6 +573,15 @@ pub async fn run_to_outcome_with(
         .await
         .unwrap_or_default();
     outcome.ollama_versions = host.ollama_versions(&run.session_id).await;
+    // Which OpenRouter endpoints answered each model, and how many calls.
+    outcome.openrouter_endpoints = host.openrouter_endpoints(&run.session_id).await;
+    for (model, endpoints) in &outcome.openrouter_endpoints {
+        outcome
+            .notes
+            .push(axocoatl_session::run_outcome::openrouter_endpoints_note(
+                model, endpoints,
+            ));
+    }
     let final_state = report.turns.last().map(|turn| turn.state);
     let turn_needs_attention = match final_state {
         Some(TurnState::Completed) => false,
@@ -691,6 +707,7 @@ mod tests {
     use crate::SessionTeamEdit;
     use axocoatl_config::loadout::{parse_loadout, resolve_loadout, LoadoutSource, ParamValues};
     use axocoatl_session::run_outcome::*;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     const CUSTOM: &str = r#"
@@ -821,6 +838,7 @@ prompt: "{task}"
                 cost_known: true,
                 cost_computed: false,
                 retries: 0,
+                unreported: Vec::new(),
             },
         }
     }
@@ -852,6 +870,8 @@ prompt: "{task}"
         stop_error: Option<String>,
         /// Whether the runtime was stopped when the network record was read.
         summed_after_stop: Mutex<Option<bool>>,
+        /// The OpenRouter endpoints that answered the Session's calls.
+        openrouter_endpoints: BTreeMap<String, Vec<ServedEndpoint>>,
     }
 
     impl FakeHost {
@@ -953,6 +973,9 @@ prompt: "{task}"
             *self.finished.lock().unwrap() = Some(outcome.clone());
             Ok(())
         }
+        async fn openrouter_endpoints(&self, _: &str) -> BTreeMap<String, Vec<ServedEndpoint>> {
+            self.openrouter_endpoints.clone()
+        }
     }
 
     fn host(waits: Vec<TurnObservation>) -> FakeHost {
@@ -1004,6 +1027,81 @@ prompt: "{task}"
         assert_eq!(outcome.verdict, RunVerdict::Interrupted);
         assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
         assert!(!outcome.usage.complete);
+        // The usage line names what was not reported.
+        assert_eq!(
+            outcome.usage.unreported,
+            ["turn turn-1, which the run could not observe"]
+        );
+        assert!(outcome
+            .usage
+            .text()
+            .ends_with("(known subtotal: usage or cost not reported for turn turn-1, which the run could not observe)"));
+    }
+
+    /// The OpenRouter endpoints that answered the run's calls are in its
+    /// Outcome, which the receipt is signed from, and in its notes, one per
+    /// model; a turn's calls that reported no usage are named in its usage.
+    #[tokio::test]
+    async fn the_openrouter_endpoints_that_answered_are_in_the_outcome_and_its_notes() {
+        let run = context(&[], later());
+        let mut turn = observation(
+            TurnState::Completed,
+            vec![check(CheckState::Passed)],
+            review(true, "openai/gpt-oss-120b"),
+        );
+        turn.usage.complete = false;
+        turn.usage.cost_known = false;
+        turn.usage.unreported = vec!["required-review (generation 1): 1 of 3 model calls".into()];
+        let served = |endpoint: &str, provider: &str, calls| ServedEndpoint {
+            endpoint: endpoint.into(),
+            provider: provider.into(),
+            calls,
+            moved: 0,
+        };
+        let endpoints: BTreeMap<String, Vec<ServedEndpoint>> = [
+            (
+                "openai/gpt-oss-120b".to_string(),
+                vec![
+                    ServedEndpoint {
+                        moved: 2,
+                        ..served("near-ai/fp4", "Near AI", 1)
+                    },
+                    served("deepinfra/bf16", "DeepInfra", 2),
+                ],
+            ),
+            (
+                "qwen/qwen3-coder".to_string(),
+                vec![served("deepinfra/fp8", "DeepInfra", 7)],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let host = FakeHost {
+            openrouter_endpoints: endpoints.clone(),
+            ..host(vec![turn])
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(outcome.openrouter_endpoints, endpoints);
+        let sealed = host.sealed.lock().unwrap().clone().unwrap().0;
+        assert_eq!(sealed.openrouter_endpoints, endpoints);
+        for note in [
+            "openai/gpt-oss-120b on OpenRouter: 1 call answered by endpoint near-ai/fp4 (Near \
+             AI), 2 by deepinfra/bf16 (DeepInfra); 2 calls moved on from endpoint near-ai/fp4 \
+             (Near AI), which failed them before answering",
+            "qwen/qwen3-coder on OpenRouter: 7 calls answered by endpoint deepinfra/fp8 \
+             (DeepInfra)",
+        ] {
+            assert!(
+                outcome.notes.iter().any(|line| line == note),
+                "{:?}",
+                outcome.notes
+            );
+        }
+        assert_eq!(
+            outcome.usage.unreported,
+            ["required-review (generation 1): 1 of 3 model calls"]
+        );
     }
 
     /// A turn whose cost is not known (a Codex writer's) leaves the run's

@@ -223,12 +223,17 @@ round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, 
 the run noticed that is neither a gap nor a warning, in words; absent when there are
 none), `warnings`,
 `usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`,
-`cost_computed` and `retries`; `cost_known` is false when a call's cost is not known, such
-as a Codex writer's on a model without a price, and `cost_microunits` then counts what
-those calls reserved; `cost_computed` is true, and absent otherwise, when part of the cost
-was computed from a program's reported tokens at its model's price, such as a Codex
-writer's), `network` (event,
-connection and route request counts), `keep` and `error`.
+`cost_computed`, `retries` and `unreported`; `cost_known` is false when a call's cost is
+not known, such as a Codex writer's on a model without a price, and `cost_microunits` then
+counts what those calls reserved; `cost_computed` is true, and absent otherwise, when part
+of the cost was computed from a program's reported tokens at its model's price, such as a
+Codex writer's; `retries` counts the calls sent again, a call moved to another OpenRouter
+endpoint included; `unreported` names, when some calls reported no usage or no cost, each
+Agent and generation with how many of its calls, and is absent otherwise), `network` (event,
+connection and route request counts), `openrouter_endpoints` (by model, the OpenRouter
+endpoints the run's native calls went to, in the order each was first counted, each with
+`endpoint`, `provider`, the `calls` it answered and the calls `moved` from it to another
+endpoint after it failed them; absent when there are none), `keep` and `error`.
 
 A Session that a run created carries `loadout`:
 `{run_id, loadout: {id, version, kind, digest, builtin}, network, workload}`. Every other

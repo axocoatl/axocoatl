@@ -496,6 +496,7 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
         max_response_bytes: NATIVE_RESPONSE_BYTES,
         initial_limits,
         reasoning: None,
+        failover_observations: None,
     };
     runtime.validate(&config).unwrap();
     // The smallest call: the 4,096-token template allowance and the output,
@@ -1074,4 +1075,315 @@ fn openrouter_admission_refuses_unsent_parameters_and_unfit_responses_by_name() 
         openrouter_output_limit(&config, &observation, &initial_limits, reasoning).unwrap();
     assert_eq!(derived, 5242);
     assert_eq!(observation.response_allowance(derived, reasoning), 104_840);
+}
+
+// ------------------------------------------------ OpenRouter endpoint failover
+
+fn openrouter_config(model: &str, max_tokens: usize) -> AgentConfig {
+    let mut config = config();
+    config.provider = "openrouter".into();
+    config.model = model.into();
+    config.sampling.max_tokens = Some(max_tokens);
+    config
+}
+
+/// Team & budget retains, after the cheapest endpoint that fits, up to three
+/// more of the model's endpoints, cheapest first, that can take over each of
+/// its calls: at least its context and prompt limit, the same output and
+/// reasoning setting, and the smallest call within the approved budget.
+/// Retained-profile validation refuses any other list.
+#[test]
+fn openrouter_runtime_retains_up_to_three_endpoints_that_can_take_over_each_call() {
+    let config = openrouter_config("qwen/qwen-2.5-72b-instruct", 4096);
+    let initial_limits = GrantLimits {
+        cost_microunits: 10_000,
+        ..limits(40_000)
+    };
+    let endpoint = |tag: &str, context: usize, prompt: &str| {
+        axocoatl_llm_openai::NativeOpenRouterObservation {
+            endpoint_tag: tag.into(),
+            provider_name: tag.to_uppercase(),
+            context_tokens: context,
+            prompt_price_per_million: prompt.into(),
+            ..legacy_openrouter_observation(&config.model)
+        }
+    };
+    let prepare = || {
+        NativeDefinitionPreparation::new(
+            config.clone(),
+            AgentDefinitionId::new("writer").unwrap(),
+            1,
+            initial_limits.clone(),
+        )
+        .unwrap()
+    };
+    let runtime = prepare()
+        .openrouter_runtime(vec![
+            endpoint("a/fp8", 32_768, "0.36"),
+            // A smaller window cannot take every call the first can.
+            endpoint("b/fp8", 16_384, "0.36"),
+            // Its smallest call costs more than the approved $0.01.
+            endpoint("c/fp8", 32_768, "5"),
+            endpoint("d/fp8", 32_768, "0.5"),
+            endpoint("e/fp8", 65_536, "0.6"),
+            endpoint("f/fp8", 32_768, "0.7"),
+            endpoint("g/fp8", 32_768, "0.8"),
+        ])
+        .unwrap();
+    assert_eq!(runtime.openrouter_endpoint(), Some("a/fp8"));
+    assert_eq!(
+        runtime.openrouter_failover_endpoints(),
+        ["d/fp8", "e/fp8", "f/fp8"]
+    );
+    runtime.validate(&config).unwrap();
+    let json = serde_json::to_string(&runtime).unwrap();
+    let NativeRuntimeConfiguration::OpenRouter(retained) =
+        serde_json::from_str::<NativeRuntimeConfiguration>(&json).unwrap()
+    else {
+        panic!("{json}");
+    };
+    assert_eq!(serde_json::to_string(&retained).unwrap(), json);
+
+    // A retained list that names an endpoint twice, one that cannot take
+    // over each call, more than three, another model's or another base URL's
+    // is refused.
+    let tampered = |change: &dyn Fn(&mut Vec<axocoatl_llm_openai::NativeOpenRouterObservation>)| {
+        let mut runtime = retained.clone();
+        change(runtime.failover_observations.as_mut().unwrap());
+        runtime.validate(&config).err().unwrap().to_string()
+    };
+    assert!(tampered(&|list| list[1] = list[0].clone()).contains("twice"));
+    assert!(
+        tampered(&|list| list[2] = endpoint("b/fp8", 16_384, "0.36"))
+            .contains("cannot take over every call of a/fp8")
+    );
+    assert!(
+        tampered(&|list| list.push(endpoint("g/fp8", 32_768, "0.8")))
+            .contains("differs from its admitted definition")
+    );
+    assert!(tampered(&|list| list[0].model = "qwen/other".into())
+        .contains("differs from its admitted definition"));
+    assert!(
+        tampered(&|list| list[0].base_url = "https://example.test/api/v1".into())
+            .contains("cannot take over every call")
+    );
+    assert!(
+        tampered(&|list| list[0].prompt_price_per_million = "5".into())
+            .contains("more than the approved $0.010000 cost budget")
+    );
+
+    // With no other endpoint that fits, the profile says so: an empty list,
+    // which an activation never extends.
+    let alone = prepare()
+        .openrouter_runtime(vec![
+            endpoint("a/fp8", 32_768, "0.36"),
+            endpoint("b/fp8", 16_384, "0.36"),
+        ])
+        .unwrap();
+    assert!(alone.openrouter_failover_endpoints().is_empty());
+    assert!(serde_json::to_string(&alone)
+        .unwrap()
+        .contains("\"failover_observations\":[]"));
+}
+
+const FAILOVER_MODEL: &str = "meta-llama/test-instruct";
+
+/// A catalog listing `endpoints` (tag, provider, price scale, context) for
+/// [`FAILOVER_MODEL`].
+async fn failover_catalog(endpoints: &[(&str, &str, u32, usize)]) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
+                "id": FAILOVER_MODEL,
+                "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
+                "supported_parameters": ["max_tokens","tools"]
+            }]})),
+        )
+        .mount(&server)
+        .await;
+    let rows: Vec<serde_json::Value> = endpoints
+        .iter()
+        .map(|(tag, provider, scale, context)| {
+            serde_json::json!({
+                "model_id": FAILOVER_MODEL, "provider_name": provider, "tag": tag,
+                "context_length": context, "max_completion_tokens": 128,
+                "supported_parameters": ["max_tokens","tools"],
+                "pricing": {"prompt": format!("0.00000{scale}"), "completion": format!("0.00000{}", 2 * scale)},
+                "status": 0, "supports_implicit_caching": false
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{FAILOVER_MODEL}/endpoints")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"data":{"id": FAILOVER_MODEL, "endpoints": rows}}),
+            ),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+/// Upgrade compatibility: a native OpenRouter profile as Axocoatl 1.4.0
+/// and the 1.5.0 builds before endpoint failover retained it (one endpoint,
+/// no failover list) still loads, validates and keeps its exact bytes. Its
+/// activation opens with the endpoints of the model that OpenRouter lists
+/// healthy now and that pass the checks Team & budget applies to a failover
+/// endpoint, so a rate-limited endpoint does not end its runs either. A
+/// profile retained with a failover list never gains an endpoint it does
+/// not list.
+#[tokio::test]
+async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_fail_over() {
+    let server = failover_catalog(&[
+        ("finite/exact", "FiniteProvider", 1, 2048),
+        ("other/exact", "OtherProvider", 2, 2048),
+        ("small/exact", "SmallProvider", 3, 1024),
+    ])
+    .await;
+    let config = openrouter_config(FAILOVER_MODEL, 32);
+    let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
+        &server.uri(),
+        "fixture-inference-key",
+        FAILOVER_MODEL,
+    )
+    .await
+    .unwrap();
+    let selected = serde_json::to_string(&profiles[0]).unwrap();
+    // The fields and their order of 1.4.0's NativeOpenRouterRuntimeConfiguration.
+    let legacy = format!(
+        r#"{{"schema_version":2,"openrouter_observation":{selected},"max_output_tokens":32,"max_response_bytes":1048576,"initial_limits":{{"activations":2,"invocations":2,"tokens":40000,"cost_microunits":1000000}}}}"#
+    );
+    let runtime: NativeRuntimeConfiguration = serde_json::from_str(&legacy).unwrap();
+    runtime.validate(&config).unwrap();
+    assert_eq!(serde_json::to_string(&runtime).unwrap(), legacy);
+    assert!(runtime.openrouter_failover_endpoints().is_empty());
+    assert!(retained_call_reservation(&legacy, &config).is_some());
+    assert!(!retained_profile_refused(&legacy));
+
+    let credentials = NativeProviderCredentials {
+        openrouter_api_key: Some("fixture-inference-key".into()),
+        openrouter_credits_only: true,
+        ..Default::default()
+    };
+    // An activation of the definition: the model's other endpoint that can
+    // take over each call joins; the smaller one does not.
+    let provider = runtime
+        .verify_credentials(&credentials, Some(&config))
+        .await
+        .unwrap();
+    let failover = provider.endpoint_failover().expect("a second endpoint");
+    assert_eq!(failover.endpoint_count(), 2);
+    assert_eq!(failover.current_endpoint(), 0);
+    // The profile alone, without its definition, connects as retained.
+    let provider = runtime
+        .verify_credentials(&credentials, None)
+        .await
+        .unwrap();
+    assert!(provider.endpoint_failover().is_none());
+    connect_retained_profile(&legacy, &credentials)
+        .await
+        .unwrap();
+
+    // A profile retained with its (here empty) failover list connects with
+    // exactly the endpoints it lists.
+    let preparation = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("writer").unwrap(),
+        1,
+        GrantLimits {
+            cost_microunits: 1_000_000,
+            ..limits(40_000)
+        },
+    )
+    .unwrap();
+    let alone = preparation
+        .openrouter_runtime(vec![profiles[0].clone()])
+        .unwrap();
+    let provider = alone
+        .verify_credentials(&credentials, Some(&config))
+        .await
+        .unwrap();
+    assert!(provider.endpoint_failover().is_none());
+    let retained = preparation.openrouter_runtime(profiles).unwrap();
+    assert_eq!(retained.openrouter_failover_endpoints(), ["other/exact"]);
+    let provider = retained
+        .verify_credentials(&credentials, Some(&config))
+        .await
+        .unwrap();
+    assert_eq!(provider.endpoint_failover().unwrap().endpoint_count(), 2);
+}
+
+/// Each native OpenRouter provider of a Session records, in the Session's
+/// log and by model, the endpoint that answered each of its calls once the
+/// answer names that endpoint's provider: what a loadout run's Outcome,
+/// notes and receipt name.
+#[tokio::test]
+async fn the_endpoint_that_answered_each_call_is_recorded_for_the_session() {
+    let server = failover_catalog(&[("finite/exact", "FiniteProvider", 1, 2048)]).await;
+    let first = serde_json::json!({"id":"gen-fixture","model":FAILOVER_MODEL,"provider":"FiniteProvider","choices":[{"index":0,"delta":{"content":"verified"},"finish_reason":"stop"}]});
+    let usage = serde_json::json!({"id":"gen-fixture","model":FAILOVER_MODEL,"provider":"FiniteProvider","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"cost":0.000008,"is_byok":false}});
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("data: {first}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+    let config = openrouter_config(FAILOVER_MODEL, 32);
+    let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
+        &server.uri(),
+        "fixture-inference-key",
+        FAILOVER_MODEL,
+    )
+    .await
+    .unwrap();
+    let runtime = NativeDefinitionPreparation::new(
+        config.clone(),
+        AgentDefinitionId::new("writer").unwrap(),
+        1,
+        GrantLimits {
+            cost_microunits: 1_000_000,
+            ..limits(40_000)
+        },
+    )
+    .unwrap()
+    .openrouter_runtime(profiles)
+    .unwrap();
+    let log = Arc::new(OpenRouterServedLog::default());
+    let credentials = NativeProviderCredentials {
+        openrouter_api_key: Some("fixture-inference-key".into()),
+        openrouter_credits_only: true,
+        openrouter_served: Some(log.clone()),
+        ..Default::default()
+    };
+    assert!(log.endpoints().is_empty());
+    let provider = runtime
+        .verify_credentials(&credentials, Some(&config))
+        .await
+        .unwrap();
+    assert!(log.endpoints().is_empty(), "opening answers no call");
+    for _ in 0..2 {
+        provider
+            .chat(ChatRequest::simple("one call"))
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        log.endpoints(),
+        [(
+            FAILOVER_MODEL.to_string(),
+            vec![axocoatl_llm_openai::ServedOpenRouterEndpoint {
+                endpoint: "finite/exact".into(),
+                provider: "FiniteProvider".into(),
+                calls: 2,
+                moved: 0,
+            }]
+        )]
+        .into_iter()
+        .collect()
+    );
 }

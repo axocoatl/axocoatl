@@ -344,6 +344,22 @@ pub trait LlmProvider: Send + Sync + 'static {
         None
     }
 
+    /// The endpoints of this provider's one model that a call can be moved
+    /// between, each under its own retained contract, when there are several
+    /// ([`EndpointFailover`]). `None` (the default): one route.
+    fn endpoint_failover(&self) -> Option<&dyn EndpointFailover> {
+        None
+    }
+
+    /// Whether a call that failed with `error` before it yielded anything is
+    /// known to have used no tokens and cost nothing: the provider sent no
+    /// request, or refused it with an HTTP status before generating anything,
+    /// which it does not bill. A metered host settles such a call to zero
+    /// instead of keeping its whole reservation. Default: not known.
+    fn failed_without_charge(&self, _error: &ProviderError) -> bool {
+        false
+    }
+
     /// Non-streaming chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
 
@@ -381,6 +397,37 @@ pub trait LlmProvider: Send + Sync + 'static {
     fn count_tokens(&self, request: &ChatRequest) -> usize {
         approximate_request_tokens(request)
     }
+}
+
+/// Endpoints of one model that a provider can move its calls between, each
+/// under its own retained contract ([`LlmProvider::endpoint_failover`]). A
+/// metered host moves a call only after it failed before producing
+/// anything, and admits the call on the new endpoint as a new call with that
+/// endpoint's own bounds. Calls stay on the endpoint they were moved to.
+pub trait EndpointFailover: Send + Sync {
+    /// How many endpoints there are; calls start on the first.
+    fn endpoint_count(&self) -> usize;
+
+    /// The endpoint calls go to now, below [`Self::endpoint_count`].
+    fn current_endpoint(&self) -> usize;
+
+    /// After a call to the current endpoint failed with `error` before
+    /// producing anything: when that failure is the endpoint's own (another
+    /// endpoint may not share it), move calls to the next endpoint in order
+    /// that is not in `tried` and can carry `request` within its contract.
+    /// Returns that endpoint and the move in words for the record. `None`
+    /// leaves calls where they are.
+    fn fail_over(
+        &self,
+        request: &ChatRequest,
+        error: &ProviderError,
+        tried: &[usize],
+    ) -> Option<(usize, String)>;
+
+    /// The error one call reports after every endpoint it was sent to
+    /// failed before producing anything: `failures` holds each endpoint and
+    /// its failure, in order.
+    fn exhausted(&self, failures: Vec<(usize, ProviderError)>) -> ProviderError;
 }
 
 /// The shared provider-agnostic estimate of a request's input tokens: its

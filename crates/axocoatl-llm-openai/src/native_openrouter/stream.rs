@@ -151,25 +151,10 @@ impl ReasoningDetails {
     }
 }
 
-/// An error OpenRouter reported inside the stream. Its numeric `code` is
-/// the upstream's HTTP status when it is one, so a Session can tell a
-/// transient failure (429, 5xx) from a rejection.
-fn stream_error(failure: &Value) -> ProviderError {
-    const PARTIAL: &str = "provider reported an error; retained accounting remains partial";
-    match failure
-        .get("code")
-        .and_then(Value::as_u64)
-        .filter(|code| (400..600).contains(code))
-    {
-        Some(status) => ProviderError::ApiError {
-            provider: PROVIDER.into(),
-            status: status as u16,
-            message: format!("native OpenRouter: {PARTIAL}"),
-        },
-        None => protocol(PARTIAL),
-    }
-}
-
+/// The answer of `profile`'s endpoint. Once the answer names that
+/// endpoint's provider, the endpoint is recorded in `served` as one that
+/// answered a call.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decode(
     response: reqwest::Response,
     mut deadlines: StreamDeadlines,
@@ -178,6 +163,7 @@ pub(super) fn decode(
     shape: CallShape,
     bounds: ProviderExecutionBounds,
     key: String,
+    served: Option<Arc<NativeOpenRouterServed>>,
 ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>> {
     Box::pin(async_stream::try_stream! {
         let mut bytes = response.bytes_stream();
@@ -228,6 +214,11 @@ pub(super) fn decode(
                 if let Some(provider) = value.get("provider").and_then(Value::as_str) {
                     if provider != profile.provider_name {
                         Err(protocol("response changed the exact admitted provider"))?;
+                    }
+                    if !observed_provider {
+                        if let Some(served) = &served {
+                            served.record(&profile);
+                        }
                     }
                     observed_provider = true;
                 }
@@ -286,7 +277,7 @@ pub(super) fn decode(
                     }
                 }
                 if let Some(failure) = value.get("error").filter(|v| !v.is_null()) {
-                    Err(stream_error(failure))?;
+                    Err(failover::answer_error(&profile, failure))?;
                 }
                 let choices = value
                     .get("choices")

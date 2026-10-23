@@ -128,7 +128,10 @@ async fn live_turn(model: &str, effort: ReasoningEffort) {
         ..Default::default()
     };
     let provider = Arc::new(Recording {
-        inner: runtime.verify_credentials(&credentials).await.unwrap(),
+        inner: runtime
+            .verify_credentials(&credentials, Some(&node.config))
+            .await
+            .unwrap(),
         requests: Mutex::new(Vec::new()),
     });
 

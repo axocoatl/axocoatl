@@ -2718,7 +2718,23 @@ mod tests {
                 "cost_microunits": 310, "complete": true, "cost_known": true, "retries": 1}}),
         );
         assert!(summary(&known)
-            .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retries\n"));
+            .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retry\n"));
+        // Calls that reported no usage are named.
+        let unreported = outcome(
+            "needs_attention",
+            serde_json::json!({"usage": {"input_tokens": 240, "output_tokens": 14,
+                "cost_microunits": 15_100, "complete": false, "cost_known": false, "retries": 2,
+                "unreported": ["required-review (generation 1): 1 of 4 model calls"]}}),
+        );
+        assert!(
+            summary(&unreported).contains(
+                "\nUsage: 240 input + 14 output tokens, cost unknown (reserved up to $0.0151), 2 \
+                 provider retries (known subtotal: usage or cost not reported for required-review \
+                 (generation 1): 1 of 4 model calls)\n"
+            ),
+            "{}",
+            summary(&unreported)
+        );
         // A Codex writer's cost computed from its reported tokens says so.
         let computed = outcome(
             "pass",
