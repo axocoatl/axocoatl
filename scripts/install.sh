@@ -844,15 +844,17 @@ fi
 previous=""
 if [ -x "${dest}/${BIN}" ]; then
   previous="$("${dest}/${BIN}" --version 2>/dev/null | head -n 1 | awk '{print $2}')" || previous=""
-  case "$previous" in
-    ''|*[!0-9.]*) previous="" ;;
-  esac
+  # A release (1.4.0) or a pre-release (1.5.0-rc.1); anything else says
+  # nothing about what it wrote.
+  printf '%s\n' "$previous" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+    || previous=""
 fi
-# A daemon is `axocoatl serve` or `axocoatl dev` run by name or by a path,
-# which may hold spaces (a home folder's name can). The program's path is
-# words up to `/axocoatl`, none of them an option.
+# A daemon is `axocoatl serve` or `axocoatl dev` run by name or by a path.
+# An absolute path may hold spaces (a home folder's name can): it is words
+# up to `/axocoatl`, none of them an option or another absolute path. A
+# relative path (./axocoatl, target/debug/axocoatl) is one word.
 daemons="$(ps -A -o args= 2>/dev/null | awk -v bin="$BIN" '
-  BEGIN { daemon = "^((/[^ ]*( [^ /-][^ ]*)*)/)?" bin " (serve|dev) " }
+  BEGIN { daemon = "^((/[^ ]*( [^ /-][^ ]*)*)/|[^ /-][^ ]*/)?" bin " (serve|dev) " }
   match($0 " ", daemon) { print substr($0 " ", RSTART, RLENGTH - 1) }
 ' || true)"
 [ -z "$previous" ] || info "replacing Axocoatl ${previous} at ${dest}/${BIN}"
@@ -879,15 +881,19 @@ case "$direction" in
 esac
 # A daemon of the copy just replaced (by its path, as the Always-On Service
 # records it, or by name) runs the new one once it restarts; a daemon of
-# another copy, such as a build from source, does not.
+# another copy, such as a build from source, does not. A relative path
+# names a copy in the folder the daemon was started from, which ps does not
+# show.
 dest_real="$(CDPATH='' cd -P -- "$dest" 2>/dev/null && pwd)" || dest_real="$dest"
 printf '%s\n' "$daemons" | while IFS= read -r daemon; do
   case "$daemon" in
     '') ;;
     "${dest}/${BIN} "*|"${dest_real}/${BIN} "*|"${BIN} "*)
       info "an Axocoatl daemon is running (${daemon}); it runs the binary it started from until it restarts. Restart it: '${BIN} service restart' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again" ;;
-    *)
+    /*)
       info "an Axocoatl daemon runs another copy (${daemon}); this install does not change it. To run ${tag} instead, stop it and start ${dest}/${BIN} (for the Always-On Service: '${dest}/${BIN} service install', then '${BIN} service restart')" ;;
+    *)
+      info "an Axocoatl daemon runs a copy named by a path relative to the folder it was started in (${daemon}); it keeps running the binary it started from, and this install changes it only if that copy is ${dest}/${BIN}. To run ${tag}, stop it and start ${dest}/${BIN}" ;;
   esac
 done
 

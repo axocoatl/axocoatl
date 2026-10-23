@@ -305,16 +305,66 @@ impl NativeCallReservation {
     }
 }
 
-/// Whether the retained provider profile `configuration` can no longer
-/// serve a turn: an Ollama profile whose observation native Sessions refuse
-/// now (every profile Axocoatl 1.4 or earlier recorded, on Ollama 0.20.6).
-/// Its turns say to review Team & budget again, so applying the Team observes
-/// such a slot again even when nothing else about it changed.
-pub(crate) fn retained_profile_refused(configuration: &str) -> bool {
-    matches!(
-        serde_json::from_str::<NativeRuntimeConfiguration>(configuration),
-        Ok(NativeRuntimeConfiguration::Ollama(runtime))
-            if runtime.observation.refused_when_retained()
+/// Why the retained provider profile `configuration` can no longer serve a
+/// turn with `credentials`, when observing its model again is the remedy its
+/// turns name ("review Team & budget again"): an Ollama profile recorded on
+/// a version native Sessions refuse now (every profile Axocoatl 1.4 or
+/// earlier recorded, on Ollama 0.20.6), at another endpoint than
+/// `providers.ollama.base_url` names now, or of a model that changed on its
+/// Ollama since (pulled again, other capabilities). Applying the Team
+/// observes such an Agent or helper again even when nothing else about it
+/// changed, and Preview shows the reason. `None` when the profile still
+/// serves, and when its Ollama cannot say whether the model changed: a turn
+/// then names what is wrong.
+pub(crate) async fn retained_profile_observation(
+    configuration: &str,
+    credentials: &NativeProviderCredentials,
+) -> Option<String> {
+    let Ok(NativeRuntimeConfiguration::Ollama(runtime)) =
+        serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
+    else {
+        return None;
+    };
+    let observation = &runtime.observation;
+    if observation.refused_when_retained() {
+        return Some(
+            if axocoatl_llm_ollama::ollama_version_refusal(&observation.server_version).is_some() {
+                format!(
+                    "this Team was reviewed on Ollama {}, which native Sessions no longer accept",
+                    shown(&observation.server_version)
+                )
+            } else {
+                "this Team's Ollama profile was recorded by an earlier Axocoatl".into()
+            },
+        );
+    }
+    if let Some(configured) = credentials
+        .ollama_base_url
+        .as_deref()
+        .filter(|configured| *configured != observation.base_url)
+    {
+        return Some(endpoint_change(configured, &observation.base_url));
+    }
+    observation.model_change().await.ok().flatten()
+}
+
+/// A value from a retained profile as a message shows it.
+fn shown(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(64)
+        .collect()
+}
+
+/// That `providers.ollama.base_url` names `configured` while a Team was
+/// reviewed with the Ollama at `recorded`, without any credential in either.
+fn endpoint_change(configured: &str, recorded: &str) -> String {
+    let url = |value: &str| shown(&crate::git_host::redact_url_credentials(value));
+    format!(
+        "providers.ollama.base_url names {}, but this Team was reviewed with the Ollama at {}",
+        url(configured),
+        url(recorded)
     )
 }
 
@@ -526,10 +576,15 @@ impl NativeOllamaRuntimeConfiguration {
         served: Option<&OllamaServedLog>,
         timeouts: axocoatl_llm::transport::StreamTimeouts,
     ) -> Result<Arc<dyn LlmProvider>> {
-        if configured_base_url.is_some_and(|configured| configured != self.observation.base_url) {
-            return Err(error(
-                "configured Ollama endpoint differs from the admitted native profile",
-            ));
+        if let Some(configured) =
+            configured_base_url.filter(|configured| *configured != self.observation.base_url)
+        {
+            return Err(error(format!(
+                "{}; review Team & budget again: applying the Team observes the model at the \
+                 endpoint configured now (or set providers.ollama.base_url back and restart \
+                 Axocoatl)",
+                endpoint_change(configured, &self.observation.base_url)
+            )));
         }
         let provider = NativeOllamaProvider::connect_observed(
             self.observation.clone(),

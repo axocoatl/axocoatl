@@ -235,9 +235,23 @@ async fn native_images_refuse_missing_or_changed_vision_and_external_or_invalid_
         assert!(provider.execution_bounds(&request).is_none(), "{url}");
         assert!(provider.chat(request).await.is_err());
     }
+    // Image input went away while the provider was connected: the next
+    // request connects to the model as it is now.
     server.reset().await;
     valid_profile(&server).await;
-    assert!(provider.chat(image_request()).await.is_err());
+    let refusal = provider
+        .chat(image_request())
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refusal.contains(
+            "Ollama reports other capabilities for test-model than when this Agent's work \
+             started; send the request again"
+        ),
+        "{refusal}"
+    );
     assert!(!server
         .received_requests()
         .await

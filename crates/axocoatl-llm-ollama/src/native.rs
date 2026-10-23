@@ -588,16 +588,24 @@ impl NativeOllamaProvider {
     {
         let body = self.wire_request(&request)?;
         let verified = self.verify().await?;
+        if let Some(observation) = &self.observed_context {
+            // A model pulled again, or with other tools or thinking, since
+            // its Team was reviewed is refused with what to do.
+            observed_context::verify_identity(self, observation).await?;
+        }
         if verified.model.tools != self.tools_supported
             || verified.model.thinking != self.thinking_supported
             || verified.model.vision != self.vision_supported
         {
-            return Err(invalid(
-                "local model capabilities changed; reconnect the execution profile",
-            ));
+            // Changed since this provider connected, when this Agent's work
+            // started: the next request connects to the model as it is now.
+            return Err(invalid(format!(
+                "Ollama reports other capabilities for {} than when this Agent's work \
+                 started; send the request again",
+                shown_name(&self.config.model)
+            )));
         }
         if let Some(observation) = &self.observed_context {
-            observed_context::verify_identity(self, observation).await?;
             // An Ollama upgraded since the probes passed is probed again
             // before it serves; the same version is a cached pass.
             observed_context::ensure_probed(self, observation, &verified.version).await?;

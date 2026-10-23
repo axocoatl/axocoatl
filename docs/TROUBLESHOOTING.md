@@ -54,10 +54,23 @@ the `ollama` on PATH is newer than the server that answers, or 0.40.6 in place o
 version that is too new. A Team reviewed on Ollama 0.20.6 asks to be reviewed again
 ("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again"), in its
 turns and in each helper its lead delegates to: in Team & budget, select Edit, then
-Preview and Apply with nothing changed. Its Ollama Agents and their Ollama helpers are
-observed again, and the Agents start new conversations. With the Ollama app on macOS,
-download it again from https://ollama.com/download, then quit and reopen it so that the
-new version answers.
+Preview and Apply, typing nothing. When the Team's budget expiry has passed (24 hours
+after it was approved, unless you chose another time), Edit fills in a new one, 24 hours
+from then, says so, and Preview shows it. Its Ollama Agents and their Ollama helpers
+are observed again, Preview says why, and the Agents start new conversations. With the
+Ollama app on macOS, download it again from https://ollama.com/download, then quit and
+reopen it so that the new version answers.
+
+**A Team's model or Ollama changed since it was reviewed**
+A Team keeps the Ollama profile each of its Agents and helpers was reviewed with. A
+turn or a delegated helper is refused, with what to do, when the model was pulled
+again ("MODEL was pulled again since this Team was reviewed (digest …, now …); review
+Team & budget again"), reports other capabilities, or when `providers.ollama.base_url`
+names another Ollama than the one the Team was reviewed with ("providers.ollama.base_url
+names URL, but this Team was reviewed with the Ollama at URL"). In Team & budget, select
+Edit, then Preview and Apply with nothing changed: each such Agent and helper is
+observed again, Preview says why, and the Agents start new conversations. To keep a
+Team as it was reviewed, set `providers.ollama.base_url` back and restart Axocoatl.
 
 **A daemon older than this CLI**
 After an upgrade, a daemon started before it (the Always-On Service or an

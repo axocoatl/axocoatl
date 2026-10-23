@@ -28,7 +28,9 @@ limits come filled in from the built-in `fix` loadout's budget (no cost for a
 local Ollama model, an expiry 24 hours away); change any of them, preview the team
 and **Apply** it. Preview refuses a token limit that cannot pay for a model call
 and the one after it, and says how many tokens the Agent needs. This creates a
-durable Session configuration for future turns.
+durable Session configuration for future turns. Once an applied team's budget expiry
+has passed, **Team & budget** says so and **Edit** fills in a new one, 24 hours from
+then, for you to review in Preview before **Apply**.
 [Provider eligibility](/configure/providers/) is checked during that review.
 Existing legacy data roots keep compatibility execution until explicitly upgraded.
 

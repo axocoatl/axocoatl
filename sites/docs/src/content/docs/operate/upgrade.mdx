@@ -166,8 +166,8 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
 2. Stop the daemon: `axocoatl service stop` for the Always-On Service, or **Ctrl-C** in
    the terminal that runs `axocoatl dev`.
 3. Make a [complete cold backup](/operate/data-backup/#make-a-cold-backup) of the data
-   root and the configuration, and keep the 1.4 binary with it. It is the only way back
-   to 1.4 (see [Data written by 1.5](#data-written-by-15)).
+   root, the configuration and your Workspace repositories, and keep the 1.4 binary with
+   it. It is the only way back to 1.4 (see [Data written by 1.5](#data-written-by-15)).
 4. Install 1.5:
 
    ```sh
@@ -192,12 +192,19 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
 7. Start the daemon: `axocoatl service start`, or `axocoatl dev`. If the binary is at
    another path than before, run `axocoatl service install` first.
 8. In each Session you continue, open **Team & budget**, select **Edit**, then
-   **Preview** and **Apply**; nothing needs to change. A Team reviewed on Ollama 0.20.6
-   says "Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again" until
-   then, and so does each helper an Agent delegates to. Apply observes each of its Ollama
-   Agents and their Ollama helpers again on the Ollama that runs now. Preview shows each
-   such Agent as replaced, with a new conversation, since Ollama 0.40 runs the model in
-   another engine; a helper starts a new conversation each time it is given work.
+   **Preview** and **Apply**. A Team reviewed on Ollama 0.20.6 says "Ollama was upgraded
+   from 0.20.6 to 0.40.6; review Team & budget again" until then, and so does each helper
+   an Agent delegates to. You type nothing:
+   - A budget expires 24 hours after it was approved unless you chose another time, so
+     the Team's has usually passed. Team & budget says so, and **Edit** fills in a new
+     expiry, 24 hours from then, which Preview shows before **Apply** approves it. The
+     limits stay as they were.
+   - Apply observes each of the Team's Ollama Agents and their Ollama helpers again on
+     the Ollama that runs now. Preview names each one with the reason ("this Team was
+     reviewed on Ollama 0.20.6, which native Sessions no longer accept") and shows each
+     such Agent as replaced, with a new conversation, since Ollama 0.40 runs the model in
+     another engine; a helper starts a new conversation each time it is given work.
+
    `axocoatl run` needs nothing: every run applies its loadout's team in a new Session.
 
 </Steps>
@@ -219,11 +226,13 @@ stop it, so that it records the copy's location (1.4.0 refuses a restored copy u
 then), then start 1.4.0. Work done with 1.5 is not in that backup. Axocoatl 1.4.0 runs
 native Ollama Sessions only on Ollama 0.20.6.
 
-The backup holds the data root, not your repositories. A large file that a 1.5 run left
-uncommitted in a repository can be a change too large for 1.4.0 to capture: with a
-1 MiB file left by a 1.5 run, 1.4.0's runs in that repository end needing attention
-("repository command output is incomplete or exceeds its capture bound"). Commit or
-move such a file before you run 1.4.0 there.
+Restoring the data root does not change your repositories: each stays as 1.5 left it
+unless you restore its copy from the same backup too, as Restore describes. A large file
+that a 1.5 run left uncommitted in a repository can be a change too large for 1.4.0 to
+capture: with a 1 MiB file left by a 1.5 run, 1.4.0's runs in that repository end needing
+attention ("repository command output is incomplete or exceeds its capture bound").
+Commit or move such a file, or restore the repository's copy, before you run 1.4.0
+there.
 
 ## Data written by 1.4
 

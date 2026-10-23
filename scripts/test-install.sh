@@ -1623,18 +1623,50 @@ path_refuse_text 'upgrading from'
 path_expect_text "an Axocoatl daemon is running (axocoatl dev); it runs the binary it started from until it restarts"
 path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service restart')"
 
-# Other programs and other axocoatl commands are not daemons, and a file
-# that does not report a version is not named.
+# A pre-release where this one goes is named, and daemons started by a
+# relative path (from the folder the binary is in, or a source build's) are
+# found. Which copy they run depends on the folder they were started in,
+# which ps does not show, and the note says so.
+reset_path_case
+P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$current_version-rc.1" \
+  P_PS="./axocoatl dev
+target/debug/axocoatl serve --config /home/a/config.yaml"
+run_path_case prerelease-with-relative-daemons
+path_expect_status 0
+path_expect_text "replacing Axocoatl $current_version-rc.1 at $case_system/axocoatl"
+path_refuse_text 'upgrading from'
+path_refuse_text 'going back'
+for daemon in './axocoatl dev' 'target/debug/axocoatl serve'; do
+  path_expect_text "an Axocoatl daemon runs a copy named by a path relative to the folder it was started in ($daemon); it keeps running the binary it started from, and this install changes it only if that copy is $case_system/axocoatl. To run v$current_version, stop it and start $case_system/axocoatl"
+done
+path_refuse_text 'another copy'
+path_refuse_text 'daemon is running'
+
+# An upgrade from a pre-release of the previous minor release is an upgrade.
+reset_path_case
+P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$previous_minor-rc.2"
+run_path_case upgrade-from-a-prerelease
+path_expect_status 0
+path_expect_text "replacing Axocoatl $previous_minor-rc.2 at $case_system/axocoatl"
+path_expect_text "upgrading from Axocoatl $previous_minor-rc.2: before Axocoatl starts again, back up its data"
+
+# Other programs and other axocoatl commands are not daemons, nor is a
+# program given a path to axocoatl, and a file that does not report a
+# version is not named.
 reset_path_case
 P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="unknown build" \
   P_PS="/opt/tools/axocoatl-helper serve
 /usr/local/bin/axocoatl run fix
-vim axocoatl serve"
+vim axocoatl serve
+vim x/axocoatl serve
+less ./axocoatl dev
+/usr/bin/vim /x/axocoatl serve"
 run_path_case no-daemon-running
 path_expect_status 0
 path_refuse_text 'replacing Axocoatl'
 path_refuse_text 'upgrading from'
 path_refuse_text 'daemon is running'
+path_refuse_text 'daemon runs'
 
 # Going back: an older release installed over a newer one is not called an
 # upgrade, and needs no backup to return to the newer one. The copy is in a
