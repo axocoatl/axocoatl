@@ -1816,7 +1816,7 @@ async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() 
             why: Some(
                 "pacman is set not to extract /usr/bin/newuidmap and /usr/bin/newgidmap \
                  (NoExtract = usr/bin/new*map in /etc/pacman.conf), so reinstalling shadow does \
-                 not write them: take that pattern out of NoExtract",
+                 not write them (it removes any copy there): take that pattern out of NoExtract",
             ),
             reinstall: pacman,
         },

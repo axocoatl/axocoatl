@@ -453,8 +453,8 @@ pub(crate) async fn id_map_tools(
 /// setuid bit (uidmap ships them setuid root on Debian and Ubuntu); rpm
 /// gives the mode and file capabilities in its records, without the
 /// capabilities when dnf is set to `nocaps`; pacman skips a path its
-/// `NoExtract` patterns name and writes a file `NoUpgrade` names next to
-/// it as `.pacnew`, and gives the file capabilities in the package
+/// `NoExtract` patterns name (removing the file there: pacman 7.1 on Arch
+/// Linux ARM) and writes a file `NoUpgrade` names next to it as `.pacnew`, and gives the file capabilities in the package
 /// (Arch's shadow records newuidmap as mode 755, so its mode says nothing).
 /// The same reason for both helpers is said once, naming both.
 async fn reinstall_keeps(
@@ -672,7 +672,7 @@ async fn reinstall_keeps(
         patterns.dedup();
         keeps.push(format!(
             "pacman is set not to extract {} ({}), so reinstalling {package} does not write \
-             {them}: take {} out of NoExtract, {then}",
+             {them} (it removes any copy there): take {} out of NoExtract, {then}",
             paths(&no_extract),
             patterns.join("; "),
             if patterns.len() == 1 {
@@ -3013,5 +3013,61 @@ mod tests {
         assert_eq!(items[1].fix.as_deref(), Some("axocoatl connect codex"));
         let (_, items) = writer(true, &["codex-chatgpt"], true);
         assert!(items.iter().all(|item| item.status == Status::Ok));
+    }
+
+    /// End-to-end on Linux: what doctor finds about this computer's
+    /// `newuidmap` and `newgidmap` with its real package manager (dpkg,
+    /// rpm, pacman) and its configuration, then the same after a recorded
+    /// reinstall that did not help. Run it in a distribution's container,
+    /// after changing a helper (`setcap -r /usr/bin/newuidmap`), with
+    /// `AXOCOATL_EXPECT_ID_MAP` set to words the result must contain:
+    ///
+    /// ```text
+    /// AXOCOATL_EXPECT_ID_MAP='pacman -S --noconfirm shadow' \
+    ///   axocoatl-<hash> doctor::tests::this_linux_computers_id_map_helpers \
+    ///   --ignored --exact --nocapture
+    /// ```
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "reads this Linux computer's package manager; run it explicitly"]
+    async fn this_linux_computers_id_map_helpers() {
+        let data = tempfile::tempdir().unwrap();
+        let mut host = crate::onboard::host::Host::from_env(None).unwrap();
+        host.data_home = data.path().to_path_buf();
+        let release = detect::OsRelease::parse(
+            &std::fs::read_to_string("/etc/os-release").unwrap_or_default(),
+        );
+        let os = Os::Linux {
+            release,
+            wsl: None,
+            systemd: false,
+        };
+        let tools = id_map_tools(&host, Path::new("/"), &os).await;
+        let said = format!("{tools:#?}\n{}", tools.describe());
+        println!("{said}");
+        if let Ok(expected) = std::env::var("AXOCOATL_EXPECT_ID_MAP") {
+            assert!(said.contains(&expected), "{expected:?} not in:\n{said}");
+        }
+        let Some(install) = tools.install.clone().filter(|_| !tools.usable()) else {
+            return;
+        };
+        // A reinstall that ran and did not help is kept, and doctor then
+        // says it instead of offering it again, while the helpers are the
+        // files they were.
+        crate::onboard::id_map_attempt::record(
+            &host,
+            &install,
+            crate::onboard::id_map_attempt::Outcome::DidNotFix,
+            "",
+        );
+        let again = id_map_tools(&host, Path::new("/"), &os).await;
+        println!("after a recorded reinstall: {:#?}", again.reinstall_keeps);
+        assert!(
+            again
+                .reinstall_keeps
+                .iter()
+                .any(|keep| keep.starts_with(&format!("`{install}` ran on "))),
+            "{again:#?}"
+        );
     }
 }
