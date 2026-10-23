@@ -81,13 +81,14 @@ fi
 gate_valid_name "$label" || gate_die "--label must be letters, digits and dashes"
 
 work=$(mktemp -d "${GATE_TMPDIR:-${TMPDIR:-/tmp}}/axo-gate-b.XXXXXX")
-stub_pid='' dev_pid=''
+stub_pid='' dev_pid='' admission_home=''
 # shellcheck disable=SC2329 # the EXIT trap runs it
 cleanup() {
   [ -n "$dev_pid" ] && kill -INT "$dev_pid" 2>/dev/null && wait "$dev_pid" 2>/dev/null
   [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null && wait "$stub_pid" 2>/dev/null
   chmod -R u+w "$work" 2>/dev/null
   rm -rf "$work"
+  [ -n "$admission_home" ] && rm -rf "$admission_home"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -293,8 +294,10 @@ gate_check "doctor and --plan ran only read-only podman commands" \
 # started, it must have run `podman machine start`, which the stand-in
 # answers by running the machine. Doctor and onboarding see only the
 # stand-in, never a Podman the runner may have.
-admission_home="$work/admission"
-mkdir -p "$admission_home"
+# A short HOME: the daemon's socket, $HOME/.axocoatl/run/axocoatl.sock, must
+# fit macOS's 104-byte socket path limit, which a HOME under the runner's
+# TMPDIR does not.
+admission_home=$(mktemp -d /tmp/axo-adm.XXXXXX)
 config=$(HOME="$admission_home" gate_config_path)
 mkdir -p "$(dirname -- "$config")"
 printf 'server:\n  port: %s\n  host: "127.0.0.1"\nproviders:\n  ollama:\n    base_url: "%s"\nrun:\n  models:\n    writer: "ollama:qwen3-coder:30b"\n    reviewer: "ollama:gpt-oss:20b"\n' \
