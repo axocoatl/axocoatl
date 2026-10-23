@@ -77,7 +77,7 @@ writes provider keys or other secrets into the definition. Run
 `axocoatl service install` again after you move Podman, `git` or `gh`, or change
 the Podman connection.
 If the service was running, load the new definition with
-`axocoatl service stop && axocoatl service start`.
+`axocoatl service restart`.
 
 On macOS the daemon's output goes to `~/Library/Logs/Axocoatl/daemon.log`. When
 they do not exist yet, install creates that directory owner-only and the file
@@ -94,7 +94,8 @@ axocoatl service install --config /absolute/path/to/axocoatl.yaml
 
 <Aside type="caution" title="Install does not start the service">
 `axocoatl service install` writes/registers the definition. Run `service start`
-separately. `axocoatl onboard` installs and starts the per-user service only when you
+separately, or `service restart` when the service already runs: `start` leaves a
+running service as it is, on the definition it started with. `axocoatl onboard` installs and starts the per-user service only when you
 choose **Always on** in its last steps (or pass `--start service`). It refuses to
 install a service while the configuration reads a hosted-provider key from a shell
 environment variable, which a service does not inherit; for OpenRouter, let onboarding
@@ -150,10 +151,22 @@ loginctl enable-linger "$USER"
 axocoatl service status
 axocoatl service stop
 axocoatl service start
+axocoatl service restart
 axocoatl service uninstall
 ```
 
-`stop` leaves the definition installed. `uninstall` stops and removes it.
+`status` says whether the daemon runs and, when its last start failed, the line that
+start logged, also while launchd or systemd is starting it again. `stop` returns once
+the daemon has exited (it ends its Sessions first) and leaves the definition
+installed. `start` starts a service that does not run and leaves one that runs as it
+is. `restart` stops a running service and starts it again with the installed
+definition, which is how a definition `install` rewrote, or a new `axocoatl` binary
+at the same path, takes effect; it starts a service that does not run. `uninstall`
+stops the service, as `stop` does, and removes the definition.
+
+Stopping or restarting the service leaves a Podman machine the daemon started
+running: Axocoatl starts `podman machine start` in a session of its own, outside
+the daemon's process group, which launchd ends with the daemon.
 
 For platform logs:
 

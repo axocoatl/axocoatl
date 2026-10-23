@@ -253,8 +253,10 @@ enum ServiceCommands {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
-    /// Start the Always-On Service now (and enable it at login)
+    /// Start the Always-On Service now (and enable it at login); one that runs is left running
     Start,
+    /// Restart the Always-On Service with its installed definition (or start it)
+    Restart,
     /// Stop the Always-On Service
     Stop,
     /// Show whether the Always-On Service is installed and running
@@ -265,6 +267,11 @@ enum ServiceCommands {
 
 #[derive(Subcommand)]
 enum SessionCommands {
+    /// Record a copied or moved data directory's new location and change nothing else, while Axocoatl is stopped (a release from 1.1.0 to 1.4.0 then starts on a restored backup)
+    RecordLocation {
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
+    },
     /// Upgrade existing Session storage while the daemon is stopped
     Upgrade {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
@@ -559,6 +566,27 @@ async fn main() {
             session,
         } => cmd_chat(&config, &agent, session).await,
         Commands::Session { command } => match command {
+            SessionCommands::RecordLocation { config } => {
+                let recorded = configure_data_dir(&config).and_then(|data_dir| {
+                    axocoatl_daemon::AxocoatlDaemon::record_data_root_location(&data_dir)
+                        .map(|recorded| (data_dir, recorded))
+                        .map_err(|error| error.to_string())
+                });
+                match recorded {
+                    Ok((data_dir, Some(recorded))) => println!(
+                        "✓ Recorded {recorded} for the data directory {}. Nothing else changed.",
+                        data_dir.display()
+                    ),
+                    Ok((data_dir, None)) => println!(
+                        "✓ The data directory {} is already recorded where it is. Nothing changed.",
+                        data_dir.display()
+                    ),
+                    Err(error) => {
+                        eprintln!("✗ {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             SessionCommands::Upgrade { config, confirm } => {
                 if !confirm {
                     eprintln!("Stop Axocoatl and make a cold backup first. This upgrades Session storage, preserves history and usage, and archives historical agent state whose role cannot be proved. Future work requires a reviewed Team & budget. Older binaries cannot use the upgraded data. Run again with --confirm to proceed.");
@@ -620,6 +648,7 @@ async fn main() {
         Commands::Service { command } => match command {
             ServiceCommands::Install { config } => cmd_service_install(&config),
             ServiceCommands::Start => cmd_service_start(),
+            ServiceCommands::Restart => cmd_service_restart(),
             ServiceCommands::Stop => cmd_service_stop(),
             ServiceCommands::Status => cmd_service_status(),
             ServiceCommands::Uninstall => cmd_service_uninstall(),
@@ -818,7 +847,7 @@ fn cmd_service_install(config: &std::path::Path) {
                 println!("\n{hint}");
             }
             println!("\nStart it with:  axocoatl service start");
-            println!("If it was already running, load the new definition with:  axocoatl service stop && axocoatl service start");
+            println!("If it was already running, load the new definition with:  axocoatl service restart");
             // `serve` writes only an `axocoatl url` hint to the service log,
             // never the link with its token, so give it here.
             println!(
@@ -856,19 +885,42 @@ fn service_install_summary(
 const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.";
 
 fn cmd_service_start() {
-    with_manager(
-        |m| m.start(),
-        "Always-On Service started — the daemon now runs 24/7",
-    );
+    with_manager(|m| m.start().map(service_started_line));
     println!("{SERVICE_SIGN_IN_HINT}");
 }
 
+fn cmd_service_restart() {
+    with_manager(|m| m.restart().map(service_started_line));
+    println!("{SERVICE_SIGN_IN_HINT}");
+}
+
+/// What `service start` or `service restart` says it did.
+fn service_started_line(started: axocoatl_service::ServiceStart) -> String {
+    match started {
+        axocoatl_service::ServiceStart::Started => {
+            "Always-On Service started — the daemon now runs 24/7".to_string()
+        }
+        axocoatl_service::ServiceStart::Restarted => {
+            "Always-On Service restarted with its installed definition — the daemon now runs 24/7"
+                .to_string()
+        }
+        axocoatl_service::ServiceStart::AlreadyRunning => {
+            "Always-On Service is already running. To load a definition `axocoatl service \
+             install` rewrote since it started, run `axocoatl service restart`"
+                .to_string()
+        }
+    }
+}
+
 fn cmd_service_stop() {
-    with_manager(|m| m.stop(), "Always-On Service stopped");
+    with_manager(|m| m.stop().map(|()| "Always-On Service stopped".to_string()));
 }
 
 fn cmd_service_uninstall() {
-    with_manager(|m| m.uninstall(), "Always-On Service uninstalled");
+    with_manager(|m| {
+        m.uninstall()
+            .map(|()| "Always-On Service uninstalled".to_string())
+    });
 }
 
 fn cmd_service_status() {
@@ -881,18 +933,9 @@ fn cmd_service_status() {
     };
     match mgr.status() {
         Ok(s) => {
-            println!("Always-On Service ({} backend)", mgr.backend());
-            println!("  installed: {}", if s.installed { "yes" } else { "no" });
-            println!("  running:   {}", if s.running { "yes" } else { "no" });
-            println!("  at login:  {}", if s.enabled { "yes" } else { "no" });
-            println!("  detail:    {}", s.detail);
-            println!("  logs:      {}", mgr.logs());
-            // A service that keeps restarting and failing is "not running"
-            // most of the time; say why it last failed.
-            if s.installed && !s.running {
-                if let Some(failure) = mgr.last_start_failure() {
-                    println!("  last start failed:\n    {failure}");
-                }
+            let failure = s.installed.then(|| mgr.last_start_failure()).flatten();
+            for line in service_status_lines(mgr.backend(), &s, &mgr.logs(), failure) {
+                println!("{line}");
             }
             if s.installed {
                 println!("\n{SERVICE_SIGN_IN_HINT}");
@@ -910,12 +953,42 @@ fn cmd_service_status() {
     }
 }
 
-/// Run a service action and report success/failure uniformly.
+/// What `service status` says of `status`, before its hints. `failure`: the
+/// line the last start logged, when it failed. A service whose start keeps
+/// failing is started again by its manager, so it may be running (starting
+/// again) when this looks: the failure is shown whenever the last start
+/// failed, and a running one is said to be starting again.
+fn service_status_lines(
+    backend: &str,
+    status: &axocoatl_service::ServiceStatus,
+    logs: &str,
+    failure: Option<String>,
+) -> Vec<String> {
+    let yes = |value: bool| if value { "yes" } else { "no" };
+    let running = match (&failure, status.running) {
+        (Some(_), true) => "yes, starting again after its last start failed",
+        (_, running) => yes(running),
+    };
+    let mut lines = vec![
+        format!("Always-On Service ({backend} backend)"),
+        format!("  installed: {}", yes(status.installed)),
+        format!("  running:   {running}"),
+        format!("  at login:  {}", yes(status.enabled)),
+        format!("  detail:    {}", status.detail),
+        format!("  logs:      {logs}"),
+    ];
+    if let Some(failure) = failure {
+        lines.push(format!("  last start failed:\n    {failure}"));
+    }
+    lines
+}
+
+/// Run a service action and report success (the line it returns) or
+/// failure uniformly.
 fn with_manager(
     action: impl FnOnce(
         &dyn axocoatl_service::ServiceManager,
-    ) -> Result<(), axocoatl_service::ServiceError>,
-    ok_msg: &str,
+    ) -> Result<String, axocoatl_service::ServiceError>,
 ) {
     let mgr = match axocoatl_service::manager() {
         Ok(m) => m,
@@ -925,7 +998,7 @@ fn with_manager(
         }
     };
     match action(mgr.as_ref()) {
-        Ok(()) => println!("✓ {ok_msg}"),
+        Ok(line) => println!("✓ {line}"),
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
@@ -4006,6 +4079,46 @@ mod tests {
                 Some(format!("ollama:{text}"))
             );
         }
+    }
+
+    /// A service whose start keeps failing is started again by launchd or
+    /// systemd, so `status` may find it running: the last failure is shown
+    /// whenever the last start failed (it was shown only while the service
+    /// did not run, so a live crash loop showed "running: yes" and nothing
+    /// else), and none when the last start succeeded.
+    #[test]
+    fn service_status_shows_the_last_failed_start_whether_or_not_it_runs() {
+        let status = |running| axocoatl_service::ServiceStatus {
+            installed: true,
+            running,
+            enabled: true,
+            detail: "loaded".into(),
+        };
+        let failure = || Some("Failed to bootstrap daemon: Session error: no".to_string());
+        let lines = service_status_lines("launchd", &status(true), "/l/daemon.log", failure());
+        assert_eq!(
+            lines[2],
+            "  running:   yes, starting again after its last start failed"
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "  last start failed:\n    Failed to bootstrap daemon: Session error: no"
+        );
+        let lines = service_status_lines("launchd", &status(false), "/l/daemon.log", failure());
+        assert_eq!(lines[2], "  running:   no");
+        assert!(lines.last().unwrap().starts_with("  last start failed:"));
+        let lines = service_status_lines("systemd", &status(true), "journalctl", None);
+        assert_eq!(
+            lines,
+            [
+                "Always-On Service (systemd backend)",
+                "  installed: yes",
+                "  running:   yes",
+                "  at login:  yes",
+                "  detail:    loaded",
+                "  logs:      journalctl",
+            ]
+        );
     }
 
     #[test]

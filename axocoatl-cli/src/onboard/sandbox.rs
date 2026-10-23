@@ -115,7 +115,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
             }
             PodmanReadiness::MachineStopped => {
                 let name = machine_name(&o.facts.podman);
-                let start = machine_cmd(&["start"], &name);
+                let start = machine_start(&name);
                 if !o.ui.consent(
                     &format!("Start {name} now? (`{}`)", start.display()),
                     true,
@@ -233,6 +233,13 @@ fn machine_cmd(verb: &[&str], name: &str) -> Cmd {
         args.push(name);
     }
     Cmd::new("podman", &args)
+}
+
+/// `podman machine start [name]` ([`Cmd::machine_start`]).
+fn machine_start(name: &str) -> Cmd {
+    let start = machine_cmd(&["start"], name);
+    let args: Vec<&str> = start.args.iter().map(String::as_str).collect();
+    Cmd::machine_start(&args, name)
 }
 
 /// Why onboarding does not change the machine: Podman is reached through
@@ -424,7 +431,7 @@ async fn create_machine(o: &mut Onboarding) -> bool {
         args: spec.init_args(None),
         ..Cmd::new("podman", &[])
     };
-    let start = Cmd::new("podman", &["machine", "start"]);
+    let start = machine_start("podman-machine-default");
     let untested = if spec.tested() {
         String::new()
     } else {
@@ -486,7 +493,7 @@ async fn rootless(o: &mut Onboarding) -> bool {
     let commands = vec![
         machine_cmd(&["stop"], &name),
         machine_cmd(&["set", "--rootful=false"], &name),
-        machine_cmd(&["start"], &name),
+        machine_start(&name),
     ];
     if o.ui.consent(
         &format!(
@@ -593,7 +600,7 @@ async fn machine_memory(o: &mut Onboarding) -> bool {
     let commands = vec![
         machine_cmd(&["stop"], &machine.name),
         machine_cmd(&["set", "--memory", &target_text], &machine.name),
-        machine_cmd(&["start"], &machine.name),
+        machine_start(&machine.name),
     ];
     if o.ui.consent(
         &format!(

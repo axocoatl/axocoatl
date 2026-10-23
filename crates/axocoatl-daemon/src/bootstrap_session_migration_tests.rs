@@ -629,6 +629,334 @@ async fn prepared_source_proven_upgrade_resumes_after_restart_without_settings_o
     );
 }
 
+/// `cp -a FROM TO`, as the backup page says.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    assert!(std::process::Command::new("cp")
+        .arg("-a")
+        .arg(from)
+        .arg(to)
+        .status()
+        .unwrap()
+        .success());
+}
+
+/// A data root copied in the middle of an interrupted Session storage
+/// upgrade (a restored backup, a migrated Mac) holds the same legacy history
+/// and checkpoints in other files: when the upgrade stopped before it
+/// converted a Session, it records the copy's identities and finishes there,
+/// and the original is left as it was. Before, the record pinned the
+/// original's inodes and the copy never started. One that stopped half-way
+/// through a Session sealed that Session's history as the original's: the
+/// copy is refused with what to do, and the original still finishes. A
+/// copy whose history differs is still refused.
+#[tokio::test]
+async fn a_copied_interrupted_upgrade_records_its_new_location_and_finishes() {
+    for half_way in [false, true] {
+        copied_interrupted_upgrade_finishes(half_way).await;
+    }
+}
+
+async fn copied_interrupted_upgrade_finishes(half_way: bool) {
+    let mut f = source_proven_startup_fixture().await;
+    let preparation = PreparedStartupMigration::prepare_source_proven(
+        &f.lease.as_ref().unwrap().ownership,
+        &f.data,
+        &f.checkpoints,
+        std::slice::from_ref(&f.session),
+    )
+    .unwrap();
+    let (upgraded, mut preparation) = preparation
+        .upgrade_held(
+            f.lease.take().unwrap(),
+            &f.data,
+            &f.checkpoints,
+            &AgentRegistry::new(),
+            &Mutex::new(HashMap::new()),
+        )
+        .await
+        .unwrap();
+    if half_way {
+        // The Session's journals were made and its history sealed and
+        // imported, and the process died before the record said Complete.
+        let DataRootFormatOwnership::Upgraded(ownership) = &upgraded.ownership else {
+            unreachable!()
+        };
+        initialize_migration_session(
+            ownership.clone(),
+            &f.data,
+            &preparation.sessions[0].specification,
+        )
+        .unwrap();
+        preparation.sessions[0].state = StartupMigrationState::Started;
+        preparation.persist(&f.data).unwrap();
+        drop(
+            migrate_held_session_state_with_mode(
+                ownership.clone(),
+                &f.data,
+                &f.checkpoints,
+                &AgentRegistry::new(),
+                &Mutex::new(HashMap::new()),
+                &[preparation.sessions[0].specification.clone()],
+                &str::len,
+                true,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    drop(upgraded); // The process died after the exchange.
+    let original = std::fs::read(f.data.path().join(STARTUP_MIGRATION_FILE)).unwrap();
+
+    let copies = tempfile::tempdir().unwrap();
+    let copy = copies.path().join("data");
+    copy_tree(f.data.path(), &copy);
+    let damaged = copies.path().join("damaged");
+    copy_tree(f.data.path(), &damaged);
+    let history = damaged.join("session-history/turns.v1.jsonl");
+    let mut changed = std::fs::read(&history).unwrap();
+    changed.extend_from_slice(b"\n");
+    std::fs::write(&history, changed).unwrap();
+
+    let data = SecureDir::open(&copy).unwrap();
+    let lease = DataDirLease::acquire(&data).unwrap();
+    let DataRootFormatOwnership::Upgraded(ownership) = &lease.ownership else {
+        panic!("lost upgraded writer fence")
+    };
+    let checkpoints =
+        CheckpointStore::new_in_secure(&data, "checkpoints", CheckpointPolicy::Manual).unwrap();
+    let doctor = super::super::AxocoatlDaemon::interrupted_upgrade_doctor_line(&copy).unwrap();
+    assert_eq!(doctor.is_err(), half_way, "{doctor:?}");
+    if half_way {
+        let (line, hint) = doctor.unwrap_err();
+        assert!(line.contains("stopped half-way"), "{line}");
+        assert!(
+            hint.contains("finish the upgrade where it started"),
+            "{hint}"
+        );
+    } else {
+        assert!(doctor
+            .unwrap()
+            .contains("records its new location and finishes it"));
+    }
+    assert!(
+        super::super::AxocoatlDaemon::interrupted_upgrade_doctor_line(f.data.path())
+            .unwrap()
+            .unwrap()
+            .ends_with("interrupted; the next start finishes it")
+    );
+    if half_way {
+        let error = PreparedStartupMigration::load_existing(&data, &checkpoints)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains(
+                "is a copy of a data directory whose Session storage upgrade stopped half-way"
+            ) && error.contains(&format!("started converting Session '{}'", f.session.id))
+                && error.contains("finish the upgrade where it started"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(copy.join(STARTUP_MIGRATION_FILE)).unwrap(),
+            original
+        );
+        drop(lease);
+        // The original finishes.
+        let lease = DataDirLease::acquire(&f.data).unwrap();
+        let DataRootFormatOwnership::Upgraded(ownership) = &lease.ownership else {
+            panic!("lost upgraded writer fence")
+        };
+        let registry = crate::bootstrap::session_dispatch::SessionDispatchRegistry::default();
+        assert_eq!(
+            PreparedStartupMigration::load_existing(&f.data, &f.checkpoints)
+                .unwrap()
+                .unwrap()
+                .resume(
+                    ownership.clone(),
+                    &f.data,
+                    &f.checkpoints,
+                    &AgentRegistry::new(),
+                    &Mutex::new(HashMap::new()),
+                    &registry,
+                    &str::len
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        return;
+    }
+    let preparation = PreparedStartupMigration::load_existing(&data, &checkpoints)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preparation.root_inode, data.inode_identity().unwrap());
+    let registry = crate::bootstrap::session_dispatch::SessionDispatchRegistry::default();
+    assert_eq!(
+        preparation
+            .resume(
+                ownership.clone(),
+                &data,
+                &checkpoints,
+                &AgentRegistry::new(),
+                &Mutex::new(HashMap::new()),
+                &registry,
+                &str::len
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(registry.retains_session(&f.session.id).unwrap());
+    assert!(!copy.join(STARTUP_MIGRATION_FILE).exists());
+    assert_eq!(
+        std::fs::read(f.data.path().join(STARTUP_MIGRATION_FILE)).unwrap(),
+        original
+    );
+
+    let (line, hint) = super::super::AxocoatlDaemon::interrupted_upgrade_doctor_line(&damaged)
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        line.contains("no longer the one it recorded") && hint.contains("Restore the backup"),
+        "{line}: {hint}"
+    );
+    let data = SecureDir::open(&damaged).unwrap();
+    let _lease = DataDirLease::acquire(&data).unwrap();
+    let checkpoints =
+        CheckpointStore::new_in_secure(&data, "checkpoints", CheckpointPolicy::Manual).unwrap();
+    assert!(PreparedStartupMigration::load_existing(&data, &checkpoints).is_err());
+    assert_eq!(
+        std::fs::read(damaged.join(STARTUP_MIGRATION_FILE)).unwrap(),
+        original
+    );
+}
+
+/// The same preparation made again on a copy taken before the format
+/// exchange (the upgrade stopped earlier) is recorded for the copy; one
+/// with other contents is still refused.
+#[tokio::test]
+async fn a_copied_preparation_is_recorded_again_for_the_copy() {
+    let f = source_proven_startup_fixture().await;
+    PreparedStartupMigration::prepare_source_proven(
+        &f.lease.as_ref().unwrap().ownership,
+        &f.data,
+        &f.checkpoints,
+        std::slice::from_ref(&f.session),
+    )
+    .unwrap();
+    drop(f.lease);
+    let copies = tempfile::tempdir().unwrap();
+    let copy = copies.path().join("data");
+    copy_tree(f.data.path(), &copy);
+    let data = SecureDir::open(&copy).unwrap();
+    let lease = DataDirLease::acquire(&data).unwrap();
+    let checkpoints =
+        CheckpointStore::new_in_secure(&data, "checkpoints", CheckpointPolicy::Manual).unwrap();
+    let preparation = PreparedStartupMigration::prepare_source_proven(
+        &lease.ownership,
+        &data,
+        &checkpoints,
+        std::slice::from_ref(&f.session),
+    )
+    .unwrap();
+    assert_eq!(preparation.root_inode, data.inode_identity().unwrap());
+    let recorded: PreparedStartupMigration =
+        serde_json::from_slice(&std::fs::read(copy.join(STARTUP_MIGRATION_FILE)).unwrap()).unwrap();
+    assert_eq!(recorded.root_inode, preparation.root_inode);
+
+    let mut other = recorded.clone();
+    other.history_sha256 = "0".repeat(64);
+    other.root_inode = "1:1".into();
+    other.persist(&data).unwrap();
+    assert!(PreparedStartupMigration::prepare_source_proven(
+        &lease.ownership,
+        &data,
+        &checkpoints,
+        std::slice::from_ref(&f.session),
+    )
+    .is_err());
+}
+
+/// `axocoatl session record-location` records a copied root's new location
+/// in its ownership record and in its interrupted upgrade's, and nothing
+/// else; it refuses a directory without an ownership record, and a root a
+/// daemon holds.
+#[tokio::test]
+async fn record_location_records_a_copied_root_and_changes_nothing_else() {
+    let mut f = source_proven_startup_fixture().await;
+    let preparation = PreparedStartupMigration::prepare_source_proven(
+        &f.lease.as_ref().unwrap().ownership,
+        &f.data,
+        &f.checkpoints,
+        std::slice::from_ref(&f.session),
+    )
+    .unwrap();
+    let (upgraded, _) = preparation
+        .upgrade_held(
+            f.lease.take().unwrap(),
+            &f.data,
+            &f.checkpoints,
+            &AgentRegistry::new(),
+            &Mutex::new(HashMap::new()),
+        )
+        .await
+        .unwrap();
+    drop(upgraded);
+    let copies = tempfile::tempdir().unwrap();
+    let copy = copies.path().join("data");
+    copy_tree(f.data.path(), &copy);
+    let listing = |root: &std::path::Path| {
+        let mut names: Vec<String> = std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = listing(&copy);
+    let recorded = super::super::AxocoatlDaemon::record_data_root_location(&copy)
+        .unwrap()
+        .unwrap();
+    assert!(
+        recorded.contains("its new location (it is a copy at another path)")
+            && recorded.contains("its interrupted Session storage upgrade"),
+        "{recorded}"
+    );
+    assert_eq!(listing(&copy), before);
+    let data = SecureDir::open(&copy).unwrap();
+    let migration: PreparedStartupMigration =
+        serde_json::from_slice(&std::fs::read(copy.join(STARTUP_MIGRATION_FILE)).unwrap()).unwrap();
+    assert_eq!(migration.root_inode, data.inode_identity().unwrap());
+    // Recorded: a second time records nothing.
+    assert_eq!(
+        super::super::AxocoatlDaemon::record_data_root_location(&copy).unwrap(),
+        None
+    );
+    // A daemon holds the root.
+    let lease = DataDirLease::acquire(&data).unwrap();
+    let error = super::super::AxocoatlDaemon::record_data_root_location(&copy)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("already owned by another daemon"), "{error}");
+    drop(lease);
+    // A directory without an ownership record is left as it is.
+    let empty = copies.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    std::fs::set_permissions(&empty, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
+    let error = super::super::AxocoatlDaemon::record_data_root_location(&empty)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("holds no Axocoatl data directory ownership record"),
+        "{error}"
+    );
+    assert!(listing(&empty).is_empty());
+    assert!(super::super::AxocoatlDaemon::record_data_root_location(
+        &copies.path().join("missing")
+    )
+    .is_err());
+}
+
 #[tokio::test]
 async fn prepared_upgrade_refuses_changed_role_mapping_or_checkpoint_source() {
     let f = source_proven_startup_fixture().await;

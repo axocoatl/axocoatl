@@ -87,6 +87,11 @@ pub(crate) struct Cmd {
     /// Asks for the person's password through `sudo`, itself or in a script
     /// it runs (Ollama's Linux installer).
     pub(crate) asks_for_password: bool,
+    /// `podman machine start` of this machine: it runs in a session of its
+    /// own, so the VM it starts outlives a Ctrl-C at this terminal and the
+    /// terminal closing, and a stale API socket the machine left is removed
+    /// first ([`Host::clear_stale_machine_socket`]).
+    pub(crate) starts_machine: Option<String>,
 }
 
 impl Cmd {
@@ -98,7 +103,15 @@ impl Cmd {
             stdin: None,
             shown: None,
             asks_for_password: program == "sudo",
+            starts_machine: None,
         }
+    }
+
+    /// `podman args…`, which starts the Podman machine `name`.
+    pub(crate) fn machine_start(args: &[&str], name: &str) -> Self {
+        let mut command = Self::new("podman", args);
+        command.starts_machine = Some(name.to_string());
+        command
     }
 
     /// `sudo program args…`.
@@ -354,6 +367,9 @@ impl Host {
         for (name, value) in &cmd.env {
             command.env(name, value);
         }
+        if cmd.starts_machine.is_some() {
+            axocoatl_isolation::podman::start_in_own_session(&mut command);
+        }
         if cmd.stdin.is_some() {
             command
                 .stdin(std::process::Stdio::piped())
@@ -383,6 +399,28 @@ impl Host {
                 cmd.display(),
                 exit_text(status.code())
             ))
+        }
+    }
+
+    /// Remove the API socket the Podman machine `name` left behind when its
+    /// VM was killed (nothing listens on it), which would make `podman
+    /// machine start` fail: the socket removed, if one was.
+    pub(crate) async fn clear_stale_machine_socket(&self, name: &str) -> Option<PathBuf> {
+        let inspected = self
+            .probe("podman", &["machine", "inspect", name])
+            .await
+            .filter(|probe| probe.success)?;
+        let socket = axocoatl_isolation::podman::api_socket_from_inspect(&inspected.stdout)?;
+        match axocoatl_isolation::podman::remove_stale_socket(&socket) {
+            Ok(true) => {
+                self.log(&format!("removed the stale socket {}", socket.display()));
+                Some(socket)
+            }
+            Ok(false) => None,
+            Err(error) => {
+                self.log(&format!("could not check {}: {error}", socket.display()));
+                None
+            }
         }
     }
 

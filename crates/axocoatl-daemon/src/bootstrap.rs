@@ -49,6 +49,7 @@ mod session_writers;
 #[path = "bootstrap_workspace_operation.rs"]
 pub(crate) mod workspace_operation;
 pub use runtime_volumes::RuntimeVolumeCheck;
+use runtime_volumes::{forget_previous_runtime_authorities, record_previous_runtime_authority};
 
 // 1.3 loadouts. Each file has one owning workstream; see
 // docs/design/1.3-loadouts.md ("Ownership").
@@ -3016,6 +3017,31 @@ fn external_lease_name(data_root: &SecureDir) -> String {
     format!("{:x}.lock", Sha256::digest(root_authority_bytes(data_root)))
 }
 
+/// Keep the runtime authority of the path the data root had when admission
+/// recorded that it was moved: the same directory at another path, so no
+/// data root of its own is left at that path. The daemon then reaps the
+/// volumes of its Sessions that carry it (see `reap_leaked_runtime_volumes`).
+/// A copy is another directory: its original keeps its own authority, and
+/// what the original was moved from, so a copy keeps none.
+fn record_moved_from(
+    data_root: &SecureDir,
+    relocated: Option<&axocoatl_session::execution_ownership::Relocated>,
+    runtime_authority: &str,
+) -> Result<(), DaemonError> {
+    match relocated {
+        Some(relocated) if relocated.recorded.directory_changed => {
+            forget_previous_runtime_authorities(data_root)
+        }
+        Some(relocated)
+            if relocated.recorded.path_changed
+                && relocated.previous_root_authority != runtime_authority =>
+        {
+            record_previous_runtime_authority(data_root, &relocated.previous_root_authority)
+        }
+        _ => Ok(()),
+    }
+}
+
 fn root_authority_bytes(data_root: &SecureDir) -> Vec<u8> {
     let bytes = data_root.path().as_os_str().as_encoded_bytes();
     #[cfg(target_os = "macos")]
@@ -3101,10 +3127,24 @@ fn open_ipc_control_root() -> Result<SecureDir, DaemonError> {
 
 impl DataDirLease {
     fn acquire(data_root: &SecureDir) -> Result<Self, DaemonError> {
+        Self::acquire_relocating(data_root).map(|(lease, _)| lease)
+    }
+
+    /// [`Self::acquire`], with what admission recorded when the data root
+    /// was copied or moved since its ownership was recorded.
+    fn acquire_relocating(
+        data_root: &SecureDir,
+    ) -> Result<
+        (
+            Self,
+            Option<axocoatl_session::execution_ownership::Relocated>,
+        ),
+        DaemonError,
+    > {
         use axocoatl_session::execution_ownership::{DataRootFormatOwnership, OwnershipError};
 
-        let (ownership, relocation) =
-            DataRootFormatOwnership::acquire_for_root_reporting(data_root).map_err(|error| {
+        let (ownership, relocated) =
+            DataRootFormatOwnership::acquire_for_root_relocating(data_root).map_err(|error| {
                 let context = match &error {
                     OwnershipError::Busy("controller (external lease)") => {
                         "is already owned by another daemon/bootstrap"
@@ -3122,7 +3162,8 @@ impl DataDirLease {
                     data_root.path().display()
                 ))
             })?;
-        if let Some(relocation) = relocation {
+        if let Some(relocated) = &relocated {
+            let relocation = relocated.recorded;
             tracing::warn!(
                 path_changed = relocation.path_changed,
                 directory_changed = relocation.directory_changed,
@@ -3132,7 +3173,7 @@ impl DataDirLease {
                 relocation.describe()
             );
         }
-        Ok(Self { ownership })
+        Ok((Self { ownership }, relocated))
     }
 
     fn external_root(&self) -> &SecureDir {
@@ -4834,7 +4875,7 @@ impl AxocoatlDaemon {
         data_root: &SecureDir,
         created: Option<session_recovery::CreatedDataRoot>,
     ) -> Result<(DataDirLease, String, SecureDir, bool), DaemonError> {
-        let lease = DataDirLease::acquire(data_root)?;
+        let (lease, relocated) = DataDirLease::acquire_relocating(data_root)?;
         let lease = match created {
             Some(created) => created.upgrade(lease)?,
             None => lease,
@@ -4842,6 +4883,7 @@ impl AxocoatlDaemon {
         // Physical orphan cleanup remains first. Version-selected canonical
         // recovery below prevents upgraded roots from reaching legacy writers.
         let runtime_authority = local_runtime_authority(data_root)?;
+        record_moved_from(data_root, relocated.as_ref(), &runtime_authority)?;
         let ipc_root = open_ipc_control_root()?;
         Self::reconcile_interrupted_runtimes_before_bootstrap(
             config,

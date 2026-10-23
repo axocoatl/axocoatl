@@ -1603,7 +1603,7 @@ run_path_case upgrade-with-a-running-service
 path_expect_status 0
 path_expect_text "replacing Axocoatl $previous_minor at $case_system/axocoatl"
 path_expect_text "upgrading from Axocoatl $previous_minor: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to $previous_minor needs that backup)"
-path_expect_text "an Axocoatl daemon is running ($case_system/axocoatl serve); it runs the binary it started from until it restarts. Restart it: 'axocoatl service stop' and 'axocoatl service start' for the Always-On Service, or stop 'axocoatl dev' (Ctrl-C) and start it again"
+path_expect_text "an Axocoatl daemon is running ($case_system/axocoatl serve); it runs the binary it started from until it restarts. Restart it: 'axocoatl service restart' for the Always-On Service, or stop 'axocoatl dev' (Ctrl-C) and start it again"
 path_refuse_text 'another copy'
 [ "$("$case_system/axocoatl" --version)" = "axocoatl $current_version" ] \
   || fail "$name did not replace the older copy"
@@ -1621,7 +1621,7 @@ path_expect_status 0
 path_expect_text "replacing Axocoatl $current_version at $case_system/axocoatl"
 path_refuse_text 'upgrading from'
 path_expect_text "an Axocoatl daemon is running (axocoatl dev); it runs the binary it started from until it restarts"
-path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service stop' and 'axocoatl service start')"
+path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service restart')"
 
 # Other programs and other axocoatl commands are not daemons, and a file
 # that does not report a version is not named.

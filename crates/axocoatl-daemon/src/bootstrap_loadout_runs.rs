@@ -1615,8 +1615,7 @@ impl AxocoatlDaemon {
                 format!(
                     "the configuration file {} now sets run.models differently from when this \
                      daemon started, and the daemon uses run.models as it read them then: \
-                     restart it (`axocoatl dev`, or `axocoatl service stop` and `axocoatl \
-                     service start`) to use them",
+                     restart it (`axocoatl dev`, or `axocoatl service restart`) to use them",
                     self.config_path_text()
                 )
             })

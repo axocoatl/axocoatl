@@ -228,11 +228,20 @@ async fn wait_healthy(url: &str, wait: Duration) -> bool {
     }
 }
 
-/// When the Axocoatl daemon answering at `url` started (Unix milliseconds):
-/// `None` when no Axocoatl `/health` answers there (another program's does
-/// not name a version), `Some(None)` for a daemon before 1.5.0, which does
-/// not say.
-async fn started_at(url: &str) -> Option<Option<u64>> {
+/// What the Axocoatl daemon answering at `url` says of itself on `/health`.
+struct DaemonHealth {
+    /// Its version; `None` for a daemon before 1.5.0, whose `/health` is
+    /// only `{"status": "healthy", "agents": N}`.
+    version: Option<String>,
+    /// When it started (Unix milliseconds); `None` for a daemon before
+    /// 1.5.0, which does not say.
+    started_at_ms: Option<u64>,
+}
+
+/// The `/health` of the Axocoatl daemon answering at `url`: `None` when no
+/// Axocoatl answers there. Another program's names no version and is not
+/// the `{"status": "healthy", "agents": N}` every release answers with.
+async fn daemon_health(url: &str) -> Option<DaemonHealth> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -242,13 +251,35 @@ async fn started_at(url: &str) -> Option<Option<u64>> {
         return None;
     }
     let health: serde_json::Value = response.json().await.ok()?;
-    health.get("version")?.as_str()?;
-    Some(
-        health
+    daemon_health_from(&health)
+}
+
+/// [`daemon_health`] of the `/health` body `health`.
+fn daemon_health_from(health: &serde_json::Value) -> Option<DaemonHealth> {
+    let version = health
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let axocoatl = version.is_some()
+        || (health.get("status").and_then(serde_json::Value::as_str) == Some("healthy")
+            && health.get("agents").is_some_and(serde_json::Value::is_u64));
+    axocoatl.then(|| DaemonHealth {
+        version,
+        started_at_ms: health
             .get("started_at_ms")
             .and_then(serde_json::Value::as_u64),
-    )
+    })
 }
+
+/// When the Axocoatl daemon answering at `url` started (Unix milliseconds):
+/// `None` when no Axocoatl `/health` answers there, `Some(None)` for a
+/// daemon before 1.5.0, which does not say.
+async fn started_at(url: &str) -> Option<Option<u64>> {
+    daemon_health(url).await.map(|health| health.started_at_ms)
+}
+
+/// This `axocoatl`'s version, which a daemon it starts reports.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Whether `config` last changed after `started` (Unix milliseconds).
 fn changed_since(config: &Path, started: u64) -> bool {
@@ -259,30 +290,57 @@ fn changed_since(config: &Path, started: u64) -> bool {
         .is_some_and(|modified| modified.as_millis() > u128::from(started))
 }
 
-/// Whether the Axocoatl daemon answering at `url` may run an older
-/// configuration than `config`: it started before the file last changed, or
-/// it does not say when it started (before 1.5.0, older than this CLI).
-async fn started_before(url: &str, config: &Path) -> bool {
-    match started_at(url).await {
-        None => false,
-        Some(None) => true,
-        Some(Some(started)) => changed_since(config, started),
+/// Why the first run must not use the Axocoatl daemon answering at `url`,
+/// as the end of a sentence about it: it is another version than this
+/// `axocoatl` (a release before 1.5.0 among them, which does not say when it
+/// started), or it started before `config` last changed, so it may run an
+/// older configuration. `None` when it may be used, or no Axocoatl answers.
+async fn stale_reason(url: &str, config: &Path) -> Option<String> {
+    let health = daemon_health(url).await?;
+    match health.version.as_deref() {
+        Some(VERSION) => {}
+        Some(version) => {
+            return Some(format!(
+                "runs Axocoatl {version}, not this axocoatl ({VERSION}), so the first run would \
+                 not use this version"
+            ))
+        }
+        None => {
+            return Some(format!(
+                "runs an Axocoatl release before 1.5.0, not this axocoatl ({VERSION}), so the \
+                 first run would not use this version"
+            ))
+        }
+    }
+    match health.started_at_ms {
+        Some(started) if !changed_since(config, started) => None,
+        _ => Some(format!(
+            "started before {} changed, so the first run would use the old configuration",
+            config.display()
+        )),
     }
 }
 
-/// Whether a daemon that answers at `url` after a restart runs `config` as
-/// it is now: it started after the file last changed, or it does not say (an
-/// Axocoatl before 1.5.0, which read the file when it restarted).
+/// Whether a daemon that answers at `url` after a restart is this
+/// `axocoatl` running `config` as it is now: it says it started after the
+/// file last changed, and it is this version. One that does not say when it
+/// started is a release before 1.5.0, never this one: a service that still
+/// runs an older `axocoatl` at another path.
 async fn restarted_current(url: &str, config: &Path) -> bool {
-    match started_at(url).await {
-        None => false,
-        Some(None) => true,
-        Some(Some(started)) => !changed_since(config, started),
-    }
+    stale_reason(url, config).await.is_none() && daemon_health(url).await.is_some()
+}
+
+/// The `axocoatl` the installed Always-On Service runs, when it is not this
+/// one (an older release at another path, say): restarting the service
+/// would run that one again.
+fn other_service_program(o: &Onboarding) -> Option<std::path::PathBuf> {
+    let program = crate::doctor::installed_service_program(&o.host.home, o.host.macos)?;
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    (canonical(&program) != canonical(&o.host.exe)).then_some(program)
 }
 
 /// Whether `axocoatl service status` says the Always-On Service runs.
-async fn service_running(o: &Onboarding) -> bool {
+pub(crate) async fn service_running(o: &Onboarding) -> bool {
     if crate::doctor::installed_service_program(&o.host.home, o.host.macos).is_none() {
         return false;
     }
@@ -325,77 +383,107 @@ fn process_runs(pid: i32) -> bool {
         })
 }
 
-/// Wait until process `pid` (when known) has exited, at most `wait`.
-async fn wait_exit(pid: Option<i32>, wait: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + wait;
-    while pid.is_some_and(process_runs) {
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+/// Whether the daemon asked to stop has stopped, once its process has
+/// exited when it is visible from here (`pid_known`): nothing answers at
+/// its IPC socket or port, or another daemon took the port (the service,
+/// restarted by its manager), as `answering` (`started_at` of what answers
+/// at the port) says: any, once the known process has exited; else one that
+/// says it started since `stale_start`, when the stopped one started.
+pub(crate) fn other_daemon_stopped(
+    pid_known: bool,
+    ipc_answers: bool,
+    port_free: bool,
+    answering: Option<Option<u64>>,
+    stale_start: Option<u64>,
+) -> bool {
+    match answering {
+        None => !ipc_answers && port_free,
+        Some(started) => pid_known || (started.is_some() && started != stale_start),
     }
-    true
 }
 
 /// How long a stopped daemon may take to end its Sessions and exit (each
 /// Session's containers are removed through Podman).
 const DAEMON_STOP_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 120 });
 
-/// Replace the daemon on `port` that runs an older configuration, once the
-/// person agrees: restart the Always-On Service when it runs, or stop the
-/// other daemon (`axocoatl dev` in another terminal) and wait for its
-/// process to exit, so that the service Step 6 just started takes the port
-/// (`service_started`) or the first run starts its own daemon. `start_dev`:
-/// onboarding starts `axocoatl dev` itself when it finishes. `false` with the
-/// step left when that did not happen.
+/// Replace the daemon on `port` that the first run must not use (`reason`
+/// says why), once the person agrees: restart the Always-On Service when it
+/// runs (installed again from this `axocoatl` first when it runs another),
+/// or stop the other daemon (`axocoatl dev` in another terminal) and wait
+/// for its process to exit, so that the service Step 6 just started takes
+/// the port (`service_started`) or the first run starts its own daemon.
+/// `start_dev`: onboarding starts `axocoatl dev` itself when it finishes.
+/// `false` with the step left when that did not happen.
 async fn replace_stale_daemon(
     o: &mut Onboarding,
     url: &str,
     port: u16,
     config: &Path,
+    reason: &str,
     service_started: bool,
     start_dev: bool,
 ) -> bool {
     if service_running(o).await {
-        if !o.ui.consent(
-            &format!(
-                "The Always-On Service started before {} changed, so the first run would use the \
-                 old configuration. Restart it now (this ends any Session turn or run in \
-                 progress)?",
-                config.display()
+        let exe = o.host.exe.display().to_string();
+        let other = other_service_program(o);
+        let question = match &other {
+            Some(program) => format!(
+                "The Always-On Service {reason}: it runs {}, not this axocoatl ({exe}). Install \
+                 it again from this axocoatl and restart it now (this ends any Session turn or \
+                 run in progress)?",
+                program.display()
             ),
-            true,
-            false,
-        ) {
-            o.step_left(
-                "The Always-On Service runs the configuration from before this onboarding: \
-                 restart it (`axocoatl service stop && axocoatl service start`), then run \
-                 `axocoatl onboard --update --smoke-test`",
-            );
+            None => format!(
+                "The Always-On Service {reason}. Restart it now (this ends any Session turn or \
+                 run in progress)?"
+            ),
+        };
+        if !o.ui.consent(&question, true, false) {
+            o.step_left(match &other {
+                Some(_) => format!(
+                    "The Always-On Service runs another axocoatl than this one: install it again \
+                     from this one (`{exe} service install --config {}`), restart it (`axocoatl \
+                     service restart`), then run `axocoatl onboard --update --smoke-test`",
+                    config.display()
+                ),
+                None => format!(
+                    "The Always-On Service {reason}: restart it (`axocoatl service restart`), \
+                     then run `axocoatl onboard --update --smoke-test`"
+                ),
+            });
             return false;
         }
-        let pid = daemon_pid(&o.socket_path).await;
-        let exe = o.host.exe.display().to_string();
-        let stopped = o.host.run(&Cmd::new(&exe, &["service", "stop"])).await;
-        // It ends its Sessions before it exits; start it again only then.
-        wait_exit(pid, DAEMON_STOP_WAIT).await;
-        if let Err(error) = stopped {
-            if service_running(o).await {
+        let config_text = config.display().to_string();
+        let mut commands = Vec::new();
+        if other.is_some() {
+            commands.push(Cmd::new(
+                &exe,
+                &["service", "install", "--config", &config_text],
+            ));
+        }
+        // `restart` returns once the old daemon has exited (it ends its
+        // Sessions first), whether or not its process is visible from here,
+        // and only then starts the service again.
+        commands.push(Cmd::new(&exe, &["service", "restart"]));
+        for command in &commands {
+            if let Err(error) = o.host.run(command).await {
                 o.step_left(format!("{error}; see `axocoatl service status`"));
                 return false;
             }
         }
-        if let Err(error) = o.host.run(&Cmd::new(&exe, &["service", "start"])).await {
-            o.step_left(format!("{error}; see `axocoatl service status`"));
-            return false;
-        }
         if wait_healthy(url, DAEMON_START_WAIT).await && restarted_current(url, config).await {
             return true;
         }
-        o.step_left(format!(
-            "The Always-On Service did not answer at {url} with the new configuration: see \
-             `axocoatl service status`, then run `axocoatl onboard --update --smoke-test` again"
-        ));
+        o.step_left(match stale_reason(url, config).await {
+            Some(reason) => format!(
+                "The Always-On Service answers at {url} but {reason}: see `axocoatl service \
+                 status`, then run `axocoatl onboard --update --smoke-test` again"
+            ),
+            None => format!(
+                "The Always-On Service did not answer at {url} with the new configuration: see \
+                 `axocoatl service status`, then run `axocoatl onboard --update --smoke-test` again"
+            ),
+        });
         return false;
     }
     let after = if service_started {
@@ -407,22 +495,22 @@ async fn replace_stale_daemon(
     };
     if !o.ui.consent(
         &format!(
-            "The daemon on port {port} started before {} changed, so the first run would use the \
-             old configuration. Stop it now (this ends any Session turn or run in progress; \
-             {after})?",
-            config.display()
+            "The daemon on port {port} {reason}. Stop it now (this ends any Session turn or run \
+             in progress; {after})?"
         ),
         true,
         false,
     ) {
         o.step_left(format!(
-            "The daemon on port {port} runs the configuration from before this onboarding: \
-             restart it (stop `axocoatl dev` and start it again), then run `axocoatl onboard \
-             --update --smoke-test`"
+            "The daemon on port {port} {reason}: restart it (stop `axocoatl dev` and start it \
+             again), then run `axocoatl onboard --update --smoke-test`"
         ));
         return false;
     }
     let pid = daemon_pid(&o.socket_path).await;
+    // Without its process to watch (a daemon in a PID namespace this one
+    // cannot see), a daemon that answers with another start is a new one.
+    let stale_start = started_at(url).await.flatten();
     let asked = match axocoatl_daemon::ipc::IpcClient::connect(&o.socket_path).await {
         Ok(mut client) => client
             .request(&axocoatl_daemon::ipc::IpcRequest::Shutdown)
@@ -441,23 +529,21 @@ async fn replace_stale_daemon(
                 let ipc = axocoatl_daemon::ipc::IpcClient::connect(&o.socket_path)
                     .await
                     .is_ok();
-                let stopped = match started_at(url).await {
-                    None => !ipc && super::host::port_free(port),
-                    // Another daemon took the port (the service, restarted
-                    // by its manager); a known process has exited, so one
-                    // that does not say when it started is new too.
-                    Some(Some(started)) => !changed_since(config, started),
-                    Some(None) => pid.is_some(),
-                };
-                if stopped {
+                if other_daemon_stopped(
+                    pid.is_some(),
+                    ipc,
+                    super::host::port_free(port),
+                    started_at(url).await,
+                    stale_start,
+                ) {
                     break;
                 }
             }
             if tokio::time::Instant::now() >= deadline {
                 o.step_left(format!(
-                    "Could not stop the daemon on port {port}, which runs the configuration from \
-                     before this onboarding: stop `axocoatl dev` (or `axocoatl service stop`), \
-                     then run `axocoatl onboard --update --smoke-test`"
+                    "Could not stop the daemon on port {port}, which {reason}: stop `axocoatl \
+                     dev` (or `axocoatl service stop`), then run `axocoatl onboard --update \
+                     --smoke-test`"
                 ));
                 return false;
             }
@@ -477,9 +563,8 @@ async fn replace_stale_daemon(
         return true;
     }
     o.step_left(format!(
-        "Could not stop the daemon on port {port}, which runs the configuration from before this \
-         onboarding: stop `axocoatl dev` (or `axocoatl service stop`), then run `axocoatl onboard \
-         --update --smoke-test`"
+        "Could not stop the daemon on port {port}, which {reason}: stop `axocoatl dev` (or \
+         `axocoatl service stop`), then run `axocoatl onboard --update --smoke-test`"
     ));
     false
 }
@@ -574,8 +659,8 @@ pub(crate) async fn run(
             } else {
                 format!(
                     "An Axocoatl daemon is running but does not answer at {url}, the port this \
-                     configuration names: restart it so it reads {} (`axocoatl service stop && \
-                     axocoatl service start`, or stop `axocoatl dev` and start it again)",
+                     configuration names: restart it so it reads {} (`axocoatl service restart`, \
+                     or stop `axocoatl dev` and start it again)",
                     config.display()
                 )
             });
@@ -583,8 +668,13 @@ pub(crate) async fn run(
         }
         answers = true;
     }
-    if answers && started_before(&url, &config).await {
-        if !replace_stale_daemon(o, &url, port, &config, service_started, start_dev).await {
+    let stale = match answers {
+        true => stale_reason(&url, &config).await,
+        false => None,
+    };
+    if let Some(reason) = stale {
+        if !replace_stale_daemon(o, &url, port, &config, &reason, service_started, start_dev).await
+        {
             return false;
         }
         answers = healthy(&url).await;
@@ -762,6 +852,98 @@ pub(crate) fn checked_in_copy() -> std::path::PathBuf {
 mod tests {
     use super::super::config::{ModelRef, Provider};
     use super::*;
+
+    /// Every release before 1.5.0 answers `/health` with only `{"status":
+    /// "healthy", "agents": N}` (1.1.2 to 1.4.0, measured): that is an
+    /// older Axocoatl, never this one. It was taken for another program and
+    /// used as it was, so the first run went to the old daemon. Another
+    /// program's `/health` is no Axocoatl.
+    #[test]
+    fn a_daemon_before_1_5_0_is_recognised_by_its_health() {
+        let old = daemon_health_from(&serde_json::json!({"status": "healthy", "agents": 1}))
+            .expect("a release before 1.5.0");
+        assert_eq!((old.version, old.started_at_ms), (None, None));
+        let current = daemon_health_from(&serde_json::json!({
+            "status": "healthy", "agents": 0, "version": VERSION, "started_at_ms": 7
+        }))
+        .unwrap();
+        assert_eq!(
+            (current.version.as_deref(), current.started_at_ms),
+            (Some(VERSION), Some(7))
+        );
+        for other in [
+            serde_json::json!({"status": "ok"}),
+            serde_json::json!({"status": "healthy"}),
+            serde_json::json!({"status": "healthy", "agents": "1"}),
+            serde_json::json!([]),
+        ] {
+            assert!(daemon_health_from(&other).is_none(), "{other}");
+        }
+    }
+
+    /// Why the first run must not use a daemon: another version (newer or
+    /// older), a release before 1.5.0, or one that started before the
+    /// configuration changed; this version started since is used.
+    #[tokio::test]
+    async fn the_first_run_uses_only_this_version_started_after_the_configuration() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.yaml");
+        std::fs::write(&config, "agents: []\n").unwrap();
+        let later = u64::try_from(
+            (std::time::SystemTime::now() + Duration::from_secs(3600))
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        for (health, reason) in [
+            (
+                serde_json::json!({"status": "healthy", "agents": 1}),
+                Some("runs an Axocoatl release before 1.5.0, not this axocoatl"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": "9.9.9",
+                    "started_at_ms": later}),
+                Some("runs Axocoatl 9.9.9, not this axocoatl"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": VERSION,
+                    "started_at_ms": 1}),
+                Some("started before"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": VERSION,
+                    "started_at_ms": later}),
+                None,
+            ),
+            (serde_json::json!({"status": "ok"}), None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&health))
+                .mount(&server)
+                .await;
+            let url = format!("{}/health", server.uri());
+            let stale = stale_reason(&url, &config).await;
+            match reason {
+                Some(reason) => assert!(
+                    stale
+                        .as_deref()
+                        .is_some_and(|stale| stale.starts_with(reason)),
+                    "{health}: {stale:?}"
+                ),
+                None => assert_eq!(stale, None, "{health}"),
+            }
+            assert_eq!(
+                restarted_current(&url, &config).await,
+                reason.is_none() && health.get("version").is_some(),
+                "{health}"
+            );
+        }
+    }
 
     /// The embedded sample is the checked-in fixture, file for file.
     #[test]

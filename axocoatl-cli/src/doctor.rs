@@ -1882,6 +1882,14 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                         Ok(line) => Item::ok("Data dir ownership", line),
                         Err((line, hint)) => Item::fail("Data dir ownership", line, hint),
                     });
+                if let Some(upgrade) =
+                    axocoatl_daemon::AxocoatlDaemon::interrupted_upgrade_doctor_line(data_dir)
+                {
+                    sections.daemon.push(match upgrade {
+                        Ok(line) => Item::ok("Session storage upgrade", line),
+                        Err((line, hint)) => Item::fail("Session storage upgrade", line, hint),
+                    });
+                }
             }
             Err(error) => sections.daemon.push(Item::fail(
                 "Data dir",
@@ -2004,7 +2012,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     ),
                     Some(
                         "Install it again from this axocoatl: `axocoatl service install`, then \
-                     `axocoatl service stop && axocoatl service start`"
+                     `axocoatl service restart`"
                             .to_string(),
                     ),
                 )
@@ -2288,8 +2296,8 @@ fn daemon_version_item(
     use axocoatl_daemon::ipc::DaemonVersion;
     let restart = || {
         Some(
-            "Restart it so it runs this version: `axocoatl service stop && axocoatl service \
-             start`, or stop `axocoatl dev` and start it again"
+            "Restart it so it runs this version: `axocoatl service restart`, or stop \
+             `axocoatl dev` and start it again"
                 .to_string(),
         )
     };
@@ -2791,8 +2799,8 @@ mod tests {
     #[test]
     fn the_daemon_line_names_a_daemon_older_than_this_cli() {
         use axocoatl_daemon::ipc::DaemonVersion;
-        let restart = "Restart it so it runs this version: `axocoatl service stop && axocoatl \
-                       service start`, or stop `axocoatl dev` and start it again";
+        let restart = "Restart it so it runs this version: `axocoatl service restart`, or stop \
+                       `axocoatl dev` and start it again";
         let older = daemon_version_item("1.5.0", Some(&DaemonVersion::BeforeVersionRequest), None);
         assert_eq!(older.status, Status::Warn);
         assert_eq!(

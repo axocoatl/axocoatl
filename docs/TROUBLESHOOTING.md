@@ -63,7 +63,7 @@ new version answers.
 After an upgrade, a daemon started before it (the Always-On Service or an
 `axocoatl dev` terminal) runs the old binary until it restarts. `axocoatl doctor`
 names its version, or says it is older than Axocoatl 1.5.0 when it does not answer
-the version request. Restart it: `axocoatl service stop && axocoatl service start`,
+the version request. Restart it: `axocoatl service restart`,
 or stop `axocoatl dev` and start it again.
 
 **Axocoatl 1.4.0 does not start after 1.5 used its data**
@@ -159,7 +159,7 @@ may start a VM that already exists but is stopped.
 A service starts with the service manager's minimal `PATH`. `axocoatl service
 install` records the directory of the `podman` your shell finds, plus
 `CONTAINER_CONNECTION` and `CONTAINER_HOST` when set. Reinstall from a shell
-where `podman` works, then run `axocoatl service stop && axocoatl service start`.
+where `podman` works, then run `axocoatl service restart`.
 On macOS the service log is `~/Library/Logs/Axocoatl/daemon.log`.
 
 **A `network: none` Session cannot become Ready**

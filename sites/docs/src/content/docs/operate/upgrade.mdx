@@ -135,9 +135,13 @@ config, environment, and Workspace copies as one set, as
 
 A restored data root is a copy, and Axocoatl 1.1.0 through 1.4.0 do not start on a
 copied data root: they exit with `failed data-directory format ownership admission`.
-1.5.0 and later record a copied root's new location when they start. To return to
-1.4.0, restore the set, start Axocoatl 1.5.0 on the restored data root once and stop
-it, then start 1.4.0. Returning to a release before 1.4.0 this way has not been tested.
+To return to one of them, restore the set, run `axocoatl session record-location` with
+1.5.0 (or later) on the restored data root while Axocoatl is stopped, then start the
+older release. That command records the copy's new location and changes nothing else.
+This was tested with 1.1.2, 1.2.0, 1.3.2 and 1.4.0, each on a restored backup holding
+a Session it had made. Starting 1.5.0 on the restored root also records the location,
+but it converts each Session's journals, which 1.2 and earlier then refuse (`unknown
+field segments`).
 </Aside>
 
 Future-version Session ledger or attachment schemas are rejected rather than
@@ -229,7 +233,8 @@ that field. Once a 1.4 daemon has recorded a capture in a data root, a 1.3 daemo
 not start on that data root, and says
 `could not recover canonical history for Session …: unknown field changed_manifest`.
 To go back to 1.3, restore the cold backup you made before upgrading, as described
-above. A 1.3 daemon does not start on a restored copy either (see the caution above).
+above, and run `axocoatl session record-location` with 1.5.0 on it before you start 1.3
+(see the caution above).
 
 ## Sessions written by 1.2 and earlier
 
@@ -246,8 +251,9 @@ cannot be made, for example because the disk is full, the Session is not convert
 does not open; free the space and open it again.
 
 The copies stay until you remove them. They cover Session journals only: to return a
-whole data root to 1.2, restore the cold backup you made before upgrading. A 1.2 daemon
-does not start on a restored copy either (see the caution above).
+whole data root to 1.2, restore the cold backup you made before upgrading, and run
+`axocoatl session record-location` with 1.5.0 on it before you start 1.2 (see the caution
+above).
 
 To put a Session back as 1.2 left it:
 

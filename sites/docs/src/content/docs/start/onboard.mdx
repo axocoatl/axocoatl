@@ -467,7 +467,10 @@ How should Axocoatl run?
   I'll start it later
 ```
 
-The service is installed only after this question (or `--start service`). A service
+The service is installed only after this question (or `--start service`): onboarding
+runs `axocoatl service install` and then `axocoatl service restart`, which starts the
+service, or, when one already runs (it asks first, since that ends its Session turns
+and runs in progress), restarts it with the new definition and configuration. A service
 cannot read keys from your shell's environment, so onboarding refuses to install one
 while the configuration names an environment variable for a key. On Linux the service
 is a `systemctl --user` unit: in a login without a systemd user session (reached with
@@ -475,6 +478,9 @@ is a `systemctl --user` unit: in a login without a systemd user session (reached
 no manager) onboarding does not offer it and says to log in as that user directly,
 and to run `sudo loginctl enable-linger USER` to keep it running after you log out.
 The terminal choice starts `axocoatl dev` as its own process; Ctrl+C stops it.
+
+A Podman machine that onboarding starts (Step 2) runs in a session of its own: a
+Ctrl+C during onboarding, or closing its terminal, ends onboarding but not the machine.
 
 ### Step 7: a first run
 
@@ -491,10 +497,14 @@ temporary directory only you can open, uses the daemon that runs (it waits for t
 Always-On Service Step 6 just started, or a daemon that already runs, and never starts
 a second one beside it), or starts one for the run and stops it afterwards (its first
 start downloads an 87 MB embedding model once). A daemon that started before the
-configuration last changed, or that does not say when it started (before 1.5.0), would
-run the old configuration: onboarding asks to restart the Always-On Service, or to stop
-that daemon (either ends its Session turns and runs in progress; `--yes` answers yes),
-and waits for it to exit. It then runs
+configuration last changed would run the old configuration, and one that is another
+version than this `axocoatl` (any before 1.5.0, which does not say when it started) would
+not run this one: onboarding asks to restart the Always-On Service, or to stop that
+daemon (either ends its Session turns and runs in progress; `--yes` answers yes), and
+waits for it to exit (at its port, when its process cannot be seen). When the service
+runs another `axocoatl` than this one (an older release at another path), onboarding
+installs it again from this one before it restarts it, and uses it only once it
+answers as this version. It then runs
 `axocoatl run fix --task "Fix the bug: paging skips the last item"` (or fix-claude-code or
 fix-codex) with your models and a receipt beside the copy, and checks the receipt with
 `axocoatl receipt verify <receipt> --key "$(axocoatl receipt key)" --repo <copy>`. It
@@ -634,7 +644,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes. While a daemon runs, a model Ollama already holds is not loaded or probed again (a run may be using it): its context is read from Ollama | FAIL |
 | Models | OpenRouter and other hosted-provider keys present (not checked with the provider): a key in the file, or the stored secret `api_key_secret` names. Without `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and changes nothing else, and a secret that is not stored names the same command; for a configuration other than the default one, both add `--config` with its path, so the key is stored in that configuration's data directory | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
 | Writers | Claude Code and Codex: sandbox image built and credential stored (for Codex, the credential the setup names); the `claude`, `codex` and `gh` CLIs (`gh` signed in, for `--keep pr`); the names of stored credentials | FAIL for the writer the configuration names (its `# Writer:` comment); WARN for one partly set up |
-| Daemon | Configuration valid; data directory writable and owned; `git`, which the daemon runs on your repositories (on macOS, the Command Line Tools); on Linux the systemd user session the Always-On Service needs, and linger when the service is installed; a running daemon and its version against the CLI's (one older than 1.5.0, which does not report it, is named as older); the Always-On Service's program; the configured port when no daemon runs; webhooks; a `hooks:` section, which this version checks but never runs; a proxy variable, which a Session's network does not use | FAIL for the configuration, the data directory and a missing `git`; otherwise WARN |
+| Daemon | Configuration valid; data directory writable and owned, and an interrupted Session storage upgrade in it; `git`, which the daemon runs on your repositories (on macOS, the Command Line Tools); on Linux the systemd user session the Always-On Service needs, and linger when the service is installed; a running daemon and its version against the CLI's (one older than 1.5.0, which does not report it, is named as older); the Always-On Service's program; the configured port when no daemon runs; webhooks; a `hooks:` section, which this version checks but never runs; a proxy variable, which a Session's network does not use | FAIL for the configuration, the data directory (and a copy of a data directory whose upgrade stopped half-way) and a missing `git`; otherwise WARN |
 
 Each FAIL names its fix: the exact command, or `axocoatl onboard`, which makes the
 change after asking. `Ready for` lists `axocoatl run fix` for a local or OpenRouter

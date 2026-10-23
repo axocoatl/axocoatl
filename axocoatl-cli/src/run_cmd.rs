@@ -1149,8 +1149,7 @@ async fn ask_preflight(
         Preflight::Missing(status) => Err(Failure::unreachable(format!(
             "the daemon at {} has no dry run (POST {PREFLIGHT_PATH} answered {status}), so it is \
              older than this axocoatl {}; nothing was started. Restart it with this version \
-             (`axocoatl dev`, or `axocoatl service stop` and `axocoatl service start`), then run \
-             again",
+             (`axocoatl dev`, or `axocoatl service restart`), then run again",
             daemon.base(),
             env!("CARGO_PKG_VERSION")
         ))),

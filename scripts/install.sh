@@ -885,9 +885,9 @@ printf '%s\n' "$daemons" | while IFS= read -r daemon; do
   case "$daemon" in
     '') ;;
     "${dest}/${BIN} "*|"${dest_real}/${BIN} "*|"${BIN} "*)
-      info "an Axocoatl daemon is running (${daemon}); it runs the binary it started from until it restarts. Restart it: '${BIN} service stop' and '${BIN} service start' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again" ;;
+      info "an Axocoatl daemon is running (${daemon}); it runs the binary it started from until it restarts. Restart it: '${BIN} service restart' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again" ;;
     *)
-      info "an Axocoatl daemon runs another copy (${daemon}); this install does not change it. To run ${tag} instead, stop it and start ${dest}/${BIN} (for the Always-On Service: '${dest}/${BIN} service install', then '${BIN} service stop' and '${BIN} service start')" ;;
+      info "an Axocoatl daemon runs another copy (${daemon}); this install does not change it. To run ${tag} instead, stop it and start ${dest}/${BIN} (for the Always-On Service: '${dest}/${BIN} service install', then '${BIN} service restart')" ;;
   esac
 done
 

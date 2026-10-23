@@ -8,11 +8,17 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
-use crate::{ServiceEnvironment, ServiceError, ServiceManager, ServiceStatus};
+use crate::{ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus};
 
 /// launchd label for the daemon agent.
 const LABEL: &str = "ai.axocoatl.daemon";
+
+/// How long a stopped daemon may take to exit. launchd kills a job that has
+/// not exited 20 seconds after it was asked to (its default `ExitTimeOut`).
+const EXIT_WAIT: Duration = Duration::from_secs(60);
+const EXIT_POLL: Duration = Duration::from_millis(250);
 
 /// Manages the daemon as a launchd user agent.
 pub struct LaunchdManager {
@@ -22,6 +28,11 @@ pub struct LaunchdManager {
     log_path: PathBuf,
     /// Current user id — the `gui/<uid>` domain target.
     uid: String,
+    /// The `launchctl` program (a test's stand-in).
+    launchctl: PathBuf,
+    /// How long [`Self::wait_unloaded`] waits, and how often it looks.
+    exit_wait: Duration,
+    exit_poll: Duration,
 }
 
 impl LaunchdManager {
@@ -50,6 +61,9 @@ impl LaunchdManager {
             plist_path,
             log_path,
             uid,
+            launchctl: PathBuf::from("launchctl"),
+            exit_wait: EXIT_WAIT,
+            exit_poll: EXIT_POLL,
         })
     }
 
@@ -58,9 +72,14 @@ impl LaunchdManager {
         format!("gui/{}", self.uid)
     }
 
+    /// `gui/<uid>/<label>` — the agent itself.
+    fn service_target(&self) -> String {
+        format!("{}/{LABEL}", self.domain())
+    }
+
     /// Run `launchctl <args>`, returning trimmed stdout on success.
     fn launchctl(&self, args: &[&str]) -> Result<String, ServiceError> {
-        let out = Command::new("launchctl")
+        let out = Command::new(&self.launchctl)
             .args(args)
             .output()
             .map_err(|e| ServiceError::Control(format!("running launchctl: {e}")))?;
@@ -76,6 +95,51 @@ impl LaunchdManager {
             )))
         }
     }
+
+    /// What `launchctl print` says of the agent: `None` when it is not
+    /// loaded, else whether its process runs.
+    fn loaded(&self) -> Option<bool> {
+        let printed = self.launchctl(&["print", &self.service_target()]).ok()?;
+        Some(runs(&printed))
+    }
+
+    /// Unload the agent and wait until its process has exited. `bootout`
+    /// returns while the daemon still ends its Sessions; launchd lists the
+    /// agent until its process has exited, and refuses to load it again
+    /// until then ("Bootstrap failed: 5: Input/output error").
+    fn unload(&self) -> Result<(), ServiceError> {
+        let target = self.service_target();
+        if let Err(error) = self.launchctl(&["bootout", &target]) {
+            // Not loaded (any more): nothing to stop.
+            if self.loaded().is_some() {
+                return Err(error);
+            }
+        }
+        let deadline = Instant::now() + self.exit_wait;
+        while self.loaded().is_some() {
+            if Instant::now() >= deadline {
+                return Err(ServiceError::Control(format!(
+                    "the Always-On Service did not exit within {} seconds of `launchctl bootout \
+                     {target}`; see `launchctl print {target}`",
+                    self.exit_wait.as_secs()
+                )));
+            }
+            std::thread::sleep(self.exit_poll);
+        }
+        Ok(())
+    }
+
+    /// Load the agent from the plist on disk; `RunAtLoad` starts it.
+    fn load(&self) -> Result<(), ServiceError> {
+        let plist = self.plist_path.to_string_lossy().to_string();
+        self.launchctl(&["bootstrap", &self.domain(), &plist])
+            .map(drop)
+    }
+}
+
+/// Whether `launchctl print` output says the agent's process runs.
+fn runs(printed: &str) -> bool {
+    printed.lines().any(|line| line.trim() == "state = running")
 }
 
 fn xml_text(text: &str) -> String {
@@ -88,6 +152,12 @@ fn xml_path(path: &Path) -> String {
     xml_text(&path.to_string_lossy())
 }
 
+/// The agent's plist. It leaves `AbandonProcessGroup` unset: when the
+/// daemon stops, launchd kills what is left of its process group, so no
+/// Podman client the daemon started outlives it. A Podman machine the
+/// daemon starts is not in that group (`podman machine start` runs in a
+/// session of its own), so stopping or restarting the service leaves the VM
+/// running.
 fn render_plist(exe: &Path, config: &Path, environment: &ServiceEnvironment, log: &Path) -> String {
     let working_dir = config.parent().unwrap_or_else(|| Path::new("."));
     let variables: String = environment
@@ -191,36 +261,55 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn uninstall(&self) -> Result<(), ServiceError> {
-        // Best-effort bootout — the agent may not be loaded.
-        let _ = self.launchctl(&["bootout", &format!("{}/{LABEL}", self.domain())]);
+        // Stopped as `stop` stops it, once its process has exited, so an
+        // `install` and `start` right after load it again.
+        if self.loaded().is_some() {
+            self.unload()?;
+        }
         if self.plist_path.exists() {
             std::fs::remove_file(&self.plist_path)?;
         }
         Ok(())
     }
 
-    fn start(&self) -> Result<(), ServiceError> {
-        // bootstrap loads the agent; RunAtLoad starts it immediately.
-        let plist = self.plist_path.to_string_lossy().to_string();
-        self.launchctl(&["bootstrap", &self.domain(), &plist])?;
-        Ok(())
+    fn start(&self) -> Result<ServiceStart, ServiceError> {
+        match self.loaded() {
+            Some(true) => Ok(ServiceStart::AlreadyRunning),
+            // Loaded but not running (its start keeps failing, or launchd
+            // waits to start it again): load the plist on disk again.
+            Some(false) => {
+                self.unload()?;
+                self.load()?;
+                Ok(ServiceStart::Started)
+            }
+            None => {
+                self.load()?;
+                Ok(ServiceStart::Started)
+            }
+        }
+    }
+
+    fn restart(&self) -> Result<ServiceStart, ServiceError> {
+        let loaded = self.loaded();
+        if loaded.is_some() {
+            self.unload()?;
+        }
+        self.load()?;
+        Ok(match loaded {
+            Some(true) => ServiceStart::Restarted,
+            _ => ServiceStart::Started,
+        })
     }
 
     fn stop(&self) -> Result<(), ServiceError> {
-        self.launchctl(&["bootout", &format!("{}/{LABEL}", self.domain())])?;
-        Ok(())
+        self.unload()
     }
 
     fn status(&self) -> Result<ServiceStatus, ServiceError> {
         let installed = self.plist_path.exists();
         // `launchctl print` exits 0 only when the agent is loaded.
-        let printed = self
-            .launchctl(&["print", &format!("{}/{LABEL}", self.domain())])
-            .ok();
-        let running = printed
-            .as_deref()
-            .map(|p| p.contains("state = running"))
-            .unwrap_or(false);
+        let printed = self.launchctl(&["print", &self.service_target()]).ok();
+        let running = printed.as_deref().is_some_and(runs);
         let detail = if !installed {
             "not installed".to_string()
         } else if printed.is_some() {
@@ -264,6 +353,233 @@ mod tests {
     }
 
     const LOG: &str = "/Users/test/Library/Logs/Axocoatl/daemon.log";
+
+    /// A manager whose plist and log are under `root`, which runs
+    /// `launchctl`.
+    fn manager(root: &Path, launchctl: &Path) -> LaunchdManager {
+        LaunchdManager {
+            plist_path: root.join("LaunchAgents").join(format!("{LABEL}.plist")),
+            log_path: root.join("Logs").join("Axocoatl").join("daemon.log"),
+            uid: "501".into(),
+            launchctl: launchctl.to_path_buf(),
+            exit_wait: Duration::from_secs(5),
+            exit_poll: Duration::from_millis(10),
+        }
+    }
+
+    /// A `launchctl` that keeps the agent's state in files beside it, as
+    /// launchd behaves: `bootstrap` fails while the agent is loaded
+    /// ("Bootstrap failed: 5: Input/output error"); `bootout` returns at
+    /// once while the daemon still exits, and `print` lists the agent for
+    /// two more calls (forever when `never-exits` exists); `print` of an
+    /// agent that is not loaded fails with 113. Each call is logged to
+    /// `calls`.
+    #[cfg(unix)]
+    struct FakeLaunchctl {
+        dir: tempfile::TempDir,
+    }
+
+    #[cfg(unix)]
+    impl FakeLaunchctl {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            crate::test_support::write_program(
+                &dir.path().join("launchctl"),
+                r#"#!/bin/sh
+D="$(dirname "$0")"
+echo "$*" >> "$D/calls"
+case "$1" in
+print)
+  [ -f "$D/loaded" ] || { echo 'Could not find service "ai.axocoatl.daemon" in domain for user gui: 501' >&2; exit 113; }
+  if [ -f "$D/exiting" ]; then
+    left=$(cat "$D/exiting")
+    if [ "$left" -le 0 ]; then
+      rm -f "$D/loaded" "$D/exiting"
+      echo 'Could not find service "ai.axocoatl.daemon" in domain for user gui: 501' >&2
+      exit 113
+    fi
+    echo $((left - 1)) > "$D/exiting"
+  fi
+  printf 'gui/501/ai.axocoatl.daemon = {
+	state = %s
+	endpoints = {
+		state = active
+	}
+}
+' "$(cat "$D/loaded")"
+  ;;
+bootstrap)
+  if [ -f "$D/loaded" ]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
+  echo running > "$D/loaded"
+  ;;
+bootout)
+  [ -f "$D/loaded" ] || { echo 'Boot-out failed: 3: No such process' >&2; exit 3; }
+  [ -f "$D/never-exits" ] || echo 2 > "$D/exiting"
+  ;;
+esac
+"#,
+            );
+            Self { dir }
+        }
+
+        fn program(&self) -> PathBuf {
+            self.dir.path().join("launchctl")
+        }
+
+        /// Load the agent in `state` (`running`, `not running`), or unload it.
+        fn set(&self, state: Option<&str>) {
+            let loaded = self.dir.path().join("loaded");
+            match state {
+                Some(state) => std::fs::write(loaded, format!("{state}\n")).unwrap(),
+                None => {
+                    let _ = std::fs::remove_file(loaded);
+                }
+            }
+        }
+
+        fn state(&self) -> Option<String> {
+            std::fs::read_to_string(self.dir.path().join("loaded"))
+                .ok()
+                .map(|state| state.trim().to_string())
+        }
+
+        /// The calls, without `print`.
+        fn changes(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.path().join("calls"))
+                .unwrap_or_default()
+                .lines()
+                .filter(|call| !call.starts_with("print"))
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    /// `start` loads an agent that is not loaded, leaves a running one
+    /// running (a bare `bootstrap` failed on it with "Input/output error"),
+    /// and loads again one that is loaded but does not run, waiting until
+    /// launchd has let go of it.
+    #[cfg(unix)]
+    #[test]
+    fn start_loads_once_and_leaves_a_running_agent_running() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        let plist = manager.plist_path.display().to_string();
+
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+        assert_eq!(launchctl.changes(), [format!("bootstrap gui/501 {plist}")]);
+        assert_eq!(launchctl.state().as_deref(), Some("running"));
+
+        assert_eq!(manager.start().unwrap(), ServiceStart::AlreadyRunning);
+        assert_eq!(launchctl.changes().len(), 1, "{:?}", launchctl.changes());
+
+        launchctl.set(Some("not running"));
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+        assert_eq!(
+            launchctl.changes()[1..],
+            [
+                "bootout gui/501/ai.axocoatl.daemon".to_string(),
+                format!("bootstrap gui/501 {plist}")
+            ]
+        );
+        assert_eq!(launchctl.state().as_deref(), Some("running"));
+    }
+
+    /// `restart` stops a running daemon, waits until its process has exited
+    /// (launchd still lists it for a while after `bootout` returns), and
+    /// only then loads the plist on disk, so the bootstrap never fails;
+    /// with nothing running it starts it.
+    #[cfg(unix)]
+    #[test]
+    fn restart_waits_for_the_old_daemon_to_exit_before_loading_the_definition() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        let plist = manager.plist_path.display().to_string();
+
+        assert_eq!(manager.restart().unwrap(), ServiceStart::Started);
+        assert_eq!(launchctl.changes(), [format!("bootstrap gui/501 {plist}")]);
+
+        assert_eq!(manager.restart().unwrap(), ServiceStart::Restarted);
+        assert_eq!(
+            launchctl.changes()[1..],
+            [
+                "bootout gui/501/ai.axocoatl.daemon".to_string(),
+                format!("bootstrap gui/501 {plist}")
+            ]
+        );
+        assert_eq!(launchctl.state().as_deref(), Some("running"));
+        let calls = std::fs::read_to_string(launchctl.dir.path().join("calls")).unwrap();
+        let after_bootout = calls.split("bootout").nth(1).unwrap();
+        assert!(
+            after_bootout.matches("print").count() >= 3,
+            "it waited for the exit:\n{calls}"
+        );
+    }
+
+    /// `stop` returns once the daemon has exited, so `stop` then `start`
+    /// starts it again; it leaves a stopped agent alone, and says so when
+    /// the daemon does not exit.
+    #[cfg(unix)]
+    #[test]
+    fn stop_waits_for_the_daemon_to_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        launchctl.set(Some("running"));
+
+        manager.stop().unwrap();
+        assert_eq!(launchctl.state(), None);
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+
+        let before = launchctl.changes().len();
+        launchctl.set(None);
+        manager.stop().unwrap();
+        assert_eq!(launchctl.changes().len(), before + 1);
+
+        launchctl.set(Some("running"));
+        std::fs::write(launchctl.dir.path().join("never-exits"), "").unwrap();
+        let manager = LaunchdManager {
+            exit_wait: Duration::from_millis(200),
+            ..manager
+        };
+        let error = manager.stop().unwrap_err().to_string();
+        assert!(
+            error.contains("did not exit within")
+                && error.contains("launchctl print gui/501/ai.axocoatl.daemon"),
+            "{error}"
+        );
+        let error = manager.restart().unwrap_err().to_string();
+        assert!(error.contains("did not exit"), "{error}");
+        assert!(!launchctl.changes().last().unwrap().starts_with("bootstrap"));
+    }
+
+    /// `uninstall` returns once the daemon has exited and the plist is
+    /// gone, so `install` and `start` right after it load the agent again
+    /// (a `bootstrap` while launchd still lists the exiting agent failed);
+    /// an agent that is not loaded only loses its plist.
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_waits_for_the_daemon_to_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        std::fs::create_dir_all(manager.plist_path.parent().unwrap()).unwrap();
+        std::fs::write(&manager.plist_path, "plist").unwrap();
+        launchctl.set(Some("running"));
+
+        manager.uninstall().unwrap();
+        assert_eq!(launchctl.state(), None);
+        assert!(!manager.plist_path.exists());
+        std::fs::write(&manager.plist_path, "plist").unwrap();
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+
+        launchctl.set(None);
+        let before = launchctl.changes().len();
+        manager.uninstall().unwrap();
+        assert_eq!(launchctl.changes().len(), before);
+        assert!(!manager.plist_path.exists());
+    }
 
     #[test]
     fn plist_uses_config_directory_and_escapes_paths() {
@@ -362,14 +678,7 @@ mod tests {
     #[test]
     fn install_writes_the_plist_and_a_private_log_without_loading_it() {
         let root = tempfile::tempdir().unwrap();
-        let manager = LaunchdManager {
-            plist_path: root
-                .path()
-                .join("LaunchAgents")
-                .join(format!("{LABEL}.plist")),
-            log_path: root.path().join("Logs").join("Axocoatl").join("daemon.log"),
-            uid: "0".into(),
-        };
+        let manager = manager(root.path(), Path::new("launchctl"));
         let config = root.path().join("config.yaml");
         manager
             .install(Path::new("/usr/local/bin/axocoatl"), &config, &homebrew())

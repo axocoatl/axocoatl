@@ -3880,7 +3880,7 @@ async fn plan_shows_the_rootful_switch_the_service_and_the_first_run() {
         "Switch it to rootless? This runs podman machine stop && podman machine set \
          --rootful=false && podman machine start",
         "would ask: Install the Always-On Service",
-        "would run: axocoatl service install && axocoatl service start",
+        "would run: axocoatl service install && axocoatl service restart",
         "would copy the sample repository to a temporary directory, SAMPLE, and run: axocoatl \
          run fix --task",
         "--repo SAMPLE/repo --receipt SAMPLE/receipt.json --record SAMPLE/record.jsonl",
@@ -4219,7 +4219,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         .and(path("/health"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
+                .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": later})),
         )
         .mount(&health)
         .await;
@@ -4295,6 +4295,66 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
     );
 }
 
+/// This `axocoatl`'s version, which its daemon reports on `/health`.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Unix milliseconds an hour from now: a daemon that started after any
+/// configuration a test writes.
+fn an_hour_from_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 3_600_000
+}
+
+/// `/health` answers `old` for its first two requests (the first run's
+/// look and its staleness check), then `new`.
+async fn health_changing(health: &MockServer, old: Value, new: Value) {
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(old))
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(health)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(new))
+        .with_priority(2)
+        .mount(health)
+        .await;
+}
+
+/// The Always-On Service is installed and runs `program`.
+fn installed_service(o: &Onboarding, program: &Path) {
+    let agents = o.host.home.join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("ai.axocoatl.daemon.plist"),
+        format!(
+            "<key>ProgramArguments</key><array><string>{}</string></array>",
+            program.display()
+        ),
+    )
+    .unwrap();
+}
+
+fn first_run_choice() -> Choice {
+    Choice {
+        writer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        reviewer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        ..Choice::default()
+    }
+}
+
 /// A daemon that started before the configuration changed runs the old
 /// one (`onboard --update` adding OpenRouter, say): the first run restarts
 /// the Always-On Service and uses it once it answers with the new start, or
@@ -4307,32 +4367,14 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         "axocoatl",
         "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
     );
-    let later = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        + 3_600_000;
+    let later = an_hour_from_now();
     let health = MockServer::start().await;
-    // `healthy` and the start check before the restart; the new start after.
-    Mock::given(method("GET"))
-        .and(path("/health"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": 1})),
-        )
-        .up_to_n_times(2)
-        .with_priority(1)
-        .mount(&health)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/health"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
-        )
-        .with_priority(2)
-        .mount(&health)
-        .await;
+    health_changing(
+        &health,
+        json!({"status": "ok", "version": VERSION, "started_at_ms": 1}),
+        json!({"status": "ok", "version": VERSION, "started_at_ms": later}),
+    )
+    .await;
     let facts = facts(
         mac("26.6"),
         48,
@@ -4357,24 +4399,9 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         ),
     )
     .unwrap();
-    let agents = o.host.home.join("Library/LaunchAgents");
-    std::fs::create_dir_all(&agents).unwrap();
-    std::fs::write(
-        agents.join("ai.axocoatl.daemon.plist"),
-        "<key>ProgramArguments</key><array><string>/usr/local/bin/axocoatl</string></array>",
-    )
-    .unwrap();
-    let choice = Choice {
-        writer_model: Some(config::ModelRef::new(
-            config::Provider::Ollama,
-            "qwen3-coder:30b",
-        )),
-        reviewer_model: Some(config::ModelRef::new(
-            config::Provider::Ollama,
-            "gpt-oss:20b",
-        )),
-        ..Choice::default()
-    };
+    // The service runs this axocoatl: restarting it is enough.
+    installed_service(&o, &o.host.exe.clone());
+    let choice = first_run_choice();
     assert!(
         smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
         "{}\n{:?}",
@@ -4382,20 +4409,86 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         o.steps
     );
     let calls = shims.calls();
-    let stop = calls
+    let restart = calls
         .iter()
-        .position(|call| call == "axocoatl service stop");
-    let start = calls
-        .iter()
-        .position(|call| call == "axocoatl service start");
+        .position(|call| call == "axocoatl service restart");
     let run = calls
         .iter()
         .position(|call| call.starts_with("axocoatl run fix --task"));
-    assert!(stop.is_some() && stop < start && start < run, "{calls:?}");
+    assert!(restart.is_some() && restart < run, "{calls:?}");
+    assert!(
+        !calls.iter().any(|call| call == "axocoatl service stop"
+            || call == "axocoatl service start"
+            || call.starts_with("axocoatl service install")),
+        "{calls:?}"
+    );
     assert!(o
         .ui
         .output()
         .contains("Restart it now (this ends any Session turn or run in progress)? yes"));
+
+    // The service runs another axocoatl (an older release at another
+    // path): it is installed again from this one before it is restarted,
+    // since a restart alone would run that one again.
+    installed_service(&o, Path::new("/usr/local/bin/axocoatl"));
+    health_changing(
+        &health,
+        json!({"status": "healthy", "agents": 1}),
+        json!({"status": "ok", "version": VERSION, "started_at_ms": later}),
+    )
+    .await;
+    let before = shims.calls().len();
+    assert!(
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
+        "{}\n{:?}",
+        o.ui.output(),
+        o.steps
+    );
+    let after = &shims.calls()[before..];
+    let install = after.iter().position(|call| {
+        call == &format!(
+            "axocoatl service install --config {}",
+            o.paths.config_path.display()
+        )
+    });
+    let restart = after
+        .iter()
+        .position(|call| call == "axocoatl service restart");
+    assert!(install.is_some() && install < restart, "{after:?}");
+    assert!(o.ui.output().contains(&format!(
+        "The Always-On Service runs an Axocoatl release before 1.5.0, not this axocoatl \
+         ({VERSION}), so the first run would not use this version: it runs \
+         /usr/local/bin/axocoatl, not this axocoatl ({})",
+        o.host.exe.display()
+    )));
+
+    // A service that still answers as the older release after the restart
+    // is not taken as this one: nothing runs against it.
+    health_changing(
+        &health,
+        json!({"status": "healthy", "agents": 1}),
+        json!({"status": "healthy", "agents": 1}),
+    )
+    .await;
+    let before = shims.calls().len();
+    o.steps.clear();
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
+    assert!(
+        o.steps.iter().any(|step| step.starts_with(&format!(
+            "The Always-On Service answers at http://127.0.0.1:{}/health but runs an Axocoatl \
+             release before 1.5.0, not this axocoatl",
+            health.address().port()
+        ))),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !shims.calls()[before..]
+            .iter()
+            .any(|call| call.starts_with("axocoatl run")),
+        "{:?}",
+        shims.calls()
+    );
 
     // The service is installed but stopped, and another daemon from before
     // 1.5.0 (its `/health` says no start) answers: that daemon is the one to
@@ -4408,16 +4501,18 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     Mock::given(method("GET"))
         .and(path("/health"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "version": "1.4.2"})),
+            ResponseTemplate::new(200).set_body_json(json!({"status": "healthy", "agents": 1})),
         )
         .mount(&health)
         .await;
     let before = shims.calls().len();
+    o.steps.clear();
     o.ui = Ui::scripted(vec![Answer::No]);
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(|step| step.starts_with(&format!(
-            "The daemon on port {} runs the configuration from before this onboarding",
+            "The daemon on port {} runs an Axocoatl release before 1.5.0, not this axocoatl \
+             ({VERSION})",
             health.address().port()
         ))),
         "{:?}",
@@ -4427,8 +4522,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     assert!(
         !after.iter().any(|call| call.starts_with("axocoatl run")
             || call.starts_with("axocoatl serve")
-            || call == "axocoatl service stop"
-            || call == "axocoatl service start"),
+            || call.starts_with("axocoatl service")
+                && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
 
@@ -4437,22 +4532,36 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         "axocoatl",
         "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
     );
+    installed_service(&o, &o.host.exe.clone());
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": 1})),
+        )
+        .mount(&health)
+        .await;
     let before = shims.calls().len();
     o.steps.clear();
     o.ui = Ui::scripted(vec![Answer::No]);
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
-        o.steps.iter().any(
-            |step| step.starts_with("The Always-On Service runs the configuration from before")
-        ),
+        o.steps.iter().any(|step| step
+            == &format!(
+                "The Always-On Service started before {} changed, so the first run would use \
+                 the old configuration: restart it (`axocoatl service restart`), then run \
+                 `axocoatl onboard --update --smoke-test`",
+                o.paths.config_path.display()
+            )),
         "{:?}",
         o.steps
     );
     let after = &shims.calls()[before..];
     assert!(
         !after.iter().any(|call| call.starts_with("axocoatl run")
-            || call == "axocoatl service stop"
-            || call == "axocoatl service start"),
+            || call.starts_with("axocoatl service")
+                && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
 
@@ -4474,12 +4583,475 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     );
     let after = &shims.calls()[before..];
     assert!(
-        !after
-            .iter()
-            .any(|call| call == "axocoatl service stop" || call == "axocoatl service start"),
+        !after.iter().any(|call| call.starts_with("axocoatl service")
+            && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
     assert!(!o.ui.output().contains("Stop it now"));
+}
+
+/// Where [`the_first_run_stops_another_daemon_through_its_ipc_socket`]
+/// tells [`fake_daemon_that_stops_when_asked`] to listen.
+const FAKE_DAEMON_SOCKET: &str = "AXOCOATL_TEST_FAKE_DAEMON_SOCKET";
+
+/// [`the_first_run_stops_another_daemon_through_its_ipc_socket`]'s other
+/// daemon (it does nothing run any other way): it answers on the IPC
+/// socket until it is asked to shut down, acknowledges that, writes
+/// `stopped` beside the socket and exits.
+#[cfg(unix)]
+#[test]
+#[ignore = "run by the_first_run_stops_another_daemon_through_its_ipc_socket"]
+fn fake_daemon_that_stops_when_asked() {
+    use axocoatl_daemon::ipc::{read_message, write_message, IpcRequest, IpcResponse};
+    let Some(socket) = std::env::var_os(FAKE_DAEMON_SOCKET).map(PathBuf::from) else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // The first run also connects only to read the peer's process.
+            match read_message::<IpcRequest>(&mut stream).await {
+                Ok(IpcRequest::Shutdown) => {
+                    write_message(&mut stream, &IpcResponse::ShutdownAck)
+                        .await
+                        .unwrap();
+                    break;
+                }
+                Ok(_) => write_message(&mut stream, &IpcResponse::Pong)
+                    .await
+                    .unwrap(),
+                Err(_) => {}
+            }
+        }
+        drop(listener);
+        std::fs::remove_file(&socket).unwrap();
+        std::fs::write(socket.with_file_name("stopped"), "").unwrap();
+    });
+}
+
+/// `/health` of the other daemon until it has stopped (`stopped` exists),
+/// then of the daemon that took its port: started an hour from now.
+struct HealthUntilStopped {
+    stopped: PathBuf,
+}
+
+impl wiremock::Respond for HealthUntilStopped {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let started = if self.stopped.exists() {
+            an_hour_from_now()
+        } else {
+            1
+        };
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": started}))
+    }
+}
+
+/// The other-daemon path of the first run's handoff: a daemon (`axocoatl
+/// dev` in another terminal, here a child process) that runs an older
+/// configuration is asked to shut down over its IPC socket once the person
+/// agrees; the first run waits until its process has exited and a daemon
+/// that started since answers, then runs. With the service Step 6 just
+/// started, it waits for that service to answer as this axocoatl.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_first_run_stops_another_daemon_through_its_ipc_socket() {
+    for service_started in [false, true] {
+        let shims = Shims::new();
+        shims.add(
+            "axocoatl",
+            "case \"$1 $2\" in \"receipt key\") echo k-test ;; esac; exit 0",
+        );
+        let facts = facts(
+            mac("26.6"),
+            48,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(Mode::Yes, false, None),
+            facts,
+            OnboardArgs::default(),
+        );
+        let run = tempfile::tempdir().unwrap();
+        o.socket_path = run.path().join("axo.sock");
+        let health = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(HealthUntilStopped {
+                stopped: run.path().join("stopped"),
+            })
+            .mount(&health)
+            .await;
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(
+            &o.paths.config_path,
+            format!(
+                "agents: []\nserver:\n  port: {}\n  host: \"127.0.0.1\"\n",
+                health.address().port()
+            ),
+        )
+        .unwrap();
+        let mut daemon = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "onboard::tests::fake_daemon_that_stops_when_asked",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(FAKE_DAEMON_SOCKET, &o.socket_path)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !o.socket_path.exists() {
+            assert!(std::time::Instant::now() < deadline, "no fake daemon");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Reap it as soon as it exits: an exited child that is not waited
+        // for still exists, and the first run waits for its process to end.
+        let reaper = std::thread::spawn(move || daemon.wait().unwrap());
+
+        assert!(
+            smoke::run(
+                &mut o,
+                WriterChoice::Ollama,
+                &first_run_choice(),
+                service_started,
+                false
+            )
+            .await,
+            "{}\n{:?}",
+            o.ui.output(),
+            o.steps
+        );
+        assert!(reaper.join().unwrap().success());
+        assert!(run.path().join("stopped").exists());
+        let output = o.ui.output();
+        assert!(
+            output.contains(&format!(
+                "The daemon on port {} started before {} changed",
+                health.address().port(),
+                o.paths.config_path.display()
+            )),
+            "{output}"
+        );
+        assert!(output.contains("Stopped the daemon on port"), "{output}");
+        let calls = shims.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.starts_with("axocoatl run fix --task")),
+            "{calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.starts_with("axocoatl serve")
+                    || call.starts_with("axocoatl service")),
+            "{calls:?}"
+        );
+    }
+}
+
+/// When the daemon asked to stop has stopped. Its process, when it can be
+/// seen from here, has exited first; one that cannot (a daemon in another
+/// PID namespace) is waited for at its port: the same daemon still
+/// answering (the same start) has not stopped, and a daemon that says it
+/// started since has taken the port.
+#[test]
+fn a_daemon_asked_to_stop_has_stopped_only_once_it_or_its_port_says_so() {
+    use smoke::other_daemon_stopped as stopped;
+    // Nothing answers: stopped once the IPC socket and the port are free.
+    assert!(stopped(false, false, true, None, Some(1)));
+    assert!(!stopped(false, true, true, None, Some(1)));
+    assert!(!stopped(false, false, false, None, Some(1)));
+    // Without a process to watch: the same start still answers.
+    assert!(!stopped(false, false, false, Some(Some(1)), Some(1)));
+    assert!(!stopped(false, false, false, Some(None), None));
+    assert!(stopped(false, false, false, Some(Some(2)), Some(1)));
+    // Its process has exited: whatever answers now is another daemon.
+    assert!(stopped(true, false, false, Some(None), None));
+    assert!(stopped(true, false, false, Some(Some(1)), Some(1)));
+}
+
+/// Step 6 installs the Always-On Service and restarts it: that starts a
+/// service that does not run, and restarts one that runs with the
+/// definition just written (a bare `service start` failed on a loaded
+/// launchd agent, and would leave a running one on its old definition). It
+/// says so first when one runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn step_six_installs_the_service_and_restarts_one_that_runs() {
+    for running in [false, true] {
+        let shims = Shims::new();
+        shims.add(
+            "axocoatl",
+            &format!(
+                "case \"$1 $2\" in \"service status\") echo '  running:   {}' ;; esac; exit 0",
+                if running { "yes" } else { "no" }
+            ),
+        );
+        let facts = facts(
+            mac("26.6"),
+            48,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(Mode::Yes, false, None),
+            facts,
+            OnboardArgs::default(),
+        );
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
+        if running {
+            installed_service(&o, &o.host.exe.clone());
+        }
+        assert_eq!(start_service(&mut o).await, Some(true), "{:?}", o.steps);
+        let changes: Vec<String> = shims
+            .calls()
+            .into_iter()
+            .filter(|call| call != "axocoatl service status")
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                format!(
+                    "axocoatl service install --config {}",
+                    o.paths.config_path.display()
+                ),
+                "axocoatl service restart".to_string()
+            ]
+        );
+        let output = o.ui.output();
+        assert_eq!(
+            output.contains(
+                "The Always-On Service is running. Install it again with this configuration and \
+                 restart it (this ends any Session turn or run in progress)? yes"
+            ),
+            running,
+            "{output}"
+        );
+        assert_eq!(
+            output.contains("Install the Always-On Service (it starts Axocoatl at login"),
+            !running,
+            "{output}"
+        );
+    }
+}
+
+/// The process group of this process.
+#[cfg(unix)]
+fn own_process_group() -> String {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A Podman machine whose VM was killed leaves its API socket behind, and
+/// the next `podman machine start` failed on it once ("bind: address
+/// already in use", exit 125). Onboarding removes such a socket before it
+/// starts the machine, and says so; one that answers is left. The start
+/// runs in a session of its own: its process group is its own, not
+/// onboarding's.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_machine_start_clears_a_stale_api_socket_and_runs_in_its_own_session() {
+    let shims = Shims::new();
+    let socket = shims.dir.path().join("api.sock");
+    let started = shims.dir.path().join("started");
+    shims.add(
+        "podman",
+        &format!(
+            r#"case "$*" in
+  "machine inspect podman-machine-default")
+    echo '[{{"Name":"podman-machine-default","ConnectionInfo":{{"PodmanSocket":{{"Path":"{socket}"}}}}}}]' ;;
+  "machine start")
+    if [ -e "{socket}" ]; then
+      echo 'Error: gvproxy exiting: listen unix {socket}: bind: address already in use' >&2
+      exit 125
+    fi
+    echo "$$ $(ps -o pgid= -p $$ | tr -d ' ')" > "{started}" ;;
+  *) exit 125 ;;
+esac"#,
+            socket = socket.display(),
+            started = started.display()
+        ),
+    );
+    // What a killed VM leaves: a socket nothing listens on.
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    let host = shims.host(true);
+    let start = Cmd::machine_start(&["machine", "start"], "podman-machine-default");
+    let ui = Ui::new(Mode::Yes, false, None);
+    ui.execute(&host, &start).await.unwrap();
+    assert!(!socket.exists());
+    assert!(
+        ui.output().contains(&format!(
+            "Removed {}, the API socket podman-machine-default left when it did not stop \
+             cleanly",
+            socket.display()
+        )),
+        "{}",
+        ui.output()
+    );
+    let ids = std::fs::read_to_string(&started).unwrap();
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    // Its own group (the group id is its process id), not onboarding's.
+    assert_eq!(ids[0], ids[1]);
+    assert_ne!(ids[1], own_process_group());
+
+    // A socket that answers is another machine's: left, and the start
+    // fails as Podman says.
+    let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let ui = Ui::new(Mode::Yes, false, None);
+    let error = ui.execute(&host, &start).await.unwrap_err();
+    assert!(error.contains("failed (exit 125)"), "{error}");
+    assert!(socket.exists());
+    assert!(!ui.output().contains("Removed"));
+}
+
+/// Where [`a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running`]
+/// tells [`start_a_machine_while_ctrl_c_is_typed`] its shims are.
+const MACHINE_START_SHIMS: &str = "AXOCOATL_TEST_MACHINE_START_SHIMS";
+
+/// The Podman machine onboarding starts outlives onboarding: a Ctrl-C
+/// typed while `podman machine start` runs, and the terminal closing, end
+/// onboarding but neither the start nor the VM it started, which shared
+/// onboarding's process group before (vfkit keeps its starter's group), so
+/// the VM died uncleanly. This runs [`start_a_machine_while_ctrl_c_is_typed`]
+/// as the foreground process group of a terminal of its own, with a
+/// `podman` whose start leaves a stand-in VM running (with the default
+/// action for Ctrl-C, as vfkit has) and takes three seconds.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running() {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+    let shims = Shims::new();
+    let vm = shims.dir.path().join("vm");
+    let done = shims.dir.path().join("done");
+    shims.add(
+        "podman",
+        &format!(
+            r#"case "$*" in
+  "machine start")
+    perl -e '$SIG{{INT}}="DEFAULT"; $SIG{{HUP}}="DEFAULT"; exec @ARGV' sleep 60 &
+    echo $! > "{vm}"
+    sleep 3
+    touch "{done}" ;;
+esac"#,
+            vm = vm.display(),
+            done = done.display()
+        ),
+    );
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = portable_pty::CommandBuilder::new(std::env::current_exe().unwrap());
+    command.args([
+        "onboard::tests::start_a_machine_while_ctrl_c_is_typed",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    command.env(MACHINE_START_SHIMS, shims.dir.path());
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        while reader.read(&mut buffer).is_ok_and(|read| read > 0) {}
+    });
+    let mut writer = pair.master.take_writer().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let pid = loop {
+        if let Some(pid) = std::fs::read_to_string(&vm)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<i32>().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "the machine did not start");
+        assert!(child.try_wait().unwrap().is_none(), "onboarding ended");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    // A Ctrl-C while the machine starts: onboarding ends.
+    writer.write_all(b"\x03").unwrap();
+    writer.flush().unwrap();
+    let ended = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "onboarding did not end");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(!ended.success());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "the VM died with onboarding");
+    // The terminal closes.
+    drop(writer);
+    drop(pair.master);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "the VM died when the terminal closed");
+    // The start itself ran to its end.
+    while !done.exists() {
+        assert!(Instant::now() < deadline, "the start did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+/// [`a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running`]'s
+/// onboarding (it does nothing run any other way): start the machine as
+/// onboarding does, with the shims it names.
+#[cfg(unix)]
+#[test]
+#[ignore = "run by a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running"]
+fn start_a_machine_while_ctrl_c_is_typed() {
+    let Some(directory) = std::env::var_os(MACHINE_START_SHIMS).map(PathBuf::from) else {
+        return;
+    };
+    let host = Host {
+        path: directory.clone().into_os_string(),
+        extra_dirs: Vec::new(),
+        home: directory.clone(),
+        root: directory.clone(),
+        exe: directory.join("axocoatl"),
+        macos: true,
+        log: None,
+        podman_connection: ConnectionOverride::None,
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(host.run(&Cmd::machine_start(
+            &["machine", "start"],
+            "podman-machine-default",
+        )))
+        .unwrap();
 }
 
 /// Replacing a configuration never shows or logs the old file's secrets;
