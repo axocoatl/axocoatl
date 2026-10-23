@@ -145,10 +145,12 @@
               pacman or zypper on Linux; on an Apple-silicon Mac without Homebrew it points
               to the podman.io installer, on an Intel Mac to the Podman 5.8 package, and on
               another Linux it says what to install; it refuses Ubuntu 22.04 and older. On
-              a Mac it then creates and starts the Podman machine. With 48 GB of memory or
-              more it suggests <code>qwen3-coder:30b</code> writing and
+              a Mac it then creates and starts the Podman machine. Models already
+              installed come first when they fit and make a pair; otherwise, with 48 GB
+              of memory or more it suggests <code>qwen3-coder:30b</code> writing and
               <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB);
-              a fix run calls them in turn.</li>
+              a fix run calls them in turn. How well <code>gpt-oss:20b</code> reviews
+              has not been measured.</li>
           <li><code>axocoatl doctor</code> reports the sandbox, the models, the writers and
               the daemon, each with its fix, and ends with whether Axocoatl is ready.</li>
           <li>The daemon follows <code>CONTAINER_CONNECTION</code> and
@@ -162,7 +164,18 @@
               where its archive is.</li>
           <li>Commands on the home page, /install, the README and the docs' first-run pages
               that did not run as written are fixed, a lint checks their shape, and the
-              pages say what the release gate verified and what is not yet verified.</li>
+              pages say what the release gate requires and what is not yet verified.</li>
+          <li><code>axocoatl connect codex --api-key</code> and <code>--api-key-only</code>
+              are refused in 1.5.0 and point to the ChatGPT sign-in: storing the OpenAI API
+              key OpenAI issues with the sign-in was never tried with an OpenAI Platform
+              organization. Onboarding bills Codex to your ChatGPT plan; a key stored
+              before is still used.</li>
+          <li>The site serves the <code>install.sh</code> of the latest release's tag,
+              never one merged to <code>main</code> before its release.</li>
+          <li>Requests to this computer (from <code>axocoatl run</code> to the daemon, and
+              to Ollama and a Preview) never go through <code>HTTP_PROXY</code> or
+              <code>HTTPS_PROXY</code>. Sessions and runs do not support a proxy; the
+              install page says what does and does not use one.</li>
         </ul>
 
         <h3>Added</h3>
@@ -181,6 +194,8 @@
           <li>A clean-machine new-user gate blocks a release; the only way past it is a
               logged manual override that only GitHub logins listed in the repository can
               start.</li>
+          <li><code>axocoatl receipt verify --require-pass</code> fails a receipt whose run
+              did not pass (exit 6).</li>
         </ul>
 
         <h3>Fixed</h3>
@@ -221,7 +236,11 @@
               Session opens it only when Ollama reports its cloud features disabled.</li>
           <li>Dependencies move to zip 9 for RUSTSEC-2026-0367, -0368 and -0369, to
               rustls-webpki 0.103.16 for RUSTSEC-2026-0382, and to webpki-roots and
-              webpki-root-certs 1.0.10 for RUSTSEC-2026-0381 and -0383.</li>
+              webpki-root-certs 1.0.10 for RUSTSEC-2026-0381 and -0383, and to tokio
+              1.53.3 for RUSTSEC-2026-0386. candle-core, used
+              for local embeddings, still brings zip 1.1.4, whose affected
+              <code>extract()</code> nothing in Axocoatl reaches; a test fails if that
+              changes.</li>
           <li>The workbench's vendored markdown-it moves to 14.3.3 for GHSA-vfgh-jcmw-g37q and
               GHSA-gfr2-rv44-r23c. The documentation site's build moves to vite 8.3.4 for
               GHSA-587h-7wmj-h5pm; nothing of it ships in Axocoatl.</li>
@@ -258,29 +277,48 @@
 
         <h3>Verified</h3>
         <ul>
-          <li>The release commit went from the published install command to passing,
-              signed runs, every receipt verified. On a 48 GB Mac on Apple silicon
-              (macOS 26.6), with Axocoatl, Podman and Ollama uninstalled first (the
-              downloaded models kept), <code>axocoatl onboard</code> installed Podman and
-              Ollama with Homebrew; <code>fix</code> with local models passed on Node.js,
-              Python, Rust and Go repositories, and <code>fix-claude-code</code>,
-              <code>fix-codex</code> and <code>fix</code> with OpenRouter models on Node.js
-              and Python, after
-              <code>connect claude-code</code> and <code>connect codex</code> signed in
-              through the browser, and onboarding connected OpenRouter through its own
-              browser sign-in. The workbench in Safari went from the sign-in link to a
-              commit.</li>
-          <li>On Ubuntu 24.04 on arm64, in a VM, as a new user: onboarding installed
-              Podman with apt, with <code>sudo</code> after asking, and connected
-              OpenRouter through its own browser sign-in; <code>fix</code> with those
-              OpenRouter models
-              passed on Node.js, Python, Rust and Go. In CI, on Ubuntu 24.04 on x86_64 and
-              arm64: the same install command, then onboarding with no terminal against a
-              scripted model server (Podman already on the runner, no first-run sample),
-              and <code>fix</code> on the same repositories.</li>
-          <li>Each path's transcript, times, downloads and tool versions are in the signed
-              evidence bundle under <code>release-evidence/1.5.0/</code> in the
-              repository.</li>
+          <li>The release gate requires the release commit to go from the published
+              install command to passing, signed runs on each path below, every receipt
+              and record verified. The release workflow publishes nothing until the
+              signed evidence shows every step each path lists; the only way past it is
+              a logged override that only maintainers listed in the repository can
+              start, and the release notes must then name the paths not run.</li>
+          <li>On a Mac on Apple silicon, with a person answering onboarding, on an
+              account that starts without Axocoatl, its data or stored credentials,
+              without Podman or a Podman machine, and without Ollama or its settings
+              (Ollama's downloaded models may stay): <code>axocoatl onboard</code>
+              installs Podman and Ollama with Homebrew, creates the Podman machine,
+              turns Ollama's cloud models off and ends ready with a passing first run,
+              and <code>fix</code> with local models passes on Node.js, Python, Rust and
+              Go repositories. Onboarding signs in Claude Code, and Codex with a ChatGPT
+              plan, in the browser, and connects OpenRouter through its browser
+              sign-in; <code>fix-claude-code</code>, <code>fix-codex</code> and
+              <code>fix</code> with OpenRouter models pass on Node.js and Python, and
+              <code>fix-claude-code</code> with <code>--keep pr</code> opens a pull
+              request whose receipt the verify-receipt Action verifies.</li>
+          <li>Also on the Mac: the Always-On Service, chosen in onboarding, runs a
+              passing fix, restarts when <code>onboard --update</code> changes the
+              configuration, then stops and uninstalls; a run with the Podman machine
+              stopped starts it and passes; timed runs on real repositories each end
+              with a verdict; the workbench in Safari goes from the sign-in link to a
+              commit, shows a Session's Preview inside the workbench only, and stays as
+              the docs say when another page floods <code>localhost</code> with
+              cookies.</li>
+          <li>On Linux, as a new user who starts without Axocoatl, its data or stored
+              credentials, or Podman, and whose subordinate ids the gate removes first
+              (the gate's instructions use a new Ubuntu 24.04 VM): onboarding installs
+              Podman with apt and adds a range of subordinate ids that overlaps no
+              other user's, with <code>sudo</code> after asking, and connects
+              OpenRouter through its browser sign-in; <code>fix</code> with those OpenRouter models passes on
+              Node.js, Python, Rust and Go, and the Always-On Service runs as a systemd
+              user unit through to its uninstall. In CI, on Ubuntu 24.04 on x86_64 and
+              arm64: the same install command, then onboarding with no terminal against
+              a scripted model server (Podman already on the runner, no first-run
+              sample), and <code>fix</code> passes on the same repositories.</li>
+          <li>Each path's transcript, times, downloads and tool versions, the models, the
+              system, its memory and the account, and who answered each question go into
+              the signed evidence bundle under <code>release-evidence/1.5.0/</code> in
+              the repository.</li>
         </ul>
       </article>
 

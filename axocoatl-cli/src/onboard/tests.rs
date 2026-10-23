@@ -3351,6 +3351,224 @@ fn codex_names_its_credential_in_the_next_command() {
     assert!(next.contains("reviewer ollama:gpt-oss:20b comes from your setup"));
 }
 
+/// Codex bills to the ChatGPT plan, and onboarding asks nothing about it:
+/// this version stores no OpenAI API key for Codex (`connect codex
+/// --api-key` is refused). A setup that names codex-openai keeps it only
+/// while that key is stored; otherwise it moves to codex-chatgpt and says
+/// why. Nothing onboarding runs or suggests is `connect codex --api-key`.
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_bills_to_the_chatgpt_plan_unless_a_stored_api_key_is_kept() {
+    let cases: [(Option<&str>, bool, &str, &str); 4] = [
+        (
+            None,
+            false,
+            "codex-chatgpt",
+            "  Codex runs bill to your ChatGPT plan (codex-chatgpt).",
+        ),
+        (
+            Some("codex-chatgpt"),
+            false,
+            "codex-chatgpt",
+            "  Codex runs bill to your ChatGPT plan (kept from your configuration: \
+             codex-chatgpt)",
+        ),
+        (
+            Some("codex-openai"),
+            false,
+            "codex-chatgpt",
+            "  Your configuration names codex-openai, an OpenAI API key, and none is stored. \
+             This version does not store one (`axocoatl connect codex --api-key` is not \
+             available), so Codex runs bill to your ChatGPT plan (codex-chatgpt).",
+        ),
+        (
+            Some("codex-openai"),
+            true,
+            "codex-openai",
+            "  Codex runs bill to an OpenAI API key (kept from your configuration: \
+             codex-openai)",
+        ),
+    ];
+    for (named, stored, credential, said) in cases {
+        let shims = Shims::new();
+        shims.add("axocoatl", "exit 0");
+        podman_shim(&shims);
+        podman_state(&shims, &["machine", "running"]);
+        ollama_shim(&shims);
+        let ollama = FakeOllama::start(
+            "0.40.6",
+            shims.home.path(),
+            shims.dir.path(),
+            &["gpt-oss:20b"],
+        )
+        .await;
+        std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+        std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+        let report = podman_report(&shims).await;
+        let facts = facts(
+            mac("26.6"),
+            48,
+            report,
+            &shims,
+            &ollama.url(),
+            OllamaService::Brew,
+        )
+        .await;
+        let args = match named {
+            None => OnboardArgs {
+                ollama_url: Some(ollama.url()),
+                reviewer: Some("ollama:gpt-oss:20b".into()),
+                ..yes(WriterChoice::Codex)
+            },
+            Some(_) => OnboardArgs {
+                ollama_url: Some(ollama.url()),
+                update: true,
+                writer: None,
+                ..yes(WriterChoice::Codex)
+            },
+        };
+        let mut o = onboarding(&shims, Ui::new(Mode::Yes, false, None), facts, args);
+        if let Some(named) = named {
+            let reviewer = config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b");
+            let old = config::render(&config::ConfigPlan {
+                ollama_base_url: Some(ollama.url()),
+                openrouter_key: None,
+                lead: reviewer.clone(),
+                reviewer: reviewer.clone(),
+                run_writer: None,
+                run_reviewer: Some(reviewer),
+                port: free_port(),
+                note: "Codex writes".into(),
+                writer: "codex",
+                codex_credential: Some(if named == "codex-openai" {
+                    "codex-openai"
+                } else {
+                    "codex-chatgpt"
+                }),
+            });
+            std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+            std::fs::write(&o.paths.config_path, &old).unwrap();
+        }
+        if stored {
+            use std::os::unix::fs::PermissionsExt;
+            let data_dir = o.data_dir();
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            axocoatl_daemon::secret_store::set_secret(&data_dir, credential, b"sk-proj-test-key")
+                .unwrap();
+        }
+        run(&mut o).await;
+        let output = o.ui.output();
+        let case = format!("{named:?}, stored: {stored}");
+        assert!(output.contains(said), "{case}\n{output}");
+        assert!(!output.contains("Bill Codex runs to"), "{case}\n{output}");
+        // Only to say it is not available.
+        assert!(
+            !output
+                .replace("(`axocoatl connect codex --api-key` is not available)", "")
+                .contains("--api-key"),
+            "{case}\n{output}"
+        );
+        let written = Kept::from_config(&config_text(&o));
+        assert_eq!(written.writer, Some(WriterChoice::Codex), "{case}");
+        assert_eq!(
+            written.codex_credential.as_deref(),
+            Some(credential),
+            "{case}"
+        );
+        let calls = shims.calls();
+        assert!(
+            !calls.iter().any(|call| call.contains("--api-key")),
+            "{case}: {calls:?}"
+        );
+        if stored {
+            assert!(
+                output.contains(&format!("Signed in: {credential} is stored")),
+                "{case}\n{output}"
+            );
+        } else {
+            // Under --yes the sign-in is left to a terminal.
+            assert!(
+                o.steps
+                    .contains(&"Sign in to Codex: axocoatl connect codex".to_string()),
+                "{case}: {:?}",
+                o.steps
+            );
+        }
+    }
+}
+
+/// Doctor's fix for a Codex setup whose credential is not stored: the
+/// ChatGPT sign-in for codex-chatgpt, and for codex-openai, which this
+/// version cannot store, `onboard --update --writer codex`, which moves the
+/// setup to the ChatGPT plan and signs in.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_sends_a_codex_api_key_setup_to_onboarding_not_to_connect() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let config_path = shims.home.path().join("config.yaml");
+    let env = doctor_env(&shims);
+    for (credential, fix) in [
+        ("codex-openai", "axocoatl onboard --update --writer codex"),
+        ("codex-chatgpt", "axocoatl connect codex"),
+    ] {
+        let reviewer = config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b");
+        std::fs::write(
+            &config_path,
+            config::render(&config::ConfigPlan {
+                ollama_base_url: None,
+                openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(
+                    "sk-or-test".to_string(),
+                ))),
+                lead: reviewer.clone(),
+                reviewer: reviewer.clone(),
+                run_writer: None,
+                run_reviewer: Some(reviewer),
+                port: free_port(),
+                note: "Codex writes".into(),
+                writer: "codex",
+                codex_credential: Some(credential),
+            }),
+        )
+        .unwrap();
+        let report = crate::doctor::collect(&config_path, &env).await;
+        let signed_in = report
+            .sections
+            .writers
+            .iter()
+            .find(|item| item.name == "Codex" && item.detail.starts_with("not connected"))
+            .unwrap_or_else(|| panic!("{credential}: {:?}", report.sections.writers));
+        assert_eq!(
+            signed_in.status,
+            crate::doctor::Status::Fail,
+            "{credential}"
+        );
+        assert_eq!(
+            signed_in.detail,
+            format!("not connected ({credential} is not stored)")
+        );
+        assert_eq!(signed_in.fix.as_deref(), Some(fix), "{credential}");
+        crate::paste_safe::assert_paste_safe(fix);
+        let codex_path = report
+            .ready_for
+            .iter()
+            .find(|path| path.command.starts_with("axocoatl run fix-codex"))
+            .unwrap_or_else(|| panic!("{credential}: {:?}", report.ready_for));
+        assert!(!codex_path.ok, "{credential}");
+        assert!(
+            codex_path
+                .detail
+                .contains(&format!("not connected: run `{fix}`")),
+            "{credential}: {}",
+            codex_path.detail
+        );
+        let shown = format!("{:?}", report.sections.writers);
+        assert!(!shown.contains("--api-key"), "{credential}: {shown}");
+    }
+}
+
 /// Step 1's default follows what is installed and the memory.
 #[tokio::test]
 async fn the_default_writer_follows_what_is_installed() {

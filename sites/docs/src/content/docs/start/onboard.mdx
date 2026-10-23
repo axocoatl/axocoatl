@@ -73,7 +73,7 @@ Ubuntu 24.04, WSL2, SELinux enforcing), and warns when `HTTPS_PROXY`, `HTTP_PROX
 ```text
 Who writes the code?
 > Claude Code (your Claude Pro or Max plan; claude found at ~/.local/bin/claude)
-  Codex (your ChatGPT plan, or an OpenAI API key)
+  Codex (your ChatGPT plan)
   A local model on this computer (Ollama, no account, needs 48 GB memory or more)
   A hosted model (OpenRouter credits)
 ```
@@ -150,7 +150,7 @@ On **Linux and WSL2**:
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
 - Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (the 1.5.0
-  release gate ran Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
+  release gate runs Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
   or newer. Any other Podman from 4.3 on (4.3 to 4.8, or Fedora's 5.x and Arch's 6.x)
   is accepted and reported as not tested on Linux yet; 4.9 is the tested one.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
@@ -257,7 +257,7 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
-   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Ran end to end on a 48 GB Mac in the 1.5.0 release gate; this reviewer's quality has not been measured |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | How well this reviewer reviews has not been measured. The 1.5.0 release gate requires runs with the local models onboarding sets up on its Mac to pass, and its evidence names them ([Install](/start/install/)) |
    | Under 48 GB | — | — | Not yet verified with local models. Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
 
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
@@ -322,12 +322,12 @@ open for that step; see [Repository toolchains](/configure/toolchains/).
 ### Step 3C: Codex
 
 Codex works the same way through `axocoatl connect codex`, which builds the Codex
-sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Onboarding
-asks which account pays for Codex runs, your ChatGPT plan (recommended) or an OpenAI API
-key (`axocoatl connect codex --api-key-only`; it needs an OpenAI Platform organization
-and is billed at API rates), and names that credential on the run command it prints
-(`--param credential=codex-chatgpt` or `codex-openai`), so storing a key later does not
-move a ChatGPT-plan setup to API billing.
+sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Codex runs
+bill to your ChatGPT plan: onboarding names that credential on the run command it prints
+(`--param credential=codex-chatgpt`), so a key stored later does not move the setup to
+API billing. 1.5.0 stores no OpenAI API key for Codex (`axocoatl connect codex
+--api-key` is not available); a configuration that already names `codex-openai` keeps it
+when that key is stored, and otherwise moves to your ChatGPT plan and says so.
 
 ### Step 3D: OpenRouter
 
@@ -366,10 +366,13 @@ The key, in this order:
      that never comes back can be diagnosed. The configuration gets
      `api_key_secret: openrouter` and
      `openrouter_billing: credits`, never the key. The callback is a loopback port,
-     so from a VM, open the link in a browser that can reach that port (Lima
-     forwards a guest's loopback ports to the host; elsewhere, forward it with
-     `ssh -L`). Cancelling in the browser or running out of time stores nothing, and
-     the step left says to run onboarding again.
+     so from a VM, open the link in a browser that can reach that port: Lima
+     forwards a guest's loopback ports to the host unless the VM is plain
+     (`limactl create --plain`, or `plain: true`), which turns forwarding off. In a
+     plain or cloud VM, forward the port first from the computer with the browser,
+     with `ssh -L PORT:127.0.0.1:PORT` and the VM's address, as onboarding says when
+     it cannot open a browser itself. Cancelling in the browser or running out of
+     time stores nothing, and the step left says to run onboarding again.
    - **Read it from an environment variable**: you name it (default
      `OPENROUTER_API_KEY`); the configuration names the variable, not the key.
    - **Enter it at a hidden prompt**: the key is then stored in the owner-only

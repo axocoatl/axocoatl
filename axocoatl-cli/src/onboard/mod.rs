@@ -60,7 +60,7 @@ pub(crate) mod exit {
 pub enum WriterChoice {
     /// Claude Code, on your Claude Pro or Max plan
     ClaudeCode,
-    /// Codex, on your ChatGPT plan or an OpenAI API key
+    /// Codex, on your ChatGPT plan
     Codex,
     /// A local model through Ollama
     Ollama,
@@ -78,7 +78,7 @@ impl WriterChoice {
                     None => "claude not found yet".to_string(),
                 }
             ),
-            WriterChoice::Codex => "Codex (your ChatGPT plan, or an OpenAI API key)".to_string(),
+            WriterChoice::Codex => "Codex (your ChatGPT plan)".to_string(),
             WriterChoice::Ollama => {
                 "A local model on this computer (Ollama, no account, needs 48 GB memory or more)"
                     .to_string()

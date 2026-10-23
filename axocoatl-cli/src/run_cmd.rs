@@ -376,8 +376,12 @@ impl Daemon {
                 }
             }
         };
+        // The daemon is on this computer (or named by --url): never through
+        // a proxy, which would see each request, and the API token, in plain
+        // text (reqwest otherwise sends even 127.0.0.1 through HTTP_PROXY).
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .no_proxy()
             .build()
             .map_err(|error| Failure::infrastructure(error.to_string()))?;
         Ok(Self {

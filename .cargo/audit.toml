@@ -12,12 +12,17 @@
 # is never encoded with it. Remove this exception together with that one-time
 # compatibility reader when 0.1.x checkpoint migration is no longer supported.
 # RUSTSEC-2026-0367, -0368 and -0369 are flaws in zip's `extract()` (SUID/SGID
-# bits, symlink targets and permissions applied through symlinks). zip 1.1.4 is
-# in the tree only through candle-core 0.8, which opens .npz and .pth archives
-# entry by entry and never calls `extract()`; Axocoatl loads its embedding model
-# from safetensors and never reaches those readers. No candle-core release
-# depends on zip 9 or later (0.11 requires zip 8.6). Every other zip in the tree
-# is 9.0.5 or later. Remove these when candle-core moves to zip 9.
+# bits, symlink targets and permissions applied through symlinks), patched only
+# in zip 9. zip 1.1.4 is in the tree only through candle-core 0.8, which opens
+# .npz and .pth archives entry by entry and never calls `extract()`; Axocoatl
+# loads its embedding model from safetensors and never reaches those readers.
+# axocoatl-memory's test candle_is_used_only_here_and_never_reads_npz_or_pth_archives
+# fails if any workspace file but neural.rs uses Candle or names one of them,
+# and a debug build of axocoatl (1.5.0) holds no candle_core npy or pickle code
+# and no zip extract(). No candle-core release depends on zip 9 or later: the
+# newest, 0.11.0 (crates.io, checked 2026-10-23), requires zip ^8.6. Every
+# other zip in the tree is 9.0.5 or later. Remove these when candle-core moves
+# to zip 9.
 ignore = [
     "RUSTSEC-2024-0436",
     "RUSTSEC-2025-0141",

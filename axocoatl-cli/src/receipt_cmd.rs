@@ -10,8 +10,9 @@
 //! `verify` exit codes: 0 valid and signed by a trusted key (and the files
 //! and record match, when asked); 1 malformed or the signature does not
 //! verify; 2 a valid signature by a key not given as trusted; 3 usage; 4 the
-//! files or the record do not match. When several apply, the first of 1, 2,
-//! 4 in that order wins.
+//! files or the record do not match; 6 with `--require-pass`, the run's
+//! verdict is not `pass`. When several apply, the first of 1, 2, 4, 6 in
+//! that order wins.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use axocoatl_session::receipt::{
     self, check_files, check_signature, open_receipt, parse_key_line, parse_trusted_keys,
     short_key_id, Envelope, OpenedReceipt, PublicKey, SignatureCheck,
 };
+use axocoatl_session::run_outcome::RunVerdict;
 use clap::Subcommand;
 
 /// Exit codes of `axocoatl receipt`.
@@ -32,6 +34,9 @@ pub mod exit {
     pub const MISMATCH: i32 = 4;
     /// `key`: the data root or its secret store cannot be read or written.
     pub const FAILURE: i32 = 5;
+    /// `verify --require-pass`: the receipt verifies, but its run's verdict
+    /// is not `pass`.
+    pub const NOT_PASSED: i32 = 6;
 }
 
 #[derive(Debug, Subcommand)]
@@ -64,6 +69,10 @@ pub enum ReceiptCommands {
         /// Check that this record bundle verifies and carries this receipt
         #[arg(long, value_name = "BUNDLE")]
         record: Option<PathBuf>,
+        /// Fail (exit 6) when the run's verdict is not `pass`: a receipt
+        /// of a run whose checks failed or that needs attention verifies too
+        #[arg(long)]
+        require_pass: bool,
         /// Print the result as one JSON document
         #[arg(long)]
         json: bool,
@@ -116,6 +125,7 @@ pub async fn cmd_receipt(command: ReceiptCommands) -> i32 {
             keys,
             repo,
             record,
+            require_pass,
             json,
         } => {
             let request = VerifyRequest {
@@ -124,6 +134,7 @@ pub async fn cmd_receipt(command: ReceiptCommands) -> i32 {
                 keys,
                 repo,
                 record,
+                require_pass,
             };
             let report = verify(&request);
             print_report(&report, json, &mut std::io::stdout());
@@ -207,14 +218,16 @@ pub struct VerifyRequest {
     pub keys: Vec<PathBuf>,
     pub repo: Option<PathBuf>,
     pub record: Option<PathBuf>,
+    /// `--require-pass`: a run whose verdict is not `pass` fails.
+    pub require_pass: bool,
 }
 
 /// What `verify` found: the JSON document `--json` prints.
 #[derive(Debug, serde::Serialize)]
 pub struct VerifyReport {
     pub exit_code: i32,
-    /// `valid`, `malformed`, `invalid`, `untrusted` or `mismatch`, or
-    /// `usage`.
+    /// `valid`, `malformed`, `invalid`, `untrusted`, `mismatch` or
+    /// `not-passed`, or `usage`.
     pub result: String,
     /// Why, in words, for any result but `valid`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -452,12 +465,22 @@ pub fn verify(request: &VerifyRequest) -> VerifyReport {
             problems,
         });
     }
+    let not_passed = request.require_pass && statement.predicate.verdict != RunVerdict::Pass;
+    if not_passed {
+        report.problems.push(format!(
+            "the run's verdict is {}, not pass (--require-pass)",
+            report.verdict.as_deref().unwrap_or("unknown")
+        ));
+    }
     if untrusted {
         report.exit_code = exit::UNTRUSTED;
         report.result = "untrusted".into();
     } else if mismatched {
         report.exit_code = exit::MISMATCH;
         report.result = "mismatch".into();
+    } else if not_passed {
+        report.exit_code = exit::NOT_PASSED;
+        report.result = "not-passed".into();
     }
     report
 }

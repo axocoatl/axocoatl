@@ -126,35 +126,62 @@ own_fish_lines() {
 #   - the line before did not end in &&, ||, |, |&, \, !, time or a function
 #     header still waiting for its body, and no [[ ]] is open;
 #   - no return, exit, exec, logout or bye came before it, anywhere, also
-#     written with a backslash (ended);
+#     written with a backslash or quotes ('return', "ex"it) (ended), except
+#     an exec where a command starts with only redirections after it
+#     (exec 2>>log), which changes this shell's files and goes on;
 #   - the reader did not lose track (lost) before it, at a here-document, a
 #     closing word that does not match the open block (fi in a { }, } in an
 #     if), a redirection without a target, an operator where a command
-#     should start (a line that starts with |), a case inside $( ), or a
-#     construct it does not follow (( where no command starts, as in
-#     for ((...)) and zsh's for f (...); zsh's foreach and repeat; coproc).
+#     should start (a line that starts with |), a case inside $( ), <( ) or
+#     >( ), or a construct it does not follow (( where no command starts, as
+#     in for ((...)) and zsh's for f (...); zsh's foreach and repeat;
+#     coproc).
 # It splits words much as the shell does, with quotes, backslashes and
-# comments (also in $( ) and in a ( ) word), and takes a keyword only where a
-# command starts. Where it sees that it cannot follow the file, later lines
-# do not count: it opens a block for any word that ends in {, but closes one
-# only at a } where a command starts, so after zsh's `f() { cmd }` no later
-# line counts. So sure() means only that the installer can tell nothing
-# before the line keeps it from running. What it cannot see: a command that
-# stops the shell another way (set -e and a failing command, a sourced file
-# or an eval that returns or exits), a syntax error it does not notice,
-# after which the shell stops reading the file, and a later line that takes
-# the directory out of PATH again; a valid file it misreads in some other way
-# can make a line count too. It also numbers each block it opens (bid) and
-# sets branched after an else or elif of a block at the top level.
-# swap(s, from, to) replaces every from in s with to, and trim(s) removes
-# leading and trailing blanks.
+# comments (also in $( ), <( ), >( ) and in a ( ) word), and takes a keyword
+# only where a command starts; after builtin or command a command still
+# starts, and digits right before < or > are the descriptor a redirection
+# names (2>/dev/null), not a word. Where it sees that it cannot follow the file,
+# later lines do not count: it opens a block for any word that ends in {, but
+# closes one only at a } where a command starts, so after zsh's `f() { cmd }`
+# no later line counts. So sure() means only that the installer can tell
+# nothing before the line keeps it from running. What it cannot see: a
+# command that stops the shell another way (set -e and a failing command, a
+# sourced file or an eval that returns or exits), a syntax error it does not
+# notice, after which the shell stops reading the file, and a later line that
+# takes the directory out of PATH again; a valid file it misreads in some
+# other way can make a line count too. It also numbers each block it opens
+# (bid), sets branched after an else or elif of a block at the top level, and
+# sets cmtat to where a comment starts on the line it read (0 for none).
+# It sets stopped at a return, exit, exec, logout or bye where a command
+# starts (an exec only when a command follows it), unless that word is in a
+# function's body or a ( ) subshell, which it ends instead of the shell, or
+# stops only a shell that is not interactive: Ubuntu's and Debian's
+# `case $- in *i*) ;; *) return;; esac` (a branch after a *i* branch of a
+# case on $-), Arch's `[[ $- != *i* ]] && return`, `[ -z "$PS1" ] &&
+# return`, zsh's `[[ -o interactive ]] || return`, the same tests the other
+# way round with the other operator (each also as return N), and Gentoo's
+# `if [[ $- != *i* ]]; then return; fi` (the then branch of an if on such a
+# test, on one line or several). Every new terminal is an interactive shell,
+# so those do not keep one from reading a later line.
+# swap(s, from, to) replaces every from in s with to, trim(s) removes leading
+# and trailing blanks, and unq(s) is word s without its quotes and
+# backslashes.
 # shellcheck disable=SC2016
 startup_awk='
 BEGIN {
   sq = sprintf("%c", 39)
   nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
-  prevcmd = 0; word = ""; inword = 0; last = ""; ctxbs = 0
+  prevcmd = 0; word = ""; raw = ""; inword = 0; last = ""; ctxbs = 0; stopped = 0
+  cmtat = 0; curline = ""; linewords = 0; execpend = 0; exechere = 0
+  # Tests true only in a shell that is not interactive (ni), and only in one
+  # that is (it), for the stops that stopped leaves out.
+  ps1 = "\"?\\$(PS1|\\{PS1\\})\"?"
+  dash = "\"?\\$-\"?"
+  ni = "(\\[\\[[ \t]+" dash "[ \t]+!=[ \t]+\\*i\\*[ \t]+\\]\\]|\\[[ \t]+-z[ \t]+" ps1 "[ \t]+\\]|\\[\\[[ \t]+-z[ \t]+" ps1 "[ \t]+\\]\\]|\\[\\[[ \t]+![ \t]+-o[ \t]+interactive[ \t]+\\]\\])"
+  it = "(\\[\\[[ \t]+" dash "[ \t]+==?[ \t]+\\*i\\*[ \t]+\\]\\]|\\[[ \t]+-n[ \t]+" ps1 "[ \t]+\\]|\\[\\[[ \t]+-n[ \t]+" ps1 "[ \t]+\\]\\]|\\[\\[[ \t]+-o[ \t]+interactive[ \t]+\\]\\])"
+  ni_line = "^[ \t]*(" ni "[ \t]*&&|" it "[ \t]*\\|\\|)[ \t]*return([ \t]+[0-9]+)?[ \t]*;?[ \t]*(#.*)?$"
+  ni_if = "^[ \t]*if[ \t]+" ni "[ \t]*(;[ \t]*then([ \t].*)?|(#.*)?)$"
 }
 function swap(s, from, to,    at, out) {
   if (from == "") return s
@@ -170,46 +197,84 @@ function trim(s) {
   sub(/[ \t]+$/, "", s)
   return s
 }
+function unq(s) {
+  gsub("\\$[\"" sq "]", "", s)
+  gsub("[\\\\\"" sq "]", "", s)
+  return s
+}
 function sure() {
   return !lost && !ended && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
 }
-function push(kind, m) { nblk++; blk[nblk] = kind; mode[nblk] = m; bid[nblk] = ++nbid }
+# Whether a stop where a command starts is in a function body (fnb) or a
+# ( ) subshell, or stops only a shell that is not interactive: in a case on
+# $- after its *i* branch (icase, iseen), in the then branch of an if on an
+# ni test (niif), or on an ni_line.
+function harmless(    j) {
+  if (pending) return 1
+  for (j = 1; j <= nblk; j++) {
+    if (fnb[j] || blk[j] == "(" || (blk[j] == "case" && icase[j] && iseen[j]) || (blk[j] == "if" && niif[j])) return 1
+  }
+  return curline ~ ni_line
+}
+function push(kind, m) {
+  nblk++; blk[nblk] = kind; mode[nblk] = m; bid[nblk] = ++nbid
+  fnb[nblk] = 0; icase[nblk] = 0; ipat[nblk] = 0; iseen[nblk] = 0; niif[nblk] = 0
+}
 function shut(kind, m) {
   if (nblk && blk[nblk] == kind && (m == "" || mode[nblk] == m)) nblk--
   else lost = 1
 }
 function tok_word(w,    k, m, opens, u) {
+  linewords++
   prevcmd = 0
   afterfname = 0
   last = w
   if (fnparen) { lost = 1; return }
   if (redir) { redir = 0; return }
-  # A word that stops the shell, also with a backslash in it (\return), and
-  # bye in zsh; anywhere, not only where a command starts.
-  u = w
-  gsub(/\\/, "", u)
-  if (u == "return" || u == "exit" || u == "exec" || u == "logout" || u == "bye") ended = 1
+  # A word after an exec where a command starts, other than the targets of
+  # its redirections: exec runs that command in place of the shell.
+  if (execpend) {
+    execpend = 0
+    ended = 1
+    if (exechere) stopped = 1
+  }
+  # A word that stops the shell, also with a backslash or quotes in it
+  # (\return, "return"), and bye in zsh; anywhere, not only where a command
+  # starts. Where a command starts, it stops the file (stopped) unless it is
+  # harmless; an exec there only once a command follows it (above).
+  u = unq(raw)
+  if (u == "return" || u == "exit" || u == "exec" || u == "logout" || u == "bye") {
+    if (u == "exec" && cmd && !testmode) { execpend = 1; exechere = !harmless() }
+    else {
+      ended = 1
+      if (cmd && !testmode && !harmless()) stopped = 1
+    }
+  }
   if (testmode) { if (w == "]]") { testmode = 0; cmd = 0 } return }
   k = nblk ? blk[nblk] : ""
   m = nblk ? mode[nblk] : ""
-  if (k == "case" && m == "head") { if (w == "in") mode[nblk] = "pat"; return }
-  if (k == "case" && m == "pat") { if (w == "esac") { nblk--; cmd = 0 } return }
+  if (k == "case" && m == "head") { if (w == "in") mode[nblk] = "pat"; else if (u == "$-") icase[nblk] = 1; return }
+  if (k == "case" && m == "pat") { if (w == "esac") { nblk--; cmd = 0 } else if (u == "*i*") ipat[nblk] = 1; return }
   if (k == "loop" && m == "head") { if (w == "do") { mode[nblk] = "body"; cmd = 1 } return }
   opens = (substr(w, length(w)) == "{")
   if (fname) {
     fname = 0
     cmd = 1
-    if (opens) { push("{", ""); return }
+    if (opens) { push("{", ""); fnb[nblk] = 1; return }
     pending = 1
     if (w !~ /\)$/) afterfname = 1
     return
   }
-  if (opens) { push("{", ""); cmd = 1; pending = 0; return }
+  if (opens) { push("{", ""); fnb[nblk] = pending; cmd = 1; pending = 0; return }
   if (!cmd) return
   pending = 0
-  if (w == "if") { push("if", ""); return }
+  if (w == "if") { push("if", ""); niif[nblk] = (linewords == 1 && curline ~ ni_if); return }
   if (w == "then") { if (k != "if") lost = 1; return }
-  if (w == "elif" || w == "else") { if (k != "if") lost = 1; else if (nblk == 1) branched = 1; return }
+  if (w == "elif" || w == "else") {
+    if (k != "if") lost = 1
+    else { niif[nblk] = 0; if (nblk == 1) branched = 1 }
+    return
+  }
   if (w == "fi") { shut("if", ""); cmd = 0; return }
   if (w == "case") { push("case", "head"); cmd = 0; return }
   if (w == "for" || w == "select") { push("loop", "head"); cmd = 0; return }
@@ -220,7 +285,7 @@ function tok_word(w,    k, m, opens, u) {
   if (w == "}") { shut("{", ""); cmd = 0; return }
   if (w == "[[") { testmode = 1; cmd = 0; return }
   if (w == "function") { fname = 1; cmd = 0; return }
-  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect") return
+  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect" || w == "builtin" || w == "command") return
   if (w == "foreach" || w == "repeat" || w == "coproc" || w == "end") { lost = 1; return }
   if (w ~ /\(\)$/ && w !~ /=/) { pending = 1; return }
   cmd = 0
@@ -234,6 +299,7 @@ function tok_op(o,    k, m, wasprev, wasafter) {
   if (testmode) return
   if (o == "<<" || o == "<<-") { lost = 1; return }
   if (o == "<" || o == ">" || o == ">>" || o == "<>" || o == ">|" || o == "&>" || o == "&>>" || o == ">&" || o == "<&" || o == "<<<") { redir = 1; return }
+  execpend = 0
   if (o == ")" && fnparen) { fnparen = 0; pending = 1; cmd = 1; return }
   if (fnparen) { lost = 1; return }
   if (o == "(" && (wasprev || wasafter)) { fnparen = 1; return }
@@ -247,15 +313,23 @@ function tok_op(o,    k, m, wasprev, wasafter) {
   if (k == "case" && m == "head") { lost = 1; return }
   if (k == "loop" && m == "head") { if (o != ";") lost = 1; return }
   if (o == ";;" || o == ";&" || o == ";;&" || o == ";|") {
-    if (k == "case" && m == "cmd") { mode[nblk] = "pat"; cmd = 0 } else lost = 1
+    if (k == "case" && m == "cmd") {
+      mode[nblk] = "pat"
+      cmd = 0
+      # Only ;; ends the match: after ;& the next branch runs too, and after
+      # ;;& or ;| the next patterns are tested.
+      if (o == ";;" && ipat[nblk]) iseen[nblk] = 1
+      if (o != ";&") ipat[nblk] = 0
+    } else lost = 1
     return
   }
-  if (o == "(") { if (cmd) { push("(", ""); pending = 0 } else lost = 1; return }
+  if (o == "(") { if (cmd) { push("(", ""); fnb[nblk] = pending; pending = 0 } else lost = 1; return }
   if (o == ")") { shut("(", ""); cmd = 0; return }
   if (cmd) lost = 1
   cmd = 1
 }
 function newline(    k, m) {
+  execpend = 0
   if (redir || fnparen || fname) lost = 1
   redir = 0
   fnparen = 0
@@ -273,9 +347,21 @@ function newline(    k, m) {
 }
 function open_ctx(t, n) { nctx++; ctx[nctx] = t; par[nctx] = n }
 function shut_ctx(c) { nctx--; if (!nctx) word = word c }
+# The word that ends at i on line s: raw gets its text, quotes and all.
+function endword(s, i) {
+  raw = raw substr(s, wstart, i - wstart)
+  tok_word(word)
+  word = ""; raw = ""; inword = 0
+}
 function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
   n = length(s)
   bs = 0
+  curline = s
+  linewords = 0
+  cmtat = 0
+  # wstart: where the word being read starts on this line (1 for one that
+  # goes on from the line before, whose text so far is in raw).
+  wstart = 1
   # esc: where the last character written with a backslash is on this line
   # (0 for the line break before it, when the line before ended in one).
   esc = ctxbs ? 0 : -1
@@ -298,7 +384,8 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
         if (c == "$" && substr(s, i + 1, 1) == "(") { open_ctx("C", 1); i++; continue }
         continue
       }
-      # C ($( )), R ($(( ))) and P (( ) in a word) end at their closing ).
+      # C ($( ), <( ), >( )), R ($(( ))) and P (( ) in a word) end at their
+      # closing ).
       if (c == sq && t != "R") { open_ctx("S", 0); continue }
       if (c == "\"") { open_ctx("D", 0); continue }
       if (c == "`") { open_ctx("B", 0); continue }
@@ -312,8 +399,8 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
       }
       if (t == "C" && substr(s, i, 3) == "<<<") { i += 2; continue }
       if (t == "C" && substr(s, i, 2) == "<<") lost = 1
-      # A case in $( ) has patterns that end in ), which this count of
-      # parentheses would take as the end of the $( ).
+      # A case in $( ) (or <( ), >( )) has patterns that end in ), which this
+      # count of parentheses would take as the end of the $( ).
       if (t == "C" && substr(s, i, 4) == "case" && (i == 1 || substr(s, i - 1, 1) ~ /[ \t;(|&]/) && (i + 4 > n || substr(s, i + 4, 1) ~ /[ \t;]/)) lost = 1
       # A comment: a # at the start of a line, or after a blank (in $( )
       # also after ; or (), unless that line break or character is written
@@ -330,14 +417,15 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
       }
       continue
     }
+    if (!inword) wstart = i
     if (c == "\\") {
       if (i == n) { bs = 1; break }
       word = word substr(s, i, 2); inword = 1; i++
       continue
     }
-    if (c == "#" && !inword) break
+    if (c == "#" && !inword) { cmtat = i; break }
     if (c == " " || c == "\t") {
-      if (inword) { tok_word(word); word = ""; inword = 0 }
+      if (inword) endword(s, i)
       continue
     }
     if (c == sq) { open_ctx("S", 0); word = word c; inword = 1; continue }
@@ -353,12 +441,15 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
       continue
     }
     if (c == "(" && inword) { open_ctx("P", 1); word = word c; continue }
+    # <( ) and >( ) hold commands, as $( ) does.
     if ((c == "<" || c == ">") && substr(s, i + 1, 1) == "(") {
-      open_ctx("P", 1); word = word c "("; inword = 1; i++
+      open_ctx("C", 1); word = word c "("; inword = 1; i++
       continue
     }
     if (index(";&|<>()", c)) {
-      if (inword) { tok_word(word); word = ""; inword = 0 }
+      # Digits right before < or > name the descriptor it redirects.
+      if (inword && (c == "<" || c == ">") && word ~ /^[0-9]+$/ && raw == "") { word = ""; inword = 0 }
+      else if (inword) endword(s, i)
       three = substr(s, i, 3)
       two = substr(s, i, 2)
       if (three == ";;&" || three == "<<<" || three == "<<-" || three == "&>>") op = three
@@ -370,11 +461,16 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
     }
     word = word c; inword = 1
   }
-  if (nctx) return
+  # A word in a quote or $( ) goes on on the next line, after a line break
+  # (none after a backslash there, which joins the lines).
+  if (nctx) {
+    raw = raw (ctxbs ? substr(s, wstart, n - wstart) : substr(s, wstart) "\n")
+    return
+  }
   # A line that ends in a backslash goes on on the next line, and so does
   # the word it ends in (a # that starts the next line is part of it).
-  if (bs) { cont = 1; return }
-  if (inword) { tok_word(word); word = ""; inword = 0 }
+  if (bs) { raw = raw substr(s, wstart, n - wstart); cont = 1; return }
+  if (inword) endword(s, n + 1)
   newline()
 }
 '
@@ -519,20 +615,25 @@ adds_to_path() {
       track($0)
     }
     END {
-      if (ENVIRON["scan_end"] == "1") exit !(!fish || (!fdepth && !fended && !flost && !fcont))
+      if (ENVIRON["scan_end"] == "1") {
+        # (A file that adds the directory already gets no line.)
+        if (found) exit 0
+        if (fish) exit !(!fdepth && !fended && !flost && !fcont)
+        exit !(!lost && !stopped && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname)
+      }
       exit !found
     }
   ' "$1" 2>/dev/null
 }
 
-# Whether a line appended at the end of fish file $1 surely runs in every
-# fish shell that reads it: no block is left open, no return, exit or exec
-# came before it (as in `status is-login || return`), the reader did not
-# lose track, and the last line does not go on. Always true for sh, bash and
-# zsh files, whose usual early stops (Ubuntu's ~/.bashrc returns in
-# non-interactive shells) do not keep a new terminal from reading the line.
+# Whether a line appended at the end of startup file $1 surely runs in every
+# new terminal: no block is left open, the reader did not lose track, and the
+# last line does not go on; in a fish file, no return, exit or exec came
+# before it (as in `status is-login || return`); in an sh, bash or zsh file,
+# none stopped it (startup_awk: not one in a function or a ( ) subshell, an
+# exec with only redirections, nor one that stops only a shell that is not
+# interactive, as Ubuntu's ~/.bashrc does).
 appended_line_runs() {
-  case "$1" in *.fish) ;; *) return 0 ;; esac
   [ -f "$1" ] || return 0
   scan_end=1
   adds_to_path "$1"
@@ -553,9 +654,11 @@ appended_line_runs() {
 # own number, so an if that a later `fi; if` or `done; if` opens is another
 # one), on a line for which sure() would be true but for that one open if
 # (not after a line that ends in && or \, nor inside another block), and only
-# when that if then ends with `fi` alone on its line, so that it runs in this
-# shell (not `fi | cmd` or `fi &`, which run it in a subshell). The reader's
-# limits (startup_awk) apply here too.
+# when that if then ends with `fi` alone on its line or followed only by
+# redirections (`fi >/dev/null 2>&1`), so that it runs in this shell (not
+# `fi | cmd` or `fi &`, which run it in a subshell). Each line is matched
+# without the comment that track() finds on it, so a quoted # ("#") is not
+# taken as one. The reader's limits (startup_awk) apply here too.
 reads_dot_profile() {
   [ -f "$1" ] || return 1
   scan_profile="$HOME/.profile" awk "$startup_awk"'
@@ -563,12 +666,14 @@ reads_dot_profile() {
       p = "(~|\\$HOME)/\\.profile"
       src = "(\\.|source)[ \t]+" p
       exists = "(\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]|\\[\\[[ \t]+-[efrs][ \t]+" p "[ \t]+\\]\\]|test[ \t]+-[efrs][ \t]+" p ")"
-      tail = "[ \t]*;?[ \t]*(#.*)?$"
+      tail = "[ \t]*;?[ \t]*$"
+      # Redirections after a compound command, which still runs in this shell.
+      redirs = "([ \t]*[0-9]*(>|>>|<|>&|<&|&>|&>>|>\\|)[ \t]*[^ \t;&|<>()]+)*"
       alone = "^" src tail
       guarded = "^" exists "[ \t]*&&[ \t]*" src tail
-      one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" tail
+      one_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then[ \t]+" src "[ \t]*;[ \t]*fi" redirs tail
       open_if = "^if[ \t]+" exists "[ \t]*;[ \t]*then" tail
-      close_if = "^fi" tail
+      close_if = "^fi" redirs tail
       abs = ENVIRON["scan_profile"]
       # opened: the number of the multi-line if that tests ~/.profile, while
       # it is open; sourced: the same, once its then branch reads ~/.profile.
@@ -577,7 +682,14 @@ reads_dot_profile() {
       found = 0
     }
     {
-      line = swap($0, sq abs sq, "$HOME/.profile")
+      top = sure()
+      cur = (nblk == 1) ? bid[1] : 0
+      in_then = opened && cur == opened && !branched && blk[1] == "if"
+      in_then = in_then && !lost && !ended && !nctx && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
+      was = nblk
+      track($0)
+      line = cmtat ? substr($0, 1, cmtat - 1) : $0
+      line = swap(line, sq abs sq, "$HOME/.profile")
       line = swap(line, abs, "$HOME/.profile")
       line = swap(line, "${HOME}", "$HOME")
       # A quoted ~, or a ~ right before a quote, is not the home directory;
@@ -585,14 +697,8 @@ reads_dot_profile() {
       gsub("[\"" sq "]~|~[\"" sq "]", "@QUOTED@", line)
       gsub(/"/, "", line)
       line = trim(line)
-      top = sure()
-      cur = (nblk == 1) ? bid[1] : 0
-      in_then = opened && cur == opened && !branched && blk[1] == "if"
-      in_then = in_then && !lost && !ended && !nctx && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
       if (top && (line ~ alone || line ~ guarded || line ~ one_if)) { found = 1; exit }
       if (in_then && line ~ alone) sourced = opened
-      was = nblk
-      track($0)
       if (top && was == 0 && nblk == 1) { opened = (line ~ open_if) ? bid[1] : 0; sourced = 0; branched = 0 }
       if (opened && cur == opened && (nblk == 0 || bid[1] != opened)) {
         # That if ended on this line.
@@ -782,7 +888,9 @@ else
   info "resolving latest release..."
   tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep '"tag_name"' | head -n1 | cut -d'"' -f4)"
-  [ -n "$tag" ] || err "could not resolve latest release tag"
+  # GitHub answers at most 60 requests an hour from one address without a
+  # token, which a shared office or CI address can use up.
+  [ -n "$tag" ] || err "could not resolve the latest release from api.github.com (it answers at most 60 requests an hour from one address without a token); set AXOCOATL_VERSION to a release tag, such as v1.5.0, to install that release without asking it"
 fi
 
 tarball="${BIN}-${tag}-${target}.tar.gz"

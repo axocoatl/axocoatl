@@ -22,7 +22,9 @@ const root = resolve(positionalArguments[0] || sourceRoot);
 const builtRoot = root !== sourceRoot;
 // While demo/one-app/films/PENDING names the CLI version, the films are not
 // recorded: every non-film rule still applies, film media, provenance and asset
-// rules are skipped and reported, and a built site must contain no film at all.
+// rules are skipped and reported, and a built site must contain no film at all
+// and no showcase page, which holds nothing but films (its source is still
+// checked).
 const { version: productVersion, pending: filmsPending } = filmMode(repositoryRoot);
 const skippedFilmRules = [];
 const pages = [
@@ -30,6 +32,8 @@ const pages = [
   'install/index.html', 'integrations/openrouter/index.html', 'pricing/index.html',
   'showcase/index.html', 'why/index.html',
 ];
+// The pages this root holds: a pending build has no showcase.
+const builtPages = filmsPending && builtRoot ? pages.filter((page) => page !== 'showcase/index.html') : pages;
 const scripts = [
   'components/ax-site-nav.js', 'components/ax-footer.js',
   'components/ax-theme-toggle.js', 'components/ax-cli-snippet.js',
@@ -164,6 +168,10 @@ function marketingRelativePath(path, label) {
 function destinationExists(url) {
   const clean = url.split(/[?#]/)[0];
   if (!clean.startsWith('/')) return true;
+  // The installer is written beside the built pages by verify-marketing-gate.sh
+  // (the release tag's scripts/install.sh when it deploys); the source tree has
+  // the repository's.
+  if (!builtRoot && clean === '/install.sh') return existsSync(resolve(repositoryRoot, 'scripts/install.sh'));
   const relative = clean.slice(1);
   if (!relative) return existsSync(join(root, 'index.html'));
   const exact = join(root, relative);
@@ -460,7 +468,7 @@ const declaredFilmMedia = new Set(films.filter(isRecord).flatMap((film) => [
 let skippedFilmReferences = 0;
 let pendingFilmNotes = 0;
 
-for (const page of pages) {
+for (const page of builtPages) {
   const path = join(root, page);
   const rawHtml = readRequired(path, page, 'utf8');
   if (rawHtml === null) continue;
@@ -574,11 +582,14 @@ for (const script of scripts) {
   if (source !== null && script.startsWith('components/')) checkRetiredPositioning(source, script);
 }
 
-// While the films are pending, /showcase shows only notes: it stays out of search
-// (noindex) and nothing links to it, so no visitor lands on twelve "recording
-// pending" placeholders.
+// While the films are pending, the built site has no /showcase (above), and its
+// source stays out of search (noindex) and unlinked, so no visitor lands on twelve
+// "recording pending" placeholders.
 if (filmsPending) {
-  const showcase = readRequired(join(root, 'showcase/index.html'), 'showcase/index.html', 'utf8');
+  if (builtRoot && existsSync(join(root, 'showcase'))) {
+    fail('showcase', `films for ${productVersion} are pending; a pending build must not ship the showcase page`);
+  }
+  const showcase = builtRoot ? null : readRequired(join(root, 'showcase/index.html'), 'showcase/index.html', 'utf8');
   if (showcase !== null && !/<meta\s+name="robots"\s+content="noindex"/i.test(showcase)) {
     fail('showcase/index.html', `films for ${productVersion} are pending; the showcase must carry <meta name="robots" content="noindex">`);
   }
@@ -1017,4 +1028,4 @@ if (errors.length) {
 const filmSummary = filmsPending
   ? `12 manifest films pending for ${productVersion}`
   : `12 manifest films${strictFilms ? ', strict film contract' : ''}`;
-console.log(`Marketing validation passed: ${pages.length} pages, ${scripts.length} scripts, ${filmSummary}${releaseBound ? `, bound to v${productVersion}` : ''}.`);
+console.log(`Marketing validation passed: ${builtPages.length} pages, ${scripts.length} scripts, ${filmSummary}${releaseBound ? `, bound to v${productVersion}` : ''}.`);

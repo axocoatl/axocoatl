@@ -356,4 +356,91 @@ mod tests {
             "semantically close text should score clearly high (got {related})"
         );
     }
+
+    /// zip 1.1.4, which RUSTSEC-2026-0367, -0368 and -0369 cover (its
+    /// `extract()`), is in the tree only through candle-core, whose .npz and
+    /// .pth readers use it. `.cargo/audit.toml` ignores those advisories
+    /// because no Axocoatl code reaches either reader: this file is the only
+    /// one that uses Candle, and it loads safetensors only. Fail if another
+    /// Rust file of the workspace starts using Candle, or any names one of
+    /// those readers.
+    #[test]
+    fn candle_is_used_only_here_and_never_reads_npz_or_pth_archives() {
+        fn rust_files(directory: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap().flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == "target" || name == "node_modules" || name.starts_with('.') {
+                    continue;
+                }
+                if entry.file_type().unwrap().is_dir() {
+                    rust_files(&path, out);
+                } else if name.ends_with(".rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut files = Vec::new();
+        for top in [
+            "crates",
+            "axocoatl-cli",
+            "axocoatl-server",
+            "src",
+            "benches",
+            "examples",
+            "tests",
+        ] {
+            if root.join(top).is_dir() {
+                rust_files(&root.join(top), &mut files);
+            }
+        }
+        assert!(files.len() > 100, "found only {} Rust files", files.len());
+        let this = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/neural.rs")
+            .canonicalize()
+            .unwrap();
+        // Candle's readers of .npz and .pth (PyTorch pickle) archives.
+        let readers = [
+            "read_npz",
+            "write_npz",
+            "NpzTensors",
+            "from_npz",
+            "read_pth",
+            "PthTensors",
+            "from_pth",
+            "pickle::",
+            "npy::",
+        ];
+        for file in files {
+            let source = std::fs::read_to_string(&file).unwrap_or_default();
+            let is_this = file.canonicalize().ok().as_ref() == Some(&this);
+            // This file's own tests name the readers, to look for them.
+            let code = if is_this {
+                source.split("#[cfg(test)]").next().unwrap_or_default()
+            } else {
+                source.as_str()
+            };
+            let code: Vec<&str> = code
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect();
+            if !is_this {
+                assert!(
+                    !code.iter().any(|line| line.contains("candle_")),
+                    "{} uses Candle; keep it in neural.rs or review .cargo/audit.toml",
+                    file.display()
+                );
+            }
+            for reader in readers {
+                assert!(
+                    !code.iter().any(|line| line.contains(reader)),
+                    "{} names Candle's {reader}; review .cargo/audit.toml",
+                    file.display()
+                );
+            }
+        }
+        let this_source = std::fs::read_to_string(&this).unwrap();
+        assert!(this_source.contains("VarBuilder::from_buffered_safetensors("));
+    }
 }

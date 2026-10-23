@@ -637,12 +637,16 @@ What `egress` does not do:
   Podman's default seccomp profile; and on macOS the Podman VM mounts your home
   directory.
 
-- What the 1.5.0 release gate verified, end to end: macOS 26.6 on Apple silicon (48 GB)
-  with rootless Podman installed by onboarding, and Ubuntu 24.04 on arm64 with rootless
-  Podman from apt, in a VM; in CI, Ubuntu 24.04 on x86_64 and arm64 against a scripted
-  model server. Loadout runs there go through `egress` with the `hardened` workload. The
-  Podman versions are in the release's signed evidence bundle, under
-  `release-evidence/1.5.0/` in the repository.
+- What the 1.5.0 release gate requires to pass end to end on the release commit (the
+  release workflow publishes nothing until its signed evidence holds every required
+  path, short of a logged override by a listed maintainer): a Mac on Apple silicon
+  with rootless Podman that onboarding installs with Homebrew, and Linux with rootless
+  Podman that onboarding installs with apt (the gate's instructions use a new Ubuntu
+  24.04 VM); in CI, Ubuntu 24.04 on x86_64 and arm64 against a scripted model server.
+  Loadout runs there go through `egress` with the `hardened` workload. The Podman
+  versions go into the release's signed evidence bundle, under
+  `release-evidence/1.5.0/` in the repository ([Install](/start/install/) lists every
+  path).
 - Not yet verified: Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux
   enforcing, WSL2 on Windows, and rootful Podman, which loadout runs refuse.
 
@@ -743,9 +747,8 @@ this contract, and Axocoatl cannot change or always detect those settings.
   answers only an authenticated request from a loopback address and returns no token).
   Its access token goes only on a route to `chatgpt.com`; a request on a route to another
   host that names it is refused, and its refresh token goes only to OpenAI's token
-  endpoint. `axocoatl connect codex --api-key` also stores, as `codex-openai`, the OpenAI
-  API key Codex writes to that `auth.json` after the browser sign-in, read the same way
-  and never shown.
+  endpoint. The OpenAI API key Codex may write to that `auth.json` after the browser
+  sign-in is not stored: this version refuses `axocoatl connect codex --api-key`.
   A route adds it on your computer; it never enters a container, a record or a log. It is not encrypted at rest, and a backup of the data
   root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer

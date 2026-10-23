@@ -58,8 +58,9 @@ agents:
 
 Both models run on the same [native Ollama server](/configure/providers/#configure-ollama).
 Ollama has to hold both models: if they do not fit in memory together, it unloads one
-to load the other; Axocoatl sets nothing that keeps or unloads either. Onboarding
-offers `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) with 48 to 95 GB of memory;
+to load the other; Axocoatl sets nothing that keeps or unloads either. Unless models
+already installed fit and make a pair, which come first, onboarding offers
+`qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) with 48 to 95 GB of memory;
 `gpt-oss:20b` as reviewer has not been measured. The measured reviewer,
 `gpt-oss:120b` (65 GB), needs a machine with roughly 96 GB of memory or more.
 

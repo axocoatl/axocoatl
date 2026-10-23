@@ -662,7 +662,7 @@ path_codex() {
   install_once || { path_end; return; }
   signed_out_before "no Codex sign-in was stored before this path" codex-chatgpt
   onboard "onboard --update --writer codex" --update --writer codex
-  confirm "Codex billing was set to the ChatGPT plan" "Did onboarding ask how to bill Codex, and did you choose the ChatGPT plan?"
+  confirm "Codex billing was set to the ChatGPT plan" "Did onboarding say Codex runs bill to your ChatGPT plan (codex-chatgpt), without offering an OpenAI API key?"
   signed_in_during_onboarding "Codex was signed in with ChatGPT in the browser during onboarding" codex-chatgpt \
     "Did onboarding open the ChatGPT sign-in page in the browser, and did you sign in there?"
   doctor_ready fix-codex

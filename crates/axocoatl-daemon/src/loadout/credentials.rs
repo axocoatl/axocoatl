@@ -52,8 +52,7 @@ fn billing_switch(chosen: &str, stored: impl Fn(&str) -> bool) -> &'static str {
 fn how_to_connect(runtime: AgentRuntime) -> String {
     match runtime {
         AgentRuntime::Codex => "run `axocoatl connect codex` to sign in with your ChatGPT plan \
-             (stored as codex-chatgpt), or `axocoatl connect codex --api-key` to also store the \
-             OpenAI API key OpenAI issues with that sign-in (as codex-openai), then run again"
+             (stored as codex-chatgpt), then run again"
             .into(),
         _ => runtime
             .credentials()
@@ -232,9 +231,7 @@ mod tests {
                         error.to_string(),
                         "Agent writer (codex) has credential auto, and neither codex-openai nor \
                          codex-chatgpt is stored: run `axocoatl connect codex` to sign in with \
-                         your ChatGPT plan (stored as codex-chatgpt), or `axocoatl connect codex \
-                         --api-key` to also store the OpenAI API key OpenAI issues with that \
-                         sign-in (as codex-openai), then run again"
+                         your ChatGPT plan (stored as codex-chatgpt), then run again"
                     );
                     assert_eq!(run.agent_credentials["writer"], AUTO_CREDENTIAL);
                 }
@@ -251,10 +248,15 @@ mod tests {
             let mut run = resolved("fix-codex", &[("credential", name)]);
             let error = choose(&mut run.clone(), |_| false).unwrap_err();
             assert!(matches!(error, RunError::Usage(_)), "{error}");
+            let how = if name == "codex-openai" {
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`"
+            } else {
+                "run `axocoatl connect codex"
+            };
             assert!(
                 error.to_string().starts_with(&format!(
                     "Agent writer (codex) needs the credential {name} ({}), and it is not \
-                     stored yet: run `axocoatl connect codex",
+                     stored yet: {how}",
                     credential_words(name)
                 )),
                 "{error}"

@@ -150,8 +150,10 @@ pub(crate) fn health_url(host: &str, port: u16) -> String {
 }
 
 async fn healthy(url: &str) -> bool {
+    // The daemon is on this computer: no proxy can reach it.
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
+        .no_proxy()
         .build()
     else {
         return false;
@@ -244,6 +246,7 @@ struct DaemonHealth {
 async fn daemon_health(url: &str) -> Option<DaemonHealth> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
+        .no_proxy()
         .build()
         .ok()?;
     let response = client.get(url).send().await.ok()?;

@@ -49,9 +49,9 @@ not been measured. The reviewer in the
 measurements below, `gpt-oss:120b` (65 GB), needs about 96 GB of memory or more. With less
 memory, use OpenRouter for the reviewer (or for both), or Claude Code or Codex as the
 writer. What each path needs and downloads is on
-[the install page](https://axocoatl.ai/install#what-it-needs). The local pair
-(`qwen3-coder:30b` and `gpt-oss:20b`) ran end to end on a 48 GB Mac in the 1.5.0
-release gate.
+[the install page](https://axocoatl.ai/install#what-it-needs). The 1.5.0 release gate
+requires `axocoatl run fix` with the local models onboarding sets up to pass end to end
+on a Mac on Apple silicon; its evidence names the models and the Mac's memory.
 
 An example of the summary `axocoatl run fix` prints on standard output (progress goes to
 standard error), here for a small Go repository with the paging bug above whose check is
@@ -263,31 +263,50 @@ Prebuilt releases support macOS 11 or newer and GNU/Linux with glibc 2.35 or
 newer on x86_64 and ARM64; on Windows, Axocoatl runs inside WSL2 (not yet verified), and
 there is no native Windows binary.
 
-What the 1.5.0 release gate verified on the release commit, from the published install
-command to passing runs:
+The 1.5.0 release gate ([`docs/RELEASE_GATE.md`](docs/RELEASE_GATE.md)) requires each
+of these paths to pass on the release commit, starting from the published install
+command, and lists the steps each must show. The release workflow publishes nothing
+until the signed evidence bundle under `release-evidence/1.5.0/` holds every one of
+them; the only way past it is a logged override that only maintainers listed in the
+repository can start, and the release notes must then name the paths not run.
 
-- **macOS 26.6 on Apple silicon (48 GB)**, with Axocoatl, Podman and Ollama uninstalled
-  first (the downloaded models kept). `axocoatl onboard` installed Podman and Ollama with
-  Homebrew and set up local models, Claude Code, Codex and OpenRouter in turn (OpenRouter
-  through onboarding's browser sign-in).
-  `axocoatl run fix` with local models passed on Node.js (with and without
-  dependencies), Python (pytest), Rust and Go repositories, and `fix-claude-code`,
-  `fix-codex` and `fix` with OpenRouter models on Node.js and Python, each receipt
-  verified. `fix-claude-code` with `--keep pr` also opened a pull request, on which the
-  docs' verify-receipt Action passed, and the workbench in Safari went from the sign-in
-  link to a commit.
-- **Ubuntu 24.04 on arm64**, in a VM, as a new user: onboarding installed Podman with apt
-  and added a range of subordinate ids if the user had none, each with `sudo` after
-  asking, and connected OpenRouter through its own browser sign-in. With those OpenRouter
-  models, `axocoatl run fix` passed on the same Node.js, Python, Rust and Go
-  repositories, each receipt verified.
+- **macOS on Apple silicon**, with a person answering onboarding at the Mac, on an
+  account that starts without Axocoatl, its data or stored credentials, without Podman
+  or a Podman machine, and without Ollama or its settings (Ollama's downloaded models
+  may stay):
+  - onboarding installs Podman and Ollama with Homebrew, creates the Podman machine,
+    turns Ollama's cloud models off and ends ready with a passing first run; then
+    `axocoatl run fix` with the local models onboarding set up passes on Node.js (with
+    and without dependencies), Python (pytest), Rust and Go repositories;
+  - onboarding signs in Claude Code, and Codex with your ChatGPT plan, in the browser,
+    and connects OpenRouter through its browser sign-in without writing the key to the
+    configuration; `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models pass
+    on Node.js and Python, and `fix-claude-code` with `--keep pr` opens a pull request
+    whose receipt the docs' verify-receipt Action verifies;
+  - the Always-On Service, chosen in onboarding, runs a passing fix, restarts when
+    `onboard --update` changes the configuration, then stops and uninstalls; a run with
+    the Podman machine stopped starts it and passes; timed runs on real repositories
+    each end with a verdict;
+  - the workbench in Safari goes from the sign-in link to a commit, shows a Session's
+    Preview inside the workbench only (a Preview address opened in a tab, reached by a
+    redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say
+    when another page floods `localhost` with cookies.
+- **Linux**, as a new user who starts without Axocoatl, its data or stored credentials,
+  or Podman, and whose subordinate ids the gate removes first (the gate's instructions
+  use a new Ubuntu 24.04 VM): onboarding installs Podman with apt and adds a range of
+  subordinate ids that overlaps no other user's, each with `sudo` after asking, connects
+  OpenRouter through its browser sign-in and installs no Ollama. With those OpenRouter
+  models, `axocoatl run fix` passes on the same repositories, and the Always-On Service
+  runs as a systemd user unit through to its uninstall.
 - **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install command, then
   onboarding with no terminal against a scripted model server (Podman already on the
-  runner, no first-run sample), and `axocoatl run fix` on the same repositories, each
-  receipt verified.
+  runner, no first-run sample), and `axocoatl run fix` passes on the same repositories.
 
-Each path's transcript, times, downloads and the Podman, Ollama, Claude Code and Codex
-versions it ran are in the signed evidence bundle under `release-evidence/1.5.0/`.
+Every receipt and record of these runs is verified. The evidence also holds each path's
+transcript, times and downloads, the Podman, Ollama, Claude Code and Codex versions it
+ran, the models, the system, its memory and the account, and who answered each
+question: the person, or for the workbench's questions up to the commit, a WebDriver
+driver in Safari.
 
 Not yet verified: Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04,
 Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can
@@ -512,7 +531,6 @@ axocoatl loadouts list|show|validate
 axocoatl record verify <file>    Check a run's record bundle
 axocoatl connect claude-code     Sign in Claude Code and store its token, never shown
 axocoatl connect codex           Sign in Codex with your ChatGPT plan, never shown
-axocoatl connect codex --api-key  Also store the OpenAI API key OpenAI issues (not yet tested live)
 axocoatl connect codex --status|--refresh  Show the sign-in, or refresh it now (no token shown)
 axocoatl secret set <name>       Store another route credential from stdin or --from-env VAR
 axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)

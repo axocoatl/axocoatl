@@ -4,7 +4,10 @@ name: marketing-deploy
 # CLI product version already has a public GitHub release. release.yml calls this
 # workflow after publishing that release and requires the deployment to finish.
 # While demo/one-app/films/PENDING names the CLI version, the marketing gate
-# builds and validates the site without films, and that site is deployed.
+# builds and validates the site without films (and without the showcase page),
+# and that site is deployed. The install.sh it serves is always the one at the
+# CLI version's release tag (--installer-from-release), never main's, so a change
+# to scripts/install.sh on main does not trigger a deployment.
 on:
   push:
     branches: [main]
@@ -13,7 +16,6 @@ on:
       - 'llms.txt'
       - 'demo/one-app/films/portfolio.json'
       - 'demo/one-app/**'
-      - 'scripts/install.sh'
       - 'branding/**'
       - '.github/workflows/marketing-deploy.yml'
   workflow_dispatch:
@@ -94,11 +96,11 @@ jobs:
           sudo apt-get install -y ffmpeg
       - name: Build and verify release-bound marketing
         if: inputs.release_tag != ''
-        run: ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
+        run: ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing --installer-from-release
 
       - name: Build and verify standalone marketing content
         if: inputs.release_tag == ''
-        run: ./scripts/verify-marketing-gate.sh portable /tmp/axocoatl-marketing
+        run: ./scripts/verify-marketing-gate.sh portable /tmp/axocoatl-marketing --installer-from-release
 
       - name: Reprove the public release and frozen tag immediately before deployment
         env:

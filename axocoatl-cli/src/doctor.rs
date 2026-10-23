@@ -1793,10 +1793,14 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             axocoatl_daemon::external_agent::codex::CODEX_SECRET,
         ],
     };
+    // A setup that names the OpenAI API key, which this version cannot store
+    // (`connect codex --api-key` is refused): onboarding moves it to the
+    // ChatGPT plan and signs in. Such a setup is always the chosen writer, so
+    // this is never offered as leaving the configuration as it is.
     let codex_connect = if codex_credential.as_deref()
         == Some(axocoatl_daemon::external_agent::codex::CODEX_SECRET)
     {
-        "axocoatl connect codex --api-key-only"
+        "axocoatl onboard --update --writer codex"
     } else {
         "axocoatl connect codex"
     };
@@ -2327,8 +2331,10 @@ fn daemon_version_item(
 /// What `GET /health` of the daemon on `host:port` says its version is.
 pub(crate) async fn daemon_version(host: &str, port: u16) -> Option<String> {
     let url = crate::onboard::smoke::health_url(host, port);
+    // A daemon on this computer: no proxy can reach it.
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
         .ok()?
         .get(url)

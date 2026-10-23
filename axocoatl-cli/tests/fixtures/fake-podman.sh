@@ -16,6 +16,10 @@
 #   timeout-retrieving   the same, with Podman's other message for it (it
 #             cannot retrieve the exec session: no such container)
 #   timeout-other        the same, with another Podman error instead
+#   timeout-settling     as Podman 6.1 does at the lifetime: the login is
+#             killed (exit 137, no message), and for the first two
+#             `container exists` the container is still listed while
+#             `container inspect` no longer finds it; then it is gone
 #   readfail  the read exits 125 while the container is still running
 # `probe` exits at once (the tests run it until the file is not busy).
 set -u
@@ -38,10 +42,22 @@ case "${1:-}" in
   container)
     case "${2:-}" in
       exists)
-        case "$mode" in timeout*) exit 1 ;; esac
+        case "$mode" in
+          timeout-settling)
+            listed=$(($(cat "$here/listed" 2>/dev/null || echo 0) + 1))
+            printf '%s\n' "$listed" > "$here/listed"
+            [ "$listed" -le 2 ] && exit 0
+            exit 1
+            ;;
+          timeout*) exit 1 ;;
+        esac
         exit 0
         ;;
       inspect)
+        if [ "$mode" = timeout-settling ]; then
+          printf 'Error: no container with ID 4567ef found in database: no such container\n' >&2
+          exit 125
+        fi
         printf 'true\n'
         exit 0
         ;;
@@ -73,6 +89,10 @@ case "${1:-}" in
       printf 'Press Enter once you have signed in\n'
       IFS= read -r _ || exit 70
       case "$mode" in
+        timeout-settling)
+          sleep 2
+          exit 137
+          ;;
         timeout*)
           sleep 2
           case "$mode" in

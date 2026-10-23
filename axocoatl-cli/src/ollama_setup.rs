@@ -328,8 +328,10 @@ pub fn candidates(models: &[InstalledModel]) -> Vec<InstalledModel> {
 /// List the models installed on an Ollama server.
 pub async fn installed_models(base_url: &str) -> Result<Vec<InstalledModel>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    // Ollama is on this computer or its network: never through a proxy.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let response = client
@@ -802,6 +804,7 @@ pub async fn loaded_memory(base_url: &str, model: &str) -> Option<(u64, u64)> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
         .ok()?;
     let ps: Value = client

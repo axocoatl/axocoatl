@@ -1782,7 +1782,29 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     assert!(!VALUE_ON_COMMAND_LINE.contains("sk-"));
     let refused = flag_takes_no_value("--api-key");
     assert!(refused.contains("--api-key takes no value"), "{refused}");
-    assert!(refused.contains("signs you in in the browser"), "{refused}");
+    assert!(
+        refused.contains("`axocoatl connect codex` signs you in to your ChatGPT plan"),
+        "{refused}"
+    );
+    assert!(!VALUE_ON_COMMAND_LINE.contains("--api-key"));
+    assert!(!refused.contains("connect codex --api-key"), "{refused}");
+    // This version refuses the API-key route, pointing to the ChatGPT
+    // sign-in, and the device-code refusal of the route's internals stays.
+    for flag in ["--api-key", "--api-key-only"] {
+        let refused = codex::api_key_not_available(flag);
+        assert!(
+            refused.starts_with(&format!(
+                "axocoatl connect codex {flag} is not available in Axocoatl {}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{refused}"
+        );
+        assert!(refused.contains("nothing was run or stored"), "{refused}");
+        assert!(
+            refused.contains("--param credential=codex-chatgpt"),
+            "{refused}"
+        );
+    }
     assert!(!flag_takes_no_value("--no-browser").contains("signs you in"));
     let parsed = Cli::try_parse_from(["x", "codex", "--api-key"]).unwrap();
     let ConnectCommands::Codex {
@@ -2806,19 +2828,55 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     assert!(screen.contains("Error: no exec session with ID 0123abcd found\r\n"));
     assert!(fixture.stored().is_none());
 
-    let fixture = ContainerFixture::new("readfail");
+    // Podman 6.1 at the lifetime: the login is killed, and for a few
+    // seconds the container is still listed while `container inspect` no
+    // longer finds it. The read waits for it to go and says the time ran
+    // out, instead of the read's own error.
+    let fixture = ContainerFixture::new("timeout-settling");
     let login = fixture.login(None, Duration::from_secs(1));
     let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     let failure = result.expect_err("nothing is stored");
-    assert_eq!(failure.code, exit::FAILURE);
-    assert!(
-        failure
-            .message
-            .starts_with("Codex's auth.json could not be read from the login container"),
-        "{}",
-        failure.message
+    assert_eq!(failure.code, exit::NO_TOKEN, "{}", failure.message);
+    assert_eq!(
+        failure.message,
+        codex_container::timed_out(Duration::from_secs(1))
     );
     assert!(fixture.stored().is_none());
+    let calls = fixture.calls();
+    assert_eq!(calls.matches("container exists\n").count(), 3, "{calls}");
+    assert_eq!(calls.matches("container inspect\n").count(), 2, "{calls}");
+
+    // A read that fails while the container still runs says so: within its
+    // lifetime at once, and past it (a lifetime of 1 ms, and here the
+    // container never ends) after the wait.
+    for (lifetime, outlived) in [
+        (codex_container::DEFAULT_LIFETIME, false),
+        (Duration::from_millis(1), true),
+    ] {
+        let fixture = ContainerFixture::new("readfail");
+        let login = fixture.login(None, lifetime);
+        let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+        let failure = result.expect_err("nothing is stored");
+        assert_eq!(failure.code, exit::FAILURE);
+        assert!(
+            failure
+                .message
+                .starts_with("Codex's auth.json could not be read from the login container"),
+            "{}",
+            failure.message
+        );
+        assert!(fixture.stored().is_none());
+        let calls = fixture.calls();
+        let inspected = calls.matches("container inspect\n").count();
+        assert!(
+            if outlived {
+                inspected >= 2
+            } else {
+                inspected == 1
+            },
+            "{lifetime:?}: {calls}"
+        );
+    }
 
     assert_eq!(
         codex_container::exists_args("n"),
