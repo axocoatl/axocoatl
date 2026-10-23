@@ -9,10 +9,11 @@
 //! each run's environment fails at setup, which still makes its Session,
 //! Workspace and run record.
 use super::*;
+use crate::child_daemon_test_support::{
+    audited_ollama, log_warnings_to_stderr, run_child, succeeded,
+};
 use crate::loadout::api::RunRequest;
 use std::os::unix::fs::PermissionsExt;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const CHILD: &str = "AXOCOATL_COPIED_DATA_ROOT_TEST_CHILD";
 const TEST: &str =
@@ -38,60 +39,6 @@ budgets:
 prompt: "{task}"
 "#;
 
-/// The audited local Ollama the native provider admits.
-async fn model_server() -> MockServer {
-    let server = MockServer::start().await;
-    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
-    let digest = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
-    for (verb, route, body) in [
-        (
-            "GET",
-            "/api/version",
-            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
-        ),
-        (
-            "GET",
-            "/api/status",
-            serde_json::json!({"cloud": {"disabled": true}}),
-        ),
-        (
-            "POST",
-            "/api/show",
-            serde_json::json!({"details": {"format": "gguf"}, "capabilities": ["completion", "tools"]}),
-        ),
-        (
-            "GET",
-            "/api/tags",
-            serde_json::json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest}]}),
-        ),
-        (
-            "GET",
-            "/api/ps",
-            serde_json::json!({"models": [{"name": MODEL, "model": MODEL, "digest": digest,
-                "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"}]}),
-        ),
-    ] {
-        Mock::given(method(verb))
-            .and(path(route))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-    }
-    // A load acknowledges the model it was asked for.
-    Mock::given(method("POST"))
-        .and(path("/api/generate"))
-        .respond_with(|request: &wiremock::Request| {
-            let body: serde_json::Value = request.body_json().unwrap_or_default();
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "model": body["model"], "created_at": "2026-10-19T00:00:00Z",
-                "response": "", "done": true, "done_reason": "load"
-            }))
-        })
-        .mount(&server)
-        .await;
-    server
-}
-
 fn run_request(repo: &std::path::Path, id: &str) -> RunRequest {
     RunRequest {
         loadout: "copied".into(),
@@ -106,30 +53,6 @@ fn run_request(repo: &std::path::Path, id: &str) -> RunRequest {
         environment: Default::default(),
         request_id: id.into(),
     }
-}
-
-/// A fake rootless Podman that starts no container.
-fn fake_podman(root: &std::path::Path) -> String {
-    let bin = root.join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let podman = bin.join("podman");
-    std::fs::write(
-        &podman,
-        r#"#!/bin/sh
-case "$*" in
-  --version) printf 'podman version 5.0.0\n' ;;
-  'machine list --format json') printf '[{"Running":true}]\n' ;;
-  'info --format json') printf '{}\n' ;;
-  'info --format {{.Host.Security.Rootless}}') printf 'true\n' ;;
-  'ps '*) ;;
-  'rm '*|'volume rm '*|'network rm '*) ;;
-  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
-esac
-"#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
-    format!("{}:/usr/bin:/bin", bin.display())
 }
 
 /// `cp -a FROM TO`, as the backup page says.
@@ -152,58 +75,33 @@ fn ownership_id(data: &std::path::Path) -> String {
 }
 
 /// One daemon start in a child process: `phase` on data root `data`, with
-/// repository `repo`. Returns its output when it succeeded.
+/// repository `repo`. Returns its output.
 async fn child(
     root: &std::path::Path,
     phase: &str,
     data: &std::path::Path,
     repo: &std::path::Path,
 ) -> std::process::Output {
-    tokio::time::timeout(
-        Duration::from_secs(300),
-        tokio::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, phase)
-            .env("AXOCOATL_DATA_DIR", data)
-            .env("AXOCOATL_COPIED_DATA_ROOT_REPO", repo)
-            .env("AXOCOATL_COPIED_DATA_ROOT_IDS", root.join("ids.json"))
-            .env("AXOCOATL_SOCKET_PATH", root.join("ipc/daemon.sock"))
-            .env("PATH", fake_podman_path(root))
-            .current_dir(root)
-            .kill_on_drop(true)
-            .output(),
+    let ids = root.join("ids.json");
+    run_child(
+        TEST,
+        CHILD,
+        phase,
+        root,
+        data,
+        &[
+            ("AXOCOATL_COPIED_DATA_ROOT_REPO", repo.as_os_str()),
+            ("AXOCOATL_COPIED_DATA_ROOT_IDS", ids.as_os_str()),
+        ],
     )
     .await
-    .unwrap()
-    .unwrap()
-}
-
-fn fake_podman_path(root: &std::path::Path) -> String {
-    if !root.join("bin/podman").exists() {
-        return fake_podman(root);
-    }
-    format!("{}:/usr/bin:/bin", root.join("bin").display())
-}
-
-fn succeeded(output: &std::process::Output) -> String {
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.status.success(), "{text}");
-    text
 }
 
 /// The body each child runs.
 async fn phase_body(phase: &str) {
     // The parent reads what the daemon logs.
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .try_init();
-    let server = model_server().await;
+    log_warnings_to_stderr();
+    let server = audited_ollama(&[MODEL]).await;
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("axocoatl.yaml");
     std::fs::write(

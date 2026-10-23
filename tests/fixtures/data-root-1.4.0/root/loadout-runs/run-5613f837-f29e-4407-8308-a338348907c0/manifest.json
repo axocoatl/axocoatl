@@ -1,0 +1,30 @@
+{
+  "schema": "axocoatl.run-manifest/1",
+  "run_id": "run-5613f837-f29e-4407-8308-a338348907c0",
+  "session_id": "ses-d14ac217-9a2c-440f-b903-dd0e8bb1dbe1",
+  "workspace_id": "wsp-803dbfeb-c72d-4725-ab91-8f8171b6758c",
+  "loadout": {
+    "id": "fix",
+    "version": 1,
+    "kind": "fix",
+    "digest": "b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41",
+    "builtin": true
+  },
+  "loadout_text": "# Built-in loadout: fix. Owner: workstream review-qa.\n# One writer, the project's required checks, and a required review by a\n# different model (up to three rounds). The reviewer numbers its findings\n# F1, F2, ...; the writer answers every finding the host sends back with\n# accept or reject and a reason, in an ADJUDICATIONS block, and the host\n# records each answer (a finding left unanswered is \"missing\" and the run\n# needs attention). A reviewer on the writer's model is warned about, not\n# refused.\nschema: axocoatl.loadout/1\nid: fix\nversion: 1\nname: Fix\ndescription: >-\n  One writer makes the change; the host runs the required checks on the exact\n  final files and a reviewer on a different model must approve the result.\nkind: fix\nparams:\n  writer_model:\n    kind: model\n    required: true\n    description: provider:model of the writer\n  reviewer_model:\n    kind: model\n    required: true\n    description: provider:model of the reviewer (use a different model than the writer)\nagents:\n  - id: writer\n    role: writer\n    model: { param: writer_model }\n    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]\n    instructions: >-\n      You own this change. Find the relevant code and tests, make the change,\n      run the project's check command and fix failures, then compare your diff\n      with the task. When the host sends you review findings, answer every\n      finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced\n      JSON array with one object per finding, {\"id\": \"F1\", \"decision\":\n      \"accept\" or \"reject\", \"reason\": \"...\"}. Reject only with a concrete\n      reason (the code that shows the finding is wrong). Fix each finding you\n      accept, run the checks again, and give your final answer.\nchecks:\n  - name: tests\n    run: { detected: true }\n    timeout: 3m\nreview:\n  model: { param: reviewer_model }\n  rounds: 3\n  tools: [read_file, list_dir, grep, glob]\n  adjudicate: true\n  instructions: >-\n    Review the change against the task and against every contract and edge\n    case the docs, comments and tests describe. Read the code the change\n    touches, not only the diff. Number each finding F1, F2, ... at the start\n    of its line, with file:line, what is wrong and what to change; report\n    only defects, not style. Give the verdict line the host asks for,\n    VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.\nbudgets:\n  agent: { activations: 4, invocations: 400, tokens: 4000000, cost_usd: 10 }\n  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }\n  wall_clock: 60m\nprompt: |\n  {task}\nsandbox:\n  network: egress\n  workload: hardened\n",
+  "params": {
+    "reviewer_model": "ollama:reviewer-model",
+    "writer_model": "ollama:writer-model"
+  },
+  "task": "Create fixed.txt saying fixed",
+  "repo": "/private/tmp/axo140/repo",
+  "repo_head": "f63ba3c73e4b646436886e4cd2fcd181db6a39a0",
+  "dirty_paths": [],
+  "started_at_ms": 1792780183851,
+  "options": {
+    "axocoatl_version": "1.4.0",
+    "check_command": "test -f fixed.txt",
+    "keep": "none",
+    "request_id": "cli-52083e24-d930-41bd-af31-01a43f05ed9e",
+    "setup_command": null
+  }
+}

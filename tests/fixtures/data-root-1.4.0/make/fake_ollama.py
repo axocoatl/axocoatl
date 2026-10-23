@@ -3,14 +3,15 @@
 experiments. Its version is read from VERSION_FILE on every request so a
 test can "upgrade" Ollama under a running daemon.
 
-Models: writer-model:latest calls bash once with the command in
-WRITER_CMD_FILE (read per turn), then answers. reviewer-model:latest
+Models: writer-model:latest delegates DELEGATED_TASK to the helper scout
+when it is offered `delegate`, and otherwise calls bash once with the
+command in WRITER_CMD_FILE (read per turn); then it answers.
+helper-model:latest answers the delegated task. reviewer-model:latest
 answers VERDICT: APPROVE. Every request is logged to LOG_FILE.
 """
 import json
 import os
 import sys
-import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,8 +23,9 @@ LOG_FILE = os.path.join(STATE, "requests.log")
 DIGESTS = {
     "writer-model:latest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
     "reviewer-model:latest": "b80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b73",
+    "helper-model:latest": "c80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b74",
 }
-STOP_PROBE = None
+DELEGATED_TASK = "Read README.md and say in one sentence what this repository is for."
 loaded = {"model": "writer-model:latest"}
 
 
@@ -111,9 +113,17 @@ class Handler(BaseHTTPRequestHandler):
         last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
         tool_after = any(m.get("role") == "tool" for m in messages[last_user + 1:])
         created = "2026-10-23T00:00:00Z"
+        offered = [t.get("function", {}).get("name") for t in body.get("tools", [])]
         if model.startswith("reviewer-model"):
             message = {"role": "assistant", "content": "The change does what was asked.\n\nVERDICT: APPROVE"}
-        elif not tool_after and any(t.get("function", {}).get("name") == "bash" for t in body.get("tools", [])):
+        elif model.startswith("helper-model"):
+            message = {"role": "assistant", "content": "It is a tiny repository for the Axocoatl 1.4.0 data-root fixture."}
+        elif not tool_after and "delegate" in offered:
+            message = {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "call_" + uuid.uuid4().hex[:12],
+                 "function": {"index": 0, "name": "delegate",
+                              "arguments": {"helper": "scout", "task": DELEGATED_TASK}}}]}
+        elif not tool_after and "bash" in offered:
             with open(WRITER_CMD_FILE) as handle:
                 command = handle.read().strip()
             message = {"role": "assistant", "content": "", "tool_calls": [

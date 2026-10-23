@@ -845,8 +845,12 @@ if [ -x "${dest}/${BIN}" ]; then
     ''|*[!0-9.]*) previous="" ;;
   esac
 fi
+# A daemon is `axocoatl serve` or `axocoatl dev` run by name or by a path,
+# which may hold spaces (a home folder's name can). The program's path is
+# words up to `/axocoatl`, none of them an option.
 daemons="$(ps -A -o args= 2>/dev/null | awk -v bin="$BIN" '
-  { n = split($1, parts, "/"); if (parts[n] == bin && ($2 == "serve" || $2 == "dev")) print $1 " " $2 }
+  BEGIN { daemon = "^((/[^ ]*( [^ /-][^ ]*)*)/)?" bin " (serve|dev) " }
+  match($0 " ", daemon) { print substr($0 " ", RSTART, RLENGTH - 1) }
 ' || true)"
 [ -z "$previous" ] || info "replacing Axocoatl ${previous} at ${dest}/${BIN}"
 
@@ -855,16 +859,34 @@ install -m 0755 "${tmp}/${BIN}" "${dest}/${BIN}" 2>/dev/null \
 
 info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
 # A new minor or major release reads data the older one wrote, and the older
-# one cannot always read it back: the way back is the backup.
+# one cannot always read it back: the way back is the backup. Going back is
+# said as such: the older release may not start on what the newer one wrote.
 new_version="${tag#v}"
-case "$previous" in
-  '') ;;
-  "${new_version%.*}".*) ;;
-  *) info "upgrading from Axocoatl ${previous}: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to ${previous} needs that backup)" ;;
+direction=""
+[ -z "$previous" ] || direction="$(awk -v old="$previous" -v new="$new_version" 'BEGIN {
+  split(old, o, "."); split(new, n, ".")
+  for (i = 1; i <= 2; i++) {
+    if (o[i] + 0 < n[i] + 0) { print "upgrade"; exit }
+    if (o[i] + 0 > n[i] + 0) { print "downgrade"; exit }
+  }
+}')"
+case "$direction" in
+  upgrade) info "upgrading from Axocoatl ${previous}: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to ${previous} needs that backup)" ;;
+  downgrade) info "going back from Axocoatl ${previous} to ${new_version}: an older release may not start on data a newer one wrote. Before Axocoatl starts again, read how to go back at https://docs.axocoatl.ai/operate/upgrade/ (it uses the backup made before upgrading to ${previous})" ;;
 esac
-if [ -n "$daemons" ]; then
-  info "an Axocoatl daemon is running ($(printf '%s\n' "$daemons" | head -n 1)); it runs the binary it started from until it restarts. Restart it: '${BIN} service stop' and '${BIN} service start' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again"
-fi
+# A daemon of the copy just replaced (by its path, as the Always-On Service
+# records it, or by name) runs the new one once it restarts; a daemon of
+# another copy, such as a build from source, does not.
+dest_real="$(CDPATH='' cd -P -- "$dest" 2>/dev/null && pwd)" || dest_real="$dest"
+printf '%s\n' "$daemons" | while IFS= read -r daemon; do
+  case "$daemon" in
+    '') ;;
+    "${dest}/${BIN} "*|"${dest_real}/${BIN} "*|"${BIN} "*)
+      info "an Axocoatl daemon is running (${daemon}); it runs the binary it started from until it restarts. Restart it: '${BIN} service stop' and '${BIN} service start' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again" ;;
+    *)
+      info "an Axocoatl daemon runs another copy (${daemon}); this install does not change it. To run ${tag} instead, stop it and start ${dest}/${BIN} (for the Always-On Service: '${dest}/${BIN} service install', then '${BIN} service stop' and '${BIN} service start')" ;;
+  esac
+done
 
 # --- Keep it on PATH for new terminals ---
 # A stock macOS PATH (/etc/paths) has no ~/.local/bin, and an `export` typed

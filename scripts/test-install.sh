@@ -1583,27 +1583,31 @@ previous_minor="$(printf '%s' "$current_version" | awk -F. '{print $1 "." ($2 - 
 reset_path_case
 P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$previous_minor" \
   P_PS="/sbin/launchd
-/usr/local/bin/axocoatl serve
-/usr/local/bin/axocoatl onboard"
+$work_dir/upgrade-with-a-running-service-system/axocoatl serve
+$work_dir/upgrade-with-a-running-service-system/axocoatl onboard"
 run_path_case upgrade-with-a-running-service
 path_expect_status 0
 path_expect_text "replacing Axocoatl $previous_minor at $case_system/axocoatl"
 path_expect_text "upgrading from Axocoatl $previous_minor: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to $previous_minor needs that backup)"
-path_expect_text "an Axocoatl daemon is running (/usr/local/bin/axocoatl serve); it runs the binary it started from until it restarts. Restart it: 'axocoatl service stop' and 'axocoatl service start' for the Always-On Service, or stop 'axocoatl dev' (Ctrl-C) and start it again"
+path_expect_text "an Axocoatl daemon is running ($case_system/axocoatl serve); it runs the binary it started from until it restarts. Restart it: 'axocoatl service stop' and 'axocoatl service start' for the Always-On Service, or stop 'axocoatl dev' (Ctrl-C) and start it again"
+path_refuse_text 'another copy'
 [ "$("$case_system/axocoatl" --version)" = "axocoatl $current_version" ] \
   || fail "$name did not replace the older copy"
 path_expect_next_runs
 
-# A reinstall of the same minor release, with `axocoatl dev` running from
-# another directory: no upgrade note, the daemon still named.
+# A reinstall of the same minor release, with `axocoatl dev` run by name
+# and a build from source running: no upgrade note; the daemon run by name
+# restarts on the new copy, the build's does not.
 reset_path_case
 P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$current_version" \
-  P_PS="axocoatl dev --config /home/a/config.yaml"
+  P_PS="axocoatl dev --config /home/a/config.yaml
+/home/a/src/axocoatl/target/debug/axocoatl dev"
 run_path_case reinstall-with-dev-running
 path_expect_status 0
 path_expect_text "replacing Axocoatl $current_version at $case_system/axocoatl"
 path_refuse_text 'upgrading from'
-path_expect_text "an Axocoatl daemon is running (axocoatl dev)"
+path_expect_text "an Axocoatl daemon is running (axocoatl dev); it runs the binary it started from until it restarts"
+path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service stop' and 'axocoatl service start')"
 
 # Other programs and other axocoatl commands are not daemons, and a file
 # that does not report a version is not named.
@@ -1617,6 +1621,22 @@ path_expect_status 0
 path_refuse_text 'replacing Axocoatl'
 path_refuse_text 'upgrading from'
 path_refuse_text 'daemon is running'
+
+# Going back: an older release installed over a newer one is not called an
+# upgrade, and needs no backup to return to the newer one. The copy is in a
+# home folder whose name holds a space, and so is its running daemon's path.
+next_minor="$(printf '%s' "$current_version" | awk -F. '{print $1 "." ($2 + 1) ".0"}')"
+reset_path_case
+P_HOME_NAME='home dir' P_ON_PATH=yes P_EXISTING="$next_minor" \
+  P_PS="$work_dir/downgrade-with-a-daemon-in-a-folder-with-a-space/home dir/.local/bin/axocoatl serve --config /x/config.yaml"
+run_path_case downgrade-with-a-daemon-in-a-folder-with-a-space
+path_expect_status 0
+path_expect_text "replacing Axocoatl $next_minor at $case_dest/axocoatl"
+path_refuse_text 'upgrading from'
+path_refuse_text 'needs that backup'
+path_expect_text "going back from Axocoatl $next_minor to $current_version: an older release may not start on data a newer one wrote. Before Axocoatl starts again, read how to go back at https://docs.axocoatl.ai/operate/upgrade/ (it uses the backup made before upgrading to $next_minor)"
+path_expect_text "an Axocoatl daemon is running ($case_dest/axocoatl serve); it runs the binary it started from until it restarts"
+path_refuse_text 'another copy'
 
 # A GitHub Actions step: the directory goes into $GITHUB_PATH for the job's
 # later steps, and no profile is asked about or written.

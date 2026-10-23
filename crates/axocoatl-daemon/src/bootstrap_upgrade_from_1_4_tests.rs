@@ -1,96 +1,45 @@
 //! A data root Axocoatl 1.4.0 wrote, as a person upgrading from 1.4 brings
-//! it (`tests/fixtures/data-root-1.4.0`, which the 1.4.0 binary made with
-//! Ollama 0.20.6; its README says how). This daemon starts on a copy of it,
+//! it (`tests/fixtures/data-root-1.4.0`, which the released 1.4.0 binary
+//! made with Ollama 0.20.6; its README says how). This daemon starts on a copy of it,
 //! keeps every Session, turn and run, and a Team reviewed on Ollama 0.20.6
 //! that is applied again unchanged is observed again on the Ollama that runs
-//! now, so its turns stop asking for the review (applied as it was, it kept
-//! the 0.20.6 profile and the turns kept refusing).
+//! now, its Agents and the helpers they delegate to, so its turns and its
+//! helpers stop asking for the review (applied as it was, it kept the 0.20.6
+//! profiles and they kept refusing).
 //!
 //! The daemon runs in a child process (bootstrap reads `AXOCOATL_DATA_DIR`
 //! from the process environment) with a fake Podman, so no container starts.
 use super::session_team::{SessionTeamApply, SessionTeamEdit};
 use super::*;
+use crate::child_daemon_test_support::{
+    audited_ollama, log_warnings_to_stderr, run_child, succeeded,
+};
 use std::os::unix::fs::PermissionsExt;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::MockServer;
 
 const CHILD: &str = "AXOCOATL_UPGRADE_FROM_1_4_TEST_CHILD";
 const TEST: &str =
     "bootstrap::upgrade_from_1_4_tests::a_1_4_0_data_root_starts_keeps_its_history_and_reviews_its_team_again";
 /// The fixture's `axocoatl run fix` (1.4.0, pass) and its Session.
-const RUN: &str = "run-cbbb39b5-8605-4483-93fa-4a4e7560c58e";
-const RUN_SESSION: &str = "ses-d4a64148-0070-4a0d-b8ce-3c6a2a6d6945";
-/// A workbench Session with an applied Team and one turn, and one never used.
-const WORKBENCH_SESSION: &str = "ses-ab45e515-4cef-4d72-9495-33336a4a4745";
-const EMPTY_SESSION: &str = "ses-6628f8ac-ccfe-4bd0-a7cd-e1afc1596148";
+const RUN: &str = "run-5613f837-f29e-4407-8308-a338348907c0";
+const RUN_SESSION: &str = "ses-d14ac217-9a2c-440f-b903-dd0e8bb1dbe1";
+/// A workbench Session with an applied Team and one turn; one whose lead
+/// delegated to a helper in its turn; and one never used.
+const WORKBENCH_SESSION: &str = "ses-774ef092-f6b4-495e-851d-ba160ce5ecd5";
+const HELPERS_SESSION: &str = "ses-4efe1aa0-b8ba-40c6-ae14-292136a1a0ff";
+const EMPTY_SESSION: &str = "ses-c466c04c-83bb-4a00-a584-9015c7c40830";
 
-/// Ollama 0.40.6 with the fixture's two models (new digests, as 0.40's
-/// registry serves them).
-async fn ollama() -> MockServer {
-    let server = MockServer::start().await;
-    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
-    let models = ["writer-model:latest", "reviewer-model:latest"];
-    let digest = |index: usize| format!("{:064x}", index + 0x40_06);
-    for (verb, route, body) in [
-        (
-            "GET",
-            "/api/version",
-            serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION}),
-        ),
-        (
-            "GET",
-            "/api/status",
-            serde_json::json!({"cloud": {"disabled": true}}),
-        ),
-        (
-            "POST",
-            "/api/show",
-            serde_json::json!({"details": {"format": "gguf"}, "capabilities": ["completion", "tools"]}),
-        ),
-        (
-            "GET",
-            "/api/tags",
-            serde_json::json!({"models": models.iter().enumerate().map(|(index, name)| {
-                serde_json::json!({"name": name, "model": name, "digest": digest(index)})
-            }).collect::<Vec<_>>()}),
-        ),
-        (
-            "GET",
-            "/api/ps",
-            serde_json::json!({"models": models.iter().enumerate().map(|(index, name)| {
-                serde_json::json!({"name": name, "model": name, "digest": digest(index),
-                    "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp"})
-            }).collect::<Vec<_>>()}),
-        ),
-    ] {
-        Mock::given(method(verb))
-            .and(path(route))
-            .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
-            .await;
-    }
-    Mock::given(method("POST"))
-        .and(path("/api/generate"))
-        .respond_with(|request: &wiremock::Request| {
-            let body: serde_json::Value = request.body_json().unwrap_or_default();
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "model": body["model"], "created_at": "2026-10-23T00:00:00Z",
-                "response": "", "done": true, "done_reason": "load"
-            }))
-        })
-        .mount(&server)
-        .await;
-    server
-}
-
-/// How many times a model was loaded (each observation loads it once).
-async fn loads(server: &MockServer) -> usize {
+/// How many times `model` was loaded (each observation loads it once).
+async fn loads(server: &MockServer, model: &str) -> usize {
     server
         .received_requests()
         .await
         .unwrap()
         .iter()
-        .filter(|request| request.url.path() == "/api/generate")
+        .filter(|request| {
+            request.url.path() == "/api/generate"
+                && request.body_json::<serde_json::Value>().unwrap()["model"] == model
+        })
         .count()
 }
 
@@ -119,14 +68,50 @@ fn unchanged_edit(view: &super::session_team::SessionTeamView, command: &str) ->
     }
 }
 
+/// Apply the Team of `session` again unchanged, as `command`, and return
+/// its lead's change: `(kind, history)`.
+async fn apply_unchanged(
+    daemon: &AxocoatlDaemon,
+    session: &str,
+    command: &str,
+) -> (String, String) {
+    let view = daemon.session_team(session).await.unwrap();
+    let edit = unchanged_edit(&view, command);
+    let preview = daemon
+        .preview_session_team(session, edit.clone())
+        .await
+        .unwrap_or_else(|error| panic!("{session}: {error}"));
+    let lead = preview
+        .changes
+        .iter()
+        .find(|change| change.slot_id == view.slots[0].slot_id)
+        .unwrap();
+    let change = (lead.kind.clone(), lead.history.clone());
+    daemon
+        .apply_session_team(
+            session,
+            SessionTeamApply {
+                edit,
+                review_digest: preview.review_digest,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{session}: {error}"));
+    change
+}
+
 async fn child_body() {
     // The parent reads what the daemon logs.
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .try_init();
-    let server = ollama().await;
+    log_warnings_to_stderr();
+    // Ollama 0.40.6 with the fixture's models (new digests, as 0.40's
+    // registry serves them).
+    let server = audited_ollama(&[
+        "writer-model:latest",
+        "reviewer-model:latest",
+        "helper-model:latest",
+    ])
+    .await;
+    // The fixture's configuration: the lead and its read-only helpers.
     let config = format!(
         r#"
 agents:
@@ -138,6 +123,24 @@ agents:
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     sampling:
       max_tokens: 4096
+  - id: reviewer
+    name: "Reviewer"
+    provider: ollama
+    model: "reviewer-model"
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    sampling:
+      max_tokens: 4096
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: "helper-model"
+    role: worker
+    tools: [read_file, list_dir, grep, glob]
+    writes: []
+    sampling:
+      max_tokens: 2048
 providers:
   ollama:
     base_url: {}
@@ -158,15 +161,31 @@ consolidation:
         .into_iter()
         .map(|session| session.id)
         .collect();
-    for session in [RUN_SESSION, WORKBENCH_SESSION, EMPTY_SESSION] {
+    for session in [
+        RUN_SESSION,
+        WORKBENCH_SESSION,
+        HELPERS_SESSION,
+        EMPTY_SESSION,
+    ] {
         assert!(
             listed.iter().any(|id| id == session),
             "{session}: {listed:?}"
         );
     }
-    for (session, input) in [
-        (RUN_SESSION, "Create fixed.txt saying fixed"),
-        (WORKBENCH_SESSION, "Add notes.txt"),
+    // Each turn's work, by the Agent that did it: the run's writer and its
+    // reviewer, Lead, and Lead with the helper it delegated to.
+    for (session, input, activations) in [
+        (
+            RUN_SESSION,
+            "Create fixed.txt saying fixed",
+            &["writer", "reviewer"][..],
+        ),
+        (WORKBENCH_SESSION, "Add notes.txt", &["Lead"][..]),
+        (
+            HELPERS_SESSION,
+            "Ask Scout what this repository is for",
+            &["Lead", "Scout"][..],
+        ),
     ] {
         let history = daemon
             .versioned_session_history_snapshot(session)
@@ -183,6 +202,18 @@ consolidation:
             axocoatl_session::turn_contract::LogicalTurnState::Completed,
             "{session}"
         );
+        let names: Vec<&str> = turn
+            .activations
+            .iter()
+            .map(|activation| match &activation.definition_name {
+                axocoatl_session::execution_content::ContentResolution::Available {
+                    content,
+                    ..
+                } => content.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(names, activations, "{session}");
         let axocoatl_session::execution_content::ContentResolution::Available {
             content: request,
             ..
@@ -217,49 +248,84 @@ consolidation:
         ),
         ("ollama", "writer-model")
     );
-    let before = loads(&server).await;
-    let edit = unchanged_edit(&view, "reapply-after-upgrade");
-    let preview = daemon
-        .preview_session_team(RUN_SESSION, edit.clone())
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    let writer = preview
-        .changes
-        .iter()
-        .find(|change| change.slot_id == view.slots[0].slot_id)
-        .unwrap();
+    let before = loads(&server, "writer-model:latest").await;
     assert_eq!(
-        (writer.kind.as_str(), writer.history.as_str()),
-        ("replaced", "new conversation")
+        apply_unchanged(&daemon, RUN_SESSION, "reapply-after-upgrade").await,
+        ("replaced".into(), "new conversation".into())
     );
     assert!(
-        loads(&server).await > before,
+        loads(&server, "writer-model:latest").await > before,
         "the writer is observed again"
     );
-    daemon
-        .apply_session_team(
-            RUN_SESSION,
-            SessionTeamApply {
-                edit,
-                review_digest: preview.review_digest,
-            },
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    let view = daemon.session_team(RUN_SESSION).await.unwrap();
-    let preview = daemon
-        .preview_session_team(RUN_SESSION, unchanged_edit(&view, "reapply-again"))
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-    let writer = preview
-        .changes
-        .iter()
-        .find(|change| change.slot_id == view.slots[0].slot_id)
-        .unwrap();
     assert_eq!(
-        (writer.kind.as_str(), writer.history.as_str()),
-        ("retained", "preserved")
+        apply_unchanged(&daemon, RUN_SESSION, "reapply-again").await,
+        ("retained".into(), "preserved".into())
     );
+
+    // The helpers 1.4.0 approved, Reviewer and Scout, hold profiles recorded
+    // on Ollama 0.20.6, which cannot connect: each refuses delegated work.
+    let view = daemon.session_team(HELPERS_SESSION).await.unwrap();
+    let delegation = view.slots[0].delegation.as_ref().expect("approved helpers");
+    let mut approved: Vec<&str> = delegation
+        .workers
+        .iter()
+        .map(|worker| worker.template_id.as_str())
+        .collect();
+    approved.sort_unstable();
+    assert_eq!(approved, ["reviewer", "scout"]);
+    let helpers = daemon.connect_approved_helpers(HELPERS_SESSION).await;
+    assert_eq!(helpers.len(), 2);
+    for (template, _, version, connected) in &helpers {
+        assert_eq!(version, "0.20.6", "{template}");
+        assert!(connected.is_err(), "{template}: {connected:?}");
+    }
+    // Applied again unchanged, the lead and each helper are observed again
+    // on 0.40.6, and each helper connects.
+    let before = (
+        loads(&server, "reviewer-model:latest").await,
+        loads(&server, "helper-model:latest").await,
+    );
+    assert_eq!(
+        apply_unchanged(&daemon, HELPERS_SESSION, "helpers-after-upgrade").await,
+        ("replaced".into(), "new conversation".into())
+    );
+    assert!(loads(&server, "reviewer-model:latest").await > before.0);
+    assert!(loads(&server, "helper-model:latest").await > before.1);
+    let observed = daemon.connect_approved_helpers(HELPERS_SESSION).await;
+    assert_eq!(observed.len(), 2);
+    for (template, definition, version, connected) in &observed {
+        assert_eq!(
+            version,
+            axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION,
+            "{template}"
+        );
+        assert!(connected.is_ok(), "{template}: {connected:?}");
+        let (_, old, ..) = helpers.iter().find(|(id, ..)| id == template).unwrap();
+        assert_ne!(definition, old, "{template} is observed again");
+    }
+    // Applied once more, they are kept as they are: nothing is loaded.
+    let before = (
+        loads(&server, "reviewer-model:latest").await,
+        loads(&server, "helper-model:latest").await,
+    );
+    assert_eq!(
+        apply_unchanged(&daemon, HELPERS_SESSION, "helpers-again").await,
+        ("retained".into(), "preserved".into())
+    );
+    assert_eq!(
+        (
+            loads(&server, "reviewer-model:latest").await,
+            loads(&server, "helper-model:latest").await,
+        ),
+        before
+    );
+    let kept = daemon.connect_approved_helpers(HELPERS_SESSION).await;
+    assert_eq!(kept.len(), 2);
+    for (template, definition, _, connected) in &kept {
+        assert!(connected.is_ok(), "{template}: {connected:?}");
+        let (_, observed, ..) = observed.iter().find(|(id, ..)| id == template).unwrap();
+        assert_eq!(definition, observed, "{template} is kept");
+    }
     daemon.shutdown().await.unwrap();
 }
 
@@ -299,47 +365,7 @@ async fn a_1_4_0_data_root_starts_keeps_its_history_and_reviews_its_team_again()
     let root = root.path().canonicalize().unwrap();
     let data = root.join("data");
     copy_fixture(&fixture, &data);
-    let bin = root.join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let podman = bin.join("podman");
-    std::fs::write(
-        &podman,
-        r#"#!/bin/sh
-case "$*" in
-  --version) printf 'podman version 5.0.0\n' ;;
-  'machine list --format json') printf '[{"Running":true}]\n' ;;
-  'info --format json') printf '{}\n' ;;
-  'info --format {{.Host.Security.Rootless}}') printf 'true\n' ;;
-  'ps '*) ;;
-  'volume ls '*) ;;
-  'rm '*|'volume rm '*|'network rm '*) ;;
-  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
-esac
-"#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let output = tokio::time::timeout(
-        Duration::from_secs(300),
-        tokio::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, "1")
-            .env("AXOCOATL_DATA_DIR", &data)
-            .env("AXOCOATL_SOCKET_PATH", root.join("ipc/daemon.sock"))
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-            .current_dir(&root)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.status.success(), "{text}");
+    let text = succeeded(&run_child(TEST, CHILD, "1", &root, &data, &[]).await);
     // A copy of a 1.4.0 root (a restored backup, a migrated Mac) is taken
     // as one, not refused.
     assert!(

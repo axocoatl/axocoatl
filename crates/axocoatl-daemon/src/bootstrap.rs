@@ -23725,6 +23725,10 @@ mod copied_data_root_tests;
 #[path = "bootstrap_upgrade_from_1_4_tests.rs"]
 mod upgrade_from_1_4_tests;
 
+#[cfg(all(test, unix))]
+#[path = "bootstrap_recovered_turn_tests.rs"]
+mod recovered_turn_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

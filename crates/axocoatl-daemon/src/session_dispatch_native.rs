@@ -308,6 +308,21 @@ pub(crate) fn retained_profile_refused(configuration: &str) -> bool {
     )
 }
 
+/// Connect the retained provider profile `configuration` with
+/// `credentials`, as an activation under it connects: the step at which a
+/// turn or a delegated helper refuses a profile it can no longer use.
+#[cfg(test)]
+pub(crate) async fn connect_retained_profile(
+    configuration: &str,
+    credentials: &NativeProviderCredentials,
+) -> Result<()> {
+    serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
+        .map_err(error)?
+        .verify_credentials(credentials)
+        .await
+        .map(|_| ())
+}
+
 /// What one model call reserves under the retained provider profile
 /// `configuration` of the definition `config`. `None` for a profile that is
 /// not a native one (an external program's).

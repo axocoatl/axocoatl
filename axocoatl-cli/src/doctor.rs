@@ -1752,7 +1752,6 @@ fn is_loopback(host: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
-/// What `GET /health` of the daemon on `host:port` says its version is.
 /// The Daemon line: which Axocoatl the running daemon is, from its answer to
 /// the IPC version request (`ipc`) or, when it named none, from its
 /// `/health` (`health`), against this CLI's version `cli`. A daemon that
@@ -1795,6 +1794,7 @@ fn daemon_version_item(
     }
 }
 
+/// What `GET /health` of the daemon on `host:port` says its version is.
 pub(crate) async fn daemon_version(host: &str, port: u16) -> Option<String> {
     let url = crate::onboard::smoke::health_url(host, port);
     let response = reqwest::Client::builder()

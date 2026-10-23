@@ -1,12 +1,15 @@
 #!/bin/sh
 # Make ../root again with Axocoatl 1.4.0, as it was made:
 #   make.sh AXOCOATL_1_4_0 WORK_DIR
-# AXOCOATL_1_4_0 is an axocoatl built from the v1.4.0 tag; WORK_DIR is a new,
-# short directory (the daemon's socket is ./axo.sock in it). Podman must
-# answer, and python3 runs the stand-in for Ollama 0.20.6 (fake_ollama.py),
-# whose writer runs one bash command and whose reviewer approves. Ports 8373
-# and 8374 must be free. The data root records WORK_DIR's paths; the test
-# does not use them.
+# AXOCOATL_1_4_0 is Axocoatl 1.4.0 (the released binary or one built from the
+# v1.4.0 tag); WORK_DIR is a new directory (the daemon's socket is ./axo.sock
+# in it). The data root records WORK_DIR's paths and the fixture is public, so
+# give it a neutral path that names no person, such as /tmp/axo140 (the test
+# does not use them; on macOS it must be under /private or the home folder,
+# which the Podman machine shares). Podman must answer, and python3 runs the
+# stand-in for Ollama 0.20.6 (fake_ollama.py), whose writer delegates to its
+# helper or runs one bash command and whose reviewer approves. Ports 8373 and
+# 8374 must be free.
 set -eu
 [ "$#" -eq 2 ] || { echo "usage: make.sh AXOCOATL_1_4_0 WORK_DIR" >&2; exit 2; }
 axocoatl=$1
@@ -36,6 +39,15 @@ agents:
     writes: []
     sampling:
       max_tokens: 4096
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: "helper-model"
+    role: worker
+    tools: [read_file, list_dir, grep, glob]
+    writes: []
+    sampling:
+      max_tokens: 2048
 providers:
   ollama:
     base_url: "http://127.0.0.1:8373"
@@ -61,14 +73,18 @@ for _ in $(seq 1 60); do
 done
 
 # An `axocoatl run fix` that passes.
-echo 'printf "fixed\n" > fixed.txt' > "$work/ollama/writer-cmd"
+printf '%s\n' 'printf "fixed\n" > fixed.txt' > "$work/ollama/writer-cmd"
 "$axocoatl" run fix --task "Create fixed.txt saying fixed" --repo "$work/repo" \
   --check "test -f fixed.txt" --model writer=ollama:writer-model \
   --model reviewer=ollama:reviewer-model --config "$work/cfg/config.yaml"
 # A workbench Session on Lead with an applied Team and one turn.
-echo 'printf "notes\n" > notes.txt' > "$work/ollama/writer-cmd"
+printf '%s\n' 'printf "notes\n" > notes.txt' > "$work/ollama/writer-cmd"
 python3 -I "$here/workbench_session.py" http://127.0.0.1:8374 "$work/root/local-api-token" \
   "$work/repo" Notes "Add notes.txt"
+# A workbench Session whose Team lets Lead delegate to its helpers (Reviewer
+# and Scout, the read-only Workers), and one turn in which Lead asks Scout.
+python3 -I "$here/workbench_session.py" http://127.0.0.1:8374 "$work/root/local-api-token" \
+  "$work/repo" Helpers "Ask Scout what this repository is for" helpers
 # And one never used: no Team, no turn.
 python3 -I "$here/workbench_session.py" http://127.0.0.1:8374 "$work/root/local-api-token" \
   "$work/repo" Unused ""

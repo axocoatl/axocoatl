@@ -1,7 +1,9 @@
 """Make one workbench Session the way the app does: register the folder,
 create a Session on the configured `lead` Agent, apply its Team with the
 suggested budget, and send one request; with an empty REQUEST, only create
-it. Usage: workbench_session.py BASE_URL TOKEN_FILE REPO NAME REQUEST"""
+it. With `helpers`, the Team lets the lead delegate to the helpers the app
+offers (Let this Agent delegate to helpers), each with its own budget.
+Usage: workbench_session.py BASE_URL TOKEN_FILE REPO NAME REQUEST [helpers]"""
 import json
 import sys
 import time
@@ -10,6 +12,7 @@ import urllib.request
 import uuid
 
 base, token_file, repo, name, request_text = sys.argv[1:6]
+helpers = sys.argv[6:] == ["helpers"]
 token = open(token_file).read().strip()
 
 
@@ -55,7 +58,24 @@ for slot in view["slots"]:
     limits["cost_microunits"] = 0
     slot["limits"] = limits
     slot["expires_at_ms"] = now_ms + budget["expires_in_ms"]
+    proposal = view.get("proposed_delegation")
+    if helpers and proposal and proposal["slot_id"] == slot["slot_id"]:
+        # A helper's budget: the fix loadout's reviewer budget, as 1.5
+        # suggests; its output limit is its template's.
+        output = {template["template_id"]: template["max_output_tokens"]
+                  for template in view["templates"]}
+        slot["delegation"] = {
+            "workers": [{"template_id": helper,
+                         "limits": {"activations": 3, "invocations": 120, "tokens": 1500000,
+                                    "cost_microunits": 0},
+                         "max_output_tokens": output[helper], "adhoc_allowed": False}
+                        for helper in proposal["helpers"]],
+            "operations": proposal["operations"],
+            "max_nodes": proposal["max_nodes"],
+            "max_edges": proposal["max_edges"],
+        }
     slots.append(slot)
+assert not helpers or any("delegation" in slot for slot in slots), view
 edit = {
     "command_id": "team-" + uuid.uuid4().hex[:12],
     "expected_configuration_revision": view["configuration_revision"],

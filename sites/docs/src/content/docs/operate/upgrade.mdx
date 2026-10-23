@@ -174,7 +174,10 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
    keeps running the binary it started from until it restarts.
 5. Upgrade Ollama to 0.40.6 or later: `brew upgrade ollama && brew services restart ollama`
    with Homebrew, or `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`
-   on Linux. `axocoatl onboard` does it after asking.
+   on Linux. With the Ollama app on macOS, download it again from
+   [ollama.com/download](https://ollama.com/download), then quit and reopen it so that the
+   new version answers. `axocoatl onboard` upgrades a Homebrew or Linux install after
+   asking, and says what to do for the app.
 6. Check the setup. Doctor says when Ollama still runs 0.20.6, when a configured model is
    missing, and when a daemon that is still running is older than 1.5.0:
 
@@ -187,10 +190,11 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
 8. In each Session you continue, open **Team & budget**, select **Edit**, then
    **Preview** and **Apply**; nothing needs to change. A Team reviewed on Ollama 0.20.6
    says "Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again" until
-   then. Apply observes each of its Ollama Agents again on the Ollama that runs now, and
-   Preview shows each as replaced, with a new conversation, since Ollama 0.40 runs the
-   model in another engine. `axocoatl run` needs nothing: every run applies its loadout's
-   team in a new Session.
+   then, and so does each helper an Agent delegates to. Apply observes each of its Ollama
+   Agents and their Ollama helpers again on the Ollama that runs now. Preview shows each
+   such Agent as replaced, with a new conversation, since Ollama 0.40 runs the model in
+   another engine; a helper starts a new conversation each time it is given work.
+   `axocoatl run` needs nothing: every run applies its loadout's team in a new Session.
 
 </Steps>
 
@@ -210,6 +214,12 @@ describes, with the 1.4 binary: start Axocoatl 1.5 on the restored data root onc
 stop it, so that it records the copy's location (1.4.0 refuses a restored copy until
 then), then start 1.4.0. Work done with 1.5 is not in that backup. Axocoatl 1.4.0 runs
 native Ollama Sessions only on Ollama 0.20.6.
+
+The backup holds the data root, not your repositories. A large file that a 1.5 run left
+uncommitted in a repository can be a change too large for 1.4.0 to capture: with a
+1 MiB file left by a 1.5 run, 1.4.0's runs in that repository end needing attention
+("repository command output is incomplete or exceeds its capture bound"). Commit or
+move such a file before you run 1.4.0 there.
 
 ## Data written by 1.4
 
