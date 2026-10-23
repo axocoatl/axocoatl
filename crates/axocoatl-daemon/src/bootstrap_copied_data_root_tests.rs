@@ -108,24 +108,42 @@ fn run_request(repo: &std::path::Path, id: &str) -> RunRequest {
     }
 }
 
-/// A fake rootless Podman that starts no container.
+/// A fake rootless Podman that starts no container. `volume ls` lists
+/// `volumes.json` beside `bin` (none when it is missing); `ps` with a
+/// runtime authority label and the SearXNG role label lists
+/// `ps-<authority>-searxng`; each removal is appended to `removed`.
 fn fake_podman(root: &std::path::Path) -> String {
     let bin = root.join("bin");
     std::fs::create_dir(&bin).unwrap();
     let podman = bin.join("podman");
     std::fs::write(
         &podman,
-        r#"#!/bin/sh
+        format!(
+            r#"#!/bin/sh
 case "$*" in
   --version) printf 'podman version 5.0.0\n' ;;
-  'machine list --format json') printf '[{"Running":true}]\n' ;;
-  'info --format json') printf '{}\n' ;;
-  'info --format {{.Host.Security.Rootless}}') printf 'true\n' ;;
-  'ps '*) ;;
-  'rm '*|'volume rm '*|'network rm '*) ;;
+  'machine list --format json') printf '[{{"Running":true}}]\n' ;;
+  'info --format json') printf '{{}}\n' ;;
+  'info --format {{{{.Host.Security.Rootless}}}}') printf 'true\n' ;;
+  'ps '*)
+    authority=; role=
+    for arg in "$@"; do
+      case "$arg" in
+        label=io.axocoatl.runtime-authority=*) authority=${{arg#*=}}; authority=${{authority#*=}} ;;
+        label=io.axocoatl.role=searxng) role=-searxng ;;
+      esac
+    done
+    if [ -n "$authority" ] && [ -n "$role" ]; then cat "{root}/ps-$authority$role" 2>/dev/null; fi
+    true ;;
+  'volume ls '*) cat '{volumes}' 2>/dev/null || printf '[]\n' ;;
+  'rm '*|'volume rm '*|'network rm '*) echo "$*" >> '{removed}' ;;
   *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
 esac
 "#,
+            root = root.display(),
+            volumes = root.join("volumes.json").display(),
+            removed = root.join("removed").display(),
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -325,11 +343,54 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
     let output = succeeded(&child(&root, "restarted", &data, &repo).await);
     assert!(!output.contains("was copied or moved"), "{output}");
 
-    // The same root moved to another path.
+    // The same root moved to another path. Its Sessions' Podman volumes
+    // carry the runtime authority of the path it had, which it keeps while
+    // one of them does (an open Session's here), and then forgets.
+    let before = local_runtime_authority(&SecureDir::open(&data).unwrap()).unwrap();
+    let session: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("ids.json")).unwrap()).unwrap();
+    std::fs::write(
+        root.join("volumes.json"),
+        serde_json::to_vec(&serde_json::json!([{
+            "Name": format!("axo-egr-{}", session["session"].as_str().unwrap()),
+            "Labels": {"io.axocoatl.runtime-authority": before},
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    // A daemon killed there left its SearXNG, which carries it too: removed
+    // once it has exited; a running one is left, and the authority kept for
+    // it.
+    std::fs::write(
+        root.join(format!("ps-{before}-searxng")),
+        "axo-searxng-exited\texited\naxo-searxng-running\trunning\n",
+    )
+    .unwrap();
     let moved = root.join("moved");
     std::fs::rename(&data, &moved).unwrap();
     succeeded(&child(&root, "moved", &moved, &repo).await);
+    let previous = moved.join("previous-runtime-authorities.json");
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&std::fs::read(&previous).unwrap()).unwrap(),
+        std::slice::from_ref(&before)
+    );
+    let removed = std::fs::read_to_string(root.join("removed")).unwrap();
+    assert!(removed.contains(" axo-searxng-exited\n"), "{removed}");
+    assert!(!removed.contains("axo-searxng-running"), "{removed}");
+    // The volume goes; the running SearXNG keeps the authority.
+    std::fs::remove_file(root.join("volumes.json")).unwrap();
+    succeeded(&child(&root, "restarted", &moved, &repo).await);
+    assert!(previous.exists());
+    std::fs::remove_file(root.join(format!("ps-{before}-searxng"))).unwrap();
+    succeeded(&child(&root, "restarted", &moved, &repo).await);
+    assert!(!previous.exists());
     std::fs::rename(&moved, &data).unwrap();
+    // What the original was moved from is not a copy's: a copy forgets it.
+    std::fs::write(
+        data.join("previous-runtime-authorities.json"),
+        serde_json::to_vec(&["0".repeat(64)]).unwrap(),
+    )
+    .unwrap();
 
     // A migration: the root and the repository both copied to new paths.
     let migrated = root.join("migrated");
@@ -346,6 +407,9 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
         .await,
     );
     assert_eq!(ownership_id(&migrated.join("data")), id);
+    assert!(!migrated
+        .join("data/previous-runtime-authorities.json")
+        .exists());
 
     // A damaged copy is still refused, and left as it was.
     let damaged = root.join("damaged");

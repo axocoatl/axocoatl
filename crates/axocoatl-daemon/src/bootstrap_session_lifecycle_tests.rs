@@ -1126,6 +1126,7 @@ const PHASE: &str = "AXOCOATL_LIFECYCLE_TEST_PHASE";
 const SHARED: &str = "AXOCOATL_LIFECYCLE_TEST_SHARED";
 const REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::leaked_runtime_volumes_are_reaped_by_their_own_daemon_only";
 const DEPENDENCY_REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::leaked_dependency_volumes_are_reaped_by_their_own_daemon_only";
+const MOVED_REAP_TEST: &str = "bootstrap::session_native_lifecycle::lifecycle_tests::a_moved_data_root_reaps_the_volumes_its_sessions_left_at_its_old_path";
 
 /// Make `data` a data root no daemon has used yet (owner-only), with the
 /// embedding model from AXOCOATL_E2E_MODEL_CACHE when it is set.
@@ -1366,6 +1367,129 @@ async fn leaked_runtime_volumes_are_reaped_by_their_own_daemon_only() {
     remember("other");
     run_reap_phase(REAP_TEST, "a2", &data_a, &a, &shared).await;
     run_reap_phase(REAP_TEST, "b2", &data_b, &b, &shared).await;
+    drop(cleanup);
+}
+
+async fn moved_reap_phase(phase: &str) {
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = load_config(config_dir.path(), &server.uri()).await;
+    let daemon = Arc::new(AxocoatlDaemon::bootstrap_headless(config).await.unwrap());
+    daemon.set_config_path(&config_dir.path().join("axocoatl.yaml"));
+    let repo = std::path::PathBuf::from(read_shared("repo"));
+    let report = reap_report(&daemon);
+    let previous =
+        || crate::bootstrap::runtime_volumes::previous_runtime_authorities(&daemon.data_root);
+    eprintln!("phase {phase}: the daemon's start check: {report:?}");
+    match phase {
+        // The data root at its first path: one Session stays open, one is
+        // closed with its runtime volumes still there (a Close a crash cut
+        // short, or 1.2's). The daemon is killed: both Sessions' containers
+        // stay, holding their volumes.
+        "first" => {
+            let open = completed_run(&daemon, &repo, "run-open").await;
+            let closed = completed_run(&daemon, &repo, "run-closed").await;
+            daemon.session_store.lock().await.close(&closed).unwrap();
+            write_shared("open", &open);
+            write_shared("closed", &closed);
+            write_shared("first", &daemon.local_runtime_authority);
+            assert!(container_exists(&format!("axo-egr-{closed}")).await);
+            // As killed: nothing of the daemon runs its cleanup.
+            std::process::exit(0);
+        }
+        // Moved: another authority. The containers the killed daemon left
+        // are gone (every Session's are removed by name at start); the
+        // closed Session's volumes, which carry the old authority, are
+        // removed as its own would be (they could not be while those
+        // containers held them); the open one's are kept (it reuses them)
+        // and so is the old authority.
+        "moved" => {
+            let (open, closed, first) = (
+                read_shared("open"),
+                read_shared("closed"),
+                read_shared("first"),
+            );
+            assert_ne!(daemon.local_runtime_authority, first);
+            for session in [&open, &closed] {
+                for container in ["axo-ses-", "axo-egr-"] {
+                    let container = format!("{container}{session}");
+                    assert!(!container_exists(&container).await, "{container}");
+                }
+            }
+            assert!(report.failed.is_empty(), "{report:?}");
+            for volume in ["axo-egr-", "axo-egi-"] {
+                let closed = format!("{volume}{closed}");
+                assert!(report.removed.contains(&closed), "{closed}: {report:?}");
+                assert!(!volume_exists(&closed).await, "{closed}");
+                let open = format!("{volume}{open}");
+                assert!(!report.removed.contains(&open), "{open}: {report:?}");
+                assert_eq!(
+                    volume_authority(&open).await.as_deref(),
+                    Some(first.as_str())
+                );
+            }
+            assert!(report.kept_open >= 2, "{report:?}");
+            assert_eq!(previous(), [first]);
+            // Delete removes the open Session's by name.
+            daemon.delete_session(&open).await.unwrap();
+            assert!(runtime_volumes_present(&open).await.is_empty());
+        }
+        // No volume carries the old authority any more: it is forgotten.
+        "after" => {
+            assert!(report.failed.is_empty(), "{report:?}");
+            assert!(previous().is_empty());
+        }
+        other => panic!("unknown phase {other}"),
+    }
+    daemon.shutdown_session_runtimes_checked().await.unwrap();
+}
+
+/// A data root moved to another path (the same directory, renamed) has
+/// another runtime authority, while its Sessions' volumes carry the one of
+/// the path it had. The start that records the move keeps that authority,
+/// and it and each later start remove, as their own, the volumes of
+/// Sessions this data root closed or deleted that carry it, also when a
+/// daemon killed at the old path left the containers that held them
+/// (before, they were another daemon's, never removed); an open Session's
+/// are kept, and once none carries it, it is forgotten.
+///
+/// ```text
+/// cargo test -p axocoatl-daemon --lib \
+///   a_moved_data_root_reaps_the_volumes_its_sessions_left_at_its_old_path -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn a_moved_data_root_reaps_the_volumes_its_sessions_left_at_its_old_path() {
+    if let Some(phase) = std::env::var_os(PHASE) {
+        moved_reap_phase(&phase.to_string_lossy()).await;
+        return;
+    }
+    let root = tempfile::Builder::new()
+        .prefix("axocoatl-moved-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let shared = root.path().join("shared");
+    let repo = root.path().join("repo");
+    let home = root.path().join("home");
+    for dir in [&shared, &repo, &home] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(repo.join("README.md"), "# Moved\n").unwrap();
+    std::fs::write(shared.join("repo"), repo.display().to_string()).unwrap();
+    let (first, moved) = (home.join("data"), home.join("moved"));
+    let cleanup = Cleanup(std::sync::Mutex::new(Vec::new()));
+    let remember = |name: &str| {
+        if let Ok(id) = std::fs::read_to_string(shared.join(name)) {
+            cleanup.0.lock().unwrap().push(id);
+        }
+    };
+    fresh_data_root(&first);
+    run_reap_phase(MOVED_REAP_TEST, "first", &first, &home, &shared).await;
+    remember("open");
+    remember("closed");
+    std::fs::rename(&first, &moved).unwrap();
+    run_reap_phase(MOVED_REAP_TEST, "moved", &moved, &home, &shared).await;
+    run_reap_phase(MOVED_REAP_TEST, "after", &moved, &home, &shared).await;
     drop(cleanup);
 }
 

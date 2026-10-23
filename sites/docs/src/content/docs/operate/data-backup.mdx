@@ -96,7 +96,12 @@ restored backup, Migration Assistant, Time Machine) is a new directory, and a mo
 has a new path. From 1.5.0, the daemon records the new location when it starts on such a
 root, keeps the root's ownership and every Session, and logs one warning that the data
 directory was copied or moved. It does so only after it holds every lock on the root, so
-it never shares a root with another daemon. The per-root external lease lives in an
+it never shares a root with another daemon. A root copied while a Session storage upgrade
+(`axocoatl session upgrade`) was interrupted finishes that upgrade at its new location
+when the upgrade had not started converting a Session yet; a copy taken half-way through
+a Session's conversion does not start, and `axocoatl doctor` says to finish the upgrade on
+the original data directory and copy that, or to restore a backup made before the
+upgrade. The per-root external lease lives in an
 owner-only operating-system temporary directory and is not backup data; the daemon
 creates it when it starts.
 
@@ -106,8 +111,12 @@ ownership was recorded, including a restored backup and a root that Migration As
 brought to a new Mac. `axocoatl serve` exits with `failed data-directory format
 ownership admission: invalid or ambiguous format ownership: unsupported, incomplete, or
 differently owned manifest`, and an installed service restarts and fails again every few
-seconds. Start 1.5.0 or later on that root once: it records the new location, and 1.4.0
-then starts on it too.
+seconds. With Axocoatl 1.5.0 or later, run `axocoatl session record-location` on that
+root once while Axocoatl is stopped (with the same `--config` and `AXOCOATL_DATA_DIR` as
+the daemon): it records the new location and changes nothing else, and the older release
+then starts on it. This was tested with 1.1.2, 1.2.0, 1.3.2 and 1.4.0 on a restored
+backup holding a Session. Starting 1.5.0 on the root records the location too, but it
+also converts each Session's journals, which 1.2 and earlier then refuse.
 </Aside>
 
 Attempts also create clones and manifests under `.axo-variants/` inside the

@@ -194,7 +194,8 @@ How a Session runs under it:
   them. Close removes them; the Session's runtime fills them again when it starts.
   When the daemon starts, it removes its own that a closed, deleted or unknown Session
   left behind (a daemon that stopped before Close, Sessions closed by Axocoatl 1.2),
-  keeps an open Session's and never touches another daemon's; `axocoatl doctor`
+  keeps an open Session's and never touches another daemon's (those its Sessions made
+  before their data root was moved to another path are its own); `axocoatl doctor`
   reports how many.
 - A Ways attempt's container starts no proxy of its own. It uses its Session's proxy
   and decision point: its Agents' `bash` commands and its setup commands get

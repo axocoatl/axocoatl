@@ -165,6 +165,18 @@ impl RecordedRelocation {
     }
 }
 
+/// A relocation admission recorded (see
+/// [`DataRootFormatOwnership::acquire_for_root_relocating`]), with what the
+/// manifest named before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relocated {
+    pub recorded: RecordedRelocation,
+    /// The digest of the path the root was recorded at before
+    /// (`root_authority_sha256`): the runtime authority a daemon on that
+    /// path labelled its Podman containers and volumes with.
+    pub previous_root_authority: String,
+}
+
 /// How a manifest compares with the root it is read from.
 enum Admission {
     Exact,
@@ -210,6 +222,15 @@ impl DataRootFormatOwnership {
     pub fn acquire_for_root_reporting(
         data_root: &SecureDir,
     ) -> Result<(Self, Option<RecordedRelocation>), OwnershipError> {
+        Self::acquire_for_root_relocating(data_root)
+            .map(|(owner, relocated)| (owner, relocated.map(|relocated| relocated.recorded)))
+    }
+
+    /// [`Self::acquire_for_root_reporting`], with the root authority the
+    /// manifest recorded before it was re-recorded.
+    pub fn acquire_for_root_relocating(
+        data_root: &SecureDir,
+    ) -> Result<(Self, Option<Relocated>), OwnershipError> {
         let (lease, format) = RootLease::acquire(data_root.path(), None, Some(data_root))?;
         match format {
             RootFormat::Legacy => {
@@ -487,7 +508,7 @@ fn finish_installed(
 fn admit_manifest(
     lease: &RootLease,
     directory: &str,
-) -> Result<(FormatManifest, Option<RecordedRelocation>), OwnershipError> {
+) -> Result<(FormatManifest, Option<Relocated>), OwnershipError> {
     let manifest = read_manifest(&lease.root, directory)?;
     let current = CurrentIdentity::of_lease(lease)?;
     match manifest.classify(&current) {
@@ -495,10 +516,16 @@ fn admit_manifest(
             remove_interrupted_rebind(&lease.root)?;
             Ok((manifest, None))
         }
-        Admission::Relocated(relocation) => Ok((
-            rebind(lease, directory, manifest, current)?,
-            Some(relocation),
-        )),
+        Admission::Relocated(recorded) => {
+            let previous_root_authority = manifest.root_authority_sha256.clone();
+            Ok((
+                rebind(lease, directory, manifest, current)?,
+                Some(Relocated {
+                    recorded,
+                    previous_root_authority,
+                }),
+            ))
+        }
         Admission::Refused => invalid(REFUSED_MANIFEST),
     }
 }

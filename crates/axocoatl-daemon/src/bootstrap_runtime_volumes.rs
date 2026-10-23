@@ -14,9 +14,85 @@
 //! `axocoatl_isolation::runtime_volumes`).
 //! The counts go to the log and to `axocoatl doctor`
 //! ([`AxocoatlDaemon::runtime_volume_check`]).
+//!
+//! The authority is the digest of the data root's path. When the data root
+//! was moved (the same directory at another path), its Sessions' volumes
+//! carry the authority of the path it had: the start that records the move
+//! keeps that authority in [`PREVIOUS_AUTHORITIES`], and each start treats
+//! a volume carrying it as its own when its name is a Session of this data
+//! root, until none does.
 use super::*;
 use axocoatl_isolation::runtime_volumes::{self, RuntimeVolumeReap, VolumeOwner};
 use axocoatl_session::execution_ownership::DataRootFormatOwnership;
+
+/// The runtime authorities of the paths this data root had before it was
+/// moved, a JSON array, while a volume of its Sessions still carries one.
+pub(super) const PREVIOUS_AUTHORITIES: &str = "previous-runtime-authorities.json";
+/// At most this many are kept (the latest moves).
+const MAX_PREVIOUS_AUTHORITIES: usize = 16;
+
+/// The runtime authorities kept in [`PREVIOUS_AUTHORITIES`]; none when the
+/// file is missing or unreadable (nothing is then treated as this data
+/// root's that is not).
+pub(super) fn previous_runtime_authorities(data_root: &SecureDir) -> Vec<String> {
+    data_root
+        .read_limited(PREVIOUS_AUTHORITIES, 64 * 1024)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<String>>(&bytes).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|authority| {
+            authority.len() == 64 && authority.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        .collect()
+}
+
+fn write_previous_runtime_authorities(
+    data_root: &SecureDir,
+    authorities: &[String],
+) -> std::io::Result<()> {
+    if authorities.is_empty() {
+        return match data_root.remove_file(PREVIOUS_AUTHORITIES) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => data_root.sync_all(),
+        };
+    }
+    let bytes = serde_json::to_vec(authorities).map_err(std::io::Error::other)?;
+    data_root.atomic_write(PREVIOUS_AUTHORITIES, &bytes)
+}
+
+/// Keep no runtime authority of another path in [`PREVIOUS_AUTHORITIES`].
+pub(super) fn forget_previous_runtime_authorities(
+    data_root: &SecureDir,
+) -> Result<(), DaemonError> {
+    write_previous_runtime_authorities(data_root, &[]).map_err(|error| {
+        DaemonError::Session(format!(
+            "removing the data directory's previous locations in '{}': {error}",
+            data_root.path().display()
+        ))
+    })
+}
+
+/// Keep `authority`, the runtime authority of the path this data root was
+/// moved from, in [`PREVIOUS_AUTHORITIES`].
+pub(super) fn record_previous_runtime_authority(
+    data_root: &SecureDir,
+    authority: &str,
+) -> Result<(), DaemonError> {
+    let mut authorities = previous_runtime_authorities(data_root);
+    if authorities.iter().any(|kept| kept == authority) {
+        return Ok(());
+    }
+    authorities.push(authority.to_string());
+    let excess = authorities.len().saturating_sub(MAX_PREVIOUS_AUTHORITIES);
+    authorities.drain(..excess);
+    write_previous_runtime_authorities(data_root, &authorities).map_err(|error| {
+        DaemonError::Session(format!(
+            "recording the data directory's previous location in '{}': {error}",
+            data_root.path().display()
+        ))
+    })
+}
 
 /// What the daemon did about leaked Session runtime volumes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -74,13 +150,31 @@ impl AxocoatlDaemon {
                 .is_some_and(|ownership| ownership.holds_session_history(id))
         });
         let owner = |name: &str| owners.owner(name);
-        let check = match runtime_volumes::reap_leaked_runtime_volumes(
+        let kept = previous_runtime_authorities(&self.data_root);
+        // A root moved back to a path it had is at its own authority again.
+        let previous: Vec<String> = kept
+            .iter()
+            .filter(|authority| **authority != self.local_runtime_authority)
+            .cloned()
+            .collect();
+        let check = match runtime_volumes::reap_leaked_runtime_volumes_of_moved_root(
             &self.local_runtime_authority,
+            &previous,
             owner,
         )
         .await
         {
-            Ok(report) => {
+            Ok((report, carried)) => {
+                if carried != kept {
+                    if let Err(error) =
+                        write_previous_runtime_authorities(&self.data_root, &carried)
+                    {
+                        tracing::warn!(
+                            %error,
+                            "could not record which previous locations' volumes are left"
+                        );
+                    }
+                }
                 tracing::info!(
                     removed = report.removed.len(),
                     removed_dependencies = report.removed_dependencies(),

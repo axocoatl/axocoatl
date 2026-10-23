@@ -1383,6 +1383,14 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                         Ok(line) => Item::ok("Data dir ownership", line),
                         Err((line, hint)) => Item::fail("Data dir ownership", line, hint),
                     });
+                if let Some(upgrade) =
+                    axocoatl_daemon::AxocoatlDaemon::interrupted_upgrade_doctor_line(data_dir)
+                {
+                    sections.daemon.push(match upgrade {
+                        Ok(line) => Item::ok("Session storage upgrade", line),
+                        Err((line, hint)) => Item::fail("Session storage upgrade", line, hint),
+                    });
+                }
             }
             Err(error) => sections.daemon.push(Item::fail(
                 "Data dir",

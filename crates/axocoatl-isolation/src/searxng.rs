@@ -612,6 +612,65 @@ impl SearxngService {
         }
         removed
     }
+
+    /// Remove the SearXNG containers that carry `authority`, the runtime
+    /// authority of a path the daemon's data root was moved from, once they
+    /// have exited: what a daemon there that was killed left, after the
+    /// Podman machine stopped it. One in any other state is left, as a data
+    /// root made at that path since may use it. Whether one is left.
+    pub async fn reap_exited_of_moved_root(authority: &str) -> Result<bool, IsolationError> {
+        let listed = podman(
+            &[
+                "ps".to_string(),
+                "-a".to_string(),
+                "--filter".to_string(),
+                format!("label={RUNTIME_AUTHORITY_LABEL}={authority}"),
+                "--filter".to_string(),
+                format!("label={ROLE_LABEL}={SEARXNG_ROLE}"),
+                "--format".to_string(),
+                "{{.Names}}\t{{.State}}".to_string(),
+            ],
+            PODMAN_TIMEOUT,
+        )
+        .await?;
+        if !listed.success {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "listing SearXNG containers: {}",
+                listed.detail()
+            )));
+        }
+        let mut left = false;
+        for (name, state) in listed
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(name, state)| (name.trim(), state.trim()))
+            .filter(|(name, _)| name.starts_with("axo-searxng-"))
+        {
+            if !matches!(state, "exited" | "stopped") {
+                left = true;
+                continue;
+            }
+            let removed = podman(
+                &strings(&[
+                    "rm",
+                    "--force",
+                    "--volumes",
+                    "--time",
+                    "0",
+                    "--ignore",
+                    name,
+                ]),
+                PODMAN_TIMEOUT,
+            )
+            .await?;
+            if !removed.success {
+                tracing::warn!(container = name, detail = %removed.detail(), "removing an orphaned SearXNG failed");
+                left = true;
+            }
+        }
+        Ok(left)
+    }
 }
 
 /// The host port in `podman port <name> 8080/tcp` output, such as

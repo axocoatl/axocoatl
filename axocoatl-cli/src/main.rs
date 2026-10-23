@@ -267,6 +267,11 @@ enum ServiceCommands {
 
 #[derive(Subcommand)]
 enum SessionCommands {
+    /// Record a copied or moved data directory's new location and change nothing else, while Axocoatl is stopped (a release from 1.1.0 to 1.4.0 then starts on a restored backup)
+    RecordLocation {
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
+    },
     /// Upgrade existing Session storage while the daemon is stopped
     Upgrade {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
@@ -561,6 +566,27 @@ async fn main() {
             session,
         } => cmd_chat(&config, &agent, session).await,
         Commands::Session { command } => match command {
+            SessionCommands::RecordLocation { config } => {
+                let recorded = configure_data_dir(&config).and_then(|data_dir| {
+                    axocoatl_daemon::AxocoatlDaemon::record_data_root_location(&data_dir)
+                        .map(|recorded| (data_dir, recorded))
+                        .map_err(|error| error.to_string())
+                });
+                match recorded {
+                    Ok((data_dir, Some(recorded))) => println!(
+                        "✓ Recorded {recorded} for the data directory {}. Nothing else changed.",
+                        data_dir.display()
+                    ),
+                    Ok((data_dir, None)) => println!(
+                        "✓ The data directory {} is already recorded where it is. Nothing changed.",
+                        data_dir.display()
+                    ),
+                    Err(error) => {
+                        eprintln!("✗ {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             SessionCommands::Upgrade { config, confirm } => {
                 if !confirm {
                     eprintln!("Stop Axocoatl and make a cold backup first. This upgrades Session storage, preserves history and usage, and archives historical agent state whose role cannot be proved. Future work requires a reviewed Team & budget. Older binaries cannot use the upgraded data. Run again with --confirm to proceed.");
