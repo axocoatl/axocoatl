@@ -170,6 +170,9 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
    listed with its path.
 4. With `--record BUNDLE`, it verifies the bundle and checks that its `receipt` section is
    this receipt, for the same run.
+5. With `--require-pass`, it fails a receipt whose run's verdict is not `pass` (checks
+   failed, needs attention, interrupted or error). Without it, such a receipt verifies
+   like any other: it says truthfully what the run did, and its verdict is in the output.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -178,10 +181,12 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
 | 2 | The signature is valid, but by a key you did not give as trusted, including when you gave none |
 | 3 | Usage: a bad flag, a file that cannot be read, a key line that is not one |
 | 4 | A covered file differs, a removed path exists, or the record does not verify or carry this receipt |
+| 6 | With `--require-pass`: the receipt verifies, but its run's verdict is not `pass` |
 
-When several apply, the first of 1, 2, 4 wins. `--json` prints the result as one JSON
+When several apply, the first of 1, 2, 4, 6 wins. `--json` prints the result as one JSON
 document (`exit_code`, `result`, `problems`, `signature`, `key_id`, `run_id`, `verdict`,
-`statement_sha256`, `files` with each mismatch, `record`).
+`statement_sha256`, `files` with each mismatch, `record`); `result` is `valid`,
+`malformed`, `invalid`, `untrusted`, `mismatch`, `not-passed` or `usage`.
 
 `axocoatl receipt show FILE` prints what a receipt says in words (run, verdict, signer,
 agents, checks, review, files, network policy) without verifying it, and says so;
@@ -207,8 +212,13 @@ cuts.
 ## Checking pull requests in GitHub Actions
 
 `axocoatl/axocoatl/actions/verify-receipt` is a composite action that checks the receipt a
-pull request's description carries, the way Keep as PR puts it there. Set it up in this
-order, each step through a pull request of its own:
+pull request's description carries, the way Keep as PR puts it there. Both are for GitHub
+only: the action runs in GitHub Actions and reads the pull request through GitHub's API,
+and [Keep as PR](/workbench/keep-as-pr/) opens pull requests with `gh`. On GitLab,
+Bitbucket or another host there is no such action; `axocoatl receipt verify`
+(above), with `--require-pass`, checks a receipt you saved from a merge request
+description in any CI job that can run it. Set the action up in this order, each step
+through a pull request of its own:
 
 1. Trust the computer that signs. On it, with the daemon's `--config` and data
    directory, add its key line to the keys file, and merge that file into the branch pull
