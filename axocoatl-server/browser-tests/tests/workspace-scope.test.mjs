@@ -193,9 +193,19 @@ for (const engine of engines) {
       await page.waitForFunction(() => Boolean(document.querySelector('ax-rail')?.workspace));
       await page.evaluate(() => closeCockpit({ homeScope: 'all' }));
       await page.waitForFunction(() => (document.querySelector('ax-session-home')?.workspaces?.length || 0) > 0);
+      // Until New session asks, the page reads the list as it was before
+      // `late` was opened (in another tab, say). A read still under way
+      // (closing the cockpit reads it again) could see `late` already, so
+      // the page reads the list once more and that read counts.
+      const before = await workspaces();
+      let stale = true;
+      await page.route('**/api/workspaces', (route) => (stale && route.request().method() === 'GET'
+        ? route.fulfill({ json: before }) : route.continue()));
       late = await runtime.createProjectWorkspace(`late-${engine.name}`, `Late ${engine.name}`);
+      await page.evaluate(() => document.querySelector('ax-session-home').refresh());
       assert.equal(await page.evaluate((id) =>
         document.querySelector('ax-session-home').workspace(id), late.workspace.id), null);
+      stale = false;
 
       assert.equal(await page.evaluate((id) =>
         document.querySelector('ax-session-home').newSession(id), late.workspace.id), true);
