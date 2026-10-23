@@ -1519,6 +1519,12 @@ async fn start_service(o: &mut Onboarding) -> Option<bool> {
         ));
         return None;
     }
+    // Its daemon would stop at once and start again, and the first run would
+    // wait for it in vain.
+    if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(&o.socket_path) {
+        o.step_left(format!("The Always-On Service cannot start: {error}"));
+        return None;
+    }
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();
     if let Err(error) = crate::reject_uninherited_service_environment(&config) {
         o.step_left(format!("Cannot install the Always-On Service: {error}"));

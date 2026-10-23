@@ -1944,11 +1944,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 });
         }
         None => {
-            sections.daemon.push(Item::warn(
-                "Daemon",
-                "no daemon running; `axocoatl run` and the workbench need one",
-                Some("Start it with `axocoatl dev` (or `axocoatl service start`)".to_string()),
-            ));
+            sections.daemon.push(no_daemon_item(&env.socket_path));
             // Without a configuration there is no port to ask about.
             if config.is_some()
                 && is_loopback(&server_host)
@@ -2313,6 +2309,26 @@ fn daemon_version_item(
             restart(),
         ),
         (None, _) => Item::ok("Daemon", "running (IPC reachable)"),
+    }
+}
+
+/// The Daemon line when no daemon answers on the IPC socket at
+/// `socket_path`: none runs, or none can, because that path is too long for
+/// a Unix socket here (a long home directory), so `axocoatl dev` would stop
+/// at once.
+fn no_daemon_item(socket_path: &Path) -> Item {
+    match axocoatl_daemon::ipc::socket_path_too_long(socket_path) {
+        Some(error) => Item::fail(
+            "Daemon",
+            format!("no daemon can run here: {error}"),
+            "With it set, start one: `axocoatl dev`, or `axocoatl service install` and \
+             `axocoatl service start`",
+        ),
+        None => Item::warn(
+            "Daemon",
+            "no daemon running; `axocoatl run` and the workbench need one",
+            Some("Start it with `axocoatl dev` (or `axocoatl service start`)".to_string()),
+        ),
     }
 }
 
@@ -2782,6 +2798,37 @@ pub(crate) async fn cmd_doctor(config_path: &Path, json: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without a daemon on the IPC socket, doctor says how to start one;
+    /// when the socket's path is too long for this system, it says that none
+    /// can run until the path is shorter, not to start one that would stop
+    /// at once.
+    #[test]
+    fn no_daemon_running_names_a_socket_path_too_long_for_one() {
+        let item = no_daemon_item(Path::new("/h/.axocoatl/run/axocoatl.sock"));
+        assert_eq!(item.status, Status::Warn);
+        assert_eq!(
+            item.line(),
+            "Daemon: no daemon running; `axocoatl run` and the workbench need one"
+        );
+        let long = PathBuf::from(format!(
+            "/{}",
+            "s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes())
+        ));
+        let item = no_daemon_item(&long);
+        assert_eq!(item.status, Status::Fail);
+        assert!(
+            item.line()
+                .starts_with("Daemon: no daemon can run here: the IPC socket path /s"),
+            "{item:?}"
+        );
+        assert!(item.detail.contains("is too long"), "{item:?}");
+        assert!(item.detail.contains("AXOCOATL_SOCKET_PATH"), "{item:?}");
+        assert!(
+            item.fix.as_deref().unwrap().contains("axocoatl dev"),
+            "{item:?}"
+        );
+    }
 
     /// The Daemon line names the running daemon's version, from the IPC
     /// version request or else `/health`. A daemon that closes the

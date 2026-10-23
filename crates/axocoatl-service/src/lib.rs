@@ -10,7 +10,7 @@
 use std::path::Path;
 
 mod environment;
-pub use environment::{ServiceEnvironment, CARRIED_VARIABLES, SYSTEM_PATH};
+pub use environment::{ServiceEnvironment, CARRIED_VARIABLES, SOCKET_PATH_VARIABLE, SYSTEM_PATH};
 
 // Each backend's manager runs only on its own platform, but both definitions
 // are rendered and tested on every platform.
@@ -98,22 +98,28 @@ pub trait ServiceManager {
 
 /// What `serve` prints when bootstrap fails, before it exits.
 const START_FAILED: &str = "Failed to bootstrap daemon: ";
+/// What `serve` prints when it cannot reserve its IPC socket (another daemon
+/// holds it, or its path is too long), before it exits.
+pub const IPC_RESERVATION_FAILED: &str = "Failed to reserve the CLI IPC socket: ";
 /// What `serve` prints once bootstrap succeeded.
 const STARTED: &str = "Axocoatl server starting on ";
 /// How much of the end of a log is read, and how long a reported line may be.
 pub(crate) const LOG_TAIL_BYTES: u64 = 64 * 1024;
 const FAILURE_LINE_CHARS: usize = 1000;
 
-/// The last `Failed to bootstrap daemon: …` line in `log`, when no
-/// successful start was logged after it: what a service that keeps
-/// restarting and failing (a launchd `KeepAlive` loop) last said.
+/// The last `Failed to bootstrap daemon: …` or `Failed to reserve the CLI
+/// IPC socket: …` line in `log`, when no successful start was logged after
+/// it: what a service that keeps restarting and failing (a launchd
+/// `KeepAlive` loop) last said.
 pub fn last_start_failure(log: &str) -> Option<String> {
+    let failed =
+        |line: &str| line.starts_with(START_FAILED) || line.starts_with(IPC_RESERVATION_FAILED);
     let line = log
         .lines()
         .rev()
         .map(str::trim)
-        .find(|line| line.starts_with(START_FAILED) || line.starts_with(STARTED))?;
-    if !line.starts_with(START_FAILED) {
+        .find(|line| failed(line) || line.starts_with(STARTED))?;
+    if !failed(line) {
         return None;
     }
     let mut shown: String = line.chars().take(FAILURE_LINE_CHARS).collect();
@@ -169,6 +175,15 @@ mod start_failure_tests {
         let recovered = format!("{log}Axocoatl server starting on 127.0.0.1:8080\n");
         assert_eq!(last_start_failure(&recovered), None);
         assert_eq!(last_start_failure("Axocoatl is running.\n"), None);
+        // A socket path too long for this system stops `serve` before
+        // bootstrap; the service reports that line too.
+        let socket = format!(
+            "{IPC_RESERVATION_FAILED}the IPC socket path /h/.axocoatl/run/axocoatl.sock is too long"
+        );
+        assert_eq!(
+            last_start_failure(&format!("{log}{socket}\n")).as_deref(),
+            Some(socket.as_str())
+        );
         assert_eq!(last_start_failure(""), None);
         let long = format!("{START_FAILED}{}", "x".repeat(5000));
         let shown = last_start_failure(&long).unwrap();

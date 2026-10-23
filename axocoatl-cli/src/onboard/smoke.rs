@@ -599,6 +599,9 @@ pub(crate) async fn run(
             config.display()
         ));
         return false;
+    } else if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(&o.socket_path) {
+        o.step_left(format!("No daemon can start for the first run: {error}"));
+        return false;
     } else {
         o.ui.say(format!(
             "  Starting a daemon for this run (axocoatl serve on port {port}; its first start \
@@ -636,8 +639,14 @@ pub(crate) async fn run(
                 break;
             }
             if let Ok(Some(status)) = daemon.0.try_wait() {
+                // What it said as it stopped, when it said why.
+                let said = std::fs::read_to_string(base.join("daemon.log"))
+                    .ok()
+                    .and_then(|log| axocoatl_service::last_start_failure(&log))
+                    .map(|line| format!(": {line}"))
+                    .unwrap_or_default();
                 o.step_left(format!(
-                    "The daemon stopped ({status}) before the first run; see {}",
+                    "The daemon stopped ({status}) before the first run{said}; see {}",
                     base.join("daemon.log").display()
                 ));
                 return false;

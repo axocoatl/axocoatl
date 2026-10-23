@@ -7,9 +7,12 @@
 //! needs to reach Podman and the host tools Keep as PR runs, and nothing
 //! else: a `PATH` with the directory of the `podman` found at install time,
 //! then the directories of `git` and `gh` when they are found elsewhere, plus
-//! the standard system directories, and the Podman connection selection
-//! (`CONTAINER_CONNECTION`, `CONTAINER_HOST`) when it is set. Provider keys and other secrets are never read here, so
-//! they cannot reach the service definition.
+//! the standard system directories, the Podman connection selection
+//! (`CONTAINER_CONNECTION`, `CONTAINER_HOST`) when it is set, and the IPC
+//! socket path (`AXOCOATL_SOCKET_PATH`) when it is set, so the service's
+//! daemon listens where this shell's commands look for it. Provider keys and
+//! other secrets are never read here, so they cannot reach the service
+//! definition.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -23,6 +26,11 @@ pub const KEEP_TOOLS: [&str; 2] = ["git", "gh"];
 
 /// Podman's connection selection, carried from the install-time environment.
 pub const CARRIED_VARIABLES: [&str; 2] = ["CONTAINER_CONNECTION", "CONTAINER_HOST"];
+
+/// The daemon's IPC socket path, carried from the install-time environment
+/// when it is an absolute path: someone whose home directory is too long for
+/// a Unix socket path sets it for every command, the service included.
+pub const SOCKET_PATH_VARIABLE: &str = "AXOCOATL_SOCKET_PATH";
 
 /// Environment variables written into the service definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +122,18 @@ impl ServiceEnvironment {
                 Ok(value) => variables.push((name.to_string(), value)),
             }
         }
+        if let Some(value) = var(SOCKET_PATH_VARIABLE).filter(|value| !value.is_empty()) {
+            match value.into_string() {
+                Ok(value)
+                    if Path::new(&value).is_absolute() && !value.chars().any(char::is_control) =>
+                {
+                    variables.push((SOCKET_PATH_VARIABLE.to_string(), value));
+                }
+                _ => warnings.push(format!(
+                    "{SOCKET_PATH_VARIABLE} is not an absolute path and was not recorded, so the service's daemon listens at its default socket, where commands from this shell do not look. Set it to an absolute path, then run `axocoatl service install` again."
+                )),
+            }
+        }
 
         Self {
             variables,
@@ -123,7 +143,7 @@ impl ServiceEnvironment {
     }
 
     /// The variables to write, in order: `PATH`, then any carried Podman
-    /// connection selection.
+    /// connection selection, then any IPC socket path.
     pub fn variables(&self) -> &[(String, String)] {
         &self.variables
     }
@@ -312,7 +332,12 @@ mod tests {
         );
         assert_eq!(
             requested,
-            ["PATH", "CONTAINER_CONNECTION", "CONTAINER_HOST"]
+            [
+                "PATH",
+                "CONTAINER_CONNECTION",
+                "CONTAINER_HOST",
+                "AXOCOATL_SOCKET_PATH"
+            ]
         );
         let names: Vec<_> = environment
             .variables()
@@ -327,6 +352,38 @@ mod tests {
         assert!(!format!("{environment:?}").contains("hunter2"));
         assert_eq!(environment.warnings().len(), 1);
         assert!(environment.warnings()[0].contains("CONTAINER_HOST contains a password"));
+    }
+
+    /// An absolute IPC socket path is carried, so the service listens where
+    /// this shell's commands look; a relative one is not (it would name
+    /// another file in the service's directory) and install says so.
+    #[test]
+    fn carries_an_absolute_socket_path_only() {
+        let (environment, _) = capture(
+            &[
+                ("PATH", "/usr/bin"),
+                ("AXOCOATL_SOCKET_PATH", "/Users/test/.axo/axocoatl.sock"),
+            ],
+            &["/usr/bin/podman"],
+        );
+        assert_eq!(
+            value(&environment, "AXOCOATL_SOCKET_PATH"),
+            Some("/Users/test/.axo/axocoatl.sock")
+        );
+        assert!(environment.warnings().is_empty());
+        let (environment, _) = capture(
+            &[
+                ("PATH", "/usr/bin"),
+                ("AXOCOATL_SOCKET_PATH", "ipc/axo.sock"),
+            ],
+            &["/usr/bin/podman"],
+        );
+        assert_eq!(value(&environment, "AXOCOATL_SOCKET_PATH"), None);
+        assert!(
+            environment.warnings()[0].contains("AXOCOATL_SOCKET_PATH is not an absolute path"),
+            "{:?}",
+            environment.warnings()
+        );
     }
 
     #[test]

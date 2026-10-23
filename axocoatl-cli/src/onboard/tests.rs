@@ -4295,6 +4295,108 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
     );
 }
 
+/// With no daemon running, the first run starts one only when it can
+/// listen: a socket path too long for this system (a long home directory)
+/// is said, with its fix, before any daemon or Always-On Service starts; a
+/// daemon that stops at once has the reason it gave shown, not only where
+/// its log is.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_first_run_says_why_no_daemon_can_start_for_it() {
+    let shims = Shims::new();
+    shims.add(
+        "axocoatl",
+        "case \"$1\" in serve) echo 'Failed to reserve the CLI IPC socket: held by a test' >&2; \
+         exit 1 ;; esac; exit 0",
+    );
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(
+        &o.paths.config_path,
+        format!(
+            "agents: []\nserver:\n  port: {}\n  host: \"127.0.0.1\"\n",
+            free_port()
+        ),
+    )
+    .unwrap();
+    let choice = Choice {
+        writer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        reviewer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        ..Choice::default()
+    };
+    let socket_path = o.socket_path.clone();
+    o.socket_path = shims
+        .home
+        .path()
+        .join("s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes()))
+        .join("axocoatl.sock");
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
+    let step = o.steps.last().cloned().unwrap_or_default();
+    assert!(
+        step.starts_with("No daemon can start for the first run: the IPC socket path"),
+        "{:?}",
+        o.steps
+    );
+    assert!(step.contains("is too long"), "{step}");
+    assert!(step.contains("AXOCOATL_SOCKET_PATH"), "{step}");
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("axocoatl serve")),
+        "{:?}",
+        shims.calls()
+    );
+    // Step 6 installs no Always-On Service whose daemon could not start
+    // either (it would restart and fail, and the first run wait for it).
+    assert_eq!(start_service(&mut o).await, None);
+    let step = o.steps.last().cloned().unwrap_or_default();
+    assert!(
+        step.starts_with("The Always-On Service cannot start: the IPC socket path"),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("axocoatl service")),
+        "{:?}",
+        shims.calls()
+    );
+
+    o.socket_path = socket_path;
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
+    let step = o.steps.last().cloned().unwrap_or_default();
+    assert!(
+        step.contains(
+            "before the first run: Failed to reserve the CLI IPC socket: held by a test; see "
+        ),
+        "{:?}",
+        o.steps
+    );
+}
+
 /// A daemon that started before the configuration changed runs the old
 /// one (`onboard --update` adding OpenRouter, say): the first run restarts
 /// the Always-On Service and uses it once it answers with the new start, or
