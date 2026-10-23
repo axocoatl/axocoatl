@@ -39,8 +39,11 @@
 #                         its prompt); the Preview and cookie questions after
 #                         them are always the person's, in Safari itself
 #     --yes               answer onboarding with flags instead of prompts (for
-#                         trying the gate: a --yes run cannot pass a required
-#                         path, whose public text says what a person did live)
+#                         trying the gate: it skips the steps that show a
+#                         person answered onboarding and signed in live, so
+#                         local, claude-code, codex, openrouter and service
+#                         cannot pass; workbench, recovery and real-repo do
+#                         not onboard and are not changed by it)
 #
 # Scripts handed to `sh -c` and `bash -c` take their values as positional
 # parameters.
@@ -387,15 +390,24 @@ onboard_output() {
 }
 
 # signed_out_before NAME SECRET: record NAME as pass when Axocoatl's secret
-# store does not hold SECRET yet, so this path can show its sign-in.
+# store does not hold SECRET yet, so this path can show its sign-in; a
+# list that cannot be read fails it.
 signed_out_before() {
-  if gate_secret_stored "$2"; then
-    had_secret=1
-    gate_record "$1" fail '' '' '' "the secret $2 was already stored, so this path cannot show its sign-in: reset the account (reset-mac-account.sh) and run the paths from local"
-  else
-    had_secret=0
-    gate_record "$1" pass '' '' '' "axocoatl secret list names no $2"
-  fi
+  gate_secret_stored "$2"
+  case $? in
+    0)
+      had_secret=1
+      gate_record "$1" fail '' '' '' "the secret $2 was already stored, so this path cannot show its sign-in: reset the account (reset-mac-account.sh) and run the paths from local"
+      ;;
+    1)
+      had_secret=0
+      gate_record "$1" pass '' '' '' "axocoatl secret list names no $2"
+      ;;
+    *)
+      had_secret=unknown
+      gate_record "$1" fail '' '' '' "cannot tell whether $2 was stored: $GATE_SECRET_ERROR"
+      ;;
+  esac
 }
 
 # signed_in_during_onboarding NAME SECRET QUESTION: record NAME as pass
@@ -403,13 +415,21 @@ signed_out_before() {
 # stored now, and the operator answers yes to QUESTION (that the sign-in
 # happened in the browser, as onboarding asked).
 signed_in_during_onboarding() {
-  local name=$1 secret=$2 question=$3
+  local name=$1 secret=$2 question=$3 stored
   if [ "$assume_yes" = 1 ]; then
     gate_skip "$name" "a --yes run signs in with axocoatl connect before onboarding, not from it"
-  elif [ "$had_secret" != 0 ]; then
+    return
+  fi
+  gate_secret_stored "$secret"
+  stored=$?
+  if [ "$had_secret" = 1 ]; then
     gate_record "$name" fail '' '' '' "$secret was stored before this path's onboarding"
-  elif ! gate_secret_stored "$secret"; then
-    gate_record "$name" fail '' '' '' "onboarding ended without the secret $secret stored"
+  elif [ "$had_secret" != 0 ]; then
+    gate_record "$name" fail '' '' '' "nothing showed that $secret was not stored before this path's onboarding"
+  elif [ "$stored" = 2 ]; then
+    gate_record "$name" fail '' '' '' "cannot tell whether onboarding stored $secret: $GATE_SECRET_ERROR"
+  elif [ "$stored" != 0 ]; then
+    gate_record "$name" fail '' '' '' "onboarding ended without the secret $secret stored$(sign_in_log "$secret")"
   else
     ask "$question"
     if [ "$ANSWER" = y ]; then
@@ -417,6 +437,19 @@ signed_in_during_onboarding() {
     else
       gate_record "$name" fail '' '' '' "the operator ($(id -un)) answered no: ${ANSWER_NOTE:-no note}"
     fi
+  fi
+}
+
+# sign_in_log SECRET: for openrouter, what onboarding's log says reached its
+# browser sign-in's callback since the path began, as "; …" for a detail.
+sign_in_log() {
+  [ "$1" = openrouter ] || return 0
+  local lines
+  lines=$(gate_onboarding_log_lines "$GATE_TMP/began" 'OpenRouter sign-in:')
+  if [ -n "$lines" ]; then
+    printf "; onboarding's log: %s" "$lines"
+  else
+    printf "; onboarding's log has no 'OpenRouter sign-in:' line, so no connection reached the sign-in's callback"
   fi
 }
 
@@ -594,7 +627,15 @@ keep_pr() {
   ) >"$GATE_ATTACH/logs/pr-repo-reset.log" 2>&1 \
     || { gate_record "reset $pr_repo to the node-deps fixture" fail '' '' '' "$(tail -n 2 "$GATE_ATTACH/logs/pr-repo-reset.log" | tr '\n' ' ')"; return; }
   gate_record "reset $pr_repo to the node-deps fixture" pass '' '' '' 'the docs strict verify-receipt workflow (require-receipt true), pinned to the candidate commit'
-  gate_step "hero command with --keep pr" -- /bin/bash -c "cd \"\$1\" && $hero --keep pr" gate-run "$clone" || return
+  # Keep commits only the paths the run's Agents changed (keep_pr.rs), so
+  # the record, receipt and report the gate asks for stay out of the pull
+  # request; its answers are checked like every fixture run's.
+  local command
+  command=$(gate_with_outputs "$hero --keep pr")
+  gate_step "hero command with --keep pr" -- /bin/bash -c "cd \"\$1\" && $command" gate-run "$clone" || return
+  mkdir -p "$GATE_ATTACH/keep-pr"
+  cp "$clone/run.axorecord.jsonl" "$clone/receipt.json" "$GATE_ATTACH/keep-pr/" 2>/dev/null
+  gate_markup_check keep-pr "$clone" "$clone/run.axorecord.jsonl" receipt.json axocoatl-junit.xml
   log="$GATE_ATTACH/logs/$(gate_slug "hero command with --keep pr").log"
   url=$(grep -Eo 'https://github\.com/[^ ]+/pull/[0-9]+' "$log" | tail -n 1)
   run=$(sed -nE 's/^Record: (run-[0-9a-f-]+).*/\1/p' "$log" | tail -n 1)
@@ -778,7 +819,8 @@ driver_answers() {
   done
 }
 
-# session_for REPO: the id of the open Session whose folder is REPO.
+# session_for REPO: the id and name, tab-separated, of the open Session
+# whose folder is REPO.
 session_for() {
   local out="$GATE_TMP/sessions.json"
   gate_api_get /api/sessions "$out" || return 1
@@ -787,8 +829,19 @@ session_for() {
     const real = require("fs").realpathSync(process.argv[2]);
     const open = sessions.filter((s) => s.working_dir === real && s.status !== "closed");
     if (!open.length) process.exit(1);
-    process.stdout.write(open[open.length - 1].id);
+    const last = open[open.length - 1];
+    process.stdout.write(`${last.id}\t${String(last.name).replace(/\s+/g, " ")}`);
   ' "$out" "$1"
+}
+
+# planted_since N: the number of planted cookies Safari sent back in the
+# last count after the first N lines of safari-pages.mjs's log, or nothing.
+planted_since() {
+  tail -n +"$(($1 + 1))" "$GATE_ATTACH/logs/safari-pages.log" 2>/dev/null | sed -n 's/.* planted=\([0-9]*\)$/\1/p' | tail -n 1
+}
+
+pages_lines() {
+  if [ -f "$GATE_ATTACH/logs/safari-pages.log" ]; then wc -l <"$GATE_ATTACH/logs/safari-pages.log" | tr -d ' '; else echo 0; fi
 }
 
 # app_pages_since N: the requests the Preview app received for a page of its
@@ -814,6 +867,42 @@ refused_top_level() {
   fi
 }
 
+# flood_step QUESTION SINCE: the flood step: after line SINCE of
+# safari-pages.mjs's log, Safari sent at least one planted cookie back (it
+# kept the flood), and the operator answers yes to QUESTION.
+flood_step() {
+  local name="a Domain=localhost cookie flood from another page leaves the workbench as the docs say" planted
+  ask "$1"
+  planted=$(planted_since "$2")
+  if [ -z "$planted" ]; then
+    gate_record "$name" fail '' '' '' "the plant page's count never reached its server (logs/safari-pages.log): nothing shows the flood was in place"
+  elif [ "$planted" = 0 ]; then
+    gate_record "$name" fail '' '' '' "Safari sent none of the 60 planted cookies back: it kept none, so the flood was not in place"
+  elif [ "$ANSWER" != y ]; then
+    gate_record "$name" fail '' '' '' "the operator ($(id -un)) answered no (Safari sent $planted of the 60 planted cookies back): ${ANSWER_NOTE:-no note}"
+  else
+    gate_record "$name" pass '' '' '' "Safari sent $planted of the 60 planted cookies back (Path=/api); the operator ($(id -un)) answered yes: $1"
+  fi
+}
+
+# removed_step QUESTION SINCE: Manage Website Data removed the flood: the
+# last count after line SINCE of safari-pages.mjs's log is 0, and the
+# operator answers yes to QUESTION.
+removed_step() {
+  local name="Manage Website Data removes the planted localhost cookies" removed
+  ask "$1"
+  removed=$(planted_since "$2")
+  if [ -z "$removed" ]; then
+    gate_record "$name" fail '' '' '' "no count after the removal: open the count page once localhost is removed"
+  elif [ "$removed" != 0 ]; then
+    gate_record "$name" fail '' '' '' "after the removal Safari still sent $removed of the planted cookies back"
+  elif [ "$ANSWER" != y ]; then
+    gate_record "$name" fail '' '' '' "the operator ($(id -un)) answered no: ${ANSWER_NOTE:-no note}"
+  else
+    gate_record "$name" pass '' '' '' "after the removal Safari sent none of the planted cookies back; the operator ($(id -un)) answered yes: $1"
+  fi
+}
+
 # safari_preview_steps LINK REPO: in Safari itself, as the person uses it:
 # a Preview stays in the workbench's pane (Open full preview disabled), a
 # Preview address typed into a tab, reached by a redirect from another
@@ -822,7 +911,7 @@ refused_top_level() {
 # another *.localhost page does to the workbench what the docs say, until
 # localhost's data is removed in Safari's settings.
 safari_preview_steps() {
-  local link=$1 repo=$2 port session address pages_port before host
+  local link=$1 repo=$2 port session='' session_name='' found address pages_port before host
   port=$(daemon_port)
   host=$(printf '%s' "$link" | sed -E 's#^https?://([^/:]+).*#\1#')
   cat >"$repo/gate-preview-app.cjs" <<'APP'
@@ -836,17 +925,27 @@ http.createServer((req, res) => {
   res.end('<!doctype html><title>Axocoatl gate Preview</title><h1>Axocoatl gate Preview</h1><p><a href="/next">Open the next page</a></p>');
 }).listen(5173, '0.0.0.0');
 APP
-  if [ "$workbench_driver" = 1 ]; then
-    # The driver used its own automation window: sign this Safari in too.
-    open -a Safari "$link"
+  if found=$(session_for "$repo"); then
+    session=${found%%$'\t'*}
+    session_name=${found#*$'\t'}
   fi
-  printf '\nIn Safari, in the Session you created: open its Terminal and, in the repository'"'"'s folder, run\n\n    node gate-preview-app.cjs\n\nthen open the Session'"'"'s Browser view and enter http://localhost:%s in its address bar.\n' "$preview_port"
+  if [ "$workbench_driver" = 1 ]; then
+    # The driver made the Session in Safari's automation window, which it
+    # closed when it finished. Open the workbench in an ordinary Safari
+    # window with the same sign-in link, and name the Session to open.
+    open -a Safari "$link"
+    printf '\nsafari-workbench.mjs made the Session in its own Safari window, now closed. Safari opens the workbench again in an ordinary window: there, open the workspace %s and, in it, the Session %s.\n' \
+      "$(basename -- "$repo")" "${session_name:-that the driver made (the last one in the list)}"
+  fi
+  printf '\nIn Safari, in that Session: open its Terminal and, in the repository'"'"'s folder, run\n\n    node gate-preview-app.cjs\n\nthen open the Session'"'"'s Browser view and enter http://localhost:%s in its address bar.\n' "$preview_port"
   confirm "the Preview shows the Session's app in the workbench" "Does the Browser view show the page 'Axocoatl gate Preview'?"
   gate_check "the app received the Preview's request from the workbench's frame" "the app's log ($repo/.gate-preview-requests.log) has no iframe request" -- \
     grep -q ' iframe$' "$repo/.gate-preview-requests.log"
   confirm "Open full preview is disabled in Safari, and the workbench says why" \
     "Is 'Open full preview' greyed out, with a line under the address bar saying that in Safari Previews stay in this pane?"
-  session=$(session_for "$repo") || session=''
+  if [ -z "$session" ] && found=$(session_for "$repo"); then
+    session=${found%%$'\t'*}
+  fi
   if [ -z "$session" ]; then
     gate_record "a Preview address typed into a tab gets Axocoatl's refusal page" fail '' '' '' "no open Session for $repo in GET /api/sessions"
     return
@@ -866,21 +965,22 @@ APP
   refused_top_level "a Command-click inside the Preview gets Axocoatl's refusal page" \
     "Back in the workbench's Browser view, hold Command and click 'Open the next page' in the Preview. Did a tab open on Axocoatl's refusal page, and not on the app?" "$before"
   # The cookie flood: from a page on another *.localhost address, as a
-  # development server the person runs could set them.
-  printf '\nOpen http://gate-pages.localhost:%s/plant?path=/api in a new Safari tab; it says how many cookies it set.\n' "$pages_port"
+  # development server the person runs could set them. Its server counts
+  # the planted cookies Safari sends back, so the evidence shows that the
+  # flood was in place, and later that it was gone.
+  before=$(pages_lines)
+  printf '\nOpen http://gate-pages.localhost:%s/plant?path=/api in a new Safari tab. It sets the cookies and shows how many of them Safari sends back.\n' "$pages_port"
   if [ "$host" = localhost ]; then
     # The workbench is on localhost, where Safari sends those cookies: the
     # docs say the API then refuses this browser and the workbench says so.
-    confirm "a Domain=localhost cookie flood from another page leaves the workbench as the docs say" \
-      "Reload the workbench tab. Does it show 'This browser is signed out' (after loading again at most twice), and not reload without end?"
-    confirm "Manage Website Data removes the planted localhost cookies" \
-      "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it, then open the sign-in link again ('axocoatl url'). Is the workbench signed in and working?"
+    flood_step "Reload the workbench tab. Does it show 'This browser is signed out' (after loading again at most twice), and not reload without end?" "$before"
+    before=$(pages_lines)
+    removed_step "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it, then open http://gate-pages.localhost:$pages_port/count?path=/api: does it say Safari sends 0 of them back? Then open the sign-in link again ('axocoatl url'). Is the workbench signed in and working?" "$before"
   else
     # The workbench is on $host, which Domain=localhost cookies never reach.
-    confirm "a Domain=localhost cookie flood from another page leaves the workbench as the docs say" \
-      "Reload the workbench tab (at $host). Is it still signed in, showing your Session, with no 'signed out' message?"
-    confirm "Manage Website Data removes the planted localhost cookies" \
-      "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it. Is the workbench still signed in and working?"
+    flood_step "Reload the workbench tab (at $host). Is it still signed in, showing your Session, with no 'signed out' message?" "$before"
+    before=$(pages_lines)
+    removed_step "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it, then open http://gate-pages.localhost:$pages_port/count?path=/api: does it say Safari sends 0 of them back? Is the workbench still signed in and working?" "$before"
   fi
   kill "$pages_pid" 2>/dev/null
   pages_pid=''
@@ -959,7 +1059,7 @@ real_repo_run() {
     gate_record "receipt verify on $name (documented command)" fail '' '' '' 'the run wrote no receipt'
     status=1
   fi
-  gate_markup_check "$name" "$clone" "$clone/run.axorecord.jsonl" || status=1
+  gate_markup_check "$name" "$clone" "$clone/run.axorecord.jsonl" receipt.json junit.xml || status=1
   return "$status"
 }
 

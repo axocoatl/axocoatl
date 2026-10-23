@@ -587,9 +587,34 @@ gate_api_get() {
     | GATE_CURL_MAX_TIME=30 gate_curl -fsS --config - "http://127.0.0.1:$GATE_DAEMON_PORT$1" >"$2" 2>&1
 }
 
-# gate_secret_stored NAME: Axocoatl's secret store holds NAME
-# (`axocoatl secret list` prints the names only).
-gate_secret_stored() { axocoatl secret list 2>/dev/null | grep -qxF -- "$1"; }
+# gate_secret_stored NAME: whether Axocoatl's secret store holds NAME, by
+# `axocoatl secret list` (the names only, one per line): 0 it does, 1 it
+# does not, 2 the list cannot be read (no axocoatl, an unreadable data
+# directory or configuration), with why in GATE_SECRET_ERROR. A list that
+# cannot be read is never taken for one without NAME.
+gate_secret_stored() {
+  local list status
+  GATE_SECRET_ERROR=''
+  list=$(axocoatl secret list 2>"$GATE_TMP/secret-list.err")
+  status=$?
+  if [ "$status" != 0 ]; then
+    # shellcheck disable=SC2034 # read by the scripts that source this file
+    GATE_SECRET_ERROR="axocoatl secret list exited $status: $(head -c 200 "$GATE_TMP/secret-list.err" | tr '\n' ' ')"
+    return 2
+  fi
+  printf '%s\n' "$list" | grep -qxF -- "$1"
+}
+
+# gate_onboarding_log_lines MARK TEXT: the first five lines holding TEXT in
+# the onboarding logs written since the file MARK was touched, on one line
+# (for a failed sign-in: each connection its callback received).
+gate_onboarding_log_lines() {
+  local dir
+  dir=$(gate_log_dir)
+  [ -d "$dir" ] && [ -e "$1" ] || return 0
+  find "$dir" -maxdepth 1 -name 'onboard-*.log' -newer "$1" -print0 2>/dev/null \
+    | xargs -0 grep -h -F -- "$2" /dev/null 2>/dev/null | head -n 5 | cut -c1-200 | tr '\n' ' '
+}
 
 # gate_server_port CONFIG: server.port in CONFIG, or nothing.
 gate_server_port() {
@@ -907,55 +932,72 @@ gate_copy_paste_lint() {
   gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$1/scripts/check-copy-paste.mjs"
 }
 
-# gate_markup_check LABEL REPO RECORD: no accepted output of the run whose
-# record is RECORD, in REPO, holds tool-call markup a model wrote as text
-# (`<function=` or `</tool_call>`): not a file the run left changed, and not
-# an answer of the Session's that the run's turns ended with, read from the
-# daemon on GATE_DAEMON_PORT (`GET /api/sessions/<id>/messages`, with the
-# local API token from the data root, never on a command line). A turn
-# that ended on such text ran nothing it meant to run. Records the step;
-# fails when the answers cannot be read.
+# gate_markup_check LABEL REPO RECORD [OUTPUT...]: no accepted output of
+# the run whose record is RECORD, in REPO, holds tool-call markup a model
+# wrote as text (`<function=` or `</tool_call>`; a turn that ended on such
+# text ran nothing it meant to run). It reads, without a daemon:
+#   - every answer the run accepted, from the history its record carries
+#     (record-answers.mjs, which reads only a whole record and needs at
+#     least one answer from a run that passed or whose checks failed);
+#   - every line the run added to a file since the commit the record says
+#     it started from (repo_head), in commits and in the working tree, and
+#     every new file, except RECORD and each OUTPUT (its receipt and JUnit
+#     report), which the gate asked for and which quote what the run read.
+# Records the step; fails when either cannot be read.
 gate_markup_check() {
-  local label=$1 repo=$2 record=$3 name found='' session messages status
+  local label=$1 repo=$2 record=$3 name answers status start file found
+  shift 3
   name="no tool-call markup in the accepted output of the run on $label"
-  found=$( (cd "$repo" && git diff HEAD --no-color && git ls-files --others --exclude-standard -z | xargs -0 cat) 2>/dev/null \
-    | grep -F -n -m 3 -e '<function=' -e '</tool_call>' | cut -c1-200 | tr '\n' ' ')
-  if [ -n "$found" ]; then
-    gate_record "$name" fail '' '' '' "the files the run left changed hold tool-call markup: $found"
-    return 1
-  fi
-  session=$(head -n 1 "$record" 2>/dev/null | node -e '
-    let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
-      try { const id = JSON.parse(s).session_id; if (typeof id === "string" && /^[A-Za-z0-9._-]+$/.test(id)) process.stdout.write(id); } catch {}
-    });')
-  if [ -z "$session" ]; then
-    gate_record "$name" fail '' '' '' "cannot read the Session's answers: $record names no Session"
-    return 1
-  fi
-  messages=$(mktemp "${TMPDIR:-/tmp}/axo-gate-messages.XXXXXX")
-  gate_api_get "/api/sessions/$session/messages" "$messages"
+  answers=$(node "$gate_dir/record-answers.mjs" "$record" 2>&1)
   status=$?
   if [ "$status" != 0 ]; then
-    gate_record "$name" fail '' '' '' "GET /api/sessions/$session/messages failed (curl exit $status): $(head -c 200 "$messages")"
-    rm -f "$messages"
+    gate_record "$name" fail '' '' '' "$answers"
     return 1
   fi
-  found=$(node -e '
-    const messages = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-    if (!Array.isArray(messages)) { console.log("the answer is not a list of messages"); process.exit(2); }
-    const answers = messages.filter((m) => String(m?.role).toLowerCase() === "assistant");
-    const bad = answers.filter((m) => /<function=|<\/tool_call>/.test(String(m.content ?? "")));
-    if (bad.length) { console.log(`${bad.length} of ${answers.length} answers: ${JSON.stringify(String(bad[0].content)).slice(0, 200)}`); process.exit(1); }
-    console.log(`${answers.length} answers of Session ${process.argv[2]} checked`);
-  ' "$messages" "$session" 2>&1)
-  status=$?
-  rm -f "$messages"
-  if [ "$status" = 0 ]; then
-    gate_record "$name" pass '' '' '' "$found; no changed file holds markup"
-    return 0
+  if ! start=$(node "$gate_dir/record-answers.mjs" --repo-head "$record" 2>&1) \
+    || ! git -C "$repo" rev-parse --quiet --verify "$start^{commit}" >/dev/null 2>&1; then
+    gate_record "$name" fail '' '' '' "$answers; cannot tell what the run changed in $repo: $start"
+    return 1
   fi
-  gate_record "$name" fail '' '' '' "$found"
-  return 1
+  local outside=() top dir
+  top=$(cd -P -- "$repo" && pwd)
+  for file in "$record" "$@"; do
+    # Relative to the repository, as the run wrote it, or absolute; one
+    # outside the repository is not in what the run changed anyway.
+    case "$file" in
+      '') continue ;;
+      /*)
+        dir=$(cd -P -- "$(dirname -- "$file")" 2>/dev/null && pwd) || continue
+        case "$dir/" in "$top/"*) ;; *) continue ;; esac
+        file="${dir#"$top"}/$(basename -- "$file")"
+        file=${file#/}
+        ;;
+    esac
+    outside+=(":(exclude,literal)$file")
+  done
+  if ! git -C "$repo" diff --no-color --no-ext-diff --no-textconv -U0 "$start" -- . "${outside[@]}" \
+    >"$GATE_TMP/markup.diff" 2>"$GATE_TMP/markup.err" \
+    || ! git -C "$repo" ls-files --others --exclude-standard -z -- . "${outside[@]}" \
+      >"$GATE_TMP/markup.new" 2>>"$GATE_TMP/markup.err" \
+    || ! (cd "$repo" && xargs -0 sh -c 'grep -a -H -n -F -e "<function=" -e "</tool_call>" -- /dev/null "$@"; [ $? -le 1 ]' gate-grep \
+      <"$GATE_TMP/markup.new" >"$GATE_TMP/markup.found" 2>>"$GATE_TMP/markup.err"); then
+    gate_record "$name" fail '' '' '' "$answers; cannot read what the run changed in $repo: $(head -c 200 "$GATE_TMP/markup.err" | tr '\n' ' ')"
+    return 1
+  fi
+  # Added lines only: a line the run left alone may quote markup (a parser's
+  # own tests, a changelog).
+  found=$( {
+    awk '/^diff --git / { hunk = 0; file = $NF; sub(/^b\//, "", file); next }
+         /^@@/ { hunk = 1; next }
+         hunk && /^\+/ { print file ": " substr($0, 2) }' "$GATE_TMP/markup.diff"
+    cat "$GATE_TMP/markup.found"
+  } | grep -a -F -m 3 -e '<function=' -e '</tool_call>' | cut -c1-200 | tr '\n' ' ')
+  if [ -n "$found" ]; then
+    gate_record "$name" fail '' '' '' "$answers; a line the run wrote holds tool-call markup: $found"
+    return 1
+  fi
+  gate_record "$name" pass '' '' '' "$answers; no line the run added since ${start:0:12} holds any"
+  return 0
 }
 
 # gate_run_fixture FIXTURE COMMAND REPO_DIR [WRITER_LABEL]: run COMMAND (as
@@ -1010,6 +1052,6 @@ gate_run_fixture() {
   gate_step "receipt matches the record on $label" -- /bin/bash -c \
     "cd \"\$1\" && axocoatl receipt verify \"\$2\" --key \"\$(axocoatl receipt key)\" --record \"\$3\"" \
     gate-verify "$repo" "$receipt" "$record" || status=1
-  gate_markup_check "$label" "$repo" "$repo/$record" || status=1
+  gate_markup_check "$label" "$repo" "$repo/$record" "$receipt" "$junit" || status=1
   return "$status"
 }

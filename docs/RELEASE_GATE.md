@@ -59,8 +59,10 @@ required and passed. A step the script skipped (a `--yes` run skips every
 step that only a person answering live can show), recorded as optional, or
 never recorded fails the path, naming the step. The list is read from the
 tagged commit, like the paths, and `evidence.test.mjs` fails when a step
-named here is not written, word for word, in a gate script. Restate the
-public text (see "Restating what was verified") from these steps.
+named here is not a whole quoted string in the script that records its
+path (`newuser-linux.sh` for A and D, `newuser-mac.sh` for C) or in
+`lib.sh`. Restate the public text (see "Restating what was verified") from
+these steps.
 
 <!-- release-gate:required-steps:start -->
 - `A-x86`
@@ -195,12 +197,30 @@ public text (see "Restating what was verified") from these steps.
   - `axocoatl service uninstall: not installed, its unit removed`
 <!-- release-gate:required-steps:end -->
 
-Every run step on a fixture also checks that no accepted output of the run
-holds tool-call markup a model wrote as text (`<function=` or
-`</tool_call>`): not a file the run left changed, and not an answer of the
-Session's, read from the daemon (`GET /api/sessions/<id>/messages`, with the
-local API token). A turn that ended on such text ran nothing it meant to
-run, so the run fails, and with it the summary step of its path.
+Every run on a fixture or a real repository, and the `--keep pr` run, also
+checks that no accepted output of the run holds tool-call markup a model
+wrote as text (`<function=` or `</tool_call>`). A turn that ended on such
+text ran nothing it meant to run. The check
+(`scripts/release-gate/record-answers.mjs` and `gate_markup_check` in
+`lib.sh`) needs no daemon:
+
+- It reads every answer the run accepted from the Session history in the
+  run's record: each activation the record marks `currently_accepted`,
+  whose output is the answer. A refused, failed or replaced activation's
+  output was never accepted and is not read. It reads only a whole record
+  (its end line's line count and digest, as `axocoatl record verify`
+  checks). A history it cannot read, an accepted activation whose output
+  the record does not hold, or a run that passed or whose checks failed
+  with no accepted answer fails the step.
+- It reads every line the run added to a file since the commit the record
+  says it started from (`repo_head`), in commits and in the working tree,
+  and every new file. It leaves out the record, receipt and JUnit report
+  the gate asked for, which quote what the run read. Lines the run left
+  alone may quote markup (a parser's own tests, a changelog) and are not
+  read.
+
+A run whose accepted output holds markup fails, and with it the summary
+step of its path.
 
 ## How the release workflow enforces it
 
@@ -451,9 +471,15 @@ Supporting checks, run in CI's workflow-contracts job:
     1.5.0, not Axocoatl, an HTTP error, a server that never answers, which
     must fail within the bound, nothing at all), and that every request the
     scripts make is bounded;
-  - the tool-call markup check, against the stand-in's daemon: a clean run
-    passes; markup in an answer or a changed file, a record without a
-    Session and a daemon that does not answer fail;
+  - the tool-call markup check, on records shaped as a 1.5.0 run writes
+    them (`testdata/record-history-1.5.0.json` is a real run's history): a
+    clean run passes, even when its record, receipt, report or a line it
+    left alone quotes markup; markup in an accepted answer, in a line it
+    added, a new file or a commit fails; a needs-attention run with no
+    accepted answer passes; and the transcript shape the daemon's API
+    serves, no accepted answer from a run that passed, a cut-off record,
+    a missing record and an unknown starting commit fail
+    (`record-answers.test.mjs` covers the reader);
   - the operator's answers in `answers.txt`, and the onboarding logs kept;
   - what `newuser-mac.sh` runs: every required C1 path by default, the
     Source Control question (Last turn N of at least 1, and the Safari
@@ -717,9 +743,11 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
     and each sign-in path checks that its secret was not stored yet. The
     person answers every onboarding consent prompt live, and the transcript
     is the evidence that the prompts read correctly. `--yes` answers
-    onboarding with flags; it is for trying the gate, and cannot pass a
-    required path, whose "onboarding was answered live in the terminal" and
-    sign-in steps it skips.
+    onboarding with flags; it is for trying the gate. It skips the
+    "onboarding was answered live in the terminal" and sign-in steps, so
+    the paths that onboard (`local`, `claude-code`, `codex`, `openrouter`
+    and `service`) cannot pass with it; `workbench`, `recovery` and
+    `real-repo` do not onboard and are not changed by it.
   - Every `onboard --update` after the first finds the gate's own
     `axocoatl dev`, which started before onboarding changes the
     configuration, and asks "The daemon on port … started before … changed,
@@ -788,8 +816,11 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   stops `axocoatl dev` with exit 0, and never prints or records the
   sign-in link (the driver reads it on standard input).
 - Then, in Safari itself, always answered by the person (the cookie and
-  website-data steps need Safari's own profile, not WebDriver's): the gate
-  writes a small app into the repository; the person starts it in the
+  website-data steps need Safari's own profile, not WebDriver's). After
+  the driver, whose automation window closes when it finishes, the gate
+  opens the sign-in link in an ordinary Safari window and names the
+  workspace and the Session (from `GET /api/sessions`) to open there. The
+  gate writes a small app into the repository; the person starts it in the
   Session's Terminal (`node gate-preview-app.cjs`; it logs each request's
   `Sec-Fetch-Dest`) and opens `http://localhost:5173` in the Session's
   Browser view. The person confirms that the Preview shows there, and that
@@ -801,20 +832,22 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   Axocoatl's refusal page, and the app's log must show no request for a
   page of its own. Last, a page on another `*.localhost` address sets the
   cookie flood the docs describe (51 cookies of 4,000 bytes and then 9
-  smaller ones, `Domain=localhost; Path=/api`). When the workbench's
-  sign-in link is on `localhost`, reloading it must show "This browser is
-  signed out", and removing localhost in Safari > Settings > Privacy >
-  Manage Website Data must sign it in again with the link; when the link
-  is on another host, which `Domain=localhost` cookies never reach, the
-  workbench must stay signed in, and Manage Website Data must still list
-  and remove the planted cookies.
+  smaller ones, `Domain=localhost; Path=/api`). Its own server counts the
+  planted cookies Safari sends back to it, and the page shows that count:
+  the step needs at least one, so the evidence shows the flood was in
+  place. When the workbench's sign-in link is on `localhost`, reloading it
+  must show "This browser is signed out", and removing localhost in
+  Safari > Settings > Privacy > Manage Website Data must sign it in again
+  with the link; when the link is on another host, which `Domain=localhost`
+  cookies never reach, the workbench must stay signed in. Either way,
+  after the removal the same server's count page must show that Safari
+  sends none of the planted cookies back.
 - Separately, CI's "Product browser regressions" job runs
   every browser regression on WebKit, Safari's engine
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
-  and in Chromium on x86_64 and aarch64, all against the release build, and
-  `release.yml`'s browser gate runs them too, in Chromium and in WebKit
-  against the release build (the WebKit leg has passed in CI). In every
-  engine a failure that followed a browser crash
+  and in Chromium on x86_64 and aarch64, all against the release build.
+  `release.yml`'s browser gate runs Chromium only, on a debug build. In
+  every engine a failure that followed a browser crash
   the suite detected is marked `# browser crash:`; nothing is rerun, so it
   still fails the suite (that README, "Browser crashes"). Run on a Mac with
   `AXO_BROWSER_ENGINE=webkit`, Playwright's
@@ -934,8 +967,12 @@ model download dominates unless models are cached.
     port in the VM (`http://127.0.0.1:<port>/callback`, a port the system
     chooses). Without `--plain`, Lima's guest agent forwards every port the
     VM listens on at 127.0.0.1 to the same port on the Mac, so the sign-in
-    page opened in the Mac's browser reaches it. 1.5.0's earlier D1 attempts
-    used a plain VM and timed out waiting for that callback. On the Mac:
+    page opened in the Mac's browser reaches it. Two of 1.5.0's D1 attempts
+    (on a1428e69) used a plain VM and timed out waiting for that callback.
+    A third (on 05e930f9) forwarded the callback port with `ssh -L` and also
+    timed out after 10 minutes; why was never found. So the gate now checks
+    the forwarding before onboarding, and onboarding's log records each
+    connection its callback receives (both below). On the Mac:
 
     ```bash
     limactl create --name=axo-d1 --cpus=4 --memory=8 template:ubuntu-24.04
@@ -971,6 +1008,13 @@ model download dominates unless models are cached.
     `HOME`. It records that the account has no Axocoatl and no Podman, and,
     in Lima, whether the guest agent forwards ports (a plain VM's is
     missing).
+  - Before onboarding, the gate listens on a free loopback port and prints
+    an address on it (`http://127.0.0.1:PORT/` and a random path) to open in
+    the browser the person will sign in to OpenRouter with, with the
+    `ssh -L` line to run first in a plain or cloud VM. The step passes when
+    the gate's listener received that request and the person saw the
+    page. A sign-in that later never calls back is then not the
+    forwarding.
   - It then removes the account's own range of subordinate ids from
     `/etc/subuid` and `/etc/subgid` with `sudo` (after a backup in its work
     directory, put back if onboarding adds none), so that onboarding must
@@ -999,7 +1043,9 @@ model download dominates unless models are cached.
     or cloud VM), run on the Mac the `ssh -L PORT:127.0.0.1:PORT …` line
     onboarding prints, with the same `-p` and `-i` as the login, and load
     the page again. Onboarding's log (kept in the evidence under
-    `logs/onboarding/`) names each connection its callback received.
+    `logs/onboarding/`) names each connection its callback received; when
+    the sign-in fails, the step's detail quotes those lines (`OpenRouter
+    sign-in: …`), or says that none reached the callback.
   - Then the README's command, without its `--model` options so that the
     models onboarding configured are used, runs on every fixture, followed
     by the receipt and record checks. `--command TEXT` runs another command

@@ -39,6 +39,25 @@ expect() {
 
 command -v node >/dev/null 2>&1 || { echo "test-release-gate: node is required" >&2; exit 1; }
 
+# bounded SECONDS COMMAND...: COMMAND's standard output and exit status, or
+# status 124 once it has run SECONDS, when it and every process it started
+# are killed. A test of a bound then fails with a message instead of
+# hanging when the bound is gone.
+bounded() {
+  node -e '
+    const { spawn } = require("child_process");
+    const [seconds, ...command] = process.argv.slice(1);
+    const child = spawn(command[0], command.slice(1), { detached: true, stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    let late = false;
+    const group = () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} };
+    const timer = setTimeout(() => { late = true; group(); }, Number(seconds) * 1000);
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("exit", () => { clearTimeout(timer); group(); });
+    child.on("close", (code) => { process.stdout.write(out); process.exit(late ? 124 : code ?? 1); });
+  ' "$@"
+}
+
 # required_steps PATH [DOC]: the steps docs/RELEASE_GATE.md requires of PATH,
 # one per line.
 required_steps() {
@@ -273,7 +292,7 @@ fi
 
 # --- What answers on a daemon's port, decided as onboarding decides it, with
 # every request bounded; and the check that no accepted output of a run
-# holds tool-call markup, against the stand-in axocoatl's daemon.
+# holds tool-call markup, read from its record and its repository.
 (
   export HOME="$work/daemon-home"
   mkdir -p "$HOME"
@@ -309,10 +328,13 @@ NODE
     server=$!
     for _ in $(seq 1 50); do [ -s "$work/health.port" ] && break; sleep 0.1; done
     t0=$SECONDS
-    got=$(GATE_CURL_MAX_TIME=1 gate_daemon_state "$(cat "$work/health.port")" "$config")
+    got=$(bounded 10 /bin/bash -c '. "$1" && GATE_CURL_MAX_TIME=1 gate_daemon_state "$2" "$3"' gate \
+      "$script_dir/lib.sh" "$(cat "$work/health.port")" "$config")
+    bounded_status=$?
     took=$((SECONDS - t0))
     kill "$server" 2>/dev/null
     wait "$server" 2>/dev/null
+    [ "$bounded_status" != 124 ] || { echo "gate_daemon_state still waited after 10 s on a $mode /health: a gate request has no time limit" >&2; exit 1; }
     case "$mode" in
       current) want=current ;;
       stale | old) want=stale ;;
@@ -335,60 +357,109 @@ NODE
     fi
   done
 
-  # gate_markup_check against the stand-in's daemon: its record names a
-  # Session whose answers the daemon serves with the local API token.
-  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$script_dir/testdata/fake-axocoatl.mjs" >"$work/fake-bin-axocoatl"
-  mkdir -p "$work/markup-bin"
-  mv "$work/fake-bin-axocoatl" "$work/markup-bin/axocoatl"
-  chmod +x "$work/markup-bin/axocoatl"
-  export PATH="$work/markup-bin:$PATH"
-  port=$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')
-  conf=$(gate_config_path)
-  mkdir -p "$(dirname -- "$conf")"
-  printf 'server:\n  port: %s\n  host: "127.0.0.1"\n' "$port" >"$conf"
-  axocoatl dev >/dev/null 2>&1 &
-  dev=$!
-  for _ in $(seq 1 50); do gate_daemon_up "$port" && break; sleep 0.1; done
-  [ "$(gate_daemon_state "$port" "$conf")" = current ] || { echo "the stand-in daemon is not current" >&2; kill -INT "$dev"; exit 1; }
-  data=$(gate_data_dir)
+  # gate_markup_check, from records shaped as a 1.5.0 run writes them
+  # (testdata/record-bundle.mjs) and a repository the "run" changed. No
+  # daemon is involved: the answers come from the record alone.
   repo="$work/markup-repo"
   mkdir -p "$repo" && git -C "$repo" init -q -b main
-  printf 'a\n' >"$repo/a.txt"
+  # A file that quotes markup before the run: the run must not be blamed
+  # for lines it left alone.
+  printf 'a\nparser test: <function=read_file>\n' >"$repo/a.txt"
   git -C "$repo" -c user.name=t -c user.email=t@example.invalid add -A
   git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm a
-  session() { # session ID ANSWER: a Session whose run ended with ANSWER
-    printf '{"session":{"id":"%s","working_dir":"%s","status":"closed"},"messages":[{"role":"user","content":"fix it"},{"role":"assistant","content":%s}]}' \
-      "$1" "$repo" "$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$2")" >"$data/fake-sessions/$1.json"
-    printf '{"schema":"axocoatl.record-bundle/2","session_id":"%s"}\n' "$1" >"$work/record-$1.jsonl"
+  start=$(git -C "$repo" rev-parse HEAD)
+  slip='Now I will edit it.
+<function=edit_file>
+<parameter=path>
+src/a.js
+</parameter>
+</function>
+</tool_call>'
+  # write_record FILE [VERDICT WRITER REVIEWER [HEAD [SHAPE]]]: a record
+  # whose run accepted WRITER and REVIEWER; SHAPE api writes the history as
+  # GET /api/sessions/<id>/messages serves it, none accepts nothing, quoted
+  # adds a turn section whose tool result quotes markup.
+  write_record() {
+    node --input-type=module -e '
+      import { writeFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { bundleText, history, record } = await import(pathToFileURL(process.argv[1]));
+      const [file, verdict = "pass", writer = "Fixed it.", reviewer = "VERDICT: APPROVE", repoHead, shape = ""] = process.argv.slice(2);
+      let entries = history(writer, reviewer);
+      if (shape === "api") entries = entries.map(({ history_version, turn }) => ({ history_version, content: turn }));
+      if (shape === "none") for (const activation of entries[0].turn.activations) activation.currently_accepted = false;
+      let text = record({ verdict, entries, repoHead });
+      if (shape === "quoted") {
+        const lines = text.trim().split("\n").map((line) => JSON.parse(line));
+        const sections = lines.slice(1, -1).map(({ section, data }) => [section, data]);
+        sections.splice(2, 0, ["turn", { tool_result: "the file holds <function=glob> and </tool_call>" }]);
+        text = bundleText(lines[0], sections);
+      }
+      writeFileSync(file, text);
+    ' "$script_dir/testdata/record-bundle.mjs" "$@"
   }
   gate_begin "$work/evidence-markup" 1.5.0 "$(printf '7%.0s' $(seq 1 40))" A-markup A
-  GATE_DAEMON_PORT=$port
-  session ses-clean 'Fixed the paging bug.'
-  gate_markup_check clean "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
-  session ses-slip 'Done.<function=edit_file><parameter=path>src/a.js</parameter></function>'
-  gate_markup_check slipped "$repo" "$work/record-ses-slip.jsonl" 2>/dev/null
-  session ses-qwen 'Here is the call: </tool_call>'
-  gate_markup_check tool-call-tag "$repo" "$work/record-ses-qwen.jsonl" 2>/dev/null
-  printf 'b\n<function=write_file>\n' >>"$repo/a.txt"
-  gate_markup_check in-a-file "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  # check LABEL RECORD: the run's outputs in the repository are the
+  # gate's, whichever record a case reads.
+  check() { gate_markup_check "$1" "$repo" "$2" run.axorecord.jsonl receipt.json axocoatl-junit.xml 2>/dev/null; }
+  write_record "$repo/run.axorecord.jsonl" pass 'Fixed the paging bug.' 'VERDICT: APPROVE' "$start" quoted
+  printf '<testcase>%s</testcase>\n' '</tool_call>' >"$repo/axocoatl-junit.xml"
+  printf '{"note":"<function=glob>"}\n' >"$repo/receipt.json"
+  printf 'b\n' >>"$repo/a.txt"
+  # The record is left out as the record, the others as outputs.
+  gate_markup_check clean "$repo" "$repo/run.axorecord.jsonl" receipt.json axocoatl-junit.xml 2>/dev/null
+  write_record "$work/slip.jsonl" pass "$slip" 'VERDICT: APPROVE' "$start"
+  check slipped "$work/slip.jsonl"
+  write_record "$work/qwen.jsonl" pass 'Fixed it.' 'VERDICT: APPROVE </tool_call>' "$start"
+  check tool-call-tag "$work/qwen.jsonl"
+  write_record "$work/api.jsonl" pass 'Fixed it.' 'VERDICT: APPROVE' "$start" api
+  check api-shape "$work/api.jsonl"
+  write_record "$work/none.jsonl" pass 'Fixed it.' 'VERDICT: APPROVE' "$start" none
+  check none-accepted "$work/none.jsonl"
+  write_record "$work/attention.jsonl" needs_attention "$slip" "$slip" "$start" none
+  check attention-none-accepted "$work/attention.jsonl"
+  write_record "$work/elsewhere.jsonl" pass 'Fixed it.' 'VERDICT: APPROVE' "$(printf 'e%.0s' $(seq 1 40))"
+  check unknown-start "$work/elsewhere.jsonl"
+  head -c 300 "$repo/run.axorecord.jsonl" >"$work/cut.jsonl"
+  check cut-off "$work/cut.jsonl"
+  check no-record "$work/absent.jsonl"
+  printf 'c\n<function=write_file>\n' >>"$repo/a.txt"
+  check in-a-file "$repo/run.axorecord.jsonl"
   git -C "$repo" checkout -q -- a.txt
   printf 'new\n</tool_call>\n' >"$repo/new.txt"
-  gate_markup_check in-a-new-file "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  check in-a-new-file "$repo/run.axorecord.jsonl"
   rm -f "$repo/new.txt"
-  printf '{"schema":"axocoatl.record-bundle/2"}\n' >"$work/record-none.jsonl"
-  gate_markup_check no-session "$repo" "$work/record-none.jsonl" 2>/dev/null
-  kill -INT "$dev" 2>/dev/null
-  wait "$dev" 2>/dev/null
-  gate_markup_check daemon-down "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  printf 'kept\n<function=bash>\n' >"$repo/kept.txt"
+  git -C "$repo" add kept.txt
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm kept
+  check in-a-commit "$repo/run.axorecord.jsonl"
   node -e '
     const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
     const got = steps.map((s) => `${s.name.replace(/^no tool-call markup in the accepted output of the run on /, "")}: ${s.status}`);
-    const want = ["clean: pass", "slipped: fail", "tool-call-tag: fail", "in-a-file: fail", "in-a-new-file: fail", "no-session: fail", "daemon-down: fail"];
+    const want = ["clean: pass", "slipped: fail", "tool-call-tag: fail", "api-shape: fail", "none-accepted: fail",
+      "attention-none-accepted: pass", "unknown-start: fail", "cut-off: fail", "no-record: fail", "in-a-file: fail",
+      "in-a-new-file: fail", "in-a-commit: fail"];
     if (got.join("\n") !== want.join("\n")) { console.error(got.join("\n")); process.exit(1); }
-    if (!/1 answers of Session ses-clean checked/.test(steps[0].detail)) { console.error(steps[0].detail); process.exit(1); }
-    if (!/<function=edit_file>/.test(steps[1].detail) || !/files the run left changed/.test(steps[3].detail)) { console.error(steps[1].detail, steps[3].detail); process.exit(1); }
+    const detail = Object.fromEntries(steps.map((s) => [s.name.replace(/^no tool-call markup in the accepted output of the run on /, ""), s.detail]));
+    const expect = {
+      clean: /^2 accepted answers in the record \(verdict pass\) hold no tool-call markup; no line the run added since [0-9a-f]{12} holds any$/,
+      slipped: /writer: ".*<function=edit_file>/,
+      "tool-call-tag": /reviewer: ".*<\/tool_call>/,
+      "api-shape": /^cannot read the run.s accepted answers: history entry 1 \(execution_v2\) has no activations$/,
+      "none-accepted": /no accepted answer, but a run whose verdict is pass accepted its writer.s$/,
+      "attention-none-accepted": /^0 accepted answers in the record \(verdict needs_attention\)/,
+      "unknown-start": /cannot tell what the run changed/,
+      "cut-off": /cut off/,
+      "no-record": /absent\.jsonl does not exist/,
+      "in-a-file": /a line the run wrote holds tool-call markup: a\.txt: <function=write_file>/,
+      "in-a-new-file": /a line the run wrote holds tool-call markup: new\.txt:2:<\/tool_call>/,
+      "in-a-commit": /a line the run wrote holds tool-call markup: kept\.txt: <function=bash>/,
+    };
+    const wrong = Object.entries(expect).filter(([name, pattern]) => !pattern.test(detail[name])).map(([name]) => `${name}: ${detail[name]}`);
+    if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
     if (steps.some((s) => s.required === false)) process.exit(1);
   ' "$GATE_STEPS" || exit 1
+  rm -rf -- "$GATE_TMP"
   # The token went to curl on standard input, never on a command line.
   grep -q 'header = "Authorization: Bearer %s"' "$script_dir/lib.sh" || exit 1
   rm -rf -- "$GATE_TMP"
@@ -408,18 +479,35 @@ NODE
   ' "$GATE_STEPS" || exit 1
   # Onboarding logs written during a path are kept with it.
   mkdir -p "$(gate_log_dir)"
-  printf 'old\n' >"$(gate_log_dir)/onboard-20200101T000000Z.log"
+  printf 'OpenRouter sign-in: GET /callback (Host 127.0.0.1:1): old\n' >"$(gate_log_dir)/onboard-20200101T000000Z.log"
   touch -t 202001010000 "$(gate_log_dir)/onboard-20200101T000000Z.log"
   touch "$GATE_TMP/began"
   sleep 1
-  printf 'GET /callback from 127.0.0.1\n' >"$(gate_log_dir)/onboard-20261023T000000Z.log"
+  printf 'step 3\nOpenRouter sign-in: GET /callback (Host 127.0.0.1:53111): no code\n' >"$(gate_log_dir)/onboard-20261023T000000Z.log"
   gate_keep_onboarding_logs "$GATE_TMP/began"
   [ "$(ls "$GATE_ATTACH/logs/onboarding")" = onboard-20261023T000000Z.log ] || { ls "$GATE_ATTACH/logs/onboarding" >&2; exit 1; }
+  # ... and a failed sign-in's detail quotes what reached its callback.
+  got=$(gate_onboarding_log_lines "$GATE_TMP/began" 'OpenRouter sign-in:')
+  [ "$got" = 'OpenRouter sign-in: GET /callback (Host 127.0.0.1:53111): no code ' ] || { echo "callback lines: $got" >&2; exit 1; }
+  # The secret store's list: a name it holds, one it does not, and a list
+  # that cannot be read, which is never taken for one without the name.
+  mkdir -p "$work/secret-bin"
+  printf '#!/bin/sh\n[ -n "$FAKE_LIST_FAILS" ] && { echo "✗ cannot read the data directory" >&2; exit 1; }\nprintf "openrouter\\nreceipt-signing-key\\n"\n' >"$work/secret-bin/axocoatl"
+  chmod +x "$work/secret-bin/axocoatl"
+  (
+    export PATH="$work/secret-bin:$PATH"
+    gate_secret_stored openrouter || exit 1
+    gate_secret_stored codex-chatgpt
+    [ $? = 1 ] || exit 1
+    FAKE_LIST_FAILS=1 gate_secret_stored codex-chatgpt
+    [ $? = 2 ] || exit 1
+    [ "$GATE_SECRET_ERROR" = 'axocoatl secret list exited 1: ✗ cannot read the data directory ' ] || { echo "$GATE_SECRET_ERROR" >&2; exit 1; }
+  ) || { echo "gate_secret_stored does not tell stored, not stored and unreadable apart" >&2; exit 1; }
   rm -rf -- "$GATE_TMP"
 )
 daemon_status=$?
 if [ "$daemon_status" = 0 ]; then
-  pass "daemon state (current, stale, before 1.5.0, not Axocoatl, HTTP error, a hang within the bound, nothing listening); every gate curl bounded; no tool-call markup in a run's answers or changed files (fails closed); operator answers kept; onboarding logs kept"
+  pass "daemon state (current, stale, before 1.5.0, not Axocoatl, HTTP error, a hang within the bound, nothing listening); every gate curl bounded; no tool-call markup in a run's accepted answers (read from a 1.5.0-shaped record) or in a line it added (fails closed); operator answers kept; onboarding logs kept, a sign-in's callback lines quoted; a secret list that cannot be read is not an empty one"
 else
   fail "daemon state, curl bounds, markup check, answers"
 fi
@@ -984,6 +1072,7 @@ PODMAN
     const status = Object.fromEntries(e.steps.map((s) => [s.name, s.status]));
     const fixtures = process.argv[2].trim().split(" ");
     const want = {
+      "the sign-in browser reached a loopback port of this account, as OpenRouter\u0027s callback must": "pass",
       "onboard (interactive, every consent answered by the operator; --start none)": "pass",
       "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": "pass",
       "axocoatl dev serves on its configured port": "pass",
@@ -1006,6 +1095,8 @@ PODMAN
     const restart = e.steps.find((s) => s.name.startsWith("onboarding restarted the service"));
     if (!/onboarding asked to restart it/.test(restart.detail)) { console.error(restart.detail); process.exit(1); }
     if (!e.attachments.includes("D1-sim/answers.txt")) { console.error("no answers.txt"); process.exit(1); }
+    const forward = e.steps.find((s) => s.name.startsWith("the sign-in browser reached"));
+    if (!/listener on 127\.0\.0\.1:\d+ received the request \(GET \/<the gate path> Host 127\.0\.0\.1:\d+\)/.test(forward.detail)) { console.error(forward.detail); process.exit(1); }
   ' "$sim/evidence/$version/$commit/D1-sim.json" "$present" "$(required_steps D1)"
   # The account's range is back, beside the other user's, and the service
   # was uninstalled.

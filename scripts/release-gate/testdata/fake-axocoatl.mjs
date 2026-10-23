@@ -3,12 +3,14 @@
 // enough to drive newuser-linux.sh end to end in test-release-gate.sh
 // (GATE_SIMULATION=1): onboard's non-interactive flags and exit codes (and
 // --update, Step 6's Always-On Service and Step 7's restart of it), doctor
-// --json, a daemon that answers /health with its version and start time,
-// /health/live and, with the local API token, a Session's messages; `run
-// fix` as a tiny writer/reviewer loop against the gate's stub model server,
-// executing read_file and edit_file itself, whose record names its Session;
-// `service`; and `secret list`. It is test scaffolding: it proves the gate
-// script's own logic, never the product.
+// --json, a daemon that answers /health with its version and start time and
+// /health/live; `run fix` as a tiny writer/reviewer loop against the gate's
+// stub model server, executing read_file and edit_file itself, whose record
+// is shaped as a 1.5.0 run writes it (testdata/record-bundle.mjs: the
+// commit it started from, its verdict, and the writer's and reviewer's
+// accepted answers in the Session history); `service`; and `secret list`.
+// It is test scaffolding: it proves the gate script's own logic, never the
+// product.
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
@@ -17,6 +19,8 @@ import {
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import path from 'node:path';
+
+import { history, record } from './record-bundle.mjs';
 
 const VERSION = process.env.FAKE_AXOCOATL_VERSION || '0.0.0';
 const darwin = process.platform === 'darwin';
@@ -102,27 +106,15 @@ async function chat(baseUrl, model, messages, tools) {
   return JSON.parse((await response.text()).trim().split('\n').at(-1)).message;
 }
 
-// The daemon (`dev`, `serve`, the service): /health, /health/live, and the
-// two Session routes the gate reads with the local API token.
+// The daemon (`dev`, `serve`, the service): /health and /health/live.
 async function daemon() {
   const config = readConfig();
-  mkdirSync(path.join(dataDir, 'fake-sessions'), { recursive: true });
-  const tokenFile = path.join(dataDir, 'local-api-token');
-  if (!existsSync(tokenFile)) writeFileSync(tokenFile, randomUUID().replace(/-/g, ''));
-  const token = readFileSync(tokenFile, 'utf8').trim();
+  mkdirSync(dataDir, { recursive: true });
   const started = Date.now();
   const server = createServer((req, res) => {
     const json = (status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
     if (req.url === '/health/live') return json(200, { status: 'ok' });
     if (req.url === '/health') return json(200, { status: 'ok', version: VERSION, started_at_ms: started });
-    if (req.headers.authorization !== `Bearer ${token}`) return json(401, { error: 'unauthorized' });
-    if (req.url === '/api/sessions') {
-      const dir = path.join(dataDir, 'fake-sessions');
-      return json(200, readdirSync(dir).map((file) => JSON.parse(readFileSync(path.join(dir, file), 'utf8')).session));
-    }
-    const match = req.url.match(/^\/api\/sessions\/([^/]+)\/messages$/);
-    const file = match && path.join(dataDir, 'fake-sessions', `${match[1]}.json`);
-    if (file && existsSync(file)) return json(200, JSON.parse(readFileSync(file, 'utf8')).messages);
     return json(404, { error: 'not found' });
   });
   server.listen(config.port, '127.0.0.1');
@@ -252,6 +244,7 @@ async function run() {
   const live = await fetch(`http://127.0.0.1:${config.port}/health/live`).catch(() => null);
   if (!live?.ok) return 4;
   const session = `ses-${randomUUID()}`;
+  const repoHead = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const messages = [{ role: 'user', content: flag('--task') }];
   let answer = '';
   for (let turn = 0; turn < 12; turn += 1) {
@@ -274,18 +267,17 @@ async function run() {
       messages.push({ role: 'tool', content: result });
     }
   }
-  // FAKE_FINAL_TEXT stands for a turn that ended on text (a slipped tool call).
+  // FAKE_FINAL_TEXT stands for a turn that ended on text (a slipped tool
+  // call) and that a broken product accepted as the writer's answer.
   if (process.env.FAKE_FINAL_TEXT) answer = `${answer}\n${process.env.FAKE_FINAL_TEXT}`;
-  mkdirSync(path.join(dataDir, 'fake-sessions'), { recursive: true });
-  writeFileSync(path.join(dataDir, 'fake-sessions', `${session}.json`), JSON.stringify({
-    session: { id: session, working_dir: process.cwd(), status: 'closed' },
-    messages: [{ role: 'user', content: flag('--task') }, { role: 'assistant', content: answer }],
-  }));
   const review = await chat(config.baseUrl, reviewer.replace(/^ollama:/, ''), [{ role: 'user', content: 'Give VERDICT: APPROVE or VERDICT: CHANGES' }], ['read_file']);
   const changed = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).stdout.split('\n').filter((line) => /^ M /.test(line));
   const pass = /VERDICT: APPROVE/.test(review.content) && changed.length === 1;
-  const header = JSON.stringify({ schema: 'axocoatl.record-bundle/2', run_id: `run-${randomUUID()}`, session_id: session });
-  for (const [option, body] of [['--junit', '<testsuites/>\n'], ['--record', `${header}\n`], ['--receipt', '{"payloadType":"fake"}\n']]) {
+  const bundle = record({
+    runId: `run-${randomUUID()}`, sessionId: session, repoHead, verdict: pass ? 'pass' : 'checks_failed',
+    entries: history(answer, review.content ?? ''),
+  });
+  for (const [option, body] of [['--junit', '<testsuites/>\n'], ['--record', bundle], ['--receipt', '{"payloadType":"fake"}\n']]) {
     if (flag(option)) writeFileSync(flag(option), body);
   }
   out(`Verdict: ${pass ? 'pass (exit 0)' : 'checks failed (exit 1)'}`);

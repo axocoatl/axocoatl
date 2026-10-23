@@ -419,7 +419,10 @@ live_onboarding_steps() {
     [ -n "$overlap" ] || overlap="the gate did not remove the account's range first"
     gate_record "onboarding added a subordinate id range that no other user's overlaps" fail '' '' '' "$overlap"
   fi
-  if gate_secret_stored openrouter; then
+  local stored lines
+  gate_secret_stored openrouter
+  stored=$?
+  if [ "$stored" = 0 ]; then
     gate_ask "When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter in the Mac's browser (no key typed or pasted)?"
     if [ "$ANSWER" = y ]; then
       gate_record "OpenRouter was connected through the browser sign-in during onboarding" pass '' '' '' \
@@ -427,8 +430,15 @@ live_onboarding_steps() {
     else
       gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' "the operator answered no: ${ANSWER_NOTE:-no note}"
     fi
+  elif [ "$stored" = 2 ]; then
+    gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' \
+      "cannot tell whether onboarding stored openrouter: $GATE_SECRET_ERROR"
   else
-    gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' "onboarding ended without the secret openrouter stored"
+    # What reached the sign-in's callback, one line per connection, tells a
+    # sign-in nobody finished from one whose callback never arrived.
+    lines=$(gate_onboarding_log_lines "$GATE_TMP/began" 'OpenRouter sign-in:')
+    gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' \
+      "onboarding ended without the secret openrouter stored; $([ -n "$lines" ] && printf "onboarding's log: %s" "$lines" || printf "onboarding's log has no 'OpenRouter sign-in:' line, so no connection reached the sign-in's callback")"
   fi
   if command -v ollama >/dev/null 2>&1 || [ -e /etc/systemd/system/ollama.service ]; then
     gate_record "onboarding did not install Ollama" fail '' '' '' "$(command -v ollama || echo /etc/systemd/system/ollama.service)"
@@ -437,8 +447,48 @@ live_onboarding_steps() {
   fi
 }
 
+# forward_check: whether the browser the person signs in with reaches a
+# loopback port of this account, as OpenRouter's browser sign-in must call
+# back to one (http://127.0.0.1:<port>/callback). Checked before
+# onboarding, by a request the gate's own listener must receive, so that a
+# sign-in that never calls back afterwards is not the forwarding: 1.5.0's
+# first D1 attempts used a plain Lima VM, which forwards no port, and one
+# with an ssh -L tunnel also timed out, for a reason nobody found.
+forward_check() {
+  local name="the sign-in browser reached a loopback port of this account, as OpenRouter's callback must"
+  local token port listener log="$GATE_ATTACH/logs/forward-check.log"
+  token=$(node -e 'process.stdout.write(require("crypto").randomBytes(12).toString("hex"))')
+  node -e '
+    const fs = require("fs");
+    const [portFile, log, token] = process.argv.slice(1);
+    const server = require("http").createServer((req, res) => {
+      const hit = req.url === `/${token}`;
+      fs.appendFileSync(log, `${req.method} ${hit ? "/<the gate path>" : req.url.split("?")[0]} Host ${req.headers.host}\n`);
+      res.writeHead(hit ? 200 : 404, { "content-type": "text/plain; charset=utf-8" });
+      res.end(hit ? "Axocoatl gate: this page reached the VM.\n" : "Axocoatl gate: not the address the gate printed.\n");
+    }).listen(0, "127.0.0.1", () => fs.writeFileSync(portFile, String(server.address().port)));
+  ' "$GATE_TMP/forward.port" "$log" "$token" &
+  listener=$!
+  for _ in $(seq 1 50); do [ -s "$GATE_TMP/forward.port" ] && break; sleep 0.1; done
+  port=$(cat "$GATE_TMP/forward.port" 2>/dev/null)
+  printf '\nBefore onboarding: open this address in the browser you will sign in to OpenRouter with (the Mac'"'"'s):\n\n    http://127.0.0.1:%s/%s\n\n' "$port" "$token"
+  printf 'In a Lima VM that is not plain it opens after a few seconds. In a plain or cloud VM, first run on the Mac, with your login'"'"'s port, key and host:\n\n    ssh -N -L %s:127.0.0.1:%s -p SSH_PORT -i KEY %s@HOST\n' "$port" "$port" "$(id -un)"
+  # A simulated person opens it with curl.
+  [ "${GATE_SIMULATION:-0}" = 1 ] && gate_curl -fsS "http://127.0.0.1:$port/$token" >/dev/null 2>&1
+  gate_ask "Did the page say 'Axocoatl gate: this page reached the VM.'?"
+  kill "$listener" 2>/dev/null
+  wait "$listener" 2>/dev/null
+  if grep -q '^GET /<the gate path> ' "$log" 2>/dev/null && [ "$ANSWER" = y ]; then
+    gate_record "$name" pass '' '' '' "the gate's listener on 127.0.0.1:$port received the request ($(grep -m 1 '^GET /<the gate path> ' "$log")), and the operator ($(id -un)) answered yes"
+  else
+    gate_record "$name" fail '' '' '' \
+      "$(grep -q '^GET /<the gate path> ' "$log" 2>/dev/null && echo 'the request arrived' || echo "the gate's listener on 127.0.0.1:${port:-?} received no request for its address"); the operator answered ${ANSWER}${ANSWER_NOTE:+: $ANSWER_NOTE}. Forward the port (a VM that is not plain, or ssh -L) before onboarding's sign-in"
+  fi
+}
+
 # 4. Onboarding, then doctor.
 if [ "$live" = 1 ]; then
+  forward_check
   # Every consent prompt is answered by the operator. --start none: the gate
   # starts `axocoatl dev` itself, with its output (and sign-in link) kept
   # out of the transcript.

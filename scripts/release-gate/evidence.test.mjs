@@ -152,17 +152,23 @@ test('the steps each path must show come from their block in RELEASE_GATE.md, an
   assert.throws(() => parseRequiredSteps(block('- `C1-local`\n- `C1-local`')), /listed twice/);
   assert.throws(() => parseRequiredSteps(block('- `C1-local`\nsome prose')), /neither a path nor a step/);
   // The real list: every path it names is a required path, each names at
-  // least one step, and each step is written literally in a gate script,
-  // so a renamed step cannot go unnoticed.
+  // least one step, and each step is a whole quoted string in the script
+  // that records that path (or lib.sh), so a renamed step cannot go
+  // unnoticed, and a step another path records under a longer name does
+  // not count.
   const markdown = readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8');
   const paths = parseRequiredPaths(markdown).map((entry) => entry.name);
-  const scripts = ['newuser-mac.sh', 'newuser-linux.sh', 'lib.sh'].map((file) => readFileSync(path.join(HERE, file), 'utf8')).join('\n');
+  const source = (file) => readFileSync(path.join(HERE, file), 'utf8');
+  const recordedBy = (name) => `${source(/^(A-|D)/.test(name) ? 'newuser-linux.sh' : 'newuser-mac.sh')}\n${source('lib.sh')}`;
+  const quoted = (text, step) => text.includes(`"${step}"`) || text.includes(`'${step}'`);
+  assert.ok(!quoted('gate_record "the account started without Podman or a Podman machine"', 'the account started without Podman'));
   const real = parseRequiredSteps(markdown);
   assert.ok(real.size > 0);
   for (const [name, steps] of real) {
     assert.ok(paths.includes(name), `${name} has required steps but is not a required path`);
     assert.ok(steps.length > 0, `${name} lists no step`);
-    for (const step of steps) assert.ok(scripts.includes(step), `${name}: no gate script records ${JSON.stringify(step)}`);
+    const text = recordedBy(name);
+    for (const step of steps) assert.ok(quoted(text, step), `${name}: its gate script records no step named ${JSON.stringify(step)}`);
   }
   for (const name of ['C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-service', 'C1-workbench-webkit', 'C1-recovery', 'C1-real-repo', 'D1']) {
     assert.ok(real.has(name), `${name} has no required steps`);
