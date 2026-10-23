@@ -5040,6 +5040,7 @@ fn start_a_machine_while_ctrl_c_is_typed() {
         extra_dirs: Vec::new(),
         home: directory.clone(),
         root: directory.clone(),
+        data_home: directory.join("data"),
         exe: directory.join("axocoatl"),
         macos: true,
         log: None,

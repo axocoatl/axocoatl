@@ -125,6 +125,11 @@ async fn child(
     repo: &std::path::Path,
 ) -> std::process::Output {
     let ids = root.join("ids.json");
+    // This test's Podman lists volumes and SearXNG containers and records
+    // removals; `run_child` keeps a `podman` already written.
+    if !root.join("bin/podman").exists() {
+        fake_podman(root);
+    }
     run_child(
         TEST,
         CHILD,
