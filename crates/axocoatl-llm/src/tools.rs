@@ -65,4 +65,40 @@ mod tests {
         assert_eq!(back.id, "call_123");
         assert_eq!(back.arguments["location"], "NYC");
     }
+
+    /// A number argument is the exact f64 it names after every parse a call
+    /// goes through (the provider's response, its re-encoded arguments, the
+    /// actor's assembled call and the stored record). serde_json's default
+    /// parser lands 1 ULP off for about a third of random bit patterns, such
+    /// as -5.220838365510166e38; the workspace enables `float_roundtrip`.
+    #[test]
+    fn a_tool_calls_number_arguments_parse_to_the_exact_f64() {
+        let known = -5.220838365510166e38_f64;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&format!("{{\"x\":{}}}", serde_json::json!(known))).unwrap();
+        assert_eq!(
+            parsed["x"].as_f64().map(f64::to_bits),
+            Some(known.to_bits())
+        );
+        proptest::proptest!(proptest::prelude::ProptestConfig::with_cases(4096), |(
+            bits in proptest::prelude::any::<u64>()
+        )| {
+            let value = f64::from_bits(bits);
+            proptest::prop_assume!(value.is_finite());
+            let call = ToolCall {
+                id: "call_1".to_string(),
+                name: "measure".to_string(),
+                arguments: serde_json::json!({ "value": value, "nested": [value] }),
+                provider_metadata: Default::default(),
+            };
+            // The arguments as a provider sends them, a JSON string.
+            let text = serde_json::to_string(&call.arguments).unwrap();
+            let arguments: serde_json::Value = serde_json::from_str(&text).unwrap();
+            proptest::prop_assert_eq!(arguments["value"].as_f64().map(f64::to_bits), Some(bits));
+            proptest::prop_assert_eq!(arguments["nested"][0].as_f64().map(f64::to_bits), Some(bits));
+            // And the call as a record stores it.
+            let stored: ToolCall = serde_json::from_slice(&serde_json::to_vec(&call).unwrap()).unwrap();
+            proptest::prop_assert_eq!(stored.arguments["value"].as_f64().map(f64::to_bits), Some(bits));
+        });
+    }
 }
