@@ -98,6 +98,11 @@ pub enum IpcRequest {
     /// What the daemon did about leaked Session runtime volumes when it
     /// started (`axocoatl doctor`).
     RuntimeVolumes,
+    /// The Axocoatl version the daemon runs (`axocoatl doctor`), so a CLI
+    /// can tell a daemon that was not restarted after an upgrade. A daemon
+    /// older than 1.5.0 does not know this request: it closes the connection
+    /// without an answer ([`IpcClient::daemon_version`]).
+    Version,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -201,6 +206,19 @@ pub enum IpcResponse {
     },
     /// What the daemon did about leaked Session runtime volumes.
     RuntimeVolumes { check: crate::RuntimeVolumeCheck },
+    /// The Axocoatl version the daemon runs, and when it started (Unix
+    /// milliseconds).
+    Version { version: String, started_at_ms: u64 },
+}
+
+/// Which Axocoatl a running daemon is, as it answers [`IpcRequest::Version`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonVersion {
+    /// It named the version it runs.
+    Reported(String),
+    /// It closed the connection without an answer, as a daemon older than
+    /// 1.5.0 does on a request it does not know.
+    BeforeVersionRequest,
 }
 
 /// Summary of a directory session, for IPC clients.
@@ -833,6 +851,10 @@ async fn handle_client(
             IpcRequest::RuntimeVolumes => IpcResponse::RuntimeVolumes {
                 check: daemon.read().await.runtime_volume_check(),
             },
+            IpcRequest::Version => IpcResponse::Version {
+                version: crate::readiness::DAEMON_VERSION.to_string(),
+                started_at_ms: crate::readiness::started_at_ms(),
+            },
             IpcRequest::ReloadNetworkPolicy => {
                 let daemon = daemon.read().await;
                 match daemon.reload_network_policy().await {
@@ -874,6 +896,29 @@ impl IpcClient {
     /// Check if the daemon is alive.
     pub async fn ping(&mut self) -> bool {
         matches!(self.request(&IpcRequest::Ping).await, Ok(IpcResponse::Pong))
+    }
+
+    /// Which Axocoatl the daemon runs. Ask on a connection of its own: a
+    /// daemon older than 1.5.0 closes it
+    /// ([`DaemonVersion::BeforeVersionRequest`]).
+    pub async fn daemon_version(&mut self) -> std::io::Result<DaemonVersion> {
+        match self.request(&IpcRequest::Version).await {
+            Ok(IpcResponse::Version { version, .. }) => Ok(DaemonVersion::Reported(version)),
+            Ok(_) => Err(std::io::Error::other(
+                "the daemon answered the version request with something else",
+            )),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                Ok(DaemonVersion::BeforeVersionRequest)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -1141,6 +1186,57 @@ mod tests {
         // Client reads response
         let resp: IpcResponse = read_message(&mut client).await.unwrap();
         assert!(matches!(resp, IpcResponse::Pong));
+    }
+
+    /// A daemon answers which version it runs. One older than 1.5.0 does
+    /// not know the request: it fails to read it and closes the connection,
+    /// which says it is older than the version request.
+    #[tokio::test]
+    async fn the_version_request_names_the_daemon_or_says_it_is_older() {
+        assert_eq!(
+            serde_json::to_value(IpcRequest::Version).unwrap(),
+            serde_json::json!({"type": "version"})
+        );
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let answer = tokio::spawn(async move {
+            let request: IpcRequest = read_message(&mut server).await.unwrap();
+            assert!(matches!(request, IpcRequest::Version));
+            write_message(
+                &mut server,
+                &IpcResponse::Version {
+                    version: "1.5.0".into(),
+                    started_at_ms: 7,
+                },
+            )
+            .await
+            .unwrap();
+        });
+        let mut client = IpcClient { stream: client };
+        assert_eq!(
+            client.daemon_version().await.unwrap(),
+            DaemonVersion::Reported("1.5.0".into())
+        );
+        answer.await.unwrap();
+
+        // 1.4.0's request type, without `version`: its read fails and its
+        // connection handler returns, dropping the stream.
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        #[allow(dead_code)]
+        enum OlderRequest {
+            Ping,
+            RuntimeVolumes,
+        }
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let older = tokio::spawn(async move {
+            assert!(read_message::<OlderRequest>(&mut server).await.is_err());
+        });
+        let mut client = IpcClient { stream: client };
+        assert_eq!(
+            client.daemon_version().await.unwrap(),
+            DaemonVersion::BeforeVersionRequest
+        );
+        older.await.unwrap();
     }
 
     #[tokio::test]

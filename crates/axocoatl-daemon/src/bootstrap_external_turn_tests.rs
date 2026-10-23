@@ -14,6 +14,7 @@
 use super::*;
 use crate::bootstrap::native_send::NativeSessionSend;
 use crate::bootstrap::native_turn::NativeFirstTurnStart;
+use crate::child_daemon_test_support::AdmissionOnlySandbox;
 use axocoatl_config::loadout::{
     parse_loadout, resolve_loadout, AgentRuntime, LoadoutSource, ParamValues,
 };
@@ -198,66 +199,6 @@ async fn bound_session(daemon: &AxocoatlDaemon, work: &std::path::Path) -> Sessi
             },
         )
         .unwrap()
-}
-
-/// A Ready runtime that admits ownership and Begin and has no egress
-/// decision point, so an external program never starts in it.
-struct AdmissionOnlySandbox(std::path::PathBuf);
-
-#[async_trait::async_trait]
-impl Sandbox for AdmissionOnlySandbox {
-    fn root(&self) -> &std::path::Path {
-        &self.0
-    }
-    fn execution_identity(&self) -> Option<&str> {
-        Some("external-turn-admission")
-    }
-    async fn exec(
-        &self,
-        _argv: &[&str],
-        _timeout: Duration,
-    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
-        Err(axocoatl_isolation::IsolationError::Io(
-            std::io::Error::other("the admission test runtime runs no command"),
-        ))
-    }
-    async fn exec_stdin(
-        &self,
-        _argv: &[&str],
-        _stdin: &str,
-        _timeout: Duration,
-    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
-        Err(axocoatl_isolation::IsolationError::Io(
-            std::io::Error::other("the admission test runtime runs no command"),
-        ))
-    }
-    fn spawn_background(&self, _command: &str) -> String {
-        unreachable!("the admission test runtime runs no background task")
-    }
-    fn spawn_pty(
-        &self,
-        _command: &str,
-        _rows: u16,
-        _cols: u16,
-    ) -> Result<Arc<axocoatl_isolation::pty::PtyTerminal>, String> {
-        Err("the admission test runtime has no terminal".into())
-    }
-    fn get_terminal(&self, _id: &str) -> Option<Arc<axocoatl_isolation::pty::PtyTerminal>> {
-        None
-    }
-    fn kill_terminal(&self, _id: &str) -> bool {
-        false
-    }
-    fn list_terminals(&self) -> Vec<(String, String, bool)> {
-        Vec::new()
-    }
-    fn list_tasks(&self) -> Vec<axocoatl_isolation::session_sandbox::BgTask> {
-        Vec::new()
-    }
-    fn with_root(&self, root: &std::path::Path) -> Arc<dyn Sandbox> {
-        Arc::new(Self(root.to_path_buf()))
-    }
-    async fn stop(&self) {}
 }
 
 async fn admission_child_body() {

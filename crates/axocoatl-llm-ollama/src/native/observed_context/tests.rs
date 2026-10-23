@@ -681,11 +681,30 @@ async fn a_profile_retained_on_ollama_0_20_6_gets_a_specific_message() {
     let mut retained = observe_native_ollama_context(&server.uri(), "test-model")
         .await
         .unwrap();
+    // What this Axocoatl records connects again; Team & budget keeps it.
+    assert!(!retained.refused_when_retained());
     retained.schema_version = 1;
     retained.server_version = "0.20.6".into();
-    // Exactly the shape 1.4.0 wrote still reads.
+    // Exactly the shape 1.4.0 wrote still reads, and is refused as retained:
+    // Team & budget's Apply observes the model again instead of keeping it.
     let bytes = serde_json::to_vec(&retained).unwrap();
     let retained: NativeOllamaContextObservation = serde_json::from_slice(&bytes).unwrap();
+    assert!(retained.refused_when_retained());
+    for (schema, version, refused) in [
+        (OBSERVATION_SCHEMA_VERSION, "0.20.6", true),
+        (1, AUDITED_OLLAMA_VERSION, true),
+        (OBSERVATION_SCHEMA_VERSION, "0.40.0-rc1", true),
+        (OBSERVATION_SCHEMA_VERSION, "0.40.7", false),
+    ] {
+        let mut observation = retained.clone();
+        observation.schema_version = schema;
+        observation.server_version = version.into();
+        assert_eq!(
+            observation.refused_when_retained(),
+            refused,
+            "{schema} {version}"
+        );
+    }
     server.reset().await;
     standard(&server).await;
     let refusal = NativeOllamaProvider::connect_observed(retained.clone(), 32, 64 * 1024)

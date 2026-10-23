@@ -305,6 +305,34 @@ impl NativeCallReservation {
     }
 }
 
+/// Whether the retained provider profile `configuration` can no longer
+/// serve a turn: an Ollama profile whose observation native Sessions refuse
+/// now (every profile Axocoatl 1.4 or earlier recorded, on Ollama 0.20.6).
+/// Its turns say to review Team & budget again, so applying the Team observes
+/// such a slot again even when nothing else about it changed.
+pub(crate) fn retained_profile_refused(configuration: &str) -> bool {
+    matches!(
+        serde_json::from_str::<NativeRuntimeConfiguration>(configuration),
+        Ok(NativeRuntimeConfiguration::Ollama(runtime))
+            if runtime.observation.refused_when_retained()
+    )
+}
+
+/// Connect the retained provider profile `configuration` with
+/// `credentials`, as an activation under it connects: the step at which a
+/// turn or a delegated helper refuses a profile it can no longer use.
+#[cfg(test)]
+pub(crate) async fn connect_retained_profile(
+    configuration: &str,
+    credentials: &NativeProviderCredentials,
+) -> Result<()> {
+    serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
+        .map_err(error)?
+        .verify_credentials(credentials)
+        .await
+        .map(|_| ())
+}
+
 /// What one model call reserves under the retained provider profile
 /// `configuration` of the definition `config`. `None` for a profile that is
 /// not a native one (an external program's).

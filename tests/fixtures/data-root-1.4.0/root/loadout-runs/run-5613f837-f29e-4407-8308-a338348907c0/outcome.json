@@ -1,0 +1,83 @@
+{
+  "schema": "axocoatl.run-outcome/1",
+  "run_id": "run-5613f837-f29e-4407-8308-a338348907c0",
+  "session_id": "ses-d14ac217-9a2c-440f-b903-dd0e8bb1dbe1",
+  "workspace_id": "wsp-803dbfeb-c72d-4725-ab91-8f8171b6758c",
+  "loadout": {
+    "id": "fix",
+    "version": 1,
+    "kind": "fix",
+    "digest": "b579bd67515486bebaf28d2bbfc76853260abef7623a05d2d5f83c1593cc9b41",
+    "builtin": true
+  },
+  "task": "Create fixed.txt saying fixed",
+  "started_at_ms": 1792780263910,
+  "finished_at_ms": 1792780299578,
+  "verdict": "pass",
+  "exit_code": 0,
+  "attention": [],
+  "turns": [
+    {
+      "turn_id": "turn-237ce5de-6d65-438d-8482-8c70ce0e816a",
+      "purpose": "run",
+      "state": "completed"
+    }
+  ],
+  "checks": [
+    {
+      "name": "tests",
+      "argv": [
+        "sh",
+        "-c",
+        "test -f fixed.txt"
+      ],
+      "state": "passed",
+      "timeout_ms": 180000,
+      "exit_code": 0,
+      "stdout_tail": "",
+      "stderr_tail": "",
+      "candidate_sha256": "ba597618281677f6ed8b847c8167f8060812b7548f76f5cee2048dee17091a77"
+    }
+  ],
+  "review": {
+    "reviewer": {
+      "provider": "ollama",
+      "model": "reviewer-model",
+      "runtime": "native"
+    },
+    "max_rounds": 3,
+    "rounds": [
+      {
+        "round": 1,
+        "verdict": "approve",
+        "passed": true,
+        "findings_text": "The change does what was asked.",
+        "findings": [],
+        "continued": false,
+        "candidate_sha256": "ba597618281677f6ed8b847c8167f8060812b7548f76f5cee2048dee17091a77"
+      }
+    ],
+    "passed": true,
+    "state": "approved",
+    "reason": "The reviewer approved this result in round 1 of 3."
+  },
+  "adjudications": [],
+  "findings": [],
+  "not_covered": [],
+  "warnings": [],
+  "usage": {
+    "input_tokens": 600,
+    "output_tokens": 60,
+    "cost_microunits": 0,
+    "complete": true,
+    "cost_known": true,
+    "retries": 0
+  },
+  "network": {
+    "events": 10,
+    "allowed_connections": 1,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  }
+}

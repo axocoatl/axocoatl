@@ -133,9 +133,12 @@ mod external_port;
 pub(crate) use external_port::ExternalSettings;
 #[cfg(test)]
 pub(crate) use external_port::RouteRequestSource;
+#[cfg(test)]
+pub(crate) use native::connect_retained_profile;
 pub(crate) use native::{
-    retained_call_reservation, with_provider_retry, CapturedNativeDefinition,
-    NativeDefinitionPreparation, NativeProviderCredentials, OllamaServedLog,
+    retained_call_reservation, retained_profile_refused, with_provider_retry,
+    CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
+    OllamaServedLog,
 };
 #[path = "session_dispatch_native_turn.rs"]
 mod native_turn;
