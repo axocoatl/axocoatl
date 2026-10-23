@@ -194,7 +194,14 @@ fn recovered_ids_differ_between_responses_even_when_history_dropped_a_round() {
     let (_, second) = recovered(&content);
     assert_ne!(first[0].id, second[0].id);
     for id in [&first[0].id, &second[0].id] {
-        assert!(id.starts_with("call_text_"), "{id}");
+        let nonce = id
+            .strip_prefix("call_text_")
+            .and_then(|rest| rest.strip_suffix("_0"))
+            .unwrap_or_default();
+        assert!(
+            nonce.len() == 16 && nonce.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{id}"
+        );
     }
     // An id the history already holds is never reused.
     let taken = first[0].id.clone();

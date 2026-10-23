@@ -327,6 +327,8 @@ runs Ollama (the Homebrew service or an `ollama serve` you run), the app's Setti
 as the user `ollama`; then it restarts the server. See
 [Set up Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
+### Tool calls written as text
+
 Qwen3-Coder on Ollama sometimes writes a tool call as answer text instead of
 Ollama's structured `tool_calls` (it leaves out the opening `<tool_call>`).
 Both Ollama providers, native and OpenAI-compatible, run such calls only when
@@ -341,11 +343,14 @@ structured calls run and the markup stays text. Nothing is read from text when
 the request set stop sequences or asked for JSON output.
 
 An answer that calls an offered tool in a way that cannot run (prose after the
-calls, a malformed block, a tool the request did not offer, values that do not
-fit, a call written as JSON, or a response cut at its output limit inside a
-call) is refused instead of ending the turn having run nothing: the
-activation fails with the reason, the done reason and the number of tools
-offered, and the turn needs attention. Text from a line that starts a call is
+calls, a malformed block, a call to a tool the request did not offer next to one
+it did, values that do not fit, a call written as JSON, or a response cut at its
+output limit inside a call) is refused instead of ending the turn having run
+nothing: the activation fails with the reason, the done reason and the number of
+tools offered, the workbench says "The model wrote a tool call as answer text that
+Axocoatl cannot run", and the turn needs attention. Nothing from that response
+ran; **Continue** asks the model again. Call markup that names only tools the
+request did not offer stays the answer. Text from a line that starts a call is
 shown only when the response ends. Response text from other providers stays
 text, because Axocoatl cannot safely invent their native call ids, signatures
 or content-block sequence.

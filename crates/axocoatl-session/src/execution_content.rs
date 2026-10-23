@@ -989,6 +989,18 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
             "The host could not read which files the Agent may change, so its work cannot be accepted automatically.",
             "review_then_finish",
         )
+    } else if provider.is_some_and(|rest| {
+        rest.contains("returned a response that was refused: the model wrote a call to ")
+    }) {
+        // An Ollama provider refused an answer that calls an offered tool as
+        // text it cannot run (a malformed or unoffered call, JSON, prose
+        // after it): the model did not finish its turn.
+        (
+            "provider_error",
+            "The model wrote a tool call as answer text that Axocoatl cannot run, so nothing \
+             from that response ran.",
+            "continue",
+        )
     } else if provider.is_some() {
         (
             "provider_error",
@@ -5398,6 +5410,20 @@ mod tests {
             class("Activation failed: LLM provider error: Streaming error: native Ollama: EOF before native terminal"),
             Some(("provider_incomplete", "continue"))
         );
+        // A call the model wrote as text that cannot run says so.
+        for line in [
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to glob as answer text that Axocoatl cannot run: text follows the call markup, so it does not end the answer. Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 7 tools offered",
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to bash as JSON in its answer, which Axocoatl never runs: only calls Ollama returns as tool calls, or that end the answer in Qwen3-Coder's <function=…> format, run. Nothing from this response ran; Ollama ended it with finish_reason \"stop\" and 7 tools offered",
+        ] {
+            let view = classify_activation_failure(line).unwrap();
+            assert_eq!((view.class, view.next_step), ("provider_error", "continue"));
+            assert!(!view.refusal);
+            assert!(
+                view.explanation.starts_with("The model wrote a tool call as answer text"),
+                "{}",
+                view.explanation
+            );
+        }
         assert_eq!(
             class("I finished. Activation failed: Token budget exceeded"),
             None

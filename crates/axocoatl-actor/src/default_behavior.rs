@@ -4949,7 +4949,7 @@ mod tests {
     }
 
     /// The id an Ollama provider gives a call it recovered from text.
-    const RECOVERED_CALL_ID: &str = "call_text_0a1b2c3d_0";
+    const RECOVERED_CALL_ID: &str = "call_text_0a1b2c3d4e5f6a7b_0";
 
     struct TextJsonOnlyLlm {
         provider: &'static str,

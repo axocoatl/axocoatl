@@ -350,6 +350,18 @@ async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
             && failure.contains("done_reason \"stop\" and 1 tools offered"),
         "{failure}"
     );
+    // The recorded output, which the workbench reads, says what happened and
+    // offers Continue.
+    let recorded = &settled.output.content().output.text;
+    let view = axocoatl_session::execution_content::classify_activation_failure(recorded)
+        .expect("a host-written activation failure");
+    assert_eq!((view.class, view.next_step), ("provider_error", "continue"));
+    assert!(
+        view.explanation
+            .starts_with("The model wrote a tool call as answer text that Axocoatl cannot run"),
+        "{failure}: {}",
+        view.explanation
+    );
     assert_eq!(tool.count.load(Ordering::SeqCst), 0);
     let usage = fixture
         .controller

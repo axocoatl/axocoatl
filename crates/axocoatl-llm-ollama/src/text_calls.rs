@@ -169,8 +169,9 @@ fn recover(text: &str, request: &ChatRequest, provider: &str) -> Result<Vec<Tool
     Ok(calls)
 }
 
-/// Eight hex digits that differ between the responses of this process (and,
-/// seeded per process, between processes).
+/// Sixteen hex digits that differ between the responses of this process
+/// (and, seeded per process, between processes): two of a Session's
+/// recoveries share one with a chance of about n²/2⁶⁵.
 fn response_nonce() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
@@ -180,7 +181,7 @@ fn response_nonce() -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos()),
     );
-    format!("{:08x}", hasher.finish() as u32)
+    format!("{:016x}", hasher.finish())
 }
 
 /// A `<tool_call>` that ends the last line with text outside a code fence or
