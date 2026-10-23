@@ -170,12 +170,19 @@ On **Linux and WSL2**:
   is gone, or it lost its setuid bit or file capabilities, an install would do nothing,
   so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
   `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
-  installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
-  runs and the helpers still cannot map, onboarding says so and does not offer it again
-  in that run (`axocoatl doctor` still names it, and a later onboarding offers it again).
-  If the install or reinstall itself fails, the step says why: a build dnf no longer has
-  (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date lists (run `sudo
-  apt-get update` first), or what the command reported, to fix before running it again.
+  installed), `sudo pacman -S --noconfirm shadow` on Arch. Onboarding and doctor first
+  read what the package manager would do: a dpkg diversion, stat override or
+  `path-exclude`, dnf set to `nocaps`, an rpm that gives the helpers no privilege, or
+  pacman's `NoExtract` or `NoUpgrade` for a helper each keep a reinstall from restoring
+  it, and then the fix says what to change first instead of offering the reinstall. If an
+  install or reinstall runs and the helpers still cannot map (something on the computer
+  changes them afterwards, which no package record shows), or the command fails,
+  onboarding says so and keeps what happened in your Axocoatl data directory
+  (`onboarding/id-map-attempt.json`): `axocoatl doctor` and later onboarding runs say
+  it, with the date, and do not offer the same command again while the helpers are the
+  same files (an upgrade that writes them again ends that). A failure says why: a build
+  dnf no longer has (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date
+  lists (run `sudo apt-get update` first), or what the command reported.
   Helpers in `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no
   install, and so is a copy earlier on `PATH` that the package does not own; on other
   distributions the fix says what to install or reinstall. Doctor names the

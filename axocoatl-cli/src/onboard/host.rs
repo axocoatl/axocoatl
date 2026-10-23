@@ -190,6 +190,10 @@ pub(crate) struct Host {
     /// selects in this process's environment (a test's, given instead):
     /// what onboarding reads Podman through.
     pub(crate) podman_connection: axocoatl_isolation::podman::ConnectionOverride,
+    /// The person's Axocoatl data directory (`~/.local/share/axocoatl`, the
+    /// default data root), where onboarding keeps what it learned about
+    /// this computer ([`super::id_map_attempt`]).
+    pub(crate) data_home: PathBuf,
 }
 
 impl Host {
@@ -217,13 +221,16 @@ impl Host {
         Ok(Self {
             path: std::env::var_os("PATH").unwrap_or_default(),
             extra_dirs,
-            home,
             root: PathBuf::from("/"),
             exe: std::env::current_exe()
                 .map_err(|error| format!("cannot find this axocoatl executable: {error}"))?,
             macos,
             log,
             podman_connection: axocoatl_isolation::podman::ConnectionOverride::from_env(),
+            data_home: crate::user_paths::UserPaths::discover()
+                .map(|paths| paths.data_dir)
+                .unwrap_or_else(|_| home.join(".local/share/axocoatl")),
+            home,
         })
     }
 
@@ -748,6 +755,7 @@ pub(crate) mod testing {
                 macos,
                 log: None,
                 podman_connection: axocoatl_isolation::podman::ConnectionOverride::None,
+                data_home: self.home.path().join(".local/share/axocoatl"),
             }
         }
     }

@@ -25,6 +25,7 @@
 pub(crate) mod config;
 pub(crate) mod detect;
 pub(crate) mod host;
+pub(crate) mod id_map_attempt;
 mod ollama;
 pub(crate) mod openrouter;
 mod sandbox;
