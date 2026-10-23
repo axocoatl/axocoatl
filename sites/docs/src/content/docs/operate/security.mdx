@@ -633,12 +633,13 @@ What `egress` does not do:
 - What the 1.5.0 release gate requires to pass end to end on the release commit (the
   release workflow publishes nothing until its signed evidence holds every required
   path, short of a logged override by a listed maintainer): a Mac on Apple silicon
-  (48 GB) with rootless Podman installed by onboarding, and Ubuntu 24.04 on arm64 with
-  rootless Podman from apt, in a Lima VM; in CI, Ubuntu 24.04 on x86_64 and arm64
-  against a scripted model server. Loadout runs there go through `egress` with the
-  `hardened` workload. The Podman versions go into the release's signed evidence
-  bundle, under `release-evidence/1.5.0/` in the repository
-  ([Install](/start/install/) lists every path).
+  with rootless Podman that onboarding installs with Homebrew, and Linux with rootless
+  Podman that onboarding installs with apt (the gate's instructions use a new Ubuntu
+  24.04 VM); in CI, Ubuntu 24.04 on x86_64 and arm64 against a scripted model server.
+  Loadout runs there go through `egress` with the `hardened` workload. The Podman
+  versions go into the release's signed evidence bundle, under
+  `release-evidence/1.5.0/` in the repository ([Install](/start/install/) lists every
+  path).
 - Not yet verified: Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux
   enforcing, WSL2 on Windows, and rootful Podman, which loadout runs refuse.
 

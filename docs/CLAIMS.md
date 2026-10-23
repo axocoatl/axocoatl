@@ -158,12 +158,23 @@ quality or performance claims about them.
 - Any reviewer or Agent through OpenRouter.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and
   onboarding offers on a 48 GB Mac. It is smaller than its writer. How well it reviews has
-  not been measured, and the pages that present it as the reviewer onboarding offers say
-  so (reference pages that show it in an example command or configuration do not).
-  The 1.5.0 release gate requires the local pair (`qwen3-coder:30b` and `gpt-oss:20b`) to
-  pass end to end on a 48 GB Mac (path `C1-local` in `docs/RELEASE_GATE.md`; the signed
-  evidence bundle goes under `release-evidence/1.5.0/`). That shows the pair runs there,
-  not how well it reviews.
+  not been measured, and each page that presents it as the reviewer onboarding offers
+  says so: the README, `llms.txt`, the docs' install, onboarding, loadouts, providers,
+  Fix/QA/Audit and cross-model review pages, and the marketing home, install and
+  changelog pages (reference pages that show it in an example command or configuration
+  do not). The 1.5.0 release gate requires `axocoatl run fix` with the local models
+  onboarding sets up to pass end to end on a Mac on Apple silicon (path `C1-local` in
+  `docs/RELEASE_GATE.md`; the signed evidence bundle goes under
+  `release-evidence/1.5.0/`; onboarding installs Podman with Homebrew, one of the path's
+  required steps, only on Apple silicon). Its steps check neither which models
+  onboarding chose nor the Mac's memory: the evidence records both (each run's receipt
+  names its models, the path's host record the memory), and no page says what they
+  were. Such a pass would show that those models run there, not how well the reviewer
+  reviews.
+- What the release gate's other paths run on beyond what their steps check: the Linux
+  path (`D1`) is to run in a new Ubuntu 24.04 VM, as the gate's instructions say, but no
+  step checks the system or its architecture, so the pages name Ubuntu 24.04 only as
+  what the instructions use; the evidence records the system.
 - The `axocoatl run` summary on the README and the marketing home page is an example of
   the format `axocoatl run fix` prints (a small Go repository whose check is
   `go test ./...`, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing), not a

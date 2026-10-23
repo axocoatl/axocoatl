@@ -50,8 +50,8 @@ measurements below, `gpt-oss:120b` (65 GB), needs about 96 GB of memory or more.
 memory, use OpenRouter for the reviewer (or for both), or Claude Code or Codex as the
 writer. What each path needs and downloads is on
 [the install page](https://axocoatl.ai/install#what-it-needs). The 1.5.0 release gate
-requires the local pair (`qwen3-coder:30b` and `gpt-oss:20b`) to pass end to end on a
-48 GB Mac.
+requires `axocoatl run fix` with the local models onboarding sets up to pass end to end
+on a Mac on Apple silicon; its evidence names the models and the Mac's memory.
 
 An example of the summary `axocoatl run fix` prints on standard output (progress goes to
 standard error), here for a small Go repository with the paging bug above whose check is
@@ -270,14 +270,14 @@ until the signed evidence bundle under `release-evidence/1.5.0/` holds every one
 them; the only way past it is a logged override that only maintainers listed in the
 repository can start, and the release notes must then name the paths not run.
 
-- **macOS on Apple silicon (48 GB)**, with a person answering onboarding at the Mac, on
-  an account that starts without Axocoatl, its data or stored credentials, without
-  Podman or a Podman machine, and without Ollama or its settings (Ollama's downloaded
-  models may stay):
+- **macOS on Apple silicon**, with a person answering onboarding at the Mac, on an
+  account that starts without Axocoatl, its data or stored credentials, without Podman
+  or a Podman machine, and without Ollama or its settings (Ollama's downloaded models
+  may stay):
   - onboarding installs Podman and Ollama with Homebrew, creates the Podman machine,
     turns Ollama's cloud models off and ends ready with a passing first run; then
-    `axocoatl run fix` with the local pair passes on Node.js (with and without
-    dependencies), Python (pytest), Rust and Go repositories;
+    `axocoatl run fix` with the local models onboarding set up passes on Node.js (with
+    and without dependencies), Python (pytest), Rust and Go repositories;
   - onboarding signs in Claude Code, and Codex with your ChatGPT plan, in the browser,
     and connects OpenRouter through its browser sign-in without writing the key to the
     configuration; `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models pass
@@ -291,21 +291,22 @@ repository can start, and the release notes must then name the paths not run.
     Preview inside the workbench only (a Preview address opened in a tab, reached by a
     redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say
     when another page floods `localhost` with cookies.
-- **Ubuntu 24.04 on arm64**, in a Lima VM, as a new user who starts without Axocoatl,
-  its data or stored credentials, or Podman, and whose subordinate ids the gate removes
-  first: onboarding installs Podman with apt and adds a range of subordinate ids that
-  overlaps no other user's, each with `sudo` after asking, connects OpenRouter through
-  its browser sign-in and installs no Ollama. With those OpenRouter models,
-  `axocoatl run fix` passes on the same repositories, and the Always-On Service runs as
-  a systemd user unit through to its uninstall.
+- **Linux**, as a new user who starts without Axocoatl, its data or stored credentials,
+  or Podman, and whose subordinate ids the gate removes first (the gate's instructions
+  use a new Ubuntu 24.04 VM): onboarding installs Podman with apt and adds a range of
+  subordinate ids that overlaps no other user's, each with `sudo` after asking, connects
+  OpenRouter through its browser sign-in and installs no Ollama. With those OpenRouter
+  models, `axocoatl run fix` passes on the same repositories, and the Always-On Service
+  runs as a systemd user unit through to its uninstall.
 - **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install command, then
   onboarding with no terminal against a scripted model server (Podman already on the
   runner, no first-run sample), and `axocoatl run fix` passes on the same repositories.
 
 Every receipt and record of these runs is verified. The evidence also holds each path's
 transcript, times and downloads, the Podman, Ollama, Claude Code and Codex versions it
-ran, the models, the machine and account, and who answered each question: the person,
-or for the workbench's questions up to the commit, a WebDriver driver in Safari.
+ran, the models, the system, its memory and the account, and who answered each
+question: the person, or for the workbench's questions up to the commit, a WebDriver
+driver in Safari.
 
 Not yet verified: Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04,
 Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can

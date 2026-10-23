@@ -149,7 +149,8 @@
               installed come first when they fit and make a pair; otherwise, with 48 GB
               of memory or more it suggests <code>qwen3-coder:30b</code> writing and
               <code>gpt-oss:20b</code> reviewing (<code>gpt-oss:120b</code> from 96 GB);
-              a fix run calls them in turn.</li>
+              a fix run calls them in turn. How well <code>gpt-oss:20b</code> reviews
+              has not been measured.</li>
           <li><code>axocoatl doctor</code> reports the sandbox, the models, the writers and
               the daemon, each with its fix, and ends with whether Axocoatl is ready.</li>
           <li>The daemon follows <code>CONTAINER_CONNECTION</code> and
@@ -282,7 +283,7 @@
               signed evidence shows every step each path lists; the only way past it is
               a logged override that only maintainers listed in the repository can
               start, and the release notes must then name the paths not run.</li>
-          <li>On a 48 GB Mac on Apple silicon, with a person answering onboarding, on an
+          <li>On a Mac on Apple silicon, with a person answering onboarding, on an
               account that starts without Axocoatl, its data or stored credentials,
               without Podman or a Podman machine, and without Ollama or its settings
               (Ollama's downloaded models may stay): <code>axocoatl onboard</code>
@@ -303,21 +304,21 @@
               commit, shows a Session's Preview inside the workbench only, and stays as
               the docs say when another page floods <code>localhost</code> with
               cookies.</li>
-          <li>On Ubuntu 24.04 on arm64, in a Lima VM, as a new user who starts without
-              Axocoatl, its data or stored credentials, or Podman, and whose subordinate
-              ids the gate removes first: onboarding installs Podman with apt and adds a
-              range of subordinate ids that overlaps no other user's, with
-              <code>sudo</code> after asking, and connects OpenRouter through its
-              browser sign-in; <code>fix</code> with those OpenRouter models passes on
+          <li>On Linux, as a new user who starts without Axocoatl, its data or stored
+              credentials, or Podman, and whose subordinate ids the gate removes first
+              (the gate's instructions use a new Ubuntu 24.04 VM): onboarding installs
+              Podman with apt and adds a range of subordinate ids that overlaps no
+              other user's, with <code>sudo</code> after asking, and connects
+              OpenRouter through its browser sign-in; <code>fix</code> with those OpenRouter models passes on
               Node.js, Python, Rust and Go, and the Always-On Service runs as a systemd
               user unit through to its uninstall. In CI, on Ubuntu 24.04 on x86_64 and
               arm64: the same install command, then onboarding with no terminal against
               a scripted model server (Podman already on the runner, no first-run
               sample), and <code>fix</code> passes on the same repositories.</li>
           <li>Each path's transcript, times, downloads and tool versions, the models, the
-              machine and account, and who answered each question go into the signed
-              evidence bundle under <code>release-evidence/1.5.0/</code> in the
-              repository.</li>
+              system, its memory and the account, and who answered each question go into
+              the signed evidence bundle under <code>release-evidence/1.5.0/</code> in
+              the repository.</li>
         </ul>
       </article>
 
