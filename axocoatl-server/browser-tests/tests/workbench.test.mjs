@@ -2408,33 +2408,36 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
       await page.route('**/api/sessions', (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: JSON.stringify([failed]),
       }));
-      await page.evaluate(() => {
-        S.session.environment = { ...S.session.environment, state: 'ready', error: null };
-        renderSessionEnvironment(S.session);
-      });
-
-      if (scenario === 'turn') {
-        await page.evaluate((sessionId) => handleWsFrame({
-          kind: 'session-error', session: sessionId, error: 'runtime activation failed',
-        }), session.id);
-      } else if (scenario === 'tasks') {
+      if (scenario === 'tasks') {
         await page.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
           status: 409,
           contentType: 'application/json',
           body: JSON.stringify({ error: 'runtime activation failed' }),
         }));
-        await page.evaluate((sessionId) => refreshSessionTasks(sessionId), session.id);
-      } else {
+      } else if (scenario === 'preview') {
         await page.route(/ses-[a-z0-9-]+-p\d+\.localhost:\d+\//, (route) => route.fulfill({
           status: 409,
           contentType: 'application/json',
           body: JSON.stringify({ error: 'runtime activation failed' }),
         }));
-        await page.evaluate((sessionId) => {
+      }
+      // The stale Ready state and the failure that reveals it, in one task:
+      // a Session list refresh the page makes on its own reads the failed
+      // record above too, and one that landed between them used to apply
+      // Failed first. The Preview's gate then refused browserGo, and the
+      // Preview stayed bound only because this journey had bound it.
+      await page.evaluate(({ scenario, sessionId }) => {
+        S.session.environment = { ...S.session.environment, state: 'ready', error: null };
+        renderSessionEnvironment(S.session);
+        if (scenario === 'turn') {
+          handleWsFrame({ kind: 'session-error', session: sessionId, error: 'runtime activation failed' });
+        } else if (scenario === 'tasks') {
+          void refreshSessionTasks(sessionId);
+        } else {
           document.querySelector('#browser').session = sessionId;
           browserGo('http://localhost:3000');
-        }, session.id);
-      }
+        }
+      }, { scenario, sessionId: session.id });
 
       await page.waitForFunction(() =>
         document.querySelector('#session-environment')?.dataset.state === 'failed');
