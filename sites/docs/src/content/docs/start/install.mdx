@@ -52,10 +52,11 @@ repository can start, and the release notes must then name the paths not run.
     before them keeps them from running (it cannot see `set -e` and a failing command, a
     sourced file that exits, or a syntax error, and it can misread a valid file in other
     ways). Its line goes at the end of the file; when something before that end can stop
-    a new terminal from reading it (a `return`, `exit` or `exec` other than one only for
-    shells that are not interactive, as in Ubuntu's `~/.bashrc`, or a line the installer
-    cannot follow), it says so and to move the line above that point, instead of saying
-    new terminals find `axocoatl`.
+    a new terminal from reading it (a `return`, `exit` or `exec` outside a function or a
+    `( )` subshell, other than one only for shells that are not interactive, as in
+    Ubuntu's `~/.bashrc`, and other than an `exec` with only redirections; or a line the
+    installer cannot follow), it says so and to move the line above that point, instead
+    of saying new terminals find `axocoatl`.
     In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
     job's later steps.
   </TabItem>

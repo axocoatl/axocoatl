@@ -126,7 +126,9 @@ own_fish_lines() {
 #   - the line before did not end in &&, ||, |, |&, \, !, time or a function
 #     header still waiting for its body, and no [[ ]] is open;
 #   - no return, exit, exec, logout or bye came before it, anywhere, also
-#     written with a backslash or quotes ('return', "ex"it) (ended);
+#     written with a backslash or quotes ('return', "ex"it) (ended), except
+#     an exec where a command starts with only redirections after it
+#     (exec 2>>log), which changes this shell's files and goes on;
 #   - the reader did not lose track (lost) before it, at a here-document, a
 #     closing word that does not match the open block (fi in a { }, } in an
 #     if), a redirection without a target, an operator where a command
@@ -136,7 +138,9 @@ own_fish_lines() {
 #     coproc).
 # It splits words much as the shell does, with quotes, backslashes and
 # comments (also in $( ), <( ), >( ) and in a ( ) word), and takes a keyword
-# only where a command starts. Where it sees that it cannot follow the file,
+# only where a command starts; after builtin or command a command still
+# starts, and digits right before < or > are the descriptor a redirection
+# names (2>/dev/null), not a word. Where it sees that it cannot follow the file,
 # later lines do not count: it opens a block for any word that ends in {, but
 # closes one only at a } where a command starts, so after zsh's `f() { cmd }`
 # no later line counts. So sure() means only that the installer can tell
@@ -149,14 +153,16 @@ own_fish_lines() {
 # (bid), sets branched after an else or elif of a block at the top level, and
 # sets cmtat to where a comment starts on the line it read (0 for none).
 # It sets stopped at a return, exit, exec, logout or bye where a command
-# starts, unless that word is in a function's body, or stops only a shell
-# that is not interactive: Ubuntu's and Debian's `case $- in *i*) ;;
-# *) return;; esac` (a branch after a *i* branch of a case on $-), Arch's
-# `[[ $- != *i* ]] && return`, `[ -z "$PS1" ] && return`, zsh's
-# `[[ -o interactive ]] || return`, the same tests the other way round with
-# the other operator, and Gentoo's `if [[ $- != *i* ]]; then return; fi`
-# (the then branch of an if on such a test). Every new terminal is an
-# interactive shell, so those do not keep one from reading a later line.
+# starts (an exec only when a command follows it), unless that word is in a
+# function's body or a ( ) subshell, which it ends instead of the shell, or
+# stops only a shell that is not interactive: Ubuntu's and Debian's
+# `case $- in *i*) ;; *) return;; esac` (a branch after a *i* branch of a
+# case on $-), Arch's `[[ $- != *i* ]] && return`, `[ -z "$PS1" ] &&
+# return`, zsh's `[[ -o interactive ]] || return`, the same tests the other
+# way round with the other operator (each also as return N), and Gentoo's
+# `if [[ $- != *i* ]]; then return; fi` (the then branch of an if on such a
+# test, on one line or several). Every new terminal is an interactive shell,
+# so those do not keep one from reading a later line.
 # swap(s, from, to) replaces every from in s with to, trim(s) removes leading
 # and trailing blanks, and unq(s) is word s without its quotes and
 # backslashes.
@@ -167,15 +173,15 @@ BEGIN {
   nctx = 0; nblk = 0; nbid = 0; cmd = 1; cont = 0; lost = 0; ended = 0; branched = 0
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
   prevcmd = 0; word = ""; raw = ""; inword = 0; last = ""; ctxbs = 0; stopped = 0
-  cmtat = 0; curline = ""; linewords = 0
+  cmtat = 0; curline = ""; linewords = 0; execpend = 0; exechere = 0
   # Tests true only in a shell that is not interactive (ni), and only in one
   # that is (it), for the stops that stopped leaves out.
   ps1 = "\"?\\$(PS1|\\{PS1\\})\"?"
   dash = "\"?\\$-\"?"
   ni = "(\\[\\[[ \t]+" dash "[ \t]+!=[ \t]+\\*i\\*[ \t]+\\]\\]|\\[[ \t]+-z[ \t]+" ps1 "[ \t]+\\]|\\[\\[[ \t]+-z[ \t]+" ps1 "[ \t]+\\]\\]|\\[\\[[ \t]+![ \t]+-o[ \t]+interactive[ \t]+\\]\\])"
   it = "(\\[\\[[ \t]+" dash "[ \t]+==?[ \t]+\\*i\\*[ \t]+\\]\\]|\\[[ \t]+-n[ \t]+" ps1 "[ \t]+\\]|\\[\\[[ \t]+-n[ \t]+" ps1 "[ \t]+\\]\\]|\\[\\[[ \t]+-o[ \t]+interactive[ \t]+\\]\\])"
-  ni_line = "^[ \t]*(" ni "[ \t]*&&|" it "[ \t]*\\|\\|)[ \t]*return[ \t]*;?[ \t]*(#.*)?$"
-  ni_if = "^[ \t]*if[ \t]+" ni "[ \t]*(;[ \t]*then)?[ \t]*(#.*)?$"
+  ni_line = "^[ \t]*(" ni "[ \t]*&&|" it "[ \t]*\\|\\|)[ \t]*return([ \t]+[0-9]+)?[ \t]*;?[ \t]*(#.*)?$"
+  ni_if = "^[ \t]*if[ \t]+" ni "[ \t]*(;[ \t]*then([ \t].*)?|(#.*)?)$"
 }
 function swap(s, from, to,    at, out) {
   if (from == "") return s
@@ -199,14 +205,14 @@ function unq(s) {
 function sure() {
   return !lost && !ended && !nctx && !nblk && !cont && !pending && !testmode && !fname && !fnparen && !afterfname
 }
-# Whether a stop where a command starts is in a function body (fnb), or
-# stops only a shell that is not interactive: in a case on $- after its *i*
-# branch (icase, iseen), in the then branch of an if on an ni test (niif), or
-# on an ni_line.
+# Whether a stop where a command starts is in a function body (fnb) or a
+# ( ) subshell, or stops only a shell that is not interactive: in a case on
+# $- after its *i* branch (icase, iseen), in the then branch of an if on an
+# ni test (niif), or on an ni_line.
 function harmless(    j) {
   if (pending) return 1
   for (j = 1; j <= nblk; j++) {
-    if (fnb[j] || (blk[j] == "case" && icase[j] && iseen[j]) || (blk[j] == "if" && niif[j])) return 1
+    if (fnb[j] || blk[j] == "(" || (blk[j] == "case" && icase[j] && iseen[j]) || (blk[j] == "if" && niif[j])) return 1
   }
   return curline ~ ni_line
 }
@@ -225,14 +231,24 @@ function tok_word(w,    k, m, opens, u) {
   last = w
   if (fnparen) { lost = 1; return }
   if (redir) { redir = 0; return }
+  # A word after an exec where a command starts, other than the targets of
+  # its redirections: exec runs that command in place of the shell.
+  if (execpend) {
+    execpend = 0
+    ended = 1
+    if (exechere) stopped = 1
+  }
   # A word that stops the shell, also with a backslash or quotes in it
   # (\return, "return"), and bye in zsh; anywhere, not only where a command
   # starts. Where a command starts, it stops the file (stopped) unless it is
-  # harmless.
+  # harmless; an exec there only once a command follows it (above).
   u = unq(raw)
   if (u == "return" || u == "exit" || u == "exec" || u == "logout" || u == "bye") {
-    ended = 1
-    if (cmd && !testmode && !harmless()) stopped = 1
+    if (u == "exec" && cmd && !testmode) { execpend = 1; exechere = !harmless() }
+    else {
+      ended = 1
+      if (cmd && !testmode && !harmless()) stopped = 1
+    }
   }
   if (testmode) { if (w == "]]") { testmode = 0; cmd = 0 } return }
   k = nblk ? blk[nblk] : ""
@@ -269,7 +285,7 @@ function tok_word(w,    k, m, opens, u) {
   if (w == "}") { shut("{", ""); cmd = 0; return }
   if (w == "[[") { testmode = 1; cmd = 0; return }
   if (w == "function") { fname = 1; cmd = 0; return }
-  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect") return
+  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect" || w == "builtin" || w == "command") return
   if (w == "foreach" || w == "repeat" || w == "coproc" || w == "end") { lost = 1; return }
   if (w ~ /\(\)$/ && w !~ /=/) { pending = 1; return }
   cmd = 0
@@ -283,6 +299,7 @@ function tok_op(o,    k, m, wasprev, wasafter) {
   if (testmode) return
   if (o == "<<" || o == "<<-") { lost = 1; return }
   if (o == "<" || o == ">" || o == ">>" || o == "<>" || o == ">|" || o == "&>" || o == "&>>" || o == ">&" || o == "<&" || o == "<<<") { redir = 1; return }
+  execpend = 0
   if (o == ")" && fnparen) { fnparen = 0; pending = 1; cmd = 1; return }
   if (fnparen) { lost = 1; return }
   if (o == "(" && (wasprev || wasafter)) { fnparen = 1; return }
@@ -312,6 +329,7 @@ function tok_op(o,    k, m, wasprev, wasafter) {
   cmd = 1
 }
 function newline(    k, m) {
+  execpend = 0
   if (redir || fnparen || fname) lost = 1
   redir = 0
   fnparen = 0
@@ -429,7 +447,9 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
       continue
     }
     if (index(";&|<>()", c)) {
-      if (inword) endword(s, i)
+      # Digits right before < or > name the descriptor it redirects.
+      if (inword && (c == "<" || c == ">") && word ~ /^[0-9]+$/ && raw == "") { word = ""; inword = 0 }
+      else if (inword) endword(s, i)
       three = substr(s, i, 3)
       two = substr(s, i, 2)
       if (three == ";;&" || three == "<<<" || three == "<<-" || three == "&>>") op = three
@@ -610,8 +630,9 @@ adds_to_path() {
 # new terminal: no block is left open, the reader did not lose track, and the
 # last line does not go on; in a fish file, no return, exit or exec came
 # before it (as in `status is-login || return`); in an sh, bash or zsh file,
-# none stopped it (startup_awk: not one in a function, nor one that stops
-# only a shell that is not interactive, as Ubuntu's ~/.bashrc does).
+# none stopped it (startup_awk: not one in a function or a ( ) subshell, an
+# exec with only redirections, nor one that stops only a shell that is not
+# interactive, as Ubuntu's ~/.bashrc does).
 appended_line_runs() {
   [ -f "$1" ] || return 0
   scan_end=1

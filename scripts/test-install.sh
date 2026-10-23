@@ -738,6 +738,8 @@ startup_expect adds_to_path no "the unmarked line after a line that ends in \\" 
 startup_expect adds_to_path no "the unmarked line in a block for another OS" "$(os_block "  $unguarded")"
 startup_expect adds_to_path no "the unmarked line in a function" "$(printf 'use_local_bin() {\n  %s\n}' "$unguarded")"
 startup_expect adds_to_path no "the unmarked line after an early return" "$(printf '[ -n "$NO_LOCAL" ] && return\n%s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after an exec with a command" "$(printf 'exec 2>/dev/null zsh\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after an exec that only redirects" "$(printf 'exec 2>>"$HOME/.shell.log" 3<&-\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the marked line in a block for another OS (taken at the user's word)" \
   "$(os_block "$(printf '  # Added by the Axocoatl installer\n  %s' "$unguarded")")"
 startup_expect adds_to_path yes "fish's line" "$(path_line_for fish)" config.fish
@@ -992,7 +994,18 @@ appended_expect runs "Fedora's ~/.bashrc" "$(printf 'if [ -f /etc/bashrc ]; then
 appended_expect runs "conda's, nvm's and Homebrew's lines" "$(printf '__conda_setup="$(%s 2> /dev/null)"\nif [ $? -eq 0 ]; then\n    eval "$__conda_setup"\nelse\n    export PATH="/opt/conda/bin:$PATH"\nfi\nunset __conda_setup\n[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\neval "$(/opt/homebrew/bin/brew shellenv)"' "'/opt/conda/bin/conda' 'shell.zsh' 'hook'")" .zshrc
 appended_expect runs "functions that return" "$(printf 'f() {\n  return 1\n}\ng() { [ -n "$1" ] || return; }\nfunction h {\n  exit\n}')" .bashrc
 appended_expect runs "return as an argument" 'echo return exit' .bashrc
+appended_expect runs "a non-interactive test that returns a status" '[ -z "$PS1" ] && return 0' .bashrc
+appended_expect runs "a one-line if on a non-interactive test" 'if [ -z "$PS1" ]; then return; fi' .bashrc
+appended_expect runs "an exit in a subshell" "$(printf '( exit 1 )\n(\n  cd /tmp || exit\n)')" .bashrc
+appended_expect runs "an exec that only redirects" "$(printf 'exec 2>>"$HOME/.bash.log"\nexec >/dev/null 2>&1 \\\n  3<&-')" .bashrc
 appended_expect stops "an exec" '[ -x /bin/zsh ] && exec zsh' .bashrc
+appended_expect stops "an exec after redirections" 'exec 2>/dev/null zsh' .bashrc
+appended_expect stops "an exec on the next line" "$(printf 'exec \\\n  zsh')" .bashrc
+appended_expect stops "a return after builtin" '[ -n "$X" ] && builtin return' .bashrc
+appended_expect stops "an exec after command" '[ -x /bin/zsh ] && command exec zsh' .bashrc
+appended_expect stops "a return after a subshell" '( cd /tmp ) && return' .bashrc
+appended_expect stops "a return after a one-line if on a non-interactive test" 'if [ -z "$PS1" ]; then :; fi; return' .bashrc
+appended_expect stops "a return in a one-line if's else" 'if [ -z "$PS1" ]; then :; else return; fi' .bashrc
 appended_expect stops "a return in a login shell only" '[[ -o login ]] || return' .zshrc
 appended_expect stops "an exit in a non-interactive test" '[[ $- != *i* ]] && exit' .bashrc
 appended_expect stops "a quoted return" "[ -n \"\$X\" ] || 'return'" .bashrc
