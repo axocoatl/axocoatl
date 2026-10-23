@@ -15,9 +15,8 @@ use axocoatl_core::TokenUsageStats;
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
-        validated_endpoint, SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
-        STREAM_TOTAL_TIMEOUT,
+        bounded_redacted, http_client, network_error, read_error_text, read_json,
+        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError,
@@ -41,6 +40,8 @@ pub struct OpenAiProvider {
     /// Only the first-party endpoint has model ids whose constraints can be
     /// matched against Axocoatl's small, explicit verified registry.
     trusted_model_namespace: bool,
+    /// How long an answer may take to start and to pause.
+    stream_timeouts: StreamTimeouts,
 }
 
 impl OpenAiProvider {
@@ -79,6 +80,7 @@ impl OpenAiProvider {
             model: model.into(),
             provider_id: "openai".to_string(),
             trusted_model_namespace: true,
+            stream_timeouts: StreamTimeouts::HOSTED,
         }
     }
 
@@ -102,7 +104,15 @@ impl OpenAiProvider {
             model: model.into(),
             provider_id: "openai".to_string(),
             trusted_model_namespace: false,
+            stream_timeouts: StreamTimeouts::HOSTED,
         }
+    }
+
+    /// Wait for each answer as `timeouts` say (the provider block's
+    /// `first_token_timeout_secs` and `idle_timeout_secs`). Chainable.
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.stream_timeouts = timeouts;
+        self
     }
 
     /// Override the provider id so the registry keys this instance under a
@@ -256,7 +266,7 @@ impl LlmProvider for OpenAiProvider {
 
         let response = self
             .request_builder(&openai_request)?
-            .timeout(RESPONSE_TIMEOUT)
+            .timeout(self.stream_timeouts.buffered())
             .send()
             .await
             .map_err(|error| network_error(&error, &[&self.api_key]))?;
@@ -322,15 +332,14 @@ impl LlmProvider for OpenAiProvider {
                 include_obfuscation: None,
             });
 
-        let response = tokio::time::timeout(
-            RESPONSE_TIMEOUT,
-            self.request_builder(&openai_request)?.send(),
-        )
-        .await
-        .map_err(|_| {
-            ProviderError::Network(format!("{} response headers timed out", self.provider_id))
-        })?
-        .map_err(|error| network_error(&error, &[&self.api_key]))?;
+        let mut deadlines = StreamDeadlines::start(self.stream_timeouts);
+        let response = deadlines
+            .headers(
+                self.request_builder(&openai_request)?.send(),
+                &self.provider_id,
+            )
+            .await?
+            .map_err(|error| network_error(&error, &[&self.api_key]))?;
         let response = self.checked_response(response, model_for_call).await?;
         let mut bytes = response.bytes_stream();
         let api_key = self.api_key.clone();
@@ -344,13 +353,7 @@ impl LlmProvider for OpenAiProvider {
             let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
 
             'response: loop {
-                let next = next_stream_item(
-                    &mut bytes,
-                    total_deadline,
-                    STREAM_IDLE_TIMEOUT,
-                    &provider_id,
-                )
-                .await?;
+                let next = deadlines.next(&mut bytes, total_deadline, &provider_id).await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

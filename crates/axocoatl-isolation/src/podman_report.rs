@@ -78,6 +78,11 @@ pub struct RuntimeInfo {
     pub gid_ranges: Option<usize>,
     /// The runtime is reached remotely (a machine, `CONTAINER_HOST`).
     pub remote: Option<bool>,
+    /// The cgroup controllers it can use for containers' resource caps
+    /// (`None`: not reported).
+    pub cgroup_controllers: Option<Vec<String>>,
+    /// `v1` or `v2`.
+    pub cgroup_version: Option<String>,
 }
 
 /// One machine `podman machine list` and `inspect` report.
@@ -381,8 +386,27 @@ pub fn parse_runtime_info(stdout: &[u8]) -> Result<RuntimeInfo, String> {
         remote: info
             .pointer("/host/serviceIsRemote")
             .and_then(Value::as_bool),
+        cgroup_controllers: match info.pointer("/host/cgroupControllers") {
+            Some(Value::Array(controllers)) => Some(
+                controllers
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            Some(Value::Null) => Some(Vec::new()),
+            _ => None,
+        },
+        cgroup_version: text("/host/cgroupVersion"),
     })
 }
+
+/// How to delegate the cgroup controllers rootless Podman needs for a
+/// container's caps to every user's systemd manager (Podman's own advice).
+pub const DELEGATE_CONTROLLERS_FIX: &str = "sudo mkdir -p /etc/systemd/system/user@.service.d && \
+     printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee \
+     /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload, then log \
+     out and back in";
 
 /// A byte count Podman reports as a number or a string of digits, in MiB.
 fn mib(value: &Value) -> Option<u64> {
@@ -1599,12 +1623,43 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
     if let Some(runtime) = &report.runtime {
         if !platform.machine && runtime.selinux == Some(true) {
             list.push(Finding::new(
-                Level::Warn,
+                Level::Ok,
                 "SELinux",
-                "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet"
+                "SELinux is enabled: Session and browser containers run with SELinux labelling \
+                 off (--security-opt label=disable), so they can use your repository without \
+                 relabelling it; their other limits stay"
                     .to_string(),
                 None,
             ));
+        }
+        if let Some(controllers) = runtime
+            .cgroup_controllers
+            .as_ref()
+            .filter(|_| !platform.machine && runtime.rootless != Some(false))
+        {
+            let missing =
+                crate::container_host::ResourceCaps::from_controllers(controllers).not_applied();
+            if !missing.is_empty() {
+                let fix = if runtime.cgroup_version.as_deref() == Some("v1") {
+                    "This computer uses cgroup v1, where rootless Podman caps no container: boot \
+                     it with cgroup v2 (systemd.unified_cgroup_hierarchy=1)"
+                        .to_string()
+                } else {
+                    DELEGATE_CONTROLLERS_FIX.to_string()
+                };
+                list.push(Finding::new(
+                    Level::Warn,
+                    "Resource caps",
+                    format!(
+                        "rootless Podman can use the cgroup controllers [{}], so Session \
+                         containers run without their {} cap (sandbox.require_resource_limits: \
+                         true refuses to start them instead)",
+                        controllers.join(", "),
+                        missing.join(", ")
+                    ),
+                    Some(fix),
+                ));
+            }
         }
     }
 
@@ -1988,6 +2043,59 @@ mod tests {
             id_map_tools: None,
             machine_platform: false,
         }
+    }
+
+    /// A Linux host whose user is not delegated the cpu controller hears
+    /// that Session containers run without their CPU cap, and how to
+    /// delegate it; SELinux is said as what Axocoatl does about it.
+    #[test]
+    fn missing_cgroup_controllers_and_selinux_are_said() {
+        let linux = platform(false);
+        let info = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":["memory","pids"],"cgroupVersion":"v2","#,
+        );
+        let report = linux_report(&info, None);
+        let runtime = report.runtime.as_ref().unwrap();
+        assert_eq!(
+            runtime.cgroup_controllers,
+            Some(vec!["memory".to_string(), "pids".to_string()])
+        );
+        let all = findings(&report, &linux);
+        let caps = all.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert_eq!(caps.level, Level::Warn);
+        assert!(
+            caps.detail.contains("[memory, pids]")
+                && caps
+                    .detail
+                    .contains("without their CPU (2 CPUs, cgroup controller cpu) cap"),
+            "{}",
+            caps.detail
+        );
+        assert_eq!(caps.fix.as_deref(), Some(DELEGATE_CONTROLLERS_FIX));
+        assert!(!all.iter().any(|f| f.name == "SELinux"));
+        // Every controller, as Ubuntu 24.04 delegates with cpu: nothing.
+        let delegated = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":["cpu","memory","pids"],"#,
+        );
+        assert!(!findings(&linux_report(&delegated, None), &linux)
+            .iter()
+            .any(|f| f.name == "Resource caps"));
+        // cgroup v1 delegates none.
+        let v1 = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":null,"cgroupVersion":"v1","#,
+        );
+        let v1 = findings(&linux_report(&v1, None), &linux);
+        let caps = v1.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert!(caps.fix.as_deref().unwrap().contains("cgroup v2"));
+        // Fedora with SELinux enforcing.
+        let selinux = LINUX_INFO.replace(r#""selinuxEnabled":false"#, r#""selinuxEnabled":true"#);
+        let selinux = findings(&linux_report(&selinux, None), &linux);
+        let line = selinux.iter().find(|f| f.name == "SELinux").unwrap();
+        assert_eq!(line.level, Level::Ok);
+        assert!(line.detail.contains("label=disable"), "{}", line.detail);
     }
 
     #[test]

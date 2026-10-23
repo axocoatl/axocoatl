@@ -57,6 +57,7 @@ async fn the_contract_probes_hold_on_a_live_ollama() {
             context_tokens: context,
         },
         &model,
+        axocoatl_llm::transport::LOCAL_FIRST_TOKEN_TIMEOUT,
     )
     .await
     .unwrap_or_else(|error| panic!("Ollama {version} with {model}: {error}"));

@@ -336,6 +336,12 @@ impl AxocoatlDaemon {
                     .options
                     .get("environment")
                     .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                // The caps the Session's container got, as its record keeps
+                // them.
+                limits: self
+                    .get_session(&manifest.session_id)
+                    .await
+                    .and_then(|session| session.environment.resource_limits),
             },
             network: outcome.network.clone(),
             checks: outcome

@@ -207,9 +207,12 @@ impl PackageManager {
     }
 
     /// The read-only command that lists the files of the installed
-    /// `package`: `dpkg-query -L`, and `rpm -q --qf` with the mode and the
-    /// file capabilities rpm gives each one (a reinstall gives them
-    /// again). `None` for pacman and zypper, whose records are not read.
+    /// `package`: `dpkg-query -L`, `rpm -q --qf` with the mode and the file
+    /// capabilities rpm gives each one (a reinstall gives them again), and
+    /// `pacman -Ql` (`shadow /usr/bin/newuidmap`; pacman's records hold no
+    /// file capabilities: Arch's shadow 4.20 records newuidmap as mode 755
+    /// and gives it `cap_setuid=ep` from the package's extended attributes).
+    /// `None` for zypper, whose records are not read.
     pub(crate) fn files_query(self, package: &str) -> Option<(&'static str, Vec<String>)> {
         let (program, args): (&'static str, Vec<&str>) = match self {
             PackageManager::Apt => ("dpkg-query", vec!["-L", package]),
@@ -222,17 +225,22 @@ impl PackageManager {
                     package,
                 ],
             ),
-            PackageManager::Pacman | PackageManager::Zypper => return None,
+            PackageManager::Pacman => ("pacman", vec!["-Ql", package]),
+            PackageManager::Zypper => return None,
         };
         Some((program, args.into_iter().map(str::to_string).collect()))
     }
 
     /// The files [`PackageManager::files_query`] printed: a path a line
     /// for dpkg, `path<TAB>mode<TAB>capabilities` for rpm (`100755`,
-    /// `cap_setuid=ep`, or nothing).
+    /// `cap_setuid=ep`, or nothing), `package path` for pacman.
     pub(crate) fn package_files(self, stdout: &str) -> Vec<PackageFile> {
         stdout
             .lines()
+            .map(|line| match self {
+                PackageManager::Pacman => line.split_once(' ').map_or("", |(_, path)| path),
+                _ => line,
+            })
             .filter(|line| line.starts_with('/'))
             .map(|line| {
                 let mut fields = line.split('\t');
@@ -386,6 +394,89 @@ pub(crate) fn dpkg_excluded(root: &Path, path: &str) -> Option<(String, String)>
         }
     }
     decided
+}
+
+/// The pattern of pacman's `option` (`NoExtract` or `NoUpgrade`, in the
+/// `[options]` of `/etc/pacman.conf` under `root` and the files it
+/// `Include`s there) that keeps pacman from writing `path` (absolute), with
+/// the file that sets it, as pacman decides: each pattern is matched with
+/// fnmatch(3) against the path without its leading `/`, the last match wins,
+/// and one starting with `!` matches to write it after all.
+pub(crate) fn pacman_kept(root: &Path, option: &str, path: &str) -> Option<(String, String)> {
+    let relative = path.trim_start_matches('/');
+    let mut patterns: Vec<(String, String)> = Vec::new();
+    let mut files = vec![root.join("etc/pacman.conf")];
+    let mut read = 0;
+    while let Some(file) = files.get(read).cloned() {
+        read += 1;
+        // Bounded: an `Include` cannot make this loop for ever.
+        if read > 64 {
+            break;
+        }
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let shown = file
+            .strip_prefix(root)
+            .map(|relative| Path::new("/").join(relative))
+            .unwrap_or(file.clone())
+            .display()
+            .to_string();
+        // An included file starts in the section that includes it.
+        let mut options = read > 1;
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or_default().trim();
+            if line.starts_with('[') && line.ends_with(']') {
+                options = &line[1..line.len() - 1] == "options";
+                continue;
+            }
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if !options {
+                continue;
+            }
+            match key.trim() {
+                key if key == option => patterns.extend(
+                    value
+                        .split_whitespace()
+                        .map(|pattern| (pattern.to_string(), shown.clone())),
+                ),
+                "Include" => {
+                    let included = value.trim();
+                    let (directory, name) = match included.rsplit_once('/') {
+                        Some((directory, name)) => (directory, name),
+                        None => continue,
+                    };
+                    let directory = root.join(directory.trim_start_matches('/'));
+                    let mut found: Vec<PathBuf> = std::fs::read_dir(&directory)
+                        .map(|entries| {
+                            entries
+                                .flatten()
+                                .filter(|entry| {
+                                    entry
+                                        .file_name()
+                                        .to_str()
+                                        .is_some_and(|file| glob_matches(name, file))
+                                })
+                                .map(|entry| entry.path())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    found.sort();
+                    files.extend(found);
+                }
+                _ => {}
+            }
+        }
+    }
+    patterns.iter().rev().find_map(|(pattern, file)| {
+        let (negated, glob) = match pattern.strip_prefix('!') {
+            Some(glob) => (true, glob),
+            None => (false, pattern.strip_prefix('\\').unwrap_or(pattern)),
+        };
+        glob_matches(glob, relative).then(|| (!negated).then(|| (pattern.clone(), file.clone())))
+    })?
 }
 
 /// `text` matches the glob `pattern` as fnmatch(3) without flags does (as
@@ -1296,7 +1387,21 @@ mod tests {
             .package_files("shadow-utils-4.17.4-1.fc42.aarch64\n")
             .is_empty());
         assert!(Apt.package_files("installed").is_empty());
-        assert_eq!(Pacman.files_query("shadow"), None);
+        // `pacman -Ql shadow`, Arch Linux ARM's shadow 4.20.0.
+        assert_eq!(
+            Pacman.files_query("shadow"),
+            Some(("pacman", vec!["-Ql".to_string(), "shadow".to_string()]))
+        );
+        let pacman = Pacman.package_files(
+            "shadow /usr/\nshadow /usr/bin/\nshadow /usr/bin/newgidmap\nshadow \
+             /usr/bin/newuidmap\nshadow /usr/share/man/man1/newuidmap.1.gz\n",
+        );
+        assert_eq!(
+            program_file(&pacman, "newuidmap").map(|file| file.path.as_str()),
+            Some("/usr/bin/newuidmap")
+        );
+        assert!(pacman.iter().all(|file| file.mode.is_none()));
+        assert!(Pacman.package_files("shadow 4.20.0.arch1-1\n").is_empty());
         assert_eq!(
             Dnf.files_query("shadow-utils"),
             Some((
@@ -1462,6 +1567,71 @@ mod tests {
     /// dnf5 5.2.18 in fedora:42 reads its configuration (`dnf
     /// --dump-main-config`): the last `tsflags` of a file's [main], added up
     /// across dnf.conf and dnf5's drop-ins.
+    #[test]
+    fn pacmans_noextract_and_noupgrade_are_read_as_pacman_reads_them() {
+        let root = tempfile::tempdir().unwrap();
+        let etc = root.path().join("etc");
+        std::fs::create_dir_all(etc.join("pacman.d")).unwrap();
+        assert_eq!(
+            pacman_kept(root.path(), "NoExtract", "/usr/bin/newuidmap"),
+            None
+        );
+        // Arch Linux's own pacman.conf has NoExtract only in comments, and
+        // the docker image's adds documentation; neither names a helper.
+        std::fs::write(
+            etc.join("pacman.conf"),
+            "[options]\n#NoExtract   =\nNoExtract  = usr/share/help/* !usr/share/help/en*\n\
+             NoExtract  = usr/share/gtk-doc/html/* usr/share/doc/*\nInclude = /etc/pacman.d/*.conf\n\
+             \n[core]\nInclude = /etc/pacman.d/mirrorlist\nNoExtract = usr/bin/newuidmap\n",
+        )
+        .unwrap();
+        assert_eq!(
+            pacman_kept(root.path(), "NoExtract", "/usr/bin/newuidmap"),
+            None,
+            "a repository section's line is not pacman's option"
+        );
+        std::fs::write(
+            etc.join("pacman.d/local.conf"),
+            "NoExtract = usr/bin/new?idmap # helpers\nNoUpgrade = usr/bin/newgidmap\n",
+        )
+        .unwrap();
+        // A file the [options] section includes counts.
+        std::fs::write(
+            etc.join("pacman.d/mirrorlist"),
+            "Server = https://x/$repo\n",
+        )
+        .unwrap();
+        assert_eq!(
+            pacman_kept(root.path(), "NoExtract", "/usr/bin/newuidmap"),
+            Some((
+                "usr/bin/new?idmap".to_string(),
+                "/etc/pacman.d/local.conf".to_string()
+            ))
+        );
+        assert_eq!(
+            pacman_kept(root.path(), "NoUpgrade", "/usr/bin/newgidmap"),
+            Some((
+                "usr/bin/newgidmap".to_string(),
+                "/etc/pacman.d/local.conf".to_string()
+            ))
+        );
+        assert_eq!(
+            pacman_kept(root.path(), "NoUpgrade", "/usr/bin/newuidmap"),
+            None
+        );
+        // The last match wins: a later `!` pattern extracts it after all.
+        std::fs::write(
+            etc.join("pacman.d/zz.conf"),
+            "NoExtract = !usr/bin/newuidmap\n",
+        )
+        .unwrap();
+        assert_eq!(
+            pacman_kept(root.path(), "NoExtract", "/usr/bin/newuidmap"),
+            None
+        );
+        assert!(pacman_kept(root.path(), "NoExtract", "/usr/bin/newgidmap").is_some());
+    }
+
     #[test]
     fn dnf_nocaps_is_read_from_its_configuration() {
         let root = tempfile::tempdir().unwrap();

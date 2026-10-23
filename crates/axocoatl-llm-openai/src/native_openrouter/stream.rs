@@ -172,6 +172,7 @@ fn stream_error(failure: &Value) -> ProviderError {
 
 pub(super) fn decode(
     response: reqwest::Response,
+    mut deadlines: StreamDeadlines,
     request: ChatRequest,
     profile: NativeOpenRouterObservation,
     shape: CallShape,
@@ -197,7 +198,7 @@ pub(super) fn decode(
         // so the stream keeps its order.
         let mut pending_reasoning = String::new();
         'wire: loop {
-            let chunk = next_stream_item(&mut bytes, deadline, STREAM_IDLE_TIMEOUT, PROVIDER).await?;
+            let chunk = deadlines.next(&mut bytes, deadline, PROVIDER).await?;
             let eof = chunk.is_none();
             let frames = match chunk {
                 Some(chunk) => decoder.push(&chunk.map_err(|e| transport_error(&e, &[&key]))?)?,

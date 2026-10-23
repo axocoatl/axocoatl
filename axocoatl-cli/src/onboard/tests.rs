@@ -1581,6 +1581,41 @@ esac"#
     );
 }
 
+fn arch() -> Os {
+    Os::Linux {
+        release: OsRelease::parse("NAME=\"Arch Linux ARM\"\nID=archarm\nID_LIKE=arch\n"),
+        wsl: None,
+        systemd: true,
+    }
+}
+
+/// `pacman` as Arch Linux ARM answers for its installed shadow 4.20.0
+/// (`pacman -Q`, `pacman -Qqo`, `pacman -Ql`, in docker.io/menci/archlinuxarm).
+fn pacman_shim(shims: &Shims) {
+    shims.add(
+        "pacman",
+        r#"case "$*" in
+  "-Q shadow") echo 'shadow 4.20.0.arch1-1' ;;
+  "-Qqo "*) echo shadow ;;
+  "-Ql shadow") printf 'shadow /usr/\nshadow /usr/bin/\nshadow /usr/bin/newgidmap\nshadow /usr/bin/newuidmap\nshadow /usr/share/man/man1/newuidmap.1.gz\n' ;;
+  *) exit 1 ;;
+esac"#,
+    );
+}
+
+/// `pacman.conf` under the root with these `[options]` lines.
+fn pacman_conf(shims: &Shims, options: &str) {
+    let etc = shims.root.path().join("etc");
+    std::fs::create_dir_all(&etc).unwrap();
+    std::fs::write(
+        etc.join("pacman.conf"),
+        format!(
+            "[options]\nHoldPkg = pacman glibc\n{options}\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
+        ),
+    )
+    .unwrap();
+}
+
 /// `dpkg-query` as ubuntu:24.04 answers for an installed uidmap, with a
 /// local diversion of /usr/bin/newuidmap when `diverted`.
 fn dpkg_shim(shims: &Shims, diverted: bool) {
@@ -1615,6 +1650,7 @@ esac"#
 async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() {
     let dnf = "sudo dnf reinstall -y shadow-utils";
     let apt = "sudo apt-get install --reinstall -y uidmap";
+    let pacman = "sudo pacman -S --noconfirm shadow";
     struct Case {
         name: &'static str,
         os: Os,
@@ -1748,6 +1784,73 @@ async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() 
             why: None,
             reinstall: apt,
         },
+        Case {
+            name: "dpkg stat overrides of both helpers, said once",
+            os: ubuntu(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                shims.add("dpkg-statoverride", r#"echo "root root 755 $2"; exit 0"#);
+            },
+            why: Some(
+                "uidmap installs /usr/bin/newuidmap and /usr/bin/newgidmap setuid root, but dpkg \
+                 stat overrides give /usr/bin/newuidmap mode 755 and /usr/bin/newgidmap mode 755 \
+                 (`dpkg-statoverride --list /usr/bin/newuidmap`, `dpkg-statoverride --list \
+                 /usr/bin/newgidmap`), and reinstalling uidmap applies those modes: remove the \
+                 overrides (`sudo dpkg-statoverride --remove /usr/bin/newuidmap && sudo \
+                 dpkg-statoverride --remove /usr/bin/newgidmap`)",
+            ),
+            reinstall: apt,
+        },
+        Case {
+            name: "pacman NoExtract, helpers deleted",
+            os: arch(),
+            helpers: None,
+            setup: |shims| {
+                pacman_shim(shims);
+                pacman_conf(
+                    shims,
+                    "NoExtract = usr/share/doc/*\nNoExtract = usr/bin/new*map",
+                );
+            },
+            why: Some(
+                "pacman is set not to extract /usr/bin/newuidmap and /usr/bin/newgidmap \
+                 (NoExtract = usr/bin/new*map in /etc/pacman.conf), so reinstalling shadow does \
+                 not write them (it removes any copy there): take that pattern out of NoExtract",
+            ),
+            reinstall: pacman,
+        },
+        Case {
+            name: "pacman NoUpgrade, capabilities removed",
+            os: arch(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                pacman_shim(shims);
+                let conf = shims.root.path().join("etc/pacman.d");
+                std::fs::create_dir_all(&conf).unwrap();
+                std::fs::write(conf.join("local.conf"), "NoUpgrade = usr/bin/newuidmap\n").unwrap();
+                pacman_conf(shims, "Include = /etc/pacman.d/*.conf");
+            },
+            why: Some(
+                "pacman is set to keep /usr/bin/newuidmap as it is (NoUpgrade = usr/bin/newuidmap \
+                 in /etc/pacman.d/local.conf), so reinstalling shadow writes its files as \
+                 /usr/bin/newuidmap.pacnew and leaves it unable to map: take that pattern out of \
+                 NoUpgrade",
+            ),
+            reinstall: pacman,
+        },
+        Case {
+            name: "pacman, capabilities removed, a negated NoExtract",
+            os: arch(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                pacman_shim(shims);
+                // The last pattern that matches wins.
+                pacman_conf(shims, "NoExtract = usr/bin/*\nNoExtract = !usr/bin/new*map");
+            },
+            why: None,
+            reinstall: pacman,
+        },
     ];
     for case in cases {
         let shims = Shims::new();
@@ -1782,11 +1885,7 @@ esac"#,
                 fix,
                 format!(
                     "{why}, then reinstall {} (`{}`), then: podman system migrate",
-                    if case.reinstall == dnf {
-                        "shadow-utils"
-                    } else {
-                        "uidmap"
-                    },
+                    case.reinstall.rsplit(' ').next().unwrap_or_default(),
                     case.reinstall
                 ),
                 "{}: {podman:?}",
@@ -1846,6 +1945,181 @@ esac"#,
             }
         }
     }
+}
+
+/// A reinstall that ran and left the helpers unable to map (something on
+/// the computer changes them afterwards, which no package record shows) is
+/// kept in the data directory: the next onboarding runs no sudo and says
+/// so, and doctor offers no reinstall, while the helpers are the same
+/// files. Once they are written again (an upgrade), the reinstall is
+/// offered again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_did_not_help_is_not_run_again_in_a_later_run() {
+    let reinstall = "sudo dnf reinstall -y shadow-utils";
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    // The reinstall "succeeds" and changes nothing, as with a hook that
+    // takes the capabilities away again.
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'Complete!' ;;
+  *) exit 1 ;;
+esac"#;
+    let run = || async {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        let ready = sandbox::run(&mut o).await;
+        (ready, o.steps.clone())
+    };
+    let (ready, steps) = run().await;
+    assert!(!ready);
+    let sudo_calls = |shims: &Shims| {
+        shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count()
+    };
+    assert_eq!(sudo_calls(&shims), 1);
+    assert!(
+        steps[0].starts_with(&format!("`{reinstall}` ran, but did not fix this")),
+        "{steps:?}"
+    );
+    // The next run reads what the first one kept.
+    let (ready, steps) = run().await;
+    assert!(!ready);
+    assert_eq!(sudo_calls(&shims), 1, "{:?}", shims.calls());
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert!(
+        steps[0].contains(&format!("`{reinstall}` ran on 20"))
+            && steps[0].contains("the helpers still could not map")
+            && steps[0].contains("`sudo chmod u+s"),
+        "{steps:?}"
+    );
+    // So does doctor.
+    let doctor = |shims: &Shims| {
+        let env = crate::doctor::Environment {
+            os: fedora(),
+            host: shims.host(false),
+            ..doctor_env(shims)
+        };
+        let config_path = shims.home.path().join("config.yaml");
+        async move {
+            crate::doctor::collect(&config_path, &env)
+                .await
+                .sections
+                .sandbox[0]
+                .fix
+                .clone()
+                .unwrap_or_default()
+        }
+    };
+    let fix = doctor(&shims).await;
+    assert!(
+        fix.starts_with(&format!("`{reinstall}` ran on 20")),
+        "{fix}"
+    );
+    assert!(!fix.contains(&format!("{reinstall} &&")), "{fix}");
+    crate::paste_safe::assert_paste_safe(&fix);
+    // An upgrade writes the helpers again: the reinstall is offered again.
+    shims.id_map_tools(Some(0o755));
+    assert_eq!(
+        doctor(&shims).await,
+        format!("{reinstall} && podman system migrate")
+    );
+}
+
+/// A reinstall that failed is kept too: dnf cannot reinstall a build no
+/// enabled repository has (`No match for argument` and `No packages marked
+/// for reinstall`, dnf 4 in registry.access.redhat.com/ubi9/ubi when its
+/// repositories lack the build), and a later run says what failed and what
+/// to do instead rather than run it again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_failed_is_not_run_again_in_a_later_run() {
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'No match for argument: shadow-utils' >&2; echo 'Error: No packages marked for reinstall.' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac"#;
+    let mut first = None;
+    for run in 0..2 {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert!(!sandbox::run(&mut o).await);
+        let sudo_calls = shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count();
+        assert_eq!(sudo_calls, 1, "run {run}: {:?}", shims.calls());
+        assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+        match run {
+            0 => first = Some(o.steps[0].clone()),
+            _ => {
+                let step = &o.steps[0];
+                assert!(
+                    step.starts_with("On 20") || step.contains(" on 20"),
+                    "{step}"
+                );
+                assert!(
+                    step.contains(
+                        "`sudo dnf reinstall -y shadow-utils` failed: dnf says \"Error: No \
+                         packages marked for reinstall.\""
+                    ) && step.contains("`sudo dnf upgrade -y shadow-utils`"),
+                    "{step}"
+                );
+                assert_ne!(Some(step), first.as_ref());
+                crate::paste_safe::assert_paste_safe(step);
+            }
+        }
+    }
+}
+
+/// A HOME of `/` (a service account's) is no home directory: a helper
+/// under it is not taken for a copy no package installed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_home_of_root_does_not_make_every_helper_foreign() {
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    let mut host = shims.host(false);
+    host.home = PathBuf::from("/");
+    let os = Os::Linux {
+        release: OsRelease::parse("ID=unknown-distribution\n"),
+        wsl: None,
+        systemd: true,
+    };
+    let tools = crate::doctor::id_map_tools(&host, shims.root.path(), &os).await;
+    assert_eq!(tools.unprivileged.len(), 2, "{tools:?}");
+    assert!(tools.foreign.is_empty(), "{tools:?}");
+    // A helper in the person's real home directory still is one.
+    host.home = std::fs::canonicalize(shims.dir.path()).unwrap();
+    let tools = crate::doctor::id_map_tools(&host, shims.root.path(), &os).await;
+    assert_eq!(tools.foreign.len(), 2, "{tools:?}");
 }
 
 /// A reinstall that fails, or that apt skips, is not offered again as it
@@ -2093,6 +2367,7 @@ async fn doctor_looks_for_the_id_map_tools_on_path_only() {
             || call
                 == "rpm -q --qf [%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILECAPS}\\n] shadow-utils"
             || call == "pacman -Q shadow"
+            || call == "pacman -Ql shadow"
         }),
         "{calls:?}"
     );

@@ -263,8 +263,9 @@ impl SearxngService {
         authority: &str,
         image: &str,
         extra_labels: &[(String, String)],
-        with_limits: bool,
+        with_limits: impl Into<crate::container_host::ResourceCaps>,
     ) -> Vec<String> {
+        let caps = with_limits.into();
         let mut args = strings(&["create", "--name", name]);
         args.push("--label".into());
         args.push(format!("{RUNTIME_AUTHORITY_LABEL}={authority}"));
@@ -288,8 +289,12 @@ impl SearxngService {
             "--no-healthcheck",
             "--image-volume=ignore",
         ]));
-        if with_limits {
-            args.extend(strings(&["--memory", "512m", "--pids-limit", "256"]));
+        // Each cap when its cgroup controller is there.
+        if caps.memory {
+            args.extend(strings(&["--memory", "512m"]));
+        }
+        if caps.pids {
+            args.extend(strings(&["--pids-limit", "256"]));
         }
         args.push("-p".into());
         args.push(format!("127.0.0.1::{SEARXNG_CONTAINER_PORT}"));
@@ -439,18 +444,21 @@ impl SearxngService {
         )?;
         self.remove_own_container().await?;
 
+        let caps = crate::container_host::container_host()
+            .await
+            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
         let mut created = podman(
             &Self::create_args(
                 &name,
                 &self.runtime_authority,
                 &self.image,
                 &self.extra_labels,
-                true,
+                caps,
             ),
             CREATE_TIMEOUT,
         )
         .await?;
-        if !created.success && created.detail().contains("cgroup") {
+        if !created.success && caps.any() && created.detail().contains("cgroup") {
             tracing::warn!(
                 container = %name,
                 detail = %created.detail(),

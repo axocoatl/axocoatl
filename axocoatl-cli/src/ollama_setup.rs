@@ -782,9 +782,15 @@ pub fn version_fix(server: Option<&str>, host: &OllamaHost) -> String {
 /// The context Ollama loads `model` with on the server at `base_url`, read
 /// the way native admission reads it: the model is loaded without
 /// generating, its context read from `GET /api/ps`, and the contract probes
-/// run on it. Returns the context and the server version.
-pub async fn observed_context(base_url: &str, model: &str) -> Result<(usize, String), String> {
-    axocoatl_llm_ollama::observe_native_ollama_context(base_url, model)
+/// run on it. The load may take `load_timeout`
+/// (`providers.ollama.first_token_timeout_secs`, 600 s unless set). Returns
+/// the context and the server version.
+pub async fn observed_context(
+    base_url: &str,
+    model: &str,
+    load_timeout: std::time::Duration,
+) -> Result<(usize, String), String> {
+    axocoatl_llm_ollama::observe_native_ollama_context_within(base_url, model, load_timeout)
         .await
         .map(|observation| (observation.context_tokens, observation.server_version))
         .map_err(|error| error.to_string())

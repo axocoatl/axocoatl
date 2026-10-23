@@ -31,6 +31,11 @@ command to passing runs, every receipt verified:
     curl -fsSL https://axocoatl.ai/install.sh | sh
     ```
 
+    On a Linux computer without `curl`, install it first: `sudo apt install curl` on
+    Ubuntu and Debian. The curl snap that Ubuntu also offers works too: the installer
+    writes what curl downloads itself, since the snap cannot write in the installer's
+    temporary directory (measured with the snap's curl 8.22.0 on Ubuntu 24.04).
+
     The installer resolves the latest GitHub release, downloads the tarball for
     the current OS and architecture, and requires its matching SHA-256 file.
     A missing, malformed, or mismatched checksum stops installation. The script

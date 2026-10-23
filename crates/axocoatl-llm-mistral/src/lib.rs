@@ -9,8 +9,8 @@ use axocoatl_core::{ChatMessage, MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
-        SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
+        bounded_redacted, http_client, network_error, read_error_text, read_json, SseDecoder,
+        StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     validate_response_tool_call, ChatRequest, ChatResponse, FinishReason, LlmProvider,
@@ -331,6 +331,8 @@ pub struct MistralProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    /// How long an answer may take to start and to pause.
+    stream_timeouts: StreamTimeouts,
 }
 
 impl MistralProvider {
@@ -360,7 +362,15 @@ impl MistralProvider {
             client: http_client(),
             api_key: api_key.into(),
             model: model.into(),
+            stream_timeouts: StreamTimeouts::HOSTED,
         }
+    }
+
+    /// Wait for each answer as `timeouts` say (`providers.mistral`'s
+    /// `first_token_timeout_secs` and `idle_timeout_secs`).
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.stream_timeouts = timeouts;
+        self
     }
 
     /// Build the OpenAI-compatible request body shared by `chat` and `chat_stream`.
@@ -428,7 +438,7 @@ impl LlmProvider for MistralProvider {
             .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
             .header(CONTENT_TYPE, "application/json")
             .json(&body)
-            .timeout(RESPONSE_TIMEOUT)
+            .timeout(self.stream_timeouts.buffered())
             .send()
             .await
             .map_err(|error| network_error(&error, &[&self.api_key]))?;
@@ -534,9 +544,10 @@ impl LlmProvider for MistralProvider {
             .header(CONTENT_TYPE, "application/json")
             .json(&body);
 
-        let response = tokio::time::timeout(RESPONSE_TIMEOUT, request_builder.send())
-            .await
-            .map_err(|_| ProviderError::Network("Mistral response headers timed out".to_string()))?
+        let mut deadlines = StreamDeadlines::start(self.stream_timeouts);
+        let response = deadlines
+            .headers(request_builder.send(), "mistral")
+            .await?
             .map_err(|error| network_error(&error, &[&self.api_key]))?;
 
         let status = response.status();
@@ -578,13 +589,7 @@ impl LlmProvider for MistralProvider {
             let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
 
             'response: loop {
-                let next = next_stream_item(
-                    &mut bytes,
-                    total_deadline,
-                    STREAM_IDLE_TIMEOUT,
-                    "Mistral",
-                )
-                .await?;
+                let next = deadlines.next(&mut bytes, total_deadline, "mistral").await?;
                 let Some(chunk) = next else {
                     for event in decoder.finish()? {
                         let (terminal, events) = parse_mistral_sse_data(&event.data)?;

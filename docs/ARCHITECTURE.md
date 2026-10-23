@@ -1403,9 +1403,20 @@ agent:**
   resolved on dedicated threads (not tokio's blocking pool), for at most 5 s per
   release. An error other than a missing path (a permission, as for the overlay of a
   `--userns=keep-id` container, whose directory in Podman's storage belongs to a
-  subordinate uid), no answer in time, or a `--volumes-from` naming a container Podman no
-  longer lists keeps every candidate, logged at `info` with the container, the mount and
-  the reason.
+  subordinate uid), no answer in time, a `--volumes-from` naming a container Podman no
+  longer lists, a container that has never started (its overlay volumes are reported only
+  once it has) or one that mounts a volume plugin's volume keeps every candidate, logged
+  at `info` once per mount point and reason: with the container and its mount when a
+  container is the reason, and with Podman's error when Podman did not answer. A container
+  run `--privileged` or with `CAP_SYS_ADMIN`, or one whose mounts neither SELinux
+  (`container_t`, enforcing) nor AppArmor (Podman's `containers-default` profile) stops
+  (its processes can then mount in a user namespace of their own), keeps a candidate below
+  any host directory it takes, since its processes can mount on it themselves, and a
+  `--rootfs` is a host directory it takes. Nothing is removed at all while a container Axocoatl cannot list
+  could hold the directory (`held_elsewhere`): Docker is installed, Podman lists another
+  connection (a Podman machine's rootful one on macOS), rootful Podman's API is enabled on
+  Linux (`/run/podman`, as Ubuntu's package does), or Podman lists a container only with
+  `--external`.
   Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
@@ -1451,9 +1462,23 @@ agent:**
   publishes nothing: a service forwarder serves each port as a socket and a separate
   Preview container publishes it.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
-  runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
-  default `require_resource_limits: false`, a host that cannot apply them starts the
-  container without them and logs a warning; set it to `true` to refuse instead.
+  runaway loop or fork bomb. Each needs its cgroup controller (`memory`, `cpu`,
+  `pids`), and rootless Podman has those the host delegates to the person's user, which
+  `podman info` lists (`crates/axocoatl-isolation/src/container_host.rs`). The container
+  gets each cap whose controller is there. With the default
+  `require_resource_limits: false`, a cap that cannot apply is left out with a warning;
+  the Session's record (`environment.resource_limits`), a run's notes and its receipt
+  (`sandbox.limits`) say which caps it got and which it did not, and `axocoatl doctor`
+  says how to delegate the missing controllers. Set it to `true` to refuse instead.
+- **SELinux.** On a Linux host whose Podman reports SELinux enabled (Fedora, RHEL), a
+  container may read and write only files labelled for containers, so the
+  bind-mounted Workspace and the execution supervisor bound from the data root would
+  be refused. Relabelling them (`:z`) would change the labels of the person's own
+  files, so Session and browser containers run with `--security-opt label=disable`, as
+  Toolbox does: SELinux confines them as it does the person's own processes, and the
+  user namespace, dropped capabilities, seccomp, `no-new-privileges` and the
+  supervisor's Landlock filter stay. A Podman machine on macOS mounts the Mac's
+  folders with a context its containers may use, so nothing changes there.
 
 **Environment readiness and consent.** A Session persists an environment generation and one
 of `unprepared`, `awaiting_approval`, `preparing`, `ready`, or `failed`. Repository detection

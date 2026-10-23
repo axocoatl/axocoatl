@@ -2187,6 +2187,14 @@ impl AxocoatlDaemon {
         let mut environment_facts =
             self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
         resolved.notes.push(plan.summary());
+        if let Some(note) = session
+            .environment
+            .resource_limits
+            .as_ref()
+            .and_then(resource_caps_note)
+        {
+            resolved.notes.push(note);
+        }
         let mut toolchain_failure = None;
         if session.environment.state == SessionEnvironmentState::Ready {
             if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
@@ -3545,6 +3553,21 @@ pub fn validate_text(text: &str) -> ValidateLoadoutResponse {
     }
 }
 
+/// The run's note when its Session's container did not get every resource
+/// cap, naming those it runs without; `None` when it got them all.
+pub(crate) fn resource_caps_note(
+    limits: &axocoatl_session::SessionResourceLimits,
+) -> Option<String> {
+    (!limits.not_applied.is_empty()).then(|| {
+        format!(
+            "The Session's container runs without its {} cap: this computer does not delegate \
+             that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With \
+             sandbox.require_resource_limits: true the Session refuses to start instead.",
+            limits.not_applied.join(", ")
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4241,6 +4264,33 @@ mod tests {
         // call whose usage is not known has no known cost either.
         let unknown = observation_from_control_plane(&view, &[], None, &HashMap::new());
         assert!(!unknown.usage.complete && !unknown.usage.cost_known);
+    }
+
+    /// A container without every resource cap is said in the run's notes,
+    /// naming each cap it runs without; one with every cap says nothing.
+    #[test]
+    fn a_run_notes_the_resource_caps_its_container_did_not_get() {
+        use axocoatl_isolation::container_host::ResourceCaps;
+        let all = crate::bootstrap::recorded_resource_limits(ResourceCaps::ALL);
+        assert_eq!(all.memory.as_deref(), Some("2g"));
+        assert_eq!(all.cpus.as_deref(), Some("2"));
+        assert_eq!(all.pids, Some(512));
+        assert_eq!(resource_caps_note(&all), None);
+        let without_cpu = crate::bootstrap::recorded_resource_limits(ResourceCaps {
+            memory: true,
+            cpus: false,
+            pids: true,
+        });
+        assert_eq!(without_cpu.cpus, None);
+        let note = resource_caps_note(&without_cpu).unwrap();
+        assert!(
+            note.contains("runs without its CPU (2 CPUs, cgroup controller cpu) cap"),
+            "{note}"
+        );
+        assert!(
+            note.contains("sandbox.require_resource_limits: true"),
+            "{note}"
+        );
     }
 
     #[test]

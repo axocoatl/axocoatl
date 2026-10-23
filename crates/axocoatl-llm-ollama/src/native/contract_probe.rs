@@ -17,11 +17,9 @@
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
-use axocoatl_llm::{
-    transport::{validated_endpoint, RESPONSE_TIMEOUT},
-    ProviderError,
-};
+use axocoatl_llm::{transport::validated_endpoint, ProviderError};
 use serde_json::{json, Value};
 
 use super::{invalid, PROVIDER};
@@ -75,17 +73,20 @@ fn failed(guarantee: &str, model: &str, version: &str, detail: impl AsRef<str>) 
 const OVER_LONG: &str = "over-long prompt refusal (truncate:false)";
 const STOP: &str = "output limit (num_predict)";
 
-/// Run both probes unless they already passed for `key`.
+/// Run both probes unless they already passed for `key`, each answer
+/// within `timeout` (the observation's load timeout: a model Ollama has
+/// unloaded since is loaded again first).
 pub(crate) async fn ensure_contract(
     client: &reqwest::Client,
     key: ProbeKey,
     model: &str,
+    timeout: Duration,
 ) -> Result<(), ProviderError> {
     if has_passed(&key) {
         return Ok(());
     }
-    over_long_probe(client, &key, model).await?;
-    stop_probe(client, &key, model).await?;
+    over_long_probe(client, &key, model, timeout).await?;
+    stop_probe(client, &key, model, timeout).await?;
     tracing::info!(
         model,
         server_version = %key.server_version,
@@ -112,12 +113,13 @@ async fn post(
     client: &reqwest::Client,
     base_url: &str,
     body: &Value,
+    timeout: Duration,
 ) -> Result<(u16, Vec<Value>), String> {
     let url = validated_endpoint(base_url, "api/chat", PROVIDER).map_err(|e| e.to_string())?;
     let mut response = client
         .post(url)
         .json(body)
-        .timeout(RESPONSE_TIMEOUT)
+        .timeout(timeout)
         .send()
         .await
         .map_err(|error| format!("the probe request failed: {error}"))?;
@@ -160,6 +162,7 @@ async fn over_long_probe(
     client: &reqwest::Client,
     key: &ProbeKey,
     model: &str,
+    timeout: Duration,
 ) -> Result<(), ProviderError> {
     let version = &key.server_version;
     // "x " is at least one token per two bytes in every tokenizer seen, so
@@ -169,6 +172,7 @@ async fn over_long_probe(
         client,
         &key.base_url,
         &probe_body(model, &content, key.context_tokens),
+        timeout,
     )
     .await
     .map_err(|detail| failed(OVER_LONG, model, version, detail))?;
@@ -227,12 +231,14 @@ async fn stop_probe(
     client: &reqwest::Client,
     key: &ProbeKey,
     model: &str,
+    timeout: Duration,
 ) -> Result<(), ProviderError> {
     let version = &key.server_version;
     let (status, records) = post(
         client,
         &key.base_url,
         &probe_body(model, STOP_PROBE_PROMPT, key.context_tokens),
+        timeout,
     )
     .await
     .map_err(|detail| failed(STOP, model, version, detail))?;

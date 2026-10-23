@@ -170,12 +170,19 @@ On **Linux and WSL2**:
   is gone, or it lost its setuid bit or file capabilities, an install would do nothing,
   so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
   `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
-  installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
-  runs and the helpers still cannot map, onboarding says so and does not offer it again
-  in that run (`axocoatl doctor` still names it, and a later onboarding offers it again).
-  If the install or reinstall itself fails, the step says why: a build dnf no longer has
-  (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date lists (run `sudo
-  apt-get update` first), or what the command reported, to fix before running it again.
+  installed), `sudo pacman -S --noconfirm shadow` on Arch. Onboarding and doctor first
+  read what the package manager would do: a dpkg diversion, stat override or
+  `path-exclude`, dnf set to `nocaps`, an rpm that gives the helpers no privilege, or
+  pacman's `NoExtract` or `NoUpgrade` for a helper each keep a reinstall from restoring
+  it, and then the fix says what to change first instead of offering the reinstall. If an
+  install or reinstall runs and the helpers still cannot map (something on the computer
+  changes them afterwards, which no package record shows), or the command fails,
+  onboarding says so and keeps what happened in your Axocoatl data directory
+  (`onboarding/id-map-attempt.json`): `axocoatl doctor` and later onboarding runs say
+  it, with the date, and do not offer the same command again while the helpers are the
+  same files (an upgrade that writes them again ends that). A failure says why: a build
+  dnf no longer has (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date
+  lists (run `sudo apt-get update` first), or what the command reported.
   Helpers in `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no
   install, and so is a copy earlier on `PATH` that the package does not own; on other
   distributions the fix says what to install or reinstall. Doctor names the
@@ -188,7 +195,8 @@ On **Linux and WSL2**:
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
   shells need Linux 6.7.
-- SELinux enforcing is reported as not yet verified; WSL without systemd is told that
+- SELinux is reported with what Axocoatl does about it: Session and browser
+  containers run with SELinux labelling off; WSL without systemd is told that
   the Always-On Service is unavailable and that `axocoatl dev` works.
 
 Then one throwaway container proves the setup: onboarding pulls
@@ -583,7 +591,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Section | Checks | Failure level |
 |---|---|---|
 | Sandbox | Podman installed, its machine (on macOS) created, rootless, 4.3 or later, and, rootless, a range of subordinate ids; the client and server versions, the machine's provider, CPUs and memory (under 4 GiB warns), the kernel | FAIL, except a stopped machine (OK: it starts on first use), an untested version or provider, and a small machine (WARN) |
-| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (warns) | As described |
+| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (OK: containers run with its labelling off); the cgroup controllers rootless Podman can use for Session containers' memory, CPU and process caps (a missing one warns) | As described |
 | Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
 | Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
 | Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |

@@ -63,8 +63,8 @@ or when one takes a directory above it and the container mounts a volume, a bind
 tmpfs where the directory is (a development container's `node_modules` volume). Axocoatl
 compares those paths as Podman reports them and, when that settles nothing, as they
 resolve on the host at that moment, waiting at most 5 seconds. When Axocoatl cannot
-tell, the directory stays for a later removal or start, and the daemon logs why, naming
-the container and mount when one is the reason: Podman cannot say; resolving a path
+tell, the directory stays for a later removal or start, and the daemon logs why once,
+naming the container and mount when one is the reason: Podman cannot say; resolving a path
 fails other than by finding nothing there, or does not finish in time (a stale network
 mount); a container took mounts with `--volumes-from` from one since removed, after
 which Podman no longer says what they are; or, on Linux, a container run with
@@ -77,18 +77,34 @@ tmpfs before Linux 6.6), Axocoatl tells the directory apart by its device, inode
 birth time instead, which a directory you remove and make again at once can match.
 Removing a container of your own that kept the directory removes nothing: Axocoatl
 removes it at its next such start or removal after that, and if the daemon stops first,
-the empty directory stays. Some mounts on the directory Axocoatl does not see: those of
-Docker, of rootful `sudo podman`, of another Podman connection or machine, or of a
-container `podman ps -a` lists only with `--external` (Buildah's, a `podman build`'s); a
-bind through a link you have since removed or changed; a mount whose host path reaches
-the directory through another mount of it (a bind mount on the host of a directory above
-it, or on macOS a path spelled through `/System/Volumes/Data`); the tmpfs Podman mounts
-for an image's `VOLUME` under `--image-volume=tmpfs`; an overlay volume of a container
-that has never started; the root filesystem of a container run with `--rootfs`; and a
-volume plugin's. From the start of a Session on such a repository until the directory is
-gone, do not mount it, or anything on it, in those ways: removing the directory breaks
-those mounts (on Linux it detaches a volume or tmpfs mounted on it, and a bind mount or
-bind volume of the directory is left on a deleted one). The
+the empty directory stays.
+
+Axocoatl removes the directory only when no container it cannot list could have a mount
+on it. When Docker is installed (a `docker` program that is not Podman's own `docker`,
+a `DOCKER_HOST` that does not name your own rootless Podman's socket, or a Docker
+socket), when Podman lists another connection than the one
+Axocoatl uses (every Podman machine on macOS has a rootful one), when rootful Podman's
+API is enabled on Linux (`/run/podman`; Ubuntu's podman package enables it), or when
+Podman lists a container only with `--external` (Buildah's, a `podman build`'s), the
+directory stays, empty and yours, and the daemon logs why once. On a Mac, and on Ubuntu
+24.04 as its package sets Podman up, it therefore stays. A container that may mount
+filesystems itself keeps the directory when it takes a directory above it: one run
+`--privileged` or with `CAP_SYS_ADMIN` added, and one that neither SELinux (enforcing)
+nor AppArmor confines, as with `--security-opt label=disable` or on a Linux computer with
+neither (Arch Linux), whose processes can mount in a user namespace of their own; one that has never started (Podman reports its overlay
+volumes only once it has), or that mounts a volume plugin's volume (Podman does not say
+which host directory it uses), keeps every such directory until it starts or is removed;
+and the root filesystem of a container run with `--rootfs` counts as a directory it
+takes. Some mounts on the directory Axocoatl still does not see: those of rootful Podman
+on a computer whose rootful API is not enabled (`sudo podman` without `/run/podman`) and
+of container engines other than Docker and Podman (nerdctl, LXC); a bind through a link
+you have since removed or changed; a mount whose host path reaches the directory through
+another mount of it (a bind mount on the host of a directory above it, or on macOS a path
+spelled through `/System/Volumes/Data`); and the tmpfs Podman mounts for an image's
+`VOLUME` under `--image-volume=tmpfs`. From the start of a Session on such a repository
+until the directory is gone, do not mount it, or anything on it, in those ways: removing
+the directory breaks those mounts (on Linux it detaches a volume or tmpfs mounted on it,
+and a bind mount or bind volume of the directory is left on a deleted one). The
 workspace is still mounted read-write: an approved command may change tracked or
 untracked project files, and nested package directories are not given an additional
 dependency-volume boundary.
@@ -134,10 +150,22 @@ without a container network, and a repository setup command that needs packages
 will likewise fail with retained evidence. Podman may still pull the selected
 image as a host operation; that is not Session container egress.
 
-When supported by the host, local Session containers request 2 GiB memory, two
-CPUs, and 512 PIDs. With `require_resource_limits: false`, a host that cannot
-apply cgroup limits falls back to an uncapped container and logs a warning.
-Set it to `true` to fail Session creation instead.
+Local Session containers request 2 GiB memory, two CPUs, and 512 PIDs. Each cap
+needs its cgroup controller (`memory`, `cpu`, `pids`), and rootless Podman has
+only those your system delegates to your user (`podman info` lists them as
+`cgroupControllers`). A container gets each cap whose controller is there. With
+`require_resource_limits: false`, a cap that cannot apply is left out with a
+warning: the Session's record and a run's notes and receipt name each cap the
+container runs without, and `axocoatl doctor` warns and prints how to delegate
+the missing controllers. Set it to `true` to fail Session creation instead.
+
+On a Linux computer with SELinux enabled (Fedora, RHEL), Session and browser
+containers run with SELinux labelling off (`--security-opt label=disable`), the
+way Toolbox runs its containers. Without it SELinux refuses them your
+repository, which is labelled as your home directory's files, and relabelling
+it would change the labels of your own files. Their other limits stay: the user
+namespace, dropped capabilities, seccomp, `no-new-privileges` and, in a hardened
+Session, the supervisor's Landlock filter. `axocoatl doctor` says so.
 
 ## Network egress
 

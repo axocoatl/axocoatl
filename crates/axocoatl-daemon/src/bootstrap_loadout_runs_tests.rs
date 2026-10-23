@@ -1030,11 +1030,21 @@ async fn external_fix_admission_child_body() {
     );
     let review = edit.required_review.as_ref().unwrap();
     assert_eq!(review.max_rounds, 3);
-    // Both stored: auto takes the API key; --param chooses either.
+    // Both stored: auto takes the API key, and says that the run is billed
+    // at API rates rather than to the plan; --param chooses either.
     crate::secret_store::set_secret(&data, "codex-openai", b"test-api-key").unwrap();
     let (codex, chosen) = resolved("fix-codex", &[]);
     assert_eq!(chosen["writer"], "codex-openai");
     assert_eq!(hosts(&codex), ["api.openai.com"]);
+    assert!(
+        codex.notes[0].ends_with(
+            "It is billed at OpenAI API rates to the key's OpenAI Platform organization, not \
+             to your ChatGPT plan, whose sign-in (codex-chatgpt) is stored too: `--param \
+             credential=codex-chatgpt` uses the plan."
+        ),
+        "{:?}",
+        codex.notes
+    );
     let (codex, chosen) = resolved("fix-codex", &[("credential", "codex-chatgpt")]);
     assert_eq!(chosen["writer"], "codex-chatgpt");
     assert_eq!(hosts(&codex), ["chatgpt.com"]);
@@ -1050,6 +1060,7 @@ async fn external_fix_admission_child_body() {
     let (codex, chosen) = resolved("fix-codex", &[]);
     assert_eq!(chosen["writer"], "codex-openai");
     assert_eq!(hosts(&codex), ["api.openai.com"]);
+    assert!(!codex.notes[0].contains("billed"), "{:?}", codex.notes);
     let message = busy(admit(request("fix-codex", &[], "codex-openai-auto")).await);
     assert!(message.contains(&holder.id), "{message}");
 

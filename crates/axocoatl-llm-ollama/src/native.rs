@@ -24,7 +24,7 @@ use axocoatl_core::{
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        network_error, next_stream_item, validated_endpoint, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
+        network_error, validated_endpoint, StreamDeadlines, StreamTimeouts, RESPONSE_TIMEOUT,
         STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
@@ -49,7 +49,8 @@ mod observed_context;
 mod server_check;
 mod version_policy;
 pub use observed_context::{
-    inspect_native_ollama_model, observe_native_ollama_context, NativeOllamaContextObservation,
+    inspect_native_ollama_model, observe_native_ollama_context,
+    observe_native_ollama_context_within, NativeOllamaContextObservation,
     OBSERVATION_SCHEMA_VERSION,
 };
 use server_check::reports_cloud_disabled;
@@ -96,6 +97,9 @@ pub struct NativeOllamaProvider {
     vision_supported: bool,
     observed_context: Option<NativeOllamaContextObservation>,
     served: Option<Arc<OllamaServedVersions>>,
+    /// How long an answer may take to start and to pause
+    /// ([`StreamTimeouts::LOCAL`] unless the configuration sets them).
+    stream_timeouts: StreamTimeouts,
 }
 
 /// The Ollama versions that served a model's inference requests, as checked
@@ -406,6 +410,18 @@ async fn metadata_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, ProviderError> {
+    metadata_request_within(client, base_url, path, body, RESPONSE_TIMEOUT).await
+}
+
+/// [`metadata_request`] whose answer may take `timeout`: a model load, which
+/// Ollama answers once the model is loaded.
+async fn metadata_request_within(
+    client: &reqwest::Client,
+    base_url: &str,
+    path: &str,
+    body: Option<Value>,
+    timeout: std::time::Duration,
+) -> Result<Value, ProviderError> {
     let url = validated_endpoint(base_url, path, PROVIDER)?;
     // The model the request names, for a 404 about it.
     let model = body
@@ -418,7 +434,7 @@ async fn metadata_request(
         None => client.get(url),
     };
     let mut response = builder
-        .timeout(RESPONSE_TIMEOUT)
+        .timeout(timeout)
         .send()
         .await
         .map_err(|error| network_error(&error, &[]))?;
@@ -487,6 +503,7 @@ impl NativeOllamaProvider {
             vision_supported: false,
             observed_context: None,
             served: None,
+            stream_timeouts: StreamTimeouts::LOCAL,
         };
         let verified = provider.verify().await?;
         provider.tools_supported = verified.model.tools;
@@ -499,6 +516,13 @@ impl NativeOllamaProvider {
     /// request this provider sends: the version that served it.
     pub fn with_served_versions(mut self, log: Arc<OllamaServedVersions>) -> Self {
         self.served = Some(log);
+        self
+    }
+
+    /// Wait for each answer as `timeouts` say (`providers.ollama`'s
+    /// `first_token_timeout_secs` and `idle_timeout_secs`).
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.stream_timeouts = timeouts;
         self
     }
 
@@ -582,11 +606,13 @@ impl NativeOllamaProvider {
             log.record(&verified.version);
         }
         let url = validated_endpoint(&self.config.base_url, "api/chat", PROVIDER)?;
-        let response =
-            tokio::time::timeout(RESPONSE_TIMEOUT, self.client.post(url).json(&body).send())
-                .await
-                .map_err(|_| protocol("request header timeout"))?
-                .map_err(|error| transport_error(&error))?;
+        // Ollama sends its headers with the first token, after loading the
+        // model and reading the prompt.
+        let mut deadlines = StreamDeadlines::start(self.stream_timeouts);
+        let response = deadlines
+            .headers(self.client.post(url).json(&body).send(), PROVIDER)
+            .await?
+            .map_err(|error| transport_error(&error))?;
         let status = response.status().as_u16();
         let retry_after = retry_after_secs(response.headers());
         let cap = self.config.max_response_bytes;
@@ -604,7 +630,7 @@ impl NativeOllamaProvider {
             let mut received = 0usize;
             let mut records = 0usize;
             loop {
-                let next = match next_stream_item(&mut bytes, deadline, STREAM_IDLE_TIMEOUT, PROVIDER).await {
+                let next = match deadlines.next(&mut bytes, deadline, PROVIDER).await {
                     Ok(value) => value,
                     Err(error) => { yield Err(error); return; }
                 };

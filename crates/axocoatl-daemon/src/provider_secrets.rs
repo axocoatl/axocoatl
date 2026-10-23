@@ -191,6 +191,8 @@ mod tests {
             api_key_secret: Some(name.to_string()),
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         }
     }
 
@@ -206,6 +208,8 @@ mod tests {
             api_key_secret: None,
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         });
 
         assert_eq!(

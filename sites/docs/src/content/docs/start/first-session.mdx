@@ -139,4 +139,23 @@ hunk review, branch checkout, and commit as deliberate user actions.
 - A detected repository setup command is only a proposal. Open **Review setup**
   and approve the exact command or explicitly continue without one.
 
+## Open the workbench from another computer
+
+The workbench listens only on the loopback address of the computer that runs
+`axocoatl dev` or the [Always-On Service](/operate/service/), and answers only requests
+that reach it there. On a Linux server or VM without a desktop that you reach over SSH,
+forward its port from the computer whose browser you use:
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 you@server
+```
+
+Keep the same port number on both ends: 8080, or the `server.port` the server's
+configuration sets, because the sign-in link names it. Then run `axocoatl url` on the
+server and open the link it prints in that browser. Previews open on `*.localhost`
+names at the port the browser used, which browsers send to the loopback address, so they
+reach the server through the same forward. While the forward runs, a program on your
+computer can reach that port as a program on the server can; the sign-in link is what
+lets a browser in, so keep it private.
+
 Continue with [Work in a Session →](/workbench/session/)

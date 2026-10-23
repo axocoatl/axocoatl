@@ -118,6 +118,30 @@ use crate::error::{
 };
 use crate::scheduler::ScheduleTable;
 
+/// How long `providers.ollama`'s answers may take to start and to pause:
+/// [`StreamTimeouts::LOCAL`] with what the block sets.
+///
+/// [`StreamTimeouts::LOCAL`]: axocoatl_llm::transport::StreamTimeouts::LOCAL
+pub(crate) fn ollama_stream_timeouts(
+    ollama: &axocoatl_config::OllamaCredentials,
+) -> axocoatl_llm::transport::StreamTimeouts {
+    axocoatl_llm::transport::StreamTimeouts::LOCAL
+        .configured(ollama.first_token_timeout_secs, ollama.idle_timeout_secs)
+}
+
+/// How long a hosted provider's answers may take to start and to pause:
+/// [`StreamTimeouts::HOSTED`] with what its block sets.
+///
+/// [`StreamTimeouts::HOSTED`]: axocoatl_llm::transport::StreamTimeouts::HOSTED
+pub(crate) fn hosted_stream_timeouts(
+    credentials: &axocoatl_config::ProviderCredentials,
+) -> axocoatl_llm::transport::StreamTimeouts {
+    axocoatl_llm::transport::StreamTimeouts::HOSTED.configured(
+        credentials.first_token_timeout_secs,
+        credentials.idle_timeout_secs,
+    )
+}
+
 /// Active E2B lease window. Live handles refresh this TTL; auto-pause preserves
 /// the runtime if the daemon hard-crashes, and explicit pause is the normal
 /// Close/shutdown boundary.
@@ -2728,7 +2752,22 @@ struct PreparedSessionSandbox {
     effective_image: String,
     runtime: Option<SessionRuntimeIdentity>,
     setup_results: Vec<SessionSetupResult>,
+    /// The resource caps a local container got.
+    resource_limits: Option<axocoatl_session::SessionResourceLimits>,
     rollback_armed: bool,
+}
+
+/// What a Session's record says of the resource caps its container got.
+pub(crate) fn recorded_resource_limits(
+    caps: axocoatl_isolation::container_host::ResourceCaps,
+) -> axocoatl_session::SessionResourceLimits {
+    use axocoatl_isolation::container_host::{CPUS_CAP, MEMORY_CAP, PIDS_CAP};
+    axocoatl_session::SessionResourceLimits {
+        memory: caps.memory.then(|| MEMORY_CAP.to_string()),
+        cpus: caps.cpus.then(|| CPUS_CAP.to_string()),
+        pids: caps.pids.then(|| PIDS_CAP.parse().ok()).flatten(),
+        not_applied: caps.not_applied(),
+    }
 }
 
 struct CreatedE2bSandbox {
@@ -5936,7 +5975,8 @@ impl AxocoatlDaemon {
                 .or(ollama.model.as_deref())
                 .unwrap_or("llama3.2");
             return Ok(Arc::new(
-                axocoatl_llm_ollama::OllamaProvider::with_base_url(&ollama.base_url, model),
+                axocoatl_llm_ollama::OllamaProvider::with_base_url(&ollama.base_url, model)
+                    .with_stream_timeouts(ollama_stream_timeouts(ollama)),
             ));
         }
         registry.get(provider_name).cloned().ok_or_else(|| {
@@ -6333,7 +6373,8 @@ impl AxocoatlDaemon {
                         openai.api_key.expose_secret(),
                         "gpt-4o", // Default model — agents specify their own
                     ),
-                };
+                }
+                .with_stream_timeouts(hosted_stream_timeouts(openai));
                 registry.register(Arc::new(provider));
                 match &openai.base_url {
                     Some(base_url) => {
@@ -6355,7 +6396,8 @@ impl AxocoatlDaemon {
                     "openai/gpt-4o-mini", // Default — agents pick their own
                     "https://openrouter.ai/api/v1",
                 )
-                .with_provider_id("openrouter");
+                .with_provider_id("openrouter")
+                .with_stream_timeouts(hosted_stream_timeouts(openrouter));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered OpenRouter provider");
             }
@@ -6367,7 +6409,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_anthropic::AnthropicProvider::new(
                     anthropic.api_key.expose_secret(),
                     "claude-sonnet-4-6",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(anthropic));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Anthropic provider");
             }
@@ -6379,7 +6422,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_gemini::GeminiProvider::new(
                     gemini.api_key.expose_secret(),
                     "gemini-2.5-flash",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(gemini));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Gemini provider");
             }
@@ -6391,7 +6435,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_mistral::MistralProvider::new(
                     mistral.api_key.expose_secret(),
                     "mistral-large-latest",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(mistral));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Mistral provider");
             }
@@ -8924,6 +8969,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(runtime),
                     setup_results,
+                    resource_limits: None,
                     rollback_armed: true,
                 })
             }
@@ -9095,6 +9141,7 @@ impl AxocoatlDaemon {
                     .effective_image()
                     .unwrap_or(axocoatl_isolation::session_sandbox::DEFAULT_IMAGE)
                     .to_string();
+                let resource_limits = sandbox.resource_caps().map(recorded_resource_limits);
                 let setup_results = match sandbox.run_setup_commands(&commands).await {
                     Ok(results) => persisted_setup_results(results),
                     Err(error) => {
@@ -9139,6 +9186,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(Self::podman_runtime_identity(&session.id)),
                     setup_results,
+                    resource_limits,
                     rollback_armed: true,
                 })
             }
@@ -9238,13 +9286,12 @@ impl AxocoatlDaemon {
                     .session_store
                     .lock()
                     .await
-                    .set_environment(
+                    .set_environment_ready(
                         &session.id,
-                        SessionEnvironmentState::Ready,
                         Some(prepared.effective_image.clone()),
                         prepared.runtime.clone(),
                         prepared.setup_results.clone(),
-                        None,
+                        prepared.resource_limits.clone(),
                     )
                     .map_err(|error| DaemonError::Session(error.to_string()));
                 match ready {

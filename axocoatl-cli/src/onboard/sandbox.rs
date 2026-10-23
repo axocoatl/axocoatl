@@ -19,6 +19,7 @@ use axocoatl_isolation::podman_report::{
 
 use super::detect::Os;
 use super::host::Cmd;
+use super::id_map_attempt::Outcome;
 use super::ui::joined;
 use super::{Onboarding, PodmanChoice};
 
@@ -728,6 +729,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
                     Some((failed, said)) => (format!("{failed})"), said.to_string()),
                     None => (error.clone(), String::new()),
                 };
+                record_attempt(o, command, Outcome::Failed, &failed, &said);
                 o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
                 return false;
             }
@@ -741,18 +743,15 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            o.step_left(install_failed(
-                command,
-                &format!("`{}` did not reinstall it", command.display()),
-                &said,
-                &fix_text,
-                rest,
-            ));
+            let failed = format!("`{}` did not reinstall it", command.display());
+            record_attempt(o, command, Outcome::Failed, &failed, &said);
+            o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
             return false;
         }
         if !o.ui.plan() {
             let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
             if !now.usable() {
+                record_attempt(o, command, Outcome::DidNotFix, "", "");
                 o.step_left(install_did_not_fix(
                     &command.display(),
                     &now.describe(),
@@ -782,6 +781,9 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         // never one.
         match (install_command.as_ref().map(Cmd::display), again) {
             (Some(installed), Some(_)) => {
+                if let Some(command) = &install_command {
+                    record_attempt(o, command, Outcome::DidNotFix, "", "");
+                }
                 let keeps = o
                     .facts
                     .podman
@@ -809,6 +811,31 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             false
         }
     }
+}
+
+/// Keep what `command`, the install or reinstall of the id-map helpers'
+/// package, did, so that doctor and later runs do not offer it again while
+/// the helpers are the same files ([`id_map_attempt`]); for a failure,
+/// with what failed (`error`, the package manager's last words `said`) and
+/// what to do instead, as [`install_failed`] says it.
+///
+/// [`id_map_attempt`]: super::id_map_attempt
+fn record_attempt(o: &Onboarding, command: &Cmd, outcome: Outcome, error: &str, said: &str) {
+    if o.ui.plan() {
+        return;
+    }
+    let shown = command.display();
+    let words = match outcome {
+        Outcome::DidNotFix => String::new(),
+        Outcome::Failed => {
+            let words = install_failed(command, error, said, &shown, &[]);
+            words
+                .strip_suffix("; then run ``")
+                .map(str::to_string)
+                .unwrap_or(words)
+        }
+    };
+    super::id_map_attempt::record(&o.host, &shown, outcome, &words);
 }
 
 /// `text` with its first letter in lower case, after a `;`.
@@ -957,8 +984,10 @@ fn landlock(o: &mut Onboarding) -> bool {
         .as_ref()
         .is_some_and(|runtime| runtime.selinux == Some(true))
     {
-        o.ui.warn(
-            "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet",
+        o.ui.ok(
+            "SELinux is enabled: Session and browser containers run with SELinux labelling off \
+             (--security-opt label=disable), so they can use your repository without \
+             relabelling it; their other limits stay",
         );
     }
     let item = crate::doctor::landlock_item(o.facts.landlock_abi, Some(&release), wsl.is_some());

@@ -80,12 +80,22 @@ impl OllamaServedLog {
 #[derive(Clone, Default)]
 pub(crate) struct NativeProviderCredentials {
     pub(crate) ollama_base_url: Option<String>,
+    /// How long native Ollama answers may take to start and to pause
+    /// (`providers.ollama`); `None`: [`StreamTimeouts::LOCAL`].
+    ///
+    /// [`StreamTimeouts::LOCAL`]: axocoatl_llm::transport::StreamTimeouts::LOCAL
+    pub(crate) ollama_timeouts: Option<axocoatl_llm::transport::StreamTimeouts>,
     /// Where this Session's native Ollama providers record the versions that
     /// served them; absent where nothing reads them.
     pub(crate) ollama_served: Option<Arc<OllamaServedLog>>,
     pub(crate) openrouter_api_key: Option<String>,
     pub(crate) openrouter_credits_only: bool,
     pub(crate) openrouter_configuration_error: Option<String>,
+    /// How long native OpenRouter answers may take to start and to pause
+    /// (`providers.openrouter`); `None`: [`StreamTimeouts::HOSTED`].
+    ///
+    /// [`StreamTimeouts::HOSTED`]: axocoatl_llm::transport::StreamTimeouts::HOSTED
+    pub(crate) openrouter_timeouts: Option<axocoatl_llm::transport::StreamTimeouts>,
 }
 
 pub(crate) struct NativeDefinitionPreparation {
@@ -486,6 +496,7 @@ impl NativeOllamaRuntimeConfiguration {
         &self,
         configured_base_url: Option<&str>,
         served: Option<&OllamaServedLog>,
+        timeouts: axocoatl_llm::transport::StreamTimeouts,
     ) -> Result<Arc<dyn LlmProvider>> {
         if configured_base_url.is_some_and(|configured| configured != self.observation.base_url) {
             return Err(error(
@@ -498,7 +509,8 @@ impl NativeOllamaRuntimeConfiguration {
             self.max_response_bytes,
         )
         .await
-        .map_err(error)?;
+        .map_err(error)?
+        .with_stream_timeouts(timeouts);
         let provider = match served {
             Some(log) => {
                 provider.with_served_versions(log.for_model(&self.observation.requested_model))

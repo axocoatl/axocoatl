@@ -110,6 +110,8 @@ fn stored(data_dir: &Path, name: &str) -> bool {
         api_key_secret: Some(name.to_string()),
         base_url: None,
         fallback: None,
+        first_token_timeout_secs: None,
+        idle_timeout_secs: None,
     };
     matches!(
         key_source("openrouter", &credentials, data_dir),

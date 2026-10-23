@@ -403,12 +403,13 @@ pub(crate) async fn id_map_tools(
             }
             .flatten()
             // Not asked: no distribution package installs a file under
-            // /usr/local, /opt or a home directory.
+            // /usr/local, /opt or a home directory (a HOME of `/`, as a
+            // service account may have, is no home directory).
             .or_else(|| {
                 let local = ["/usr/local/", "/opt/"]
                     .iter()
                     .any(|prefix| real.starts_with(prefix))
-                    || Path::new(&real).starts_with(&host.home);
+                    || (host.home != Path::new("/") && Path::new(&real).starts_with(&host.home));
                 local.then_some(false)
             });
             if owner == Some(false) {
@@ -427,6 +428,16 @@ pub(crate) async fn id_map_tools(
     ) {
         tools.reinstall_keeps =
             reinstall_keeps(host, root, manager, package, &install, &tools).await;
+        // What the same reinstall did when onboarding ran it, while the
+        // helpers are the files they were then: a hook or policy that
+        // changes them afterwards shows in no package manager's records.
+        if !tools.usable() {
+            if let Some(attempt) = crate::onboard::id_map_attempt::recorded(host, &install) {
+                tools
+                    .reinstall_keeps
+                    .push(attempt.words(&tools.unprivileged));
+            }
+        }
     }
     tools
 }
@@ -441,7 +452,11 @@ pub(crate) async fn id_map_tools(
 /// a path its `path-exclude` filters leave out, and gives the helpers their
 /// setuid bit (uidmap ships them setuid root on Debian and Ubuntu); rpm
 /// gives the mode and file capabilities in its records, without the
-/// capabilities when dnf is set to `nocaps`. pacman's records are not read.
+/// capabilities when dnf is set to `nocaps`; pacman skips a path its
+/// `NoExtract` patterns name (removing the file there: pacman 7.1 on Arch
+/// Linux ARM) and writes a file `NoUpgrade` names next to it as `.pacnew`, and gives the file capabilities in the package
+/// (Arch's shadow records newuidmap as mode 755, so its mode says nothing).
+/// The same reason for both helpers is said once, naming both.
 async fn reinstall_keeps(
     host: &crate::onboard::host::Host,
     root: &Path,
@@ -495,6 +510,12 @@ async fn reinstall_keeps(
     let mut not_shipped: Vec<&str> = Vec::new();
     let mut no_caps: Vec<String> = Vec::new();
     let mut unprivileged: Vec<String> = Vec::new();
+    // dpkg's and pacman's reasons, each kind once for every path it holds.
+    let mut diverted: Vec<(String, String, String)> = Vec::new();
+    let mut excluded: Vec<(String, String, String)> = Vec::new();
+    let mut overridden: Vec<(String, u32)> = Vec::new();
+    let mut no_extract: Vec<(String, String, String)> = Vec::new();
+    let mut no_upgrade: Vec<(String, String, String)> = Vec::new();
     for (name, missing) in wanted {
         let Some(file) = detect::program_file(&files, name) else {
             not_shipped.push(name);
@@ -513,20 +534,12 @@ async fn reinstall_keeps(
                         Some(by) => format!("a diversion by the package {by}"),
                         None => "a local diversion, added by hand".to_string(),
                     };
-                    keeps.push(format!(
-                        "dpkg diverts {path} to {to} ({whose}), so reinstalling {package} \
-                         writes its file there, not at {path}: remove that diversion if nothing \
-                         needs it (`dpkg-divert --list {path}` shows it), {then}"
-                    ));
+                    diverted.push((path.to_string(), to, whose));
                     continue;
                 }
                 if missing {
                     if let Some((line, config)) = detect::dpkg_excluded(root, path) {
-                        keeps.push(format!(
-                            "{package}'s {path} was removed, and dpkg is set to leave it out \
-                             ({line} in {config}), so reinstalling {package} does not write \
-                             it: remove that line, {then}"
-                        ));
+                        excluded.push((path.to_string(), line, config));
                         continue;
                     }
                 }
@@ -536,12 +549,7 @@ async fn reinstall_keeps(
                     .filter(|probe| probe.success)
                     .and_then(|probe| detect::dpkg_override_mode(&probe.stdout, path));
                 if let Some(mode) = mode.filter(|mode| mode & 0o4000 == 0) {
-                    keeps.push(format!(
-                        "{package} installs {path} setuid root, but a dpkg stat override gives \
-                         it mode {mode:o} (`dpkg-statoverride --list {path}`), and reinstalling \
-                         {package} applies that mode: remove the override (`sudo \
-                         dpkg-statoverride --remove {path}`), {then}"
-                    ));
+                    overridden.push((path.to_string(), mode));
                 }
             }
             PackageManager::Dnf => {
@@ -553,8 +561,153 @@ async fn reinstall_keeps(
                     no_caps.push(path.to_string());
                 }
             }
-            PackageManager::Pacman | PackageManager::Zypper => {}
+            PackageManager::Pacman => {
+                if let Some((pattern, config)) = detect::pacman_kept(root, "NoExtract", path) {
+                    no_extract.push((path.to_string(), pattern, config));
+                } else if !missing {
+                    if let Some((pattern, config)) = detect::pacman_kept(root, "NoUpgrade", path) {
+                        no_upgrade.push((path.to_string(), pattern, config));
+                    }
+                }
+            }
+            PackageManager::Zypper => {}
         }
+    }
+    let both = |count: usize| match count {
+        1 => ("it", "its", "that"),
+        _ => ("them", "their", "those"),
+    };
+    let paths = |entries: &[(String, String, String)]| -> String {
+        entries
+            .iter()
+            .map(|(path, _, _)| path.as_str())
+            .collect::<Vec<_>>()
+            .join(" and ")
+    };
+    if !diverted.is_empty() {
+        let each = diverted
+            .iter()
+            .map(|(path, to, whose)| format!("{path} to {to} ({whose})"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let (them, _, those) = both(diverted.len());
+        let list = paths(&diverted).replace(" and ", " ");
+        let diversion = if diverted.len() == 1 {
+            "diversion"
+        } else {
+            "diversions"
+        };
+        keeps.push(format!(
+            "dpkg diverts {each}, so reinstalling {package} writes its {} there, not at {}: \
+             remove {those} {diversion} if nothing needs {them} (`dpkg-divert --list {list}` \
+             shows {them}), {then}",
+            if diverted.len() == 1 { "file" } else { "files" },
+            paths(&diverted)
+        ));
+    }
+    if !excluded.is_empty() {
+        let (them, _, those) = both(excluded.len());
+        let filters = excluded
+            .iter()
+            .map(|(_, line, config)| format!("{line} in {config}"))
+            .collect::<Vec<_>>();
+        let mut filters_said = filters.clone();
+        filters_said.dedup();
+        keeps.push(format!(
+            "{package}'s {} {} removed, and dpkg is set to leave {them} out ({}), so \
+             reinstalling {package} does not write {them}: remove {those} {}, {then}",
+            paths(&excluded),
+            if excluded.len() == 1 { "was" } else { "were" },
+            filters_said.join("; "),
+            if filters_said.len() == 1 {
+                "line"
+            } else {
+                "lines"
+            }
+        ));
+    }
+    if !overridden.is_empty() {
+        let list = overridden
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
+        let modes = match overridden.as_slice() {
+            [(_, mode)] => format!("it mode {mode:o}"),
+            _ => overridden
+                .iter()
+                .map(|(path, mode)| format!("{path} mode {mode:o}"))
+                .collect::<Vec<_>>()
+                .join(" and "),
+        };
+        let lists = list
+            .iter()
+            .map(|path| format!("`dpkg-statoverride --list {path}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let removes = list
+            .iter()
+            .map(|path| format!("sudo dpkg-statoverride --remove {path}"))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let one = overridden.len() == 1;
+        keeps.push(format!(
+            "{package} installs {} setuid root, but {} {modes} ({lists}), and reinstalling \
+             {package} applies {}: remove {} (`{removes}`), {then}",
+            list.join(" and "),
+            if one {
+                "a dpkg stat override gives"
+            } else {
+                "dpkg stat overrides give"
+            },
+            if one { "that mode" } else { "those modes" },
+            if one { "the override" } else { "the overrides" },
+        ));
+    }
+    if !no_extract.is_empty() {
+        let (them, _, _) = both(no_extract.len());
+        let mut patterns: Vec<String> = no_extract
+            .iter()
+            .map(|(_, pattern, config)| format!("NoExtract = {pattern} in {config}"))
+            .collect();
+        patterns.dedup();
+        keeps.push(format!(
+            "pacman is set not to extract {} ({}), so reinstalling {package} does not write \
+             {them} (it removes any copy there): take {} out of NoExtract, {then}",
+            paths(&no_extract),
+            patterns.join("; "),
+            if patterns.len() == 1 {
+                "that pattern"
+            } else {
+                "those patterns"
+            }
+        ));
+    }
+    if !no_upgrade.is_empty() {
+        let (them, _, _) = both(no_upgrade.len());
+        let mut patterns: Vec<String> = no_upgrade
+            .iter()
+            .map(|(_, pattern, config)| format!("NoUpgrade = {pattern} in {config}"))
+            .collect();
+        patterns.dedup();
+        let pacnew = no_upgrade
+            .iter()
+            .map(|(path, _, _)| format!("{path}.pacnew"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        keeps.push(format!(
+            "pacman is set to keep {} as {} {} ({}), so reinstalling {package} writes its \
+             files as {pacnew} and leaves {them} unable to map: take {} out of NoUpgrade, \
+             {then}",
+            paths(&no_upgrade),
+            if no_upgrade.len() == 1 { "it" } else { "they" },
+            if no_upgrade.len() == 1 { "is" } else { "are" },
+            patterns.join("; "),
+            if patterns.len() == 1 {
+                "that pattern"
+            } else {
+                "those patterns"
+            }
+        ));
     }
     if !no_caps.is_empty() {
         if let Some(config) = detect::dnf_nocaps(root) {
@@ -1175,6 +1328,12 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 &wanted,
                 &fixes,
                 env,
+                // Loading a model may take as long as a first answer may.
+                ollama
+                    .first_token_timeout_secs
+                    .map_or(axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT, |secs| {
+                        std::time::Duration::from_secs(secs)
+                    }),
                 &mut sections.models,
                 &mut model_states,
             )
@@ -1895,13 +2054,16 @@ fn writer_items(
 }
 
 /// The Ollama server and each model; returns whether the server is ready.
-/// `fixes`: each model's fixes for its role.
+/// `fixes`: each model's fixes for its role. Loading a model to read its
+/// context may take `load_timeout`.
+#[allow(clippy::too_many_arguments)]
 async fn check_ollama(
     base_url: &str,
     host: &OllamaHost,
     wanted: &BTreeMap<String, bool>,
     fixes: &BTreeMap<String, ModelFixes>,
     env: &Environment,
+    load_timeout: std::time::Duration,
     items: &mut Vec<Item>,
     states: &mut BTreeMap<String, ModelState>,
 ) -> bool {
@@ -2032,7 +2194,7 @@ async fn check_ollama(
                 Some(tokens) => Ok((tokens, String::new())),
                 None => {
                     eprintln!("  (loading {model} once to read its context…)");
-                    ollama_setup::observed_context(base_url, model).await
+                    ollama_setup::observed_context(base_url, model, load_timeout).await
                 }
             };
             match observed {
@@ -2851,5 +3013,61 @@ mod tests {
         assert_eq!(items[1].fix.as_deref(), Some("axocoatl connect codex"));
         let (_, items) = writer(true, &["codex-chatgpt"], true);
         assert!(items.iter().all(|item| item.status == Status::Ok));
+    }
+
+    /// End-to-end on Linux: what doctor finds about this computer's
+    /// `newuidmap` and `newgidmap` with its real package manager (dpkg,
+    /// rpm, pacman) and its configuration, then the same after a recorded
+    /// reinstall that did not help. Run it in a distribution's container,
+    /// after changing a helper (`setcap -r /usr/bin/newuidmap`), with
+    /// `AXOCOATL_EXPECT_ID_MAP` set to words the result must contain:
+    ///
+    /// ```text
+    /// AXOCOATL_EXPECT_ID_MAP='pacman -S --noconfirm shadow' \
+    ///   axocoatl-<hash> doctor::tests::this_linux_computers_id_map_helpers \
+    ///   --ignored --exact --nocapture
+    /// ```
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "reads this Linux computer's package manager; run it explicitly"]
+    async fn this_linux_computers_id_map_helpers() {
+        let data = tempfile::tempdir().unwrap();
+        let mut host = crate::onboard::host::Host::from_env(None).unwrap();
+        host.data_home = data.path().to_path_buf();
+        let release = detect::OsRelease::parse(
+            &std::fs::read_to_string("/etc/os-release").unwrap_or_default(),
+        );
+        let os = Os::Linux {
+            release,
+            wsl: None,
+            systemd: false,
+        };
+        let tools = id_map_tools(&host, Path::new("/"), &os).await;
+        let said = format!("{tools:#?}\n{}", tools.describe());
+        println!("{said}");
+        if let Ok(expected) = std::env::var("AXOCOATL_EXPECT_ID_MAP") {
+            assert!(said.contains(&expected), "{expected:?} not in:\n{said}");
+        }
+        let Some(install) = tools.install.clone().filter(|_| !tools.usable()) else {
+            return;
+        };
+        // A reinstall that ran and did not help is kept, and doctor then
+        // says it instead of offering it again, while the helpers are the
+        // files they were.
+        crate::onboard::id_map_attempt::record(
+            &host,
+            &install,
+            crate::onboard::id_map_attempt::Outcome::DidNotFix,
+            "",
+        );
+        let again = id_map_tools(&host, Path::new("/"), &os).await;
+        println!("after a recorded reinstall: {:#?}", again.reinstall_keeps);
+        assert!(
+            again
+                .reinstall_keeps
+                .iter()
+                .any(|keep| keep.starts_with(&format!("`{install}` ran on "))),
+            "{again:#?}"
+        );
     }
 }

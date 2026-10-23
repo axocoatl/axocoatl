@@ -1,4 +1,5 @@
 pub mod browser_container;
+pub mod container_host;
 mod dependency_mountpoint;
 pub mod e2b;
 pub mod egress;
