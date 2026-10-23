@@ -736,6 +736,16 @@ impl EgressSidecar {
     ) -> Result<Self, IsolationError> {
         spec.validate()?;
         let container = spec.container();
+        // A cap the host cannot apply, when every one is required, refuses
+        // the start before anything is made.
+        let mut with_limits =
+            crate::container_host::caps_for("the egress sidecar", spec.require_resource_limits)
+                .await
+                .map_err(|refusal| {
+                    IsolationError::OciContainerFailed(format!(
+                        "starting the egress proxy {container}: {refusal}"
+                    ))
+                })?;
         // The proxy reaches what the sidecar's network reaches, including
         // the host through that network's gateway: refuse it outright.
         let gateways = network_gateways(spec.network.as_deref())
@@ -790,9 +800,6 @@ impl EgressSidecar {
                 container: Some(container.clone()),
             })
             .await;
-        let mut with_limits = crate::container_host::container_host()
-            .await
-            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
         let first = loop {
             match launch(&shared, first_generation, with_limits).await {
                 Ok(generation) => break generation,

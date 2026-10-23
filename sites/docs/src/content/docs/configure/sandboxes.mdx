@@ -157,7 +157,9 @@ only those your system delegates to your user (`podman info` lists them as
 `require_resource_limits: false`, a cap that cannot apply is left out with a
 warning: the Session's record and a run's notes and receipt name each cap the
 container runs without, and `axocoatl doctor` warns and prints how to delegate
-the missing controllers. Set it to `true` to fail Session creation instead.
+the missing controllers. Set it to `true` to fail Session creation instead: then
+no Session, browser, service-forwarder, egress or managed SearXNG container starts
+without every cap, and the error names the caps that cannot apply.
 
 On a Linux computer with SELinux enabled (Fedora, RHEL), Session and browser
 containers run with SELinux labelling off (`--security-opt label=disable`), the

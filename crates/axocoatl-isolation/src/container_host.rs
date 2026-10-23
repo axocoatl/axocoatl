@@ -192,6 +192,53 @@ pub fn insert_label_disable(args: &mut Vec<String>) {
     args.insert(at, LABEL_DISABLE.to_string());
 }
 
+/// The caps a container Axocoatl starts for a Session or beside it (`what`:
+/// `the browser container`) gets on this host: each whose cgroup controller
+/// Podman lists, or every one when Podman did not say (a cgroup error then
+/// drops them). With `required` (`sandbox.require_resource_limits`) a cap
+/// the host cannot apply refuses its start, naming it
+/// ([`required_caps_missing`]); otherwise the caps it runs without are
+/// logged at `warn`, once for each kind of container.
+pub async fn caps_for(what: &str, required: bool) -> Result<ResourceCaps, String> {
+    match container_host().await {
+        Some(host) => caps_on(&host, what, required),
+        None => Ok(ResourceCaps::ALL),
+    }
+}
+
+/// [`caps_for`] on `host`.
+fn caps_on(host: &ContainerHost, what: &str, required: bool) -> Result<ResourceCaps, String> {
+    if required {
+        if let Some(refusal) = required_caps_missing(host.caps, &host.controllers) {
+            return Err(refusal);
+        }
+    }
+    let missing = host.caps.not_applied();
+    if !missing.is_empty() && first_warning(what) {
+        tracing::warn!(
+            controllers = %host.controllers.join(", "),
+            "this host's Podman cannot apply {what}'s {} cap: starting it without {}",
+            missing.join(", "),
+            if missing.len() == 1 { "that cap" } else { "those caps" }
+        );
+    }
+    Ok(host.caps)
+}
+
+/// Whether this process has not warned about `what`'s caps yet (and now
+/// has).
+fn first_warning(what: &str) -> bool {
+    static WARNED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut warned = WARNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let first = !warned.iter().any(|said| said == what);
+    if first {
+        warned.push(what.to_string());
+    }
+    first
+}
+
 /// Why a container that must have every cap (`sandbox.require_resource_limits`)
 /// cannot start here, naming what is missing, or `None` when it can.
 pub fn required_caps_missing(caps: ResourceCaps, controllers: &[String]) -> Option<String> {
@@ -219,7 +266,7 @@ mod tests {
         assert_eq!(host.caps, ResourceCaps::ALL);
         // A machine's SELinux labels the Mac's files for containers already.
         assert!(!host.label_disable);
-        // Ubuntu 24.04's default delegation, without cpu.
+        // A host that delegates memory and pids, not cpu.
         let host = ContainerHost::parse(r#"["memory","pids"] false"#, true).unwrap();
         assert_eq!(
             host.caps,
@@ -294,5 +341,21 @@ mod tests {
             "{refusal}"
         );
         assert_eq!(required_caps_missing(ResourceCaps::ALL, &[]), None);
+    }
+
+    /// A container started for a Session or beside it gets the caps the
+    /// host can apply; required, a missing one refuses its start.
+    #[test]
+    fn a_helper_container_gets_the_caps_the_host_has_or_is_refused() {
+        let partial = ContainerHost::parse(r#"["memory","pids"] false"#, true).unwrap();
+        let caps = caps_on(&partial, "the browser container", false).unwrap();
+        assert_eq!(caps, partial.caps);
+        let refusal = caps_on(&partial, "the browser container", true).unwrap_err();
+        assert!(refusal.starts_with("resource limits required"), "{refusal}");
+        assert!(refusal.contains("CPU (2 CPUs"), "{refusal}");
+        let all = ContainerHost::parse(r#"["cpu","memory","pids"] false"#, true).unwrap();
+        assert_eq!(caps_on(&all, "SearXNG", true), Ok(ResourceCaps::ALL));
+        assert!(first_warning("a kind no other test names"));
+        assert!(!first_warning("a kind no other test names"));
     }
 }

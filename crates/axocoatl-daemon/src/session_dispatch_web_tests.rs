@@ -77,7 +77,17 @@ fn configuration_decides_which_web_tools_native_sessions_get() {
     let (_root, managed) =
         tools("web_search:\n  provider: searxng\nweb_fetch:\n  max_bytes: 65536\n");
     assert_eq!(refusals(&managed), (None, None));
-    assert!(managed.managed_searxng().is_some());
+    assert!(!managed
+        .managed_searxng()
+        .unwrap()
+        .requires_resource_limits());
+    // sandbox.require_resource_limits holds for the managed SearXNG too.
+    let (_root, required) =
+        tools("sandbox:\n  require_resource_limits: true\nweb_search:\n  provider: searxng\n");
+    assert!(required
+        .managed_searxng()
+        .unwrap()
+        .requires_resource_limits());
     assert_eq!(
         managed.legacy_search_tool().unwrap().backend_name(),
         "searxng"

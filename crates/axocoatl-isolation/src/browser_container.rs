@@ -361,6 +361,10 @@ pub async fn ensure_service_sockets(
         }
         remove_forwarder(&name).await?;
     }
+    let with_limits =
+        crate::container_host::caps_for("the service forwarder", launch.require_resource_limits)
+            .await
+            .map_err(|refusal| failed(format!("starting the service forwarder: {refusal}")))?;
     create_owned_volume(
         &service_socket_volume(&launch.session_id),
         Some(launch.runtime_authority.as_str()),
@@ -374,7 +378,7 @@ pub async fn ensure_service_sockets(
         session_container_id: session_id,
         session_started: started,
         ports: ports.clone(),
-        with_limits: host_caps().await,
+        with_limits,
         labels: launch.labels.clone(),
     };
     let id = loop {
@@ -601,14 +605,6 @@ async fn image_present(image: &str) -> Result<bool, IsolationError> {
     }
 }
 
-/// The resource caps this host's Podman can apply ([`ResourceCaps::ALL`]
-/// when it did not say; a cgroup error then drops them).
-async fn host_caps() -> ResourceCaps {
-    crate::container_host::container_host()
-        .await
-        .map_or(ResourceCaps::ALL, |host| host.caps)
-}
-
 impl BrowserContainer {
     /// Start the Session's browser container, replacing any stale one.
     pub async fn start(launch: &BrowserLaunch) -> Result<Self, IsolationError> {
@@ -629,6 +625,12 @@ impl BrowserContainer {
         .await?;
         let user = image_user(selected.id()).await?;
         let name = browser_container_name(&launch.session_id);
+        let with_limits = crate::container_host::caps_for(
+            "the browser container",
+            launch.require_resource_limits,
+        )
+        .await
+        .map_err(|refusal| failed(format!("starting {name}: {refusal}")))?;
         let removed = podman(
             &[
                 "rm".into(),
@@ -655,7 +657,7 @@ impl BrowserContainer {
             exposed_ports: dedup_ports(&launch.exposed_ports),
             egress: launch.egress,
             supervisor_path: supervisor.path().to_path_buf(),
-            with_limits: host_caps().await,
+            with_limits,
             label_disable: crate::container_host::container_host()
                 .await
                 .is_some_and(|host| host.label_disable),

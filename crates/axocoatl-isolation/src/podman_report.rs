@@ -1635,12 +1635,25 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
         if let Some(controllers) = runtime
             .cgroup_controllers
             .as_ref()
-            .filter(|_| !platform.machine && runtime.rootless != Some(false))
+            .filter(|_| runtime.rootless != Some(false))
         {
             let missing =
                 crate::container_host::ResourceCaps::from_controllers(controllers).not_applied();
             if !missing.is_empty() {
-                let fix = if runtime.cgroup_version.as_deref() == Some("v1") {
+                let in_use = report.machine_in_use().map(|machine| machine.name.as_str());
+                let fix = if platform.machine {
+                    // Podman 6.1.4 sets a machine up with this drop-in
+                    // (read in podman-machine-default).
+                    format!(
+                        "In the machine (`{}`), give its user the cgroup controllers Podman's \
+                         machine setup delegates: `Delegate=memory pids cpu io` under \
+                         `[Service]` in /etc/systemd/system/user@.service.d/delegate.conf, then \
+                         restart the machine (`{} && {}`)",
+                        machine_command("ssh", in_use),
+                        machine_command("stop", in_use),
+                        machine_command("start", in_use)
+                    )
+                } else if runtime.cgroup_version.as_deref() == Some("v1") {
                     "This computer uses cgroup v1, where rootless Podman caps no container: boot \
                      it with cgroup v2 (systemd.unified_cgroup_hierarchy=1)"
                         .to_string()
@@ -2047,7 +2060,8 @@ mod tests {
 
     /// A Linux host whose user is not delegated the cpu controller hears
     /// that Session containers run without their CPU cap, and how to
-    /// delegate it; SELinux is said as what Axocoatl does about it.
+    /// delegate it, and so does a Podman machine; SELinux is said as what
+    /// Axocoatl does about it.
     #[test]
     fn missing_cgroup_controllers_and_selinux_are_said() {
         let linux = platform(false);
@@ -2096,6 +2110,39 @@ mod tests {
         let line = selinux.iter().find(|f| f.name == "SELinux").unwrap();
         assert_eq!(line.level, Level::Ok);
         assert!(line.detail.contains("label=disable"), "{}", line.detail);
+        // A Podman machine without one: its fix is in the machine, as
+        // Podman's machine setup has it.
+        let with = |controllers: &str| {
+            let mut report = mac_report();
+            report.runtime = Some(
+                parse_runtime_info(
+                    MAC_INFO
+                        .replace(
+                            r#""arch":"arm64","#,
+                            &format!(r#""arch":"arm64","cgroupControllers":{controllers},"#),
+                        )
+                        .as_bytes(),
+                )
+                .unwrap(),
+            );
+            findings(&report, &platform(true))
+        };
+        let machine = with(r#"["memory","pids"]"#);
+        let caps = machine.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert_eq!(caps.level, Level::Warn);
+        assert_eq!(
+            caps.fix.as_deref(),
+            Some(
+                "In the machine (`podman machine ssh`), give its user the cgroup controllers \
+                 Podman's machine setup delegates: `Delegate=memory pids cpu io` under \
+                 `[Service]` in /etc/systemd/system/user@.service.d/delegate.conf, then restart \
+                 the machine (`podman machine stop && podman machine start`)"
+            )
+        );
+        // podman-machine-default (Podman 6.1.4) lists them all: nothing.
+        assert!(!with(r#"["cpu","io","memory","pids"]"#)
+            .iter()
+            .any(|f| f.name == "Resource caps"));
     }
 
     #[test]

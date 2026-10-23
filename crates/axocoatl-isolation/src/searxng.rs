@@ -86,6 +86,9 @@ pub struct SearxngService {
     secret_key: String,
     directory: SecureDir,
     extra_labels: Vec<(String, String)>,
+    /// `sandbox.require_resource_limits`: a cap the host cannot apply
+    /// refuses the container's start.
+    require_resource_limits: bool,
     client: reqwest::Client,
     state: tokio::sync::Mutex<Option<Endpoint>>,
 }
@@ -237,6 +240,7 @@ impl SearxngService {
             secret_key,
             directory,
             extra_labels: Vec::new(),
+            require_resource_limits: false,
             client,
             state: tokio::sync::Mutex::new(None),
         })
@@ -246,6 +250,18 @@ impl SearxngService {
     pub fn with_labels(mut self, labels: Vec<(String, String)>) -> Self {
         self.extra_labels = labels;
         self
+    }
+
+    /// Refuse to start the container without every resource cap
+    /// (`sandbox.require_resource_limits`).
+    pub fn with_required_resource_limits(mut self, required: bool) -> Self {
+        self.require_resource_limits = required;
+        self
+    }
+
+    /// Whether the container starts only with every resource cap.
+    pub fn requires_resource_limits(&self) -> bool {
+        self.require_resource_limits
     }
 
     /// This daemon's container name.
@@ -444,9 +460,11 @@ impl SearxngService {
         )?;
         self.remove_own_container().await?;
 
-        let caps = crate::container_host::container_host()
+        let caps = crate::container_host::caps_for("SearXNG", self.require_resource_limits)
             .await
-            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
+            .map_err(|refusal| {
+                IsolationError::OciSetupFailed(format!("starting SearXNG {name}: {refusal}"))
+            })?;
         let mut created = podman(
             &Self::create_args(
                 &name,
@@ -458,7 +476,11 @@ impl SearxngService {
             CREATE_TIMEOUT,
         )
         .await?;
-        if !created.success && caps.any() && created.detail().contains("cgroup") {
+        if !created.success
+            && caps.any()
+            && created.detail().contains("cgroup")
+            && !self.require_resource_limits
+        {
             tracing::warn!(
                 container = %name,
                 detail = %created.detail(),
