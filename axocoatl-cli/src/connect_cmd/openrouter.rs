@@ -111,7 +111,7 @@ impl Browser {
 }
 
 /// One sign-in.
-pub(crate) struct SignIn {
+pub(crate) struct SignIn<'a> {
     /// The data root the key is stored in.
     pub(crate) data_dir: PathBuf,
     /// The secret's name (default [`OPENROUTER_SECRET`]).
@@ -126,6 +126,13 @@ pub(crate) struct SignIn {
     /// connect openrouter` (and its `--sign-in-timeout` after a timeout),
     /// or onboarding's own command.
     pub(crate) retry: Option<String>,
+    /// At a terminal: asked, when the sign-in time ends without a sign-in,
+    /// whether to wait that long again (`true` waits). `None` without a
+    /// terminal: the sign-in then stops.
+    pub(crate) keep_waiting: Option<&'a (dyn Fn(Duration) -> bool + Sync)>,
+    /// Told of each connection to the loopback server, in a line for a log
+    /// (never its query: [`Callback::wait_reporting`]).
+    pub(crate) report: Option<&'a (dyn Fn(&str) + Sync)>,
 }
 
 /// What a sign-in stored, without the key.
@@ -212,7 +219,7 @@ async fn unless_interrupted<T>(
 /// Sign in, get the key, check it and store it. Progress goes to `out`; the
 /// key never does. The configuration is not touched.
 pub(crate) async fn sign_in(
-    request: SignIn,
+    request: SignIn<'_>,
     out: &mut (dyn Write + Send),
     interrupt: &Interrupt,
 ) -> Result<Connected, Failure> {
@@ -224,7 +231,10 @@ pub(crate) async fn sign_in(
         sign_in_time,
         endpoints,
         retry,
+        keep_waiting,
+        report,
     } = request;
+    let report = report.unwrap_or(&|_| {});
     let command = retry.as_deref().unwrap_or("axocoatl connect openrouter");
     let again = format!("Run `{command}` again to retry.");
     let more_time = match &retry {
@@ -302,33 +312,53 @@ pub(crate) async fn sign_in(
         minutes(sign_in_time)
     );
     let _ = out.flush();
-    let returned = tokio::select! {
-        returned = callback.wait(&pkce) => returned,
-        () = tokio::time::sleep(sign_in_time) => {
-            let ignored = match callback.ignored() {
-                0 => String::new(),
-                1 => " One return to this computer carried a code without this sign-in's state, \
-                      so it was not used."
-                    .to_string(),
-                count => format!(
-                    " {count} returns to this computer carried a code without this sign-in's \
-                     state, so they were not used."
-                ),
-            };
-            return Err(failure(
-                exit::NO_TOKEN,
-                format!(
-                    "The OpenRouter sign-in was not completed within {}; nothing was \
-                     stored.{ignored} {again} {more_time}",
-                    minutes(sign_in_time)
-                ),
-            ));
-        }
-        () = interrupt.wait() => {
-            return Err(failure(
-                exit::INTERRUPTED,
-                "interrupted: the OpenRouter sign-in was stopped and nothing was stored",
-            ));
+    // At a terminal, the end of the sign-in time asks whether to wait
+    // again; the loopback server listens all along, and one wait serves
+    // every round, so a return answered just as the time ended is not lost.
+    let mut waited = sign_in_time;
+    let returned = {
+        let wait = callback.wait_reporting(&pkce, report);
+        tokio::pin!(wait);
+        loop {
+            tokio::select! {
+                returned = &mut wait => break returned,
+                () = tokio::time::sleep(sign_in_time) => {
+                    if keep_waiting.is_some_and(|keep_waiting| keep_waiting(sign_in_time)) {
+                        let _ = writeln!(
+                            out,
+                            "Waiting {} more for the sign-in (Ctrl-C stops it)…",
+                            minutes(sign_in_time)
+                        );
+                        let _ = out.flush();
+                        waited += sign_in_time;
+                        continue;
+                    }
+                    let ignored = match callback.ignored() {
+                        0 => String::new(),
+                        1 => " One return to this computer carried a code without this sign-in's \
+                              state, so it was not used."
+                            .to_string(),
+                        count => format!(
+                            " {count} returns to this computer carried a code without this \
+                             sign-in's state, so they were not used."
+                        ),
+                    };
+                    return Err(failure(
+                        exit::NO_TOKEN,
+                        format!(
+                            "The OpenRouter sign-in was not completed within {}; nothing was \
+                             stored.{ignored} {again} {more_time}",
+                            minutes(waited)
+                        ),
+                    ));
+                }
+                () = interrupt.wait() => {
+                    return Err(failure(
+                        exit::INTERRUPTED,
+                        "interrupted: the OpenRouter sign-in was stopped and nothing was stored",
+                    ));
+                }
+            }
         }
     };
     drop(callback);
@@ -410,6 +440,15 @@ pub(crate) async fn sign_in(
     })
 }
 
+/// What onboarding's sign-in asks and tells: whether to keep waiting at
+/// the end of the sign-in time (at a terminal), and each connection to the
+/// loopback server, for its log.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Hooks<'a> {
+    pub(crate) keep_waiting: Option<&'a (dyn Fn(Duration) -> bool + Sync)>,
+    pub(crate) report: Option<&'a (dyn Fn(&str) + Sync)>,
+}
+
 /// Onboarding's OpenRouter step (Step 3D): check `writer` and `reviewer`
 /// (OpenRouter model ids, `vendor/model` or `openrouter:vendor/model`;
 /// either may be absent) in OpenRouter's catalog, sign in in the browser
@@ -421,7 +460,9 @@ pub(crate) async fn sign_in(
 /// first) and writes no configuration: the configuration onboarding writes
 /// names the secret in `api_key_secret`, with `openrouter_billing: credits`
 /// ([`provider_yaml`]`(&connected.secret)`); show [`connected_lines`].
-/// Every [`Failure`] says that nothing was stored.
+/// Every [`Failure`] says that nothing was stored. `hooks` asks, at a
+/// terminal, whether to keep waiting when the sign-in time ends, and takes
+/// each connection to the loopback server for onboarding's log.
 ///
 /// It installs no signal handling, so the process keeps its own: Ctrl-C,
 /// `SIGTERM` or a hang-up during the sign-in ends onboarding as it would at
@@ -429,12 +470,14 @@ pub(crate) async fn sign_in(
 /// atomic write). A caller that handles signals itself passes its own
 /// [`Interrupt`] to [`onboarding_sign_in`] and raises it instead; the
 /// sign-in then stops with [`exit::INTERRUPTED`].
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn sign_in_for_onboarding(
     data_dir: &Path,
     writer: Option<&str>,
     reviewer: Option<&str>,
     no_browser: bool,
     retry: &str,
+    hooks: Hooks<'_>,
     out: &mut (dyn Write + Send),
 ) -> Result<Connected, Failure> {
     let endpoints = Endpoints::openrouter().map_err(|error| failure(exit::FAILURE, error))?;
@@ -447,6 +490,7 @@ pub(crate) async fn sign_in_for_onboarding(
         Browser::for_this_computer(no_browser),
         endpoints,
         retry,
+        hooks,
         out,
         &interrupt,
     )
@@ -463,6 +507,7 @@ pub(crate) async fn onboarding_sign_in(
     browser: Browser,
     endpoints: Endpoints,
     retry: &str,
+    hooks: Hooks<'_>,
     out: &mut (dyn Write + Send),
     interrupt: &Interrupt,
 ) -> Result<Connected, Failure> {
@@ -482,6 +527,8 @@ pub(crate) async fn onboarding_sign_in(
             sign_in_time: Duration::from_secs(DEFAULT_SIGN_IN_MINUTES * 60),
             endpoints,
             retry: Some(retry.to_string()),
+            keep_waiting: hooks.keep_waiting,
+            report: hooks.report,
         },
         out,
         interrupt,
@@ -901,13 +948,47 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     let interrupt = Interrupt::default();
     let listeners = interrupt.listen();
     let browser = Browser::for_this_computer(flags.no_browser);
-    let (code, text) = connect_and_configure(
+    // What reaches the sign-in's loopback server goes to a log, so a
+    // sign-in that never completes can be diagnosed; at a terminal, the end
+    // of the sign-in time asks whether to wait again.
+    let log = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .and_then(|home| {
+            let directory = crate::onboard::host::log_directory(
+                &home,
+                cfg!(target_os = "macos"),
+                std::env::var_os("XDG_STATE_HOME")
+                    .map(PathBuf::from)
+                    .as_deref(),
+            );
+            crate::onboard::host::Log::create_named(
+                &directory,
+                "connect-openrouter",
+                &crate::onboard::host::stamp(),
+            )
+            .ok()
+        });
+    let report = |line: &str| {
+        if let Some(log) = &log {
+            log.line(line);
+        }
+    };
+    let ask = |time: Duration| keep_waiting_at_the_terminal(time);
+    let hooks = Hooks {
+        keep_waiting: std::io::stdin()
+            .is_terminal()
+            .then_some(&ask as &(dyn Fn(Duration) -> bool + Sync)),
+        report: Some(&report),
+    };
+    let (code, mut text) = connect_and_configure(
         &flags,
         creatable.as_ref(),
         data_dir,
         models,
         browser,
         endpoints,
+        hooks,
         &mut std::io::stderr(),
         &interrupt,
     )
@@ -918,9 +999,35 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     if code == exit::CONNECTED {
         println!("\n{text}");
     } else {
+        if let Some(log) = &log {
+            text.push_str(&format!(
+                "\n  Each connection to the sign-in's address on this computer is logged in {} \
+                 (never a code)",
+                log.path().display()
+            ));
+        }
         eprintln!("{text}");
     }
     code
+}
+
+/// The question at the end of the sign-in time, at a terminal: Enter waits
+/// that long again.
+pub(crate) fn keep_waiting_question(time: Duration) -> String {
+    format!(
+        "No sign-in came back within {}. Keep waiting {} more? (No stops the sign-in; nothing \
+         is stored.)",
+        minutes(time),
+        minutes(time)
+    )
+}
+
+fn keep_waiting_at_the_terminal(time: Duration) -> bool {
+    dialoguer::Confirm::new()
+        .with_prompt(keep_waiting_question(time))
+        .default(true)
+        .interact()
+        .unwrap_or(false)
 }
 
 /// Sign in, store the key, and update the configuration (unless
@@ -934,6 +1041,7 @@ pub(crate) async fn connect_and_configure(
     models: Vec<(String, String)>,
     browser: Browser,
     endpoints: Endpoints,
+    hooks: Hooks<'_>,
     out: &mut (dyn Write + Send),
     interrupt: &Interrupt,
 ) -> (i32, String) {
@@ -948,6 +1056,8 @@ pub(crate) async fn connect_and_configure(
             ),
             endpoints,
             retry: None,
+            keep_waiting: hooks.keep_waiting,
+            report: hooks.report,
         },
         out,
         interrupt,

@@ -101,8 +101,14 @@ and they are checked before you sign in. The models above are examples. The comm
    carries this sign-in's state (any other request there is ignored, and the sign-in
    goes on waiting), then exchanges its code, with a verifier that never left your
    computer, for a new key labeled `Axocoatl <date>`. The sign-in may take 10
-   minutes (`--sign-in-timeout MINUTES`, 1 to 60). Cancelling it in the browser,
-   running out of time or pressing Ctrl-C stores nothing.
+   minutes (`--sign-in-timeout MINUTES`, 1 to 60); at a terminal, when that time
+   ends, it asks whether to keep waiting (Enter waits as long again). Each
+   connection to that address is written to a log, `connect-openrouter-<time>.log`
+   beside onboarding's (`~/Library/Logs/Axocoatl` on macOS, `~/.local/state/axocoatl`
+   on Linux), its method, path and `Host` only, never the code; a sign-in that fails
+   names the log. In WSL the page opens with `wslview`, in Windows' browser.
+   Cancelling it in the browser, running out of time or pressing Ctrl-C stores
+   nothing.
 4. Checks the key with OpenRouter (`GET /api/v1/key`) and shows its label, credit
    limit, usage and whether the account is on the free tier (it has not bought
    credits), never the key.

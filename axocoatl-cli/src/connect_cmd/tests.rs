@@ -2252,7 +2252,7 @@ const DEVICE_PAGE: &str = "https://auth.openai.com/codex/device";
 /// Write an executable script, and run it with `probe` (which it answers
 /// at once, without doing anything) until it is not "text file busy",
 /// which it is while another test's fork still holds a file it was writing.
-fn install_script(path: &Path, contents: &str) {
+pub(crate) fn install_script(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     for _ in 0..100 {
@@ -2273,7 +2273,7 @@ fn install_script(path: &Path, contents: &str) {
 /// alone in a directory: it appends how many arguments it got and each one
 /// to `opened` beside it, and exits with `status`. Its directory, to use as
 /// `PATH`, and the `opened` file.
-fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
+pub(crate) fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
     let directory = root.join("opener-bin");
     std::fs::create_dir_all(&directory).unwrap();
     let opened = root.join("opened");

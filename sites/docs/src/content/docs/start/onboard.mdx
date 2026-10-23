@@ -348,10 +348,15 @@ The key, in this order:
    - **Sign in to OpenRouter in your browser (recommended)**, the default: the same
      sign-in as [`axocoatl connect openrouter`](/configure/providers/#configure-openrouter).
      It checks both models in OpenRouter's catalog, opens OpenRouter's sign-in page
-     in your browser and prints its address, waits up to 10 minutes for the browser
-     to return to `http://127.0.0.1:<port>/callback`, and stores the key OpenRouter
-     issues as the secret `openrouter` in Axocoatl's secret store (`0600`), never
-     showing it. The configuration gets `api_key_secret: openrouter` and
+     in your browser (in WSL with `wslview`, in Windows' browser) and prints its
+     address, waits up to 10 minutes for the browser to return to
+     `http://127.0.0.1:<port>/callback`, and stores the key OpenRouter issues as the
+     secret `openrouter` in Axocoatl's secret store (`0600`), never showing it. When
+     the 10 minutes end without a sign-in, it asks whether to keep waiting (Enter
+     waits 10 minutes more). Each connection to that address is written to the
+     onboarding log, its method, path and `Host` only, never the code, so a sign-in
+     that never comes back can be diagnosed. The configuration gets
+     `api_key_secret: openrouter` and
      `openrouter_billing: credits`, never the key. The callback is a loopback port,
      so from a VM, open the link in a browser that can reach that port (Lima
      forwards a guest's loopback ports to the host; elsewhere, forward it with
@@ -371,9 +376,22 @@ again, which uses that key. Without a key nothing is saved, and the step left gi
 account pays). With `--writer openrouter` the reviewer runs on OpenRouter too; a
 `--reviewer ollama:…` is a usage error. Before writing anything, onboarding checks that
 OpenRouter accepts the key and lists both models (after a sign-in, the sign-in has
-checked both). A key you connected that OpenRouter refuses is a step left that signs
-in again with `axocoatl connect openrouter`. OpenRouter uses your OpenRouter credits;
-BYOK is not supported for native Sessions.
+checked both). A key you connected that OpenRouter refuses, or a stored secret that
+holds no OpenRouter key: at a terminal, onboarding offers its browser sign-in in its
+place; with `--yes` it is a step left that signs in again with `axocoatl connect
+openrouter`. When the browser sign-in replaces a key that was written in the
+configuration file, the backup onboarding makes leaves that key out (it is no longer
+used; delete it at `https://openrouter.ai/settings/keys`).
+
+Onboarding then reads each model's endpoints as a run does. A run uses an endpoint
+only while OpenRouter reports it healthy (status 0), since it stays on one endpoint
+with no fallback, so a model whose every usable endpoint OpenRouter reports
+unavailable or degraded right now, or that has no endpoint native Sessions can use,
+cannot run now. Onboarding says so, with each endpoint's status and its success rate
+over the last 30 minutes; at a terminal you can name another model (Enter takes a
+model onboarding suggests, such as `deepseek/deepseek-chat-v3.1` for the writer), and with
+`--yes` it is a step left that names one and nothing is saved.
+OpenRouter uses your OpenRouter credits; BYOK is not supported for native Sessions.
 
 ### Step 4: the configuration
 

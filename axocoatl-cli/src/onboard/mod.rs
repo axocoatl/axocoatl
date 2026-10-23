@@ -584,6 +584,23 @@ impl Onboarding {
     }
 }
 
+/// The secrets Axocoatl's store under `data_dir` holds, by name. With
+/// `--plan` they are read without the store, which makes its directory
+/// owner-only before it reads: `--plan` changes nothing.
+pub(crate) fn stored_secret_names(o: &Onboarding) -> Vec<String> {
+    let data_dir = o.data_dir();
+    if !o.ui.plan() {
+        return axocoatl_daemon::secret_store::list_secrets(&data_dir).unwrap_or_default();
+    }
+    std::fs::read_dir(data_dir.join(axocoatl_daemon::secret_store::SECRETS_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
+}
+
 /// The setup chosen in Step 3.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Choice {
@@ -1280,7 +1297,10 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             ));
             return false;
         }
-        if let Err(error) = write_backup(&o.paths, &backup, old) {
+        // A key written in the file that the new one no longer holds is
+        // left out of the backup: nothing uses it any more.
+        let kept_back = config::backup_without_moved_key(old, &new);
+        if let Err(error) = write_backup(&o.paths, &backup, kept_back.as_deref().unwrap_or(old)) {
             o.step_left(format!("Could not back up the configuration: {error}"));
             return false;
         }
@@ -1288,6 +1308,21 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             "Backed up to {}",
             o.paths.config_dir.join(&backup).display()
         ));
+        if kept_back.is_some() {
+            o.ui.say(format!(
+                "  The backup leaves out the OpenRouter key that was written in the file: \
+                 nothing uses it now. It still works in your OpenRouter account until you delete \
+                 it at {}",
+                openrouter::KEYS_PAGE
+            ));
+        } else if config::moved_openrouter_key(old, &new) {
+            o.ui.warn(format!(
+                "The backup {backup} still holds the OpenRouter key that was written in the file, \
+                 which nothing uses now: delete the backup once you no longer need it, and the key \
+                 at {}",
+                openrouter::KEYS_PAGE
+            ));
+        }
     } else if o.ui.plan() {
         o.ui.say(format!("  would write {}:", path.display()));
         for line in config::redacted_lines(&new) {

@@ -18,6 +18,7 @@ use super::detect::{Facts, OllamaServer, OllamaService, Os, OsRelease};
 use super::host::testing::Shims;
 use super::ui::{Answer, Mode, Ui};
 use super::*;
+use crate::connect_cmd::openrouter_tests::{catalog_row, mount_endpoints};
 
 const GIB: u64 = 1 << 30;
 
@@ -2801,10 +2802,11 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-test-onboard");
     podman_shim(&shims);
@@ -3181,10 +3183,11 @@ async fn an_interactive_reviewer_equal_to_the_writer_is_asked_again() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "z-ai/glm-4.6"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("z-ai/glm-4.6")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_I_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-interactive");
     let facts = facts(
@@ -3820,10 +3823,11 @@ async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_U_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-from-env");
     let old_port = free_port();

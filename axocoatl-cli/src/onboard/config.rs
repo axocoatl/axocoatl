@@ -360,19 +360,30 @@ fn agents_block(plan: &ConfigPlan) -> String {
     )
 }
 
-/// A whole new configuration.
-pub(crate) fn render(plan: &ConfigPlan) -> String {
-    let openrouter_note = match &plan.openrouter_key {
-        Some(KeyRef::Secret(name)) => format!(
+/// The comment a configuration onboarding writes has about OpenRouter's
+/// key: in the secret store, or in this file (a key or a variable).
+fn openrouter_note(key: &KeyRef) -> String {
+    match key {
+        KeyRef::Secret(name) => format!(
             "# OpenRouter's key is in Axocoatl's secret store (secret {name}), never in this \
              file.\n# OpenRouter credits pay; BYOK is not supported for native Session \
              execution.\n"
         ),
-        Some(_) => "# OpenRouter uses your normal API key and OpenRouter credits.\n\
-                    # BYOK is not supported for native Session execution.\n"
-            .to_string(),
-        None => String::new(),
-    };
+        KeyRef::Value(_) | KeyRef::Env(_) => KEY_NOTE.to_string(),
+    }
+}
+
+/// [`openrouter_note`] for a key given in this file.
+const KEY_NOTE: &str = "# OpenRouter uses your normal API key and OpenRouter credits.\n\
+                        # BYOK is not supported for native Session execution.\n";
+
+/// A whole new configuration.
+pub(crate) fn render(plan: &ConfigPlan) -> String {
+    let openrouter_note = plan
+        .openrouter_key
+        .as_ref()
+        .map(openrouter_note)
+        .unwrap_or_default();
     let run = run_block(plan);
     format!(
         "# Axocoatl — {note}\n{openrouter_note}{agents}\n{providers}\n{run}{run_gap}{server}",
@@ -968,9 +979,75 @@ pub(crate) fn update(
             })?
             .text;
     }
+    // The comment onboarding wrote about the key says where it is now.
+    if let Some(key) = &plan.openrouter_key {
+        let note = openrouter_note(key);
+        let written = [KEY_NOTE.to_string()]
+            .into_iter()
+            .chain(
+                text.lines()
+                    .find_map(|line| {
+                        line.strip_prefix(
+                            "# OpenRouter's key is in Axocoatl's secret store (secret ",
+                        )
+                        .and_then(|rest| rest.split_once(')'))
+                        .map(|(name, _)| name.to_string())
+                    })
+                    .map(|name| openrouter_note(&KeyRef::Secret(name))),
+            )
+            .find(|written| *written != note && text.contains(written.as_str()));
+        if let Some(written) = written {
+            text = text.replacen(&written, &note, 1);
+        }
+    }
     axocoatl_config::parse_config(&text, path)
         .map_err(|error| format!("the updated configuration would not load: {error}"))?;
     Ok(Updated { text, kept })
+}
+
+/// The OpenRouter key written in configuration `text` (`api_key`, not a
+/// `${VARIABLE}`), when it has one.
+pub(crate) fn written_openrouter_key(text: &str) -> Option<zeroize::Zeroizing<String>> {
+    read_existing(text)
+        .ok()?
+        .providers?
+        .openrouter?
+        .get("api_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && !key.starts_with("${") && !key.contains("your-key"))
+        .map(|key| zeroize::Zeroizing::new(key.to_string()))
+}
+
+/// Whether `old` has an OpenRouter key written in it that `new` no longer
+/// holds (it moved to the secret store, or another replaced it): nothing
+/// uses that key once `new` is written.
+pub(crate) fn moved_openrouter_key(old: &str, new: &str) -> bool {
+    written_openrouter_key(old).is_some_and(|key| !new.contains(key.as_str()))
+}
+
+/// `old` for a backup that leaves out the OpenRouter key written in it when
+/// `new` no longer holds that key ([`moved_openrouter_key`]): the backup then
+/// holds no key nothing uses. `None` when the backup is `old` as it is (no
+/// such key, or one this cannot take out: the caller says the backup holds
+/// it).
+pub(crate) fn backup_without_moved_key(old: &str, new: &str) -> Option<String> {
+    if !moved_openrouter_key(old, new) {
+        return None;
+    }
+    let key = written_openrouter_key(old)?;
+    let mut lines = to_lines(old);
+    let providers = top_block(&lines, "providers")?;
+    let openrouter = child_block(&lines, providers, "openrouter")?;
+    let index = (openrouter.0 + 1..openrouter.1)
+        .find(|&index| lines[index].trim_start().starts_with("api_key:"))?;
+    let indent = lines[index].len() - lines[index].trim_start().len();
+    lines[index] = format!(
+        "{}api_key: \"\"  # the key written here was left out of this backup",
+        " ".repeat(indent)
+    );
+    let text = from_lines(&lines);
+    (!text.contains(key.as_str())).then_some(text)
 }
 
 /// A line diff of `old` and `new`: `-` removed, `+` added, unchanged lines

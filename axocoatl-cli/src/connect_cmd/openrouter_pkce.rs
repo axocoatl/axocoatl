@@ -197,8 +197,21 @@ impl Callback {
     /// code that is not a cancellation are answered and ignored, and a
     /// connection that fails before it is accepted is skipped. The caller
     /// bounds the wait.
+    #[cfg(test)]
     pub(crate) async fn wait(&self, pkce: &Pkce) -> Returned {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Request>(8);
+        self.wait_reporting(pkce, &|_| {}).await
+    }
+
+    /// [`Callback::wait`], telling `report` of each connection in a line:
+    /// its method, its path without the query, its `Host` and what became of
+    /// it, never a code or a state (a failed sign-in can be diagnosed from
+    /// these lines in a log).
+    pub(crate) async fn wait_reporting(
+        &self,
+        pkce: &Pkce,
+        report: &(dyn Fn(&str) + Sync),
+    ) -> Returned {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<(Option<Arrival>, Request)>(8);
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
@@ -213,8 +226,10 @@ impl Callback {
                         let Ok(Some(request)) =
                             tokio::time::timeout(REQUEST_WAIT, read_request(&mut stream)).await
                         else {
+                            let _ = sender.send((None, Request::Other(0, NOT_HERE_PAGE))).await;
                             return;
                         };
+                        let arrival = Arrival::of(&request);
                         let request = classify(&request, port, &state);
                         let (status, page) = match &request {
                             Request::Other(status, page) => (*status, *page),
@@ -223,19 +238,74 @@ impl Callback {
                             Request::WrongState => (400, WRONG_STATE_PAGE),
                         };
                         respond(&mut stream, status, page).await;
-                        let _ = sender.send(request).await;
+                        let _ = sender.send((Some(arrival), request)).await;
                     });
                 }
-                Some(request) = receiver.recv() => match request {
-                    Request::Other(..) => {}
-                    Request::WrongState => {
-                        self.ignored.fetch_add(1, Ordering::SeqCst);
+                Some((arrival, request)) = receiver.recv() => {
+                    report(&Arrival::line(arrival.as_ref(), &request));
+                    match request {
+                        Request::Other(..) => {}
+                        Request::WrongState => {
+                            self.ignored.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Request::Code(code) => return Returned::Code(Zeroizing::new(code)),
+                        Request::Cancelled(error) => return Returned::Cancelled(error),
                     }
-                    Request::Code(code) => return Returned::Code(Zeroizing::new(code)),
-                    Request::Cancelled(error) => return Returned::Cancelled(error),
-                },
+                }
             }
         }
+    }
+}
+
+/// What a connection to the loopback server asked for, as a log line can
+/// show it: never the query, which holds the code and the state.
+struct Arrival {
+    method: String,
+    path: String,
+    host: String,
+}
+
+impl Arrival {
+    fn of(request: &RawRequest) -> Self {
+        let shown = |text: &str| -> String {
+            text.chars()
+                .filter(|c| c.is_ascii_graphic())
+                .take(100)
+                .collect()
+        };
+        Self {
+            method: shown(&request.method),
+            path: shown(request.target.split(['?', '#']).next().unwrap_or_default()),
+            host: request
+                .host
+                .as_deref()
+                .map(shown)
+                .unwrap_or_else(|| "none".into()),
+        }
+    }
+
+    /// `OpenRouter sign-in: GET /callback (Host 127.0.0.1:53111): the
+    /// sign-in's code`.
+    fn line(arrival: Option<&Self>, request: &Request) -> String {
+        let Some(arrival) = arrival else {
+            return format!(
+                "OpenRouter sign-in: a connection sent no request within {} s; ignored",
+                REQUEST_WAIT.as_secs()
+            );
+        };
+        let outcome = match request {
+            Request::Code(_) => "the sign-in's code, with its state".to_string(),
+            Request::Cancelled(Some(error)) => format!("no code: cancelled ({error})"),
+            Request::Cancelled(None) => "no code: cancelled".to_string(),
+            Request::WrongState => {
+                "a code without this sign-in's state: answered 400, not used".to_string()
+            }
+            Request::Other(status, _) => format!("answered {status} and ignored"),
+        };
+        format!(
+            "OpenRouter sign-in: {} {} (Host {}): {outcome}",
+            arrival.method, arrival.path, arrival.host
+        )
     }
 }
 
