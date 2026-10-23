@@ -40,3 +40,26 @@ test('visible Session Knowledge creates a note and attaches its exact revision w
   assert.equal(new URL(page.url()).pathname,'/');assert.ok(mutations.every(path=>!path.endsWith('/execute')&&!path.endsWith('/tasks')));assert.deepEqual(errors,[]);
  }finally{await context.close();}
 });
+
+// New note writes into the view it was read with, so it and Import Markdown
+// wait for the first read; a click before it once threw on a missing title
+// field (Linux WebKit, under load).
+test('Knowledge offers New note and Import Markdown only once its view is read',async()=>{
+ const context=await newAuthorizedContext(browser, {viewport:{width:1280,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],held=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/api/sessions/*/knowledge?**',route=>{held.push(route);});
+ try{
+  await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(runtime.fixtures.alpha.sessions[0].id)}`);
+  const panel=page.locator('ax-session-knowledge');await page.waitForFunction(id=>document.querySelector('ax-session-knowledge')?.getAttribute('session')===id,runtime.fixtures.alpha.sessions[0].id);
+  const read=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/knowledge'));
+  await panel.getByRole('button',{name:'Knowledge',exact:true}).click();await read;
+  const newNote=panel.getByRole('button',{name:'New note',exact:true}),importMarkdown=panel.getByRole('button',{name:'Import Markdown',exact:true});
+  assert.equal(await newNote.isDisabled(),true);assert.equal(await importMarkdown.isDisabled(),true);
+  await panel.evaluate(element=>element.edit(null));assert.equal(await panel.getByLabel('Title',{exact:true}).count(),0);
+  for(const route of held.splice(0))await route.continue();await page.unroute('**/api/sessions/*/knowledge?**');
+  await page.waitForFunction(()=>document.querySelector('ax-session-knowledge')?.shadowRoot?.querySelector('.new')?.disabled===false);assert.equal(await importMarkdown.isDisabled(),false);
+  await newNote.click();const title=panel.getByLabel('Title',{exact:true});await title.waitFor();
+  assert.equal(await title.evaluate(element=>element.getRootNode().activeElement===element),true,'New note focuses its title');
+  assert.deepEqual(errors,[]);
+ }finally{await context.close();}
+});
