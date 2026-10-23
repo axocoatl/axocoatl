@@ -14,9 +14,10 @@
 //!
 //! These checks read the printed texts (doctor's and onboarding's fixes,
 //! onboarding's text without a terminal, every command's `--help`, and the
-//! messages built at run time from a list of choices) and the sources of
-//! the CLI and its crates: every backticked span of a string, every flag
-//! written with its value, and every `|` joined into a text at run time.
+//! messages built at run time from a list of choices), the sources of the
+//! CLI, the server and the crates (every backticked span of a string, every
+//! flag written with its value, and every `|` joined into a text at run
+//! time), and the commands the workbench's scripts show.
 
 use std::path::{Path, PathBuf};
 
@@ -531,11 +532,12 @@ fn runtime_bars(source: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The sources of the CLI and of every crate, but this file.
+/// The sources of the CLI, the server and every crate, but this file.
 fn all_sources() -> Vec<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     sources(&manifest.join("src"), &mut files);
+    sources(&manifest.join("../axocoatl-server/src"), &mut files);
     if let Ok(crates) = std::fs::read_dir(manifest.join("../crates")) {
         for entry in crates.flatten() {
             sources(&entry.path().join("src"), &mut files);
@@ -547,10 +549,58 @@ fn all_sources() -> Vec<PathBuf> {
         files.iter().any(|file| file.ends_with("src/doctor.rs"))
             && files
                 .iter()
-                .any(|file| file.ends_with("axocoatl-session/src/toolchain.rs")),
+                .any(|file| file.ends_with("axocoatl-session/src/toolchain.rs"))
+            && files
+                .iter()
+                .any(|file| file.ends_with("axocoatl-server/src/routes.rs")),
         "the scan read no sources: {files:?}"
     );
     files
+}
+
+/// The workbench's scripts, which show commands for a person to run too.
+fn workbench_scripts() -> Vec<PathBuf> {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../axocoatl-server/static/ui");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "js"))
+        .collect();
+    files.sort();
+    assert!(
+        files.iter().any(|file| file.ends_with("run-outcome.js"))
+            && files
+                .iter()
+                .any(|file| file.ends_with("settings-loadouts.js")),
+        "the scan read no scripts: {files:?}"
+    );
+    files
+}
+
+/// The string literals in a line of JavaScript (`'…'`, `"…"` and `` `…` ``),
+/// without their quotes.
+fn script_literals(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut open: Option<(char, String)> = None;
+    let mut escaped = false;
+    for c in line.chars() {
+        match open.as_mut() {
+            Some((_, text)) if escaped => {
+                text.push(c);
+                escaped = false;
+            }
+            Some((_, text)) if c == '\\' => {
+                text.push(c);
+                escaped = true;
+            }
+            Some((quote, _)) if c == *quote => found.extend(open.take().map(|(_, text)| text)),
+            Some((_, text)) => text.push(c),
+            None if matches!(c, '\'' | '"' | '`') => open = Some((c, String::new())),
+            None => {}
+        }
+    }
+    found
 }
 
 /// The texts that join a `|` in at run time and are no command or flag a
@@ -691,6 +741,61 @@ fn no_printed_command_names_a_value_in_angle_brackets() {
         found.is_empty(),
         "commands with <placeholders> that paste as redirections:\n{}",
         found.join("\n")
+    );
+}
+
+/// No command the workbench shows (its scripts' strings) names a value as
+/// an `<angle>` placeholder or writes `a|b` choices or an `[--optional]`
+/// part: a person copies these from the page into a shell.
+#[test]
+fn no_workbench_command_is_unsafe_to_paste() {
+    let mut found = Vec::new();
+    let mut commands = 0;
+    for file in workbench_scripts() {
+        let source = std::fs::read_to_string(&file).unwrap();
+        for (number, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with('*') || code.starts_with("/*") {
+                continue;
+            }
+            for literal in script_literals(line) {
+                for flag in flag_placeholders(&literal) {
+                    found.push(format!("{}:{}: {flag}", file.display(), number + 1));
+                }
+                for command in literal_commands(&literal) {
+                    commands += 1;
+                    let problems = problems(&command);
+                    if !problems.is_empty() {
+                        found.push(format!(
+                            "{}:{}: `{command}`: {}",
+                            file.display(),
+                            number + 1,
+                            problems.join("; ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(commands > 5, "the scan found {commands} commands");
+    assert!(
+        found.is_empty(),
+        "workbench commands unsafe to paste:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The workbench scan reads each kind of JavaScript string.
+#[test]
+fn the_workbench_scan_reads_every_kind_of_string() {
+    assert_eq!(
+        script_literals(r#"h('p', "a \"b\"", `run ${x}`) + 'it\'s'"#),
+        ["p", r#"a \"b\""#, "run ${x}", r"it\'s"]
+    );
+    let shown = script_literals("'Check it with axocoatl receipt verify <file> --keys <keys>. '");
+    assert_eq!(
+        literal_commands(&shown[0]),
+        ["axocoatl receipt verify <file> --keys <keys>"]
     );
 }
 
