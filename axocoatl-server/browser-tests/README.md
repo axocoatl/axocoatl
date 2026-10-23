@@ -133,6 +133,16 @@ pin Playwright 1.64.1 (WebKit 27.2, libsoup 3.6.6). Under the same stress in
 an Ubuntu 24.04 VM (aarch64), 1.60's WebKit crashed 26 times in 1,212
 iterations, with 20 failures, and 1.64.1's crashed 0 times in 1,000.
 
+On CI's x86_64 WebKit leg with 1.64.1, the 11 runs that finished between
+2026-10-21 and 2026-10-23 (270 to 296 tests each, about 3,200 journey runs)
+printed no `# browser crash:` line. Two of them failed, on journeys that do
+not crash the browser: the Preview journeys under Safari's user agent on
+Linux and a rewind count at 59028c4a (fixed since), and an xterm.js page
+error after a cross-tab Close at 05e930f9. Three more runs were cancelled
+at the job's 45-minute limit while `playwright install --with-deps webkit`
+downloaded WebKit's system packages for 25 to 39 minutes (about 20 seconds
+in the other runs), not by a crash.
+
 Measured with Playwright 1.60's WebKit on Ubuntu 24.04, the journeys of
 `local-api-token.test.mjs` hit this when they reloaded or left a
 workbench that had just connected and was still loading: the loopback IP
@@ -166,6 +176,16 @@ none. `trackRequests` and `waitForNoRequestsInFlight` in
 `support/daemon.mjs` do the waiting, for `local-api-token.test.mjs`'s
 `waitForSettledWorkbench` too. Closing a context (200 times) or reloading
 the page (220 times) while the workbench loaded did not crash it in the VM.
+
+Every other journey settles too: in WebKit on Linux, every page the harness
+watches (`support/browser-crash.mjs`) waits, before `reload`, `goto`,
+`goBack` or `goForward` from a fixture daemon's page, until it has had no
+request in flight for half a second (`support/settle-navigation.mjs`). A
+request still in flight after five seconds, as when a journey holds one on
+purpose, is cancelled by the navigation as before; this wait never fails a
+journey, while `waitForNoRequestsInFlight` fails after 30 seconds.
+`tests/settle-navigation.test.mjs` checks the waiting with a fake page and
+clock, and that only WebKit's pages on Linux get it.
 
 So the harness says when a context lost its sign-in, under the test, as a
 `# browser crash:` line with the time and the request that was refused, and
