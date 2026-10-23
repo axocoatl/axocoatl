@@ -384,8 +384,8 @@ none, doubled for each round already run again in the turn, at most 30 seconds; 
 `Retry-After` longer than 30 seconds is not waited for, and the review ends. While it
 waits, the workbench shows the review as under way, and **Stop** ends the wait. When its
 model kept calling tools and gave no answer, even when asked for its final answer without
-tools, used every tool round of its activation or reached its token limit for the
-activation, it runs again at once. Otherwise, or when the run again does not finish
+tools, gave no answer and called no tool it was offered, used every tool round of its
+activation or reached its token limit for the activation, it runs again at once. Otherwise, or when the run again does not finish
 either, the turn needs your attention and the review says why in the reviewer's own
 words: for a request larger than its model takes, how many tokens it needed and the
 limit. A run prints that reason on its `Needs attention` line.

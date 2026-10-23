@@ -291,6 +291,8 @@ enum ReviewerFailure {
     /// A status whose response stated a `Retry-After`, in seconds.
     StatusAfter(u16, u64),
     Refusal,
+    /// A native Ollama response that held neither an answer nor a tool call.
+    NoAnswer,
 }
 impl ReviewerFailure {
     fn error(self) -> ProviderError {
@@ -312,6 +314,9 @@ impl ReviewerFailure {
                 provider: "ollama".into(),
                 reason: "safety".into(),
             },
+            Self::NoAnswer => ProviderError::Stream(
+                "native Ollama: native response has no final content or tool call".into(),
+            ),
         }
     }
 }
@@ -1718,6 +1723,57 @@ async fn a_reviewer_that_gives_no_answer_twice_ends_the_review_saying_why() {
     assert!(
         reason.ends_with("Select the reviewer and Continue to run it again, or Finish."),
         "{reason}"
+    );
+}
+
+/// A reviewer whose native Ollama model gave no answer and called no tool it
+/// was offered (gpt-oss:20b called a `search` tool, which Ollama dropped,
+/// and the review of a passing fix ended needing attention) runs the same
+/// round again at once, in a fresh conversation, and that run's approval
+/// completes the turn; it is no provider retry.
+#[tokio::test]
+async fn a_reviewer_whose_model_answered_nothing_runs_its_round_again_once() {
+    let fixture = review_fixture(3).await;
+    let scenario = failing_reviewer(
+        &[Some(ReviewerFailure::NoAnswer)],
+        &["", "VERDICT: APPROVE\nNothing must change."],
+    );
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    assert_eq!(
+        reviewer_started(&scenario)
+            .iter()
+            .map(|(generation, _)| *generation)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
+    assert!(review_retries(&run).is_empty());
+    let plane = run.controller.control_plane().unwrap();
+    let reruns: Vec<_> = plane
+        .nodes
+        .iter()
+        .flat_map(|node| &node.activations)
+        .flat_map(|activation| &activation.evidence)
+        .filter(|evidence| evidence.kind == "review_rerun")
+        .collect();
+    assert_eq!(reruns.len(), 1, "{reruns:?}");
+    let crate::session_control_plane::EvidenceValue::Available { value } = &reruns[0].summary
+    else {
+        panic!("{:?}", reruns[0].summary)
+    };
+    assert_eq!(
+        value,
+        "The reviewer did not finish (its model gave no answer and called no tool it was \
+         offered); its review round 1 was run again, once, in a fresh conversation on the \
+         same result"
     );
 }
 

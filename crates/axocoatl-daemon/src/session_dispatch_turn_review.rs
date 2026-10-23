@@ -194,20 +194,31 @@ pub(crate) fn review_rerun_backoff(earlier: usize) -> std::time::Duration {
     doubled.min(crate::provider_retry::MAX_RETRY_AFTER)
 }
 
+/// How an activation records a native Ollama response that held neither an
+/// answer nor a tool call, as `axocoatl-llm-ollama`'s native stream words
+/// it: gpt-oss:20b reviewing a fix called a `search` tool it was never
+/// offered, which Ollama dropped, and wrote nothing else.
+const NATIVE_NO_ANSWER: &str = "LLM provider error: Streaming error: native Ollama: native \
+     response has no final content or tool call";
+
 /// Why a reviewer that did not finish can in a fresh conversation, read
 /// from the host-written first line of its recorded failure: its model kept
 /// calling tools and gave no answer, even when asked for its final answer
-/// without tools; used every tool round of its activation; or reached its
-/// token limit for the activation. A new activation of the same round starts
-/// without that conversation and with its own token limit. `None` for any
-/// other failure: one the same request meets again (a request larger than
-/// the model's context, a Session budget used up, a refused admission), a
-/// refusal, or a provider's, which [`crate::provider_retry`] judges.
+/// without tools; gave no answer and called no tool it was offered; used
+/// every tool round of its activation; or reached its token limit for the
+/// activation. A new activation of the same round starts without that
+/// conversation and with its own token limit. `None` for any other failure:
+/// one the same request meets again (a request larger than the model's
+/// context, a Session budget used up, a refused admission), a refusal, or a
+/// provider's, which [`crate::provider_retry`] judges.
 pub(crate) fn rerun_cause_of_text(text: &str) -> Option<&'static str> {
     let first = text.lines().next()?;
     let line = first.strip_prefix("Activation failed: ")?;
     if line.starts_with("Tool call failed: agent tool loop - ") {
         return Some("its model kept calling tools and gave no answer");
+    }
+    if line == NATIVE_NO_ANSWER {
+        return Some("its model gave no answer and called no tool it was offered");
     }
     if line.starts_with("This Agent reached its token limit for this activation") {
         return Some("it reached its token limit for the activation");
@@ -2173,6 +2184,11 @@ mod tests {
                 "its model kept calling tools and gave no answer",
             ),
             (
+                "LLM provider error: Streaming error: native Ollama: native response has no \
+                 final content or tool call",
+                "its model gave no answer and called no tool it was offered",
+            ),
+            (
                 "This Agent reached its tool-round limit for this activation (128 rounds) and \
                  still asked for read_file; those calls did not run. Run it again to go on, or \
                  narrow the task.",
@@ -2191,11 +2207,27 @@ mod tests {
             failed("The Session budget for this Agent is used up"),
             failed("LLM provider error: ollama API error: 502 - upstream failure"),
             failed("LLM provider error: Content filtered by ollama: safety"),
+            failed("LLM provider error: Streaming error: native Ollama: invalid JSON line"),
             "Tool call failed: agent tool loop - no host line".to_owned(),
             String::new(),
         ] {
             assert_eq!(rerun_cause_of_text(&text), None, "{text}");
         }
+        // The native Ollama provider words an empty response as the host
+        // reads it.
+        let (_, message) = NATIVE_NO_ANSWER.split_once("native Ollama: ").unwrap();
+        assert!(
+            include_str!("../../axocoatl-llm-ollama/src/native.rs")
+                .contains(&format!("\"{message}\"")),
+            "{message}"
+        );
+        assert_eq!(
+            format!(
+                "LLM provider error: {}",
+                axocoatl_llm::ProviderError::Stream(format!("native Ollama: {message}"))
+            ),
+            NATIVE_NO_ANSWER
+        );
     }
 
     /// A review's reason quotes the reviewer's own failure, and says in words
