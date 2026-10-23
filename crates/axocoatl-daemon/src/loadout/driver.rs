@@ -52,6 +52,22 @@ impl KindDriver for SingleTurnDriver {
     }
 }
 
+/// The warning of a run whose Session's runtime could not be stopped when
+/// the run ended.
+pub const SESSION_RUNTIME_NOT_STOPPED: &str = "session_runtime_not_stopped";
+
+/// [`SESSION_RUNTIME_NOT_STOPPED`] for `session_id`, with why.
+pub fn session_runtime_not_stopped(session_id: &str, reason: &str) -> RunWarning {
+    RunWarning {
+        code: SESSION_RUNTIME_NOT_STOPPED.into(),
+        message: format!(
+            "the container and egress sidecar of the run's Session {session_id} could not be \
+             stopped, so they may still be running: {reason}. Close the Session with \
+             `axocoatl session close {session_id}` or in the workbench to stop them"
+        ),
+    }
+}
+
 /// Now, in Unix milliseconds.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -534,6 +550,15 @@ pub async fn run_to_outcome_with(
         .cloned()
         .collect();
     outcome.warnings = warnings(run, &report, &report.turns);
+    // Nothing more runs in the Session: its runtime stops before its
+    // network record is summed up, so the Outcome counts what stopping it
+    // recorded and a finished run leaves no container or egress sidecar
+    // running.
+    if let Err(reason) = host.stop_session_runtime(&run.session_id).await {
+        outcome
+            .warnings
+            .push(session_runtime_not_stopped(&run.session_id, &reason));
+    }
     let events = host.recorded_events(&run.run_id).await.unwrap_or_default();
     outcome.usage = usage(&report.turns, &events);
     outcome.network = host
@@ -821,6 +846,12 @@ prompt: "{task}"
         /// When set, the receipt does not cover every path the run changed,
         /// for these reasons.
         seal_incomplete: Option<Vec<String>>,
+        /// The Sessions whose runtime the host was asked to stop.
+        stopped_runtimes: Mutex<Vec<String>>,
+        /// When set, stopping the runtime fails with this reason.
+        stop_error: Option<String>,
+        /// Whether the runtime was stopped when the network record was read.
+        summed_after_stop: Mutex<Option<bool>>,
     }
 
     impl FakeHost {
@@ -897,6 +928,25 @@ prompt: "{task}"
                     .seal_incomplete
                     .as_deref()
                     .map(crate::bootstrap::receipts::receipt_incomplete)),
+            }
+        }
+        async fn network_summary(&self, _: &str) -> Result<NetworkSummary, RunError> {
+            *self.summed_after_stop.lock().unwrap() =
+                Some(!self.stopped_runtimes.lock().unwrap().is_empty());
+            Ok(NetworkSummary::default())
+        }
+        async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+            assert!(
+                self.sealed.lock().unwrap().is_none(),
+                "the runtime stops before the receipt is signed"
+            );
+            self.stopped_runtimes
+                .lock()
+                .unwrap()
+                .push(session_id.into());
+            match &self.stop_error {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(()),
             }
         }
         async fn finish(&self, _: &str, outcome: &RunOutcome) -> Result<(), RunError> {
@@ -1008,6 +1058,58 @@ prompt: "{task}"
         assert!(events
             .iter()
             .any(|event| matches!(event, RunEvent::TurnStarted { .. })));
+    }
+
+    /// Once nothing more runs in it, the runtime of the run's Session
+    /// stops: before its network record is summed up and before the receipt
+    /// and the `Ended` event. A runtime that cannot be stopped is the
+    /// warning `session_runtime_not_stopped`, recorded before the end, and
+    /// never changes the verdict or the exit code.
+    #[tokio::test]
+    async fn the_sessions_runtime_stops_before_the_end_and_a_failure_is_only_a_warning() {
+        let run = context(&[], later());
+        let passing = || {
+            vec![observation(
+                TurnState::Completed,
+                vec![check(CheckState::Passed)],
+                review(true, "openai/gpt-oss-120b"),
+            )]
+        };
+        let host = host(passing());
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(*host.stopped_runtimes.lock().unwrap(), ["ses-1"]);
+        assert_eq!(*host.summed_after_stop.lock().unwrap(), Some(true));
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+
+        let host = FakeHost {
+            waits: Mutex::new(passing()),
+            stop_error: Some("another Session's turn holds the Workspace".into()),
+            ..FakeHost::default()
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(outcome.verdict, RunVerdict::Pass);
+        let warning = outcome
+            .warnings
+            .iter()
+            .find(|warning| warning.code == SESSION_RUNTIME_NOT_STOPPED)
+            .unwrap_or_else(|| panic!("{:?}", outcome.warnings));
+        assert_eq!(
+            warning.message,
+            "the container and egress sidecar of the run's Session ses-1 could not be stopped, \
+             so they may still be running: another Session's turn holds the Workspace. Close \
+             the Session with `axocoatl session close ses-1` or in the workbench to stop them"
+        );
+        let events = host.events.lock().unwrap().clone();
+        let warned = events
+            .iter()
+            .position(|event| {
+                matches!(event, RunEvent::Warning { warning, .. } if warning.code == SESSION_RUNTIME_NOT_STOPPED)
+            })
+            .expect("the warning is recorded");
+        assert!(matches!(events.last(), Some(RunEvent::Ended { .. })));
+        assert!(warned < events.len() - 1);
     }
 
     /// The host signs the final Outcome before the `Ended` event and the

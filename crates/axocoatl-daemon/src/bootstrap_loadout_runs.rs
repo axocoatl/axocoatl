@@ -2223,7 +2223,7 @@ impl AxocoatlDaemon {
                 .unwrap_or_else(|poison| poison.into_inner())
                 .insert(run_id.clone());
         }
-        let session = self
+        let session = match self
             .create_loadout_session(
                 &workspace.id,
                 &name,
@@ -2233,252 +2233,288 @@ impl AxocoatlDaemon {
                 binding,
                 overlay,
             )
-            .await?;
-        let mut environment_facts =
-            self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
-        resolved.notes.push(plan.summary());
-        let mut toolchain_failure = None;
-        if session.environment.state == SessionEnvironmentState::Ready {
-            if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
-                let setup_run = self
-                    .run_toolchain_setup(
-                        &session.id,
-                        &run_id,
-                        toolchain,
-                        &loadout.file.sandbox.network,
-                        setup,
-                    )
-                    .await;
-                resolved
-                    .notes
-                    .push(loadout_toolchain::setup_note(&setup_run));
-                toolchain_failure = setup_run.failure;
-                environment_facts.setup = Some(setup_run.facts);
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                self.loadout_runs
+                    .e2e_runs
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .remove(&run_id);
+                return Err(error);
             }
-            if request.environment.no_probe && plan.check.is_some() {
-                resolved.notes.push(
-                    "the check was not probed before the first model call (--no-probe)".into(),
-                );
-            }
-            let probe_check = plan
-                .check
-                .as_ref()
-                .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
-            if let Some((check, _)) = probe_check {
-                let timeout = resolved
-                    .checks
-                    .iter()
-                    .filter(|check| check.argv.is_some())
-                    .map(|check| check.timeout_secs)
-                    .max()
-                    .unwrap_or(180);
-                let setup_note = environment_facts.setup.as_ref().map(|facts| {
-                    format!(
-                        "`{}`: {}",
-                        facts.command,
-                        loadout_toolchain::setup_outcome(facts)
-                    )
-                });
-                match self
-                    .probe_loadout_check(
-                        &session.id,
-                        &run_id,
-                        &plan,
-                        check,
-                        timeout,
-                        &request.task,
-                        setup_note.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(loadout_toolchain::ProbeRun::Runs(probe)) => {
-                        environment_facts.probe = Some(probe)
-                    }
-                    // A probe that could not run decides nothing: the run's
-                    // own check still runs and says what happened.
-                    Err(error) => {
-                        tracing::warn!(session = %session.id, %error, "the check probe could not run")
-                    }
-                    Ok(loadout_toolchain::ProbeRun::Refused {
-                        message,
-                        environment,
-                    }) => {
-                        // Not admitted: the run's Session goes with it.
-                        if let Err(error) = self.close_session(&session.id).await {
-                            tracing::warn!(session = %session.id, %error, "closing the refused run's Session failed");
+        };
+        // From here on the Session exists: a run refused after all closes it
+        // (`close_refused_run_session`); a run that ends here stops its
+        // runtime.
+        let (session_id, refused_run) = (session.id.clone(), run_id.clone());
+        let admitted = async move {
+            let mut environment_facts =
+                self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
+            resolved.notes.push(plan.summary());
+            let mut toolchain_failure = None;
+            if session.environment.state == SessionEnvironmentState::Ready {
+                if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
+                    let setup_run = self
+                        .run_toolchain_setup(
+                            &session.id,
+                            &run_id,
+                            toolchain,
+                            &loadout.file.sandbox.network,
+                            setup,
+                        )
+                        .await;
+                    resolved
+                        .notes
+                        .push(loadout_toolchain::setup_note(&setup_run));
+                    toolchain_failure = setup_run.failure;
+                    environment_facts.setup = Some(setup_run.facts);
+                }
+                if request.environment.no_probe && plan.check.is_some() {
+                    resolved.notes.push(
+                        "the check was not probed before the first model call (--no-probe)".into(),
+                    );
+                }
+                let probe_check = plan
+                    .check
+                    .as_ref()
+                    .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
+                if let Some((check, _)) = probe_check {
+                    let timeout = resolved
+                        .checks
+                        .iter()
+                        .filter(|check| check.argv.is_some())
+                        .map(|check| check.timeout_secs)
+                        .max()
+                        .unwrap_or(180);
+                    let setup_note = environment_facts.setup.as_ref().map(|facts| {
+                        format!(
+                            "`{}`: {}",
+                            facts.command,
+                            loadout_toolchain::setup_outcome(facts)
+                        )
+                    });
+                    match self
+                        .probe_loadout_check(
+                            &session.id,
+                            &run_id,
+                            &plan,
+                            check,
+                            timeout,
+                            &request.task,
+                            setup_note.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(loadout_toolchain::ProbeRun::Runs(probe)) => {
+                            environment_facts.probe = Some(probe)
                         }
-                        self.loadout_runs
-                            .e2e_runs
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .remove(&run_id);
-                        return Err(if environment {
-                            DaemonError::Session(message)
-                        } else {
-                            DaemonError::InvalidRequest(message)
-                        });
+                        // A probe that could not run decides nothing: the run's
+                        // own check still runs and says what happened.
+                        Err(error) => {
+                            tracing::warn!(
+                                session = %session.id,
+                                %error,
+                                "the check probe could not run"
+                            )
+                        }
+                        Ok(loadout_toolchain::ProbeRun::Refused {
+                            message,
+                            environment,
+                        }) => {
+                            // Not admitted: the run's Session goes with it.
+                            return Err(if environment {
+                                DaemonError::Session(message)
+                            } else {
+                                DaemonError::InvalidRequest(message)
+                            });
+                        }
                     }
                 }
             }
-        }
-        let (repo_head, dirty_paths) = repository_state(&repo).await;
-        let options = RunOptions {
-            task: request.task.clone(),
-            repo: repo.clone(),
-            params: request.params.clone(),
-            keep: request.keep,
-            check_command: request.check_command.clone(),
-            setup_command: request.setup_command.clone(),
-        };
-        let manifest = RunManifest {
-            schema: RUN_MANIFEST_SCHEMA.into(),
-            run_id: run_id.clone(),
-            session_id: session.id.clone(),
-            workspace_id: workspace.id.clone(),
-            loadout: loadout_ref,
-            loadout_text: loadout.text.clone(),
-            params: resolved.params.clone(),
-            credentials,
-            task: request.task.clone(),
-            repo: repo_text,
-            repo_head,
-            dirty_paths,
-            started_at_ms,
-            options: serde_json::json!({
-                "request_id": request.request_id,
-                "keep": request.keep,
-                "check_command": request.check_command,
-                "setup_command": request.setup_command,
-                "axocoatl_version": env!("CARGO_PKG_VERSION"),
-                "environment": environment_facts,
-            }),
-        };
-        let store = self.loadout_runs.store()?;
-        store.create(&manifest).map_err(record_error)?;
-        let warnings: Vec<RunWarning> = resolved
-            .warnings
-            .iter()
-            .map(|warning| RunWarning {
-                code: warning.code.clone(),
-                message: warning.message.clone(),
-            })
-            .collect();
-        for warning in &warnings {
-            store
-                .append(
-                    &run_id,
-                    &RunEvent::Warning {
-                        at_ms: now_ms(),
-                        warning: warning.clone(),
-                    },
-                )
-                .map_err(record_error)?;
-        }
-        // What admission notes, such as the credential each external
-        // writer's route sends: a `note` event, which `axocoatl run` prints
-        // as the run starts, and a line of the Outcome's notes.
-        for note in &resolved.notes {
+            let (repo_head, dirty_paths) = repository_state(&repo).await;
+            let options = RunOptions {
+                task: request.task.clone(),
+                repo: repo.clone(),
+                params: request.params.clone(),
+                keep: request.keep,
+                check_command: request.check_command.clone(),
+                setup_command: request.setup_command.clone(),
+            };
+            let manifest = RunManifest {
+                schema: RUN_MANIFEST_SCHEMA.into(),
+                run_id: run_id.clone(),
+                session_id: session.id.clone(),
+                workspace_id: workspace.id.clone(),
+                loadout: loadout_ref,
+                loadout_text: loadout.text.clone(),
+                params: resolved.params.clone(),
+                credentials,
+                task: request.task.clone(),
+                repo: repo_text,
+                repo_head,
+                dirty_paths,
+                started_at_ms,
+                options: serde_json::json!({
+                    "request_id": request.request_id,
+                    "keep": request.keep,
+                    "check_command": request.check_command,
+                    "setup_command": request.setup_command,
+                    "axocoatl_version": env!("CARGO_PKG_VERSION"),
+                    "environment": environment_facts,
+                }),
+            };
+            let store = self.loadout_runs.store()?;
+            store.create(&manifest).map_err(record_error)?;
+            let warnings: Vec<RunWarning> = resolved
+                .warnings
+                .iter()
+                .map(|warning| RunWarning {
+                    code: warning.code.clone(),
+                    message: warning.message.clone(),
+                })
+                .collect();
+            for warning in &warnings {
+                store
+                    .append(
+                        &run_id,
+                        &RunEvent::Warning {
+                            at_ms: now_ms(),
+                            warning: warning.clone(),
+                        },
+                    )
+                    .map_err(record_error)?;
+            }
+            // What admission notes, such as the credential each external
+            // writer's route sends: a `note` event, which `axocoatl run` prints
+            // as the run starts, and a line of the Outcome's notes.
+            for note in &resolved.notes {
+                store
+                    .append(
+                        &run_id,
+                        &RunEvent::Phase {
+                            at_ms: now_ms(),
+                            phase: "note".into(),
+                            detail: note.clone(),
+                        },
+                    )
+                    .map_err(record_error)?;
+            }
+            let ready = session.environment.state == SessionEnvironmentState::Ready;
             store
                 .append(
                     &run_id,
                     &RunEvent::Phase {
                         at_ms: now_ms(),
-                        phase: "note".into(),
-                        detail: note.clone(),
+                        phase: "preparing".into(),
+                        detail: if ready {
+                            "the Session's environment is ready".into()
+                        } else {
+                            format!(
+                                "the Session's environment is {:?}",
+                                session.environment.state
+                            )
+                        },
                     },
                 )
                 .map_err(record_error)?;
-        }
-        let ready = session.environment.state == SessionEnvironmentState::Ready;
-        store
-            .append(
-                &run_id,
-                &RunEvent::Phase {
-                    at_ms: now_ms(),
-                    phase: "preparing".into(),
-                    detail: if ready {
-                        "the Session's environment is ready".into()
-                    } else {
-                        format!(
-                            "the Session's environment is {:?}",
-                            session.environment.state
-                        )
-                    },
-                },
-            )
-            .map_err(record_error)?;
-        // A read-only Agent that cannot read the repository would only
-        // report that it examined nothing, so such a run does not start.
-        let unreadable = if ready && toolchain_failure.is_none() {
-            self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
-                .await
-        } else {
-            None
-        };
-        if !ready || unreadable.is_some() || toolchain_failure.is_some() {
-            // The environment failed (or still needs a person), or the
-            // run's read-only Agents cannot read the repository: the run
-            // ends here with what the setup printed, or why.
-            let detail = match (unreadable, toolchain_failure) {
-                (Some(refusal), _) => refusal,
-                (None, Some(failure)) => failure,
-                (None, None) => {
-                    let mut detail = session
-                        .environment
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "the Session's environment is not ready".into());
-                    for result in &session.environment.setup_results {
-                        detail.push_str(&format!(
-                            "\n$ {} (exit {})\n{}{}",
-                            result.command, result.exit_code, result.stdout, result.stderr
-                        ));
-                    }
-                    detail
-                }
+            // A read-only Agent that cannot read the repository would only
+            // report that it examined nothing, so such a run does not start.
+            let unreadable = if ready && toolchain_failure.is_none() {
+                self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
+                    .await
+            } else {
+                None
             };
-            let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
-            outcome.notes = resolved.notes.clone();
-            // What the Session's record holds so far, setup included.
-            outcome.network = self.loadout_network_summary(&session.id).await;
-            if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+            if !ready || unreadable.is_some() || toolchain_failure.is_some() {
+                // The environment failed (or still needs a person), or the
+                // run's read-only Agents cannot read the repository: the run
+                // ends here with what the setup printed, or why.
+                let detail = match (unreadable, toolchain_failure) {
+                    (Some(refusal), _) => refusal,
+                    (None, Some(failure)) => failure,
+                    (None, None) => {
+                        let mut detail = session
+                            .environment
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "the Session's environment is not ready".into());
+                        for result in &session.environment.setup_results {
+                            detail.push_str(&format!(
+                                "\n$ {} (exit {})\n{}{}",
+                                result.command, result.exit_code, result.stdout, result.stderr
+                            ));
+                        }
+                        detail
+                    }
+                };
+                let mut outcome =
+                    ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
+                outcome.notes = resolved.notes.clone();
+                // The run ends here, so its Session's runtime stops; then what
+                // the Session's record holds, setup included, is summed up.
+                if let Err(error) = self.stop_loadout_run_runtime(&session.id).await {
+                    let warning = crate::loadout::driver::session_runtime_not_stopped(
+                        &session.id,
+                        &error.to_string(),
+                    );
+                    let _ = store.append(
+                        &run_id,
+                        &RunEvent::Warning {
+                            at_ms: now_ms(),
+                            warning: warning.clone(),
+                        },
+                    );
+                    outcome.warnings.push(warning);
+                }
+                outcome.network = self.loadout_network_summary(&session.id).await;
+                if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
+                    let _ = store.append(
+                        &run_id,
+                        &RunEvent::Warning {
+                            at_ms: now_ms(),
+                            warning: warning.clone(),
+                        },
+                    );
+                    outcome.warnings.push(warning);
+                }
                 let _ = store.append(
                     &run_id,
-                    &RunEvent::Warning {
+                    &RunEvent::Ended {
                         at_ms: now_ms(),
-                        warning: warning.clone(),
+                        outcome: Box::new(outcome.clone()),
                     },
                 );
-                outcome.warnings.push(warning);
+                store.finish(&run_id, &outcome).map_err(record_error)?;
             }
-            let _ = store.append(
-                &run_id,
-                &RunEvent::Ended {
-                    at_ms: now_ms(),
-                    outcome: Box::new(outcome.clone()),
+            let wall_clock =
+                crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
+            let context = RunContext {
+                run_id: run_id.clone(),
+                session_id: session.id.clone(),
+                workspace_id: workspace.id.clone(),
+                resolved,
+                options,
+                deadline: std::time::Instant::now() + std::time::Duration::from_millis(wall_clock),
+                agent_contexts,
+            };
+            Ok((
+                RunAccepted {
+                    run_id,
+                    session_id: session.id,
+                    workspace_id: workspace.id,
+                    warnings,
                 },
-            );
-            store.finish(&run_id, &outcome).map_err(record_error)?;
+                context,
+            ))
         }
-        let wall_clock = crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
-        let context = RunContext {
-            run_id: run_id.clone(),
-            session_id: session.id.clone(),
-            workspace_id: workspace.id.clone(),
-            resolved,
-            options,
-            deadline: std::time::Instant::now() + std::time::Duration::from_millis(wall_clock),
-            agent_contexts,
-        };
-        Ok((
-            RunAccepted {
-                run_id,
-                session_id: session.id,
-                workspace_id: workspace.id,
-                warnings,
-            },
-            context,
-        ))
+        .await;
+        if admitted.is_err() {
+            self.close_refused_run_session(&session_id, &refused_run)
+                .await;
+        }
+        admitted
     }
 
     /// `POST /api/runs`: resolve the loadout, authorize the repository as a
@@ -2598,7 +2634,8 @@ impl AxocoatlDaemon {
     /// to the run before its environment is prepared, and prepare that
     /// environment with exactly `setup` approved (no detected command is
     /// ever approved by a run). Returns the Session as prepared: Ready, or
-    /// Failed with the setup's output.
+    /// Failed with the setup's output. A Session it made and could not
+    /// bind or prepare is closed again.
     #[allow(clippy::too_many_arguments)]
     async fn create_loadout_session(
         &self,
@@ -2649,7 +2686,8 @@ impl AxocoatlDaemon {
         // loadout's own team before the first turn.
         let mode = SessionMode::Custom { agents: Vec::new() };
         let setup_approved = setup.is_some();
-        let session = {
+        let run_id = binding.run_id.clone();
+        let (session_id, bound) = {
             let mut sessions = self.session_store.lock().await;
             let (session, receipt) = sessions
                 .create_native_with_environment(
@@ -2666,29 +2704,43 @@ impl AxocoatlDaemon {
                     true,
                 )
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
-            self.session_dispatch_lifecycles
-                .retain_native_session(ownership.clone(), receipt)?;
-            sessions
-                .bind_loadout(&session.id, binding)
-                .map_err(|error| DaemonError::Session(error.to_string()))?
+            let bound = (|| {
+                self.session_dispatch_lifecycles
+                    .retain_native_session(ownership.clone(), receipt)?;
+                sessions
+                    .bind_loadout(&session.id, binding)
+                    .map_err(|error| DaemonError::Session(error.to_string()))
+            })();
+            (session.id, bound)
         };
-        self.egress_points.set_loadout_overlay(&session.id, overlay);
-        match self.prepare_new_session_environment(session.clone()).await {
-            Ok(session) => Ok(session),
-            Err(error) => {
-                // A failed preparation is recorded on the Session; return it
-                // as it stands so the run reports the setup's output.
-                let current = self.get_session(&session.id).await;
-                match current {
-                    Some(current)
-                        if current.environment.state == SessionEnvironmentState::Failed =>
-                    {
-                        Ok(current)
+        let error = match bound {
+            Ok(session) => {
+                self.egress_points.set_loadout_overlay(&session.id, overlay);
+                match self.prepare_new_session_environment(session.clone()).await {
+                    Ok(session) => return Ok(session),
+                    Err(error) => {
+                        // A failed preparation is recorded on the Session;
+                        // return it as it stands so the run reports the
+                        // setup's output.
+                        match self.get_session(&session.id).await {
+                            Some(current)
+                                if current.environment.state == SessionEnvironmentState::Failed =>
+                            {
+                                return Ok(current)
+                            }
+                            _ => error,
+                        }
                     }
-                    _ => Err(error),
                 }
             }
-        }
+            Err(error) => error,
+        };
+        // Not admitted: the Session goes with the run, once this admission
+        // no longer holds the Workspace that closing it takes.
+        drop(_named);
+        drop(_operation);
+        self.close_refused_run_session(&session_id, &run_id).await;
+        Err(error)
     }
 
     /// The refusal a run gets when another operation holds its Workspace
@@ -2819,6 +2871,67 @@ impl AxocoatlDaemon {
             .into_iter()
             .map(|(_, event)| event)
             .collect())
+    }
+
+    /// Stop the runtime of the Session of a run that has ended: its
+    /// containers, egress sidecar and browser stop, as when the daemon
+    /// stops, and the Session stays open with its record, History, team and
+    /// network record, so Keep, the record bundle and the workbench work as
+    /// before; what needs its container again (Files, Terminal, a turn)
+    /// starts it again, as after a restart. A Session whose own turn runs,
+    /// or whose Workspace another operation holds, keeps its runtime, and
+    /// the refusal says why. A Session closed, gone or never prepared has
+    /// none to stop.
+    pub async fn stop_loadout_run_runtime(&self, session_id: &str) -> Result<(), DaemonError> {
+        match self.get_session(session_id).await {
+            Some(session) if session.status != axocoatl_session::SessionStatus::Closed => {}
+            _ => return Ok(()),
+        }
+        let refused = format!("The runtime of Session {session_id} was not stopped");
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the end of a loadout run in Session {session_id}"),
+                    refused: refused.clone(),
+                },
+            )
+            .await?;
+        let _start = self
+            .lock_session_start_for_lifecycle(session_id, &refused)
+            .await?;
+        if let Some(active) = self.active_session_turn(session_id).await? {
+            return Err(DaemonError::SessionConflict(format!(
+                "{refused}: its turn {} is running",
+                active.turn_id
+            )));
+        }
+        self.stop_session_actors_checked(session_id).await?;
+        self.stop_session_sandbox_checked(session_id).await
+    }
+
+    /// Close the Session of a run that admission refused after creating it
+    /// (the check probe, or a record that could not be written): the
+    /// Session goes with the run. Why it could not be closed is logged.
+    async fn close_refused_run_session(&self, session_id: &str, run_id: &str) {
+        self.loadout_runs
+            .e2e_runs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(run_id);
+        let open = self
+            .get_session(session_id)
+            .await
+            .is_some_and(|session| session.status != axocoatl_session::SessionStatus::Closed);
+        if open {
+            if let Err(error) = self.close_session(session_id).await {
+                tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "closing the refused run's Session failed"
+                );
+            }
+        }
     }
 
     /// Write `run_id`'s Outcome once.
@@ -3474,8 +3587,9 @@ impl AxocoatlDaemon {
     }
 
     /// At startup: a run left without an Outcome was cut off by a restart;
-    /// it ends failed, never resumed silently. Loadout Sessions get their
-    /// loadout's network additions back.
+    /// it ends failed, never resumed silently (the restart already stopped
+    /// its Session's runtime). Loadout Sessions get their loadout's network
+    /// additions back.
     pub(crate) async fn recover_loadout_runs(&self) {
         let Ok(store) = self.loadout_runs.store() else {
             return;

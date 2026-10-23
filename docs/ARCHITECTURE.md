@@ -697,7 +697,14 @@ Workspace, which Open workspace… registers only after the person confirms it),
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
-repository HEAD and the paths that were dirty. It is idempotent on `request_id`.
+repository HEAD and the paths that were dirty. It is idempotent on `request_id`. Any
+failure after the Session exists closes it again (`close_refused_run_session`). A run
+stops its Session's runtime when it ends (`RunHost::stop_session_runtime`, before the
+network summary, the receipt and the `Ended` event; `stop_loadout_run_runtime` on the
+daemon, under the Workspace operation and the Session's start lock, refused while a turn
+of it runs), and so do the environment-failure path and a driver error (`fail_run`): the
+containers go as at a daemon stop, the Session stays open, and `ensure_sandbox` starts it
+again on demand. A stop that fails is the warning `session_runtime_not_stopped`.
 
 **Per-Session sandbox.** Every place the daemon reads the network mode or the workload plan
 for a Session goes through `session_sandbox_policy`: an unbound Session gets the global

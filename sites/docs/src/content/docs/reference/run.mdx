@@ -242,6 +242,18 @@ stops each of its own turns that did not complete, such as one that needs attent
 a person's Stop would (a `closing_turn` phase line on standard error), so the next run
 on the repository is admitted. The Outcome keeps each turn as it was observed.
 
+Then the run stops its Session's runtime, before its network summary, receipt and
+Outcome are written: the Session's container, egress sidecar and browser stop, as when
+the daemon stops, so a run that ended leaves nothing running. A run that ends at its
+environment (the setup or the toolchain failed, or its read-only Agents cannot read the
+repository) stops it too. The Session stays open with its turns, History, team, network
+record and changes, so Keep, the record bundle and the workbench work as before, and what
+needs its container again, such as its Terminal in the workbench, starts it again. When
+the runtime cannot be stopped, for example because another Session's turn holds the
+Workspace, the run has the warning `session_runtime_not_stopped`, which names the Session
+and `axocoatl session close`; the verdict and the exit code do not change. A run refused
+after its Session was made (the check probe) closes that Session.
+
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
@@ -457,5 +469,6 @@ run only while the daemon process that admitted it is running.
 
 <Aside>
 A run is an ordinary Session. Open it in the workbench to read its turns, the Agent graph,
-the network record and Git while it runs or after it ends.
+the network record and Git while it runs or after it ends. Once the run has ended, its
+container is stopped until something in the Session needs it again.
 </Aside>

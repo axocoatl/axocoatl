@@ -1825,6 +1825,22 @@ async fn toolchain_admission_child_body() {
         .outcome
         .unwrap();
     assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+    // The run ended at its environment: its Session stays open, its
+    // runtime stopped.
+    assert_ne!(
+        daemon
+            .get_session(&accepted.session_id)
+            .await
+            .unwrap()
+            .status,
+        axocoatl_session::SessionStatus::Closed
+    );
+    assert!(!daemon
+        .session_sandboxes
+        .lock()
+        .await
+        .contains_key(&accepted.session_id));
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     assert!(
         outcome.notes.iter().any(|note| note.contains(
             "· toolchain python (pyproject.toml at the repository root) · check python3 -m \
@@ -1834,6 +1850,36 @@ async fn toolchain_admission_child_body() {
         "{:?}",
         outcome.notes
     );
+
+    // A run whose record cannot be written after its Session was made is
+    // refused, and its Session closed: nothing of it stays open. (Root
+    // writes through the permissions this takes away.)
+    if crate::bootstrap::effective_uid() != 0 {
+        let runs = daemon
+            .data_root
+            .path()
+            .join(axocoatl_session::run_record::RUN_RECORD_DIR);
+        let before: Vec<String> = daemon
+            .list_sessions()
+            .await
+            .into_iter()
+            .map(|session| session.id)
+            .collect();
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let unrecorded = daemon
+            .admit_loadout_run(request(python.path(), "python-unrecorded", None))
+            .await;
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unrecorded.is_err(), "{unrecorded:?}");
+        let made: Vec<Session> = daemon
+            .list_sessions()
+            .await
+            .into_iter()
+            .filter(|session| !before.contains(&session.id))
+            .collect();
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(made[0].status, axocoatl_session::SessionStatus::Closed);
+    }
 
     // --toolchain none: the loadout's image as it is, nothing detected.
     let mut none = request(python.path(), "python-none", Some("python3 -m pytest"));
@@ -2095,6 +2141,11 @@ const SLOW_TASK: &str = "Wait for the person to stop this run.";
 /// What the writer of the stopped run has written when it is stopped: part
 /// of an answer, as the fix re-smoke's writer had.
 const STREAMED_TEXT: &str = "I can see the issue now. Let me also look at the tests to better";
+/// The part of [`STREAMED_TEXT`] the turn's record holds while the stream
+/// stalls: a native Ollama answer offered tools keeps its last 16 bytes
+/// back until more arrives, so a tool call written as text is never shown
+/// half.
+const STREAMED_SHOWN: &str = "I can see the issue now.";
 
 /// A model server in front of `upstream` (the wiremock model server): a
 /// `/api/chat` call for [`SLOW_TASK`] streams one line of the writer's
@@ -2382,6 +2433,13 @@ impl crate::loadout::RunHost for LiveHost {
         self.daemon.seal_loadout_run(run_id, outcome).await
     }
 
+    async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+        self.daemon
+            .stop_loadout_run_runtime(session_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {
         Ok(self.daemon.finish_loadout_run(run_id, outcome)?)
     }
@@ -2621,6 +2679,45 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
         assert!(events.iter().any(
             |event| matches!(event, RunEvent::Phase { phase, .. } if phase == "closing_turn")
         ));
+        // Its Session's runtime stopped: neither its container nor its
+        // egress sidecar runs on, and the Session stays open.
+        assert_ne!(
+            daemon
+                .get_session(&accepted.session_id)
+                .await
+                .unwrap()
+                .status,
+            axocoatl_session::SessionStatus::Closed
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.code == crate::loadout::driver::SESSION_RUNTIME_NOT_STOPPED),
+            "{:?}",
+            outcome.warnings
+        );
+        let container_exists = |prefix: &str| {
+            std::process::Command::new("podman")
+                .args([
+                    "container",
+                    "exists",
+                    &format!("{prefix}{}", accepted.session_id),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(!container_exists("axo-ses-") && !container_exists("axo-egr-"));
+        // What needs the container again (the workbench's Terminal, a
+        // turn) starts it, as after a daemon restart.
+        let session = daemon.get_session(&accepted.session_id).await.unwrap();
+        daemon.ensure_sandbox(&session).await?;
+        assert!(container_exists("axo-ses-"));
+        daemon
+            .stop_loadout_run_runtime(&accepted.session_id)
+            .await?;
+        assert!(!container_exists("axo-ses-"));
 
         // The record bundle carries the versioned history and the team as
         // applied.
@@ -2736,7 +2833,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
                                             &evidence.summary,
                                             crate::session_control_plane::EvidenceValue::Available {
                                                 value
-                                            } if value.contains(STREAMED_TEXT)
+                                            } if value.contains(STREAMED_SHOWN)
                                         )
                                 })
                             })
@@ -2765,7 +2862,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             assert!(
                 !entry.detail.trim().is_empty()
                     && entry.detail != "other: "
-                    && !entry.detail.contains(STREAMED_TEXT)
+                    && !entry.detail.contains(STREAMED_SHOWN)
                     && entry.class != axocoatl_session::run_outcome::FailureClass::Other,
                 "{entry:?}"
             );
@@ -2783,6 +2880,11 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             operation.try_lock().is_ok(),
             "the stopped run's Session still holds the Workspace"
         );
+        assert!(!daemon
+            .session_sandboxes
+            .lock()
+            .await
+            .contains_key(&stopped.session_id));
         Ok::<(), DaemonError>(())
     }
     .await;
