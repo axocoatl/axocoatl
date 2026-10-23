@@ -871,7 +871,15 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     };
     if wants_smoke_test(o, writer) {
         o.ui.heading("Step 7 · A first run");
-        if !smoke::run(o, writer, &choice, service_started).await {
+        if !smoke::run(
+            o,
+            writer,
+            &choice,
+            service_started,
+            start == StartChoice::Dev,
+        )
+        .await
+        {
             code = exit::NOT_READY;
         }
     }

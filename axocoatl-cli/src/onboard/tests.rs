@@ -3794,7 +3794,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         .and(path("/health"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "started_at_ms": later})),
+                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
         )
         .mount(&health)
         .await;
@@ -3834,7 +3834,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         ..Choice::default()
     };
     assert!(
-        smoke::run(&mut o, WriterChoice::Ollama, &choice, true).await,
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, true, false).await,
         "{}\n{:?}",
         o.ui.output(),
         o.steps
@@ -3852,7 +3852,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
     // port: no second daemon, a step to restart it.
     let _ipc = std::os::unix::net::UnixListener::bind(&o.socket_path).unwrap();
     write(&o, free_port());
-    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps
             .iter()
@@ -3892,7 +3892,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     Mock::given(method("GET"))
         .and(path("/health"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "started_at_ms": 1})),
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": 1})),
         )
         .up_to_n_times(2)
         .with_priority(1)
@@ -3902,7 +3903,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         .and(path("/health"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "started_at_ms": later})),
+                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
         )
         .with_priority(2)
         .mount(&health)
@@ -3950,7 +3951,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         ..Choice::default()
     };
     assert!(
-        smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await,
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
         "{}\n{:?}",
         o.ui.output(),
         o.steps
@@ -3981,12 +3982,14 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     health.reset().await;
     Mock::given(method("GET"))
         .and(path("/health"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "version": "1.4.2"})),
+        )
         .mount(&health)
         .await;
     let before = shims.calls().len();
     o.ui = Ui::scripted(vec![Answer::No]);
-    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(|step| step.starts_with(&format!(
             "The daemon on port {} runs the configuration from before this onboarding",
@@ -4012,7 +4015,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     let before = shims.calls().len();
     o.steps.clear();
     o.ui = Ui::scripted(vec![Answer::No]);
-    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(
             |step| step.starts_with("The Always-On Service runs the configuration from before")
@@ -4027,6 +4030,31 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
             || call == "axocoatl service start"),
         "{after:?}"
     );
+
+    // Another program's `/health` (no version) is no older Axocoatl: the run
+    // uses what answers, as before, and stops or restarts nothing.
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .mount(&health)
+        .await;
+    let before = shims.calls().len();
+    o.steps.clear();
+    o.ui = Ui::new(Mode::Yes, false, None);
+    assert!(
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
+        "{:?}",
+        o.steps
+    );
+    let after = &shims.calls()[before..];
+    assert!(
+        !after
+            .iter()
+            .any(|call| call == "axocoatl service stop" || call == "axocoatl service start"),
+        "{after:?}"
+    );
+    assert!(!o.ui.output().contains("Stop it now"));
 }
 
 /// Replacing a configuration never shows or logs the old file's secrets;

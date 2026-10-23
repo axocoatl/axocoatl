@@ -451,7 +451,11 @@ Onboarding copies a small Node repository with one failing `node --test` to a ne
 temporary directory only you can open, uses the daemon that runs (it waits for the
 Always-On Service Step 6 just started, or a daemon that already runs, and never starts
 a second one beside it), or starts one for the run and stops it afterwards (its first
-start downloads an 87 MB embedding model once), runs
+start downloads an 87 MB embedding model once). A daemon that started before the
+configuration last changed, or that does not say when it started (before 1.5.0), would
+run the old configuration: onboarding asks to restart the Always-On Service, or to stop
+that daemon (either ends its Session turns and runs in progress; `--yes` answers yes),
+and waits for it to exit. It then runs
 `axocoatl run fix --task "Paging skips the last item"` (or fix-claude-code or
 fix-codex) with your models and a receipt beside the copy, and checks the receipt with
 `axocoatl receipt verify <receipt> --key "$(axocoatl receipt key)" --repo <copy>`. It

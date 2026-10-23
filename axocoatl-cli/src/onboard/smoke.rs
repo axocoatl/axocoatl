@@ -228,39 +228,57 @@ async fn wait_healthy(url: &str, wait: Duration) -> bool {
     }
 }
 
-/// Whether the daemon answering at `url` may run an older configuration
-/// than `config`: it started before the file last changed, or its `/health`
-/// does not say when it started (a daemon before 1.5.0, older than this
-/// CLI). `false` when nothing answers.
-async fn started_before(url: &str, config: &Path) -> bool {
-    let Ok(client) = reqwest::Client::builder()
+/// When the Axocoatl daemon answering at `url` started (Unix milliseconds):
+/// `None` when no Axocoatl `/health` answers there (another program's does
+/// not name a version), `Some(None)` for a daemon before 1.5.0, which does
+/// not say.
+async fn started_at(url: &str) -> Option<Option<u64>> {
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
-    else {
-        return false;
-    };
-    let Some(health) = client
-        .get(url)
-        .send()
-        .await
-        .ok()
-        .filter(|response| response.status().is_success())
-    else {
-        return false;
-    };
-    let Some(started) = health
-        .json::<serde_json::Value>()
-        .await
-        .ok()
-        .and_then(|health| health.get("started_at_ms")?.as_u64())
-    else {
-        return true;
-    };
+        .ok()?;
+    let response = client.get(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let health: serde_json::Value = response.json().await.ok()?;
+    health.get("version")?.as_str()?;
+    Some(
+        health
+            .get("started_at_ms")
+            .and_then(serde_json::Value::as_u64),
+    )
+}
+
+/// Whether `config` last changed after `started` (Unix milliseconds).
+fn changed_since(config: &Path, started: u64) -> bool {
     std::fs::metadata(config)
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
         .is_some_and(|modified| modified.as_millis() > u128::from(started))
+}
+
+/// Whether the Axocoatl daemon answering at `url` may run an older
+/// configuration than `config`: it started before the file last changed, or
+/// it does not say when it started (before 1.5.0, older than this CLI).
+async fn started_before(url: &str, config: &Path) -> bool {
+    match started_at(url).await {
+        None => false,
+        Some(None) => true,
+        Some(Some(started)) => changed_since(config, started),
+    }
+}
+
+/// Whether a daemon that answers at `url` after a restart runs `config` as
+/// it is now: it started after the file last changed, or it does not say (an
+/// Axocoatl before 1.5.0, which read the file when it restarted).
+async fn restarted_current(url: &str, config: &Path) -> bool {
+    match started_at(url).await {
+        None => false,
+        Some(None) => true,
+        Some(Some(started)) => !changed_since(config, started),
+    }
 }
 
 /// Whether `axocoatl service status` says the Always-On Service runs.
@@ -283,7 +301,8 @@ async fn service_running(o: &Onboarding) -> bool {
 }
 
 /// The process of the daemon on the IPC socket `socket`, from the socket's
-/// peer credentials.
+/// peer credentials (none when the daemon is in a PID namespace this
+/// process cannot see).
 async fn daemon_pid(socket: &Path) -> Option<i32> {
     tokio::net::UnixStream::connect(socket)
         .await
@@ -291,6 +310,7 @@ async fn daemon_pid(socket: &Path) -> Option<i32> {
         .peer_cred()
         .ok()?
         .pid()
+        .filter(|pid| *pid > 0)
 }
 
 /// Whether process `pid` still runs (a zombie on Linux does not).
@@ -305,6 +325,18 @@ fn process_runs(pid: i32) -> bool {
         })
 }
 
+/// Wait until process `pid` (when known) has exited, at most `wait`.
+async fn wait_exit(pid: Option<i32>, wait: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + wait;
+    while pid.is_some_and(process_runs) {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    true
+}
+
 /// How long a stopped daemon may take to end its Sessions and exit (each
 /// Session's containers are removed through Podman).
 const DAEMON_STOP_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 120 });
@@ -312,9 +344,18 @@ const DAEMON_STOP_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else 
 /// Replace the daemon on `port` that runs an older configuration, once the
 /// person agrees: restart the Always-On Service when it runs, or stop the
 /// other daemon (`axocoatl dev` in another terminal) and wait for its
-/// process to exit, so the first run starts its own. `false` with the step
-/// left when that did not happen.
-async fn replace_stale_daemon(o: &mut Onboarding, url: &str, port: u16, config: &Path) -> bool {
+/// process to exit, so that the service Step 6 just started takes the port
+/// (`service_started`) or the first run starts its own daemon. `start_dev`:
+/// onboarding starts `axocoatl dev` itself when it finishes. `false` with the
+/// step left when that did not happen.
+async fn replace_stale_daemon(
+    o: &mut Onboarding,
+    url: &str,
+    port: u16,
+    config: &Path,
+    service_started: bool,
+    start_dev: bool,
+) -> bool {
     if service_running(o).await {
         if !o.ui.consent(
             &format!(
@@ -333,14 +374,22 @@ async fn replace_stale_daemon(o: &mut Onboarding, url: &str, port: u16, config: 
             );
             return false;
         }
+        let pid = daemon_pid(&o.socket_path).await;
         let exe = o.host.exe.display().to_string();
-        for args in [["service", "stop"], ["service", "start"]] {
-            if let Err(error) = o.host.run(&Cmd::new(&exe, &args)).await {
+        let stopped = o.host.run(&Cmd::new(&exe, &["service", "stop"])).await;
+        // It ends its Sessions before it exits; start it again only then.
+        wait_exit(pid, DAEMON_STOP_WAIT).await;
+        if let Err(error) = stopped {
+            if service_running(o).await {
                 o.step_left(format!("{error}; see `axocoatl service status`"));
                 return false;
             }
         }
-        if wait_healthy(url, DAEMON_START_WAIT).await && !started_before(url, config).await {
+        if let Err(error) = o.host.run(&Cmd::new(&exe, &["service", "start"])).await {
+            o.step_left(format!("{error}; see `axocoatl service status`"));
+            return false;
+        }
+        if wait_healthy(url, DAEMON_START_WAIT).await && restarted_current(url, config).await {
             return true;
         }
         o.step_left(format!(
@@ -349,11 +398,18 @@ async fn replace_stale_daemon(o: &mut Onboarding, url: &str, port: u16, config: 
         ));
         return false;
     }
+    let after = if service_started {
+        "the Always-On Service you just started takes the port"
+    } else if start_dev {
+        "onboarding starts `axocoatl dev` when it finishes"
+    } else {
+        "start `axocoatl dev` again afterwards"
+    };
     if !o.ui.consent(
         &format!(
             "The daemon on port {port} started before {} changed, so the first run would use the \
-             old configuration. Stop it now (this ends any Session turn or run in progress; start \
-             `axocoatl dev` again afterwards)?",
+             old configuration. Stop it now (this ends any Session turn or run in progress; \
+             {after})?",
             config.display()
         ),
         true,
@@ -380,25 +436,45 @@ async fn replace_stale_daemon(o: &mut Onboarding, url: &str, port: u16, config: 
         ));
         let deadline = tokio::time::Instant::now() + DAEMON_STOP_WAIT;
         loop {
-            let ipc = axocoatl_daemon::ipc::IpcClient::connect(&o.socket_path)
-                .await
-                .is_ok();
             // The process holds the data directory until it exits.
-            if !ipc
-                && !healthy(url).await
-                && super::host::port_free(port)
-                && !pid.is_some_and(process_runs)
-            {
-                o.ui.ok(format!(
-                    "Stopped the daemon on port {port}; start `axocoatl dev` again after onboarding"
-                ));
-                return true;
+            if !pid.is_some_and(process_runs) {
+                let ipc = axocoatl_daemon::ipc::IpcClient::connect(&o.socket_path)
+                    .await
+                    .is_ok();
+                let stopped = match started_at(url).await {
+                    None => !ipc && super::host::port_free(port),
+                    // Another daemon took the port (the service, restarted
+                    // by its manager); a known process has exited, so one
+                    // that does not say when it started is new too.
+                    Some(Some(started)) => !changed_since(config, started),
+                    Some(None) => pid.is_some(),
+                };
+                if stopped {
+                    break;
+                }
             }
             if tokio::time::Instant::now() >= deadline {
-                break;
+                o.step_left(format!(
+                    "Could not stop the daemon on port {port}, which runs the configuration from \
+                     before this onboarding: stop `axocoatl dev` (or `axocoatl service stop`), \
+                     then run `axocoatl onboard --update --smoke-test`"
+                ));
+                return false;
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        if service_started
+            && !(wait_healthy(url, DAEMON_START_WAIT).await && restarted_current(url, config).await)
+        {
+            o.step_left(format!(
+                "The Always-On Service did not answer at {url} after the older daemon stopped: \
+                 see `axocoatl service status`, then run `axocoatl onboard --update \
+                 --smoke-test` again"
+            ));
+            return false;
+        }
+        o.ui.ok(format!("Stopped the daemon on port {port}; {after}"));
+        return true;
     }
     o.step_left(format!(
         "Could not stop the daemon on port {port}, which runs the configuration from before this \
@@ -410,12 +486,14 @@ async fn replace_stale_daemon(o: &mut Onboarding, url: &str, port: u16, config: 
 
 /// Step 7; `true` when the run passed and its receipt verified.
 /// `service_started`: Step 6 just started the Always-On Service, which
-/// this run then uses (never a second daemon beside it).
+/// this run then uses (never a second daemon beside it). `start_dev`:
+/// onboarding starts `axocoatl dev` when it finishes.
 pub(crate) async fn run(
     o: &mut Onboarding,
     writer: WriterChoice,
     choice: &Choice,
     service_started: bool,
+    start_dev: bool,
 ) -> bool {
     if o.ui.plan() {
         let args = run_args(
@@ -502,7 +580,7 @@ pub(crate) async fn run(
         answers = true;
     }
     if answers && started_before(&url, &config).await {
-        if !replace_stale_daemon(o, &url, port, &config).await {
+        if !replace_stale_daemon(o, &url, port, &config, service_started, start_dev).await {
             return false;
         }
         answers = healthy(&url).await;
