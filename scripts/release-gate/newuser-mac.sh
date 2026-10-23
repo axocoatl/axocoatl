@@ -378,7 +378,7 @@ path_codex() {
   path_begin codex
   install_once || { path_end; return; }
   onboard "onboard --update --writer codex" --update --writer codex
-  confirm "Codex billing was set to the ChatGPT plan" "Did onboarding ask how to bill Codex, and did you choose the ChatGPT plan?"
+  confirm "Codex billing was set to the ChatGPT plan" "Did onboarding say Codex runs bill to your ChatGPT plan (codex-chatgpt), without offering an OpenAI API key?"
   doctor_ready fix-codex
   ensure_daemon
   local command
