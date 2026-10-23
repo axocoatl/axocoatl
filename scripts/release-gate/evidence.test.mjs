@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, bundleDecision,
   commitMatches, compareTotals, decideRelease, overridePhrase, pae, parseActors, parseKeys,
-  parseRequiredPaths, sixteenGbMentions, stepsPass, verifyBundle,
+  parseRequiredPaths, parseRequiredSteps, requiredStepProblems, sixteenGbMentions, stepsPass, verifyBundle,
 } from './evidence.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +37,11 @@ const REQUIRED = `# Release gate
 - \`C1-local\`: Tier C, local models
 - \`C2-local\` (when the public copy names 16 GB): the small-memory Mac
 <!-- release-gate:required-paths:end -->
+
+<!-- release-gate:required-steps:start -->
+- \`C1-local\`
+  - \`run fix node-deps\`
+<!-- release-gate:required-steps:end -->
 `;
 
 function makeKey() {
@@ -134,8 +139,58 @@ test('the required paths come from the block in RELEASE_GATE.md, the 16 GB ones 
   assert.throws(() => parseRequiredPaths('# nothing'), /required-paths block/);
   const real = parseRequiredPaths(readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8'));
   const always = real.filter((entry) => entry.when === 'always').map((entry) => entry.name);
-  assert.deepEqual(always, ['A-x86', 'A-arm', 'C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-workbench-webkit', 'D1']);
+  assert.deepEqual(always, ['A-x86', 'A-arm', 'C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-service',
+    'C1-workbench-webkit', 'C1-recovery', 'C1-real-repo', 'D1']);
   assert.ok(real.some((entry) => entry.name.startsWith('C2-') && entry.when === 'sixteen-gb'));
+});
+
+test('the steps each path must show come from their block in RELEASE_GATE.md, and the gate scripts record each by that name', () => {
+  assert.deepEqual([...parseRequiredSteps(REQUIRED)], [['C1-local', ['run fix node-deps']]]);
+  assert.throws(() => parseRequiredSteps(REQUIRED.replace(/<!-- release-gate:required-steps:start -->[^]*$/, '')), /required-steps block/);
+  const block = (body) => `<!-- release-gate:required-steps:start -->\n${body}\n<!-- release-gate:required-steps:end -->\n`;
+  assert.throws(() => parseRequiredSteps(block('  - `a step`')), /under no path/);
+  assert.throws(() => parseRequiredSteps(block('- `C1-local`\n- `C1-local`')), /listed twice/);
+  assert.throws(() => parseRequiredSteps(block('- `C1-local`\nsome prose')), /neither a path nor a step/);
+  // The real list: every path it names is a required path, each names at
+  // least one step, and each step is written literally in a gate script,
+  // so a renamed step cannot go unnoticed.
+  const markdown = readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8');
+  const paths = parseRequiredPaths(markdown).map((entry) => entry.name);
+  const scripts = ['newuser-mac.sh', 'newuser-linux.sh', 'lib.sh'].map((file) => readFileSync(path.join(HERE, file), 'utf8')).join('\n');
+  const real = parseRequiredSteps(markdown);
+  assert.ok(real.size > 0);
+  for (const [name, steps] of real) {
+    assert.ok(paths.includes(name), `${name} has required steps but is not a required path`);
+    assert.ok(steps.length > 0, `${name} lists no step`);
+    for (const step of steps) assert.ok(scripts.includes(step), `${name}: no gate script records ${JSON.stringify(step)}`);
+  }
+  for (const name of ['C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-service', 'C1-workbench-webkit', 'C1-recovery', 'C1-real-repo', 'D1']) {
+    assert.ok(real.has(name), `${name} has no required steps`);
+  }
+});
+
+test('a required path that did not record, skipped, failed or made optional a step the list names is refused', () => {
+  const required = ['the account started without Podman or a Podman machine'];
+  const recorded = (status, extra = {}) => [{ name: 'run fix node-deps', status: 'pass', required: true }, { name: required[0], status, required: true, ...extra }];
+  assert.deepEqual(requiredStepProblems('C1-local', recorded('pass'), required), []);
+  assert.match(requiredStepProblems('C1-local', recorded('pass').slice(0, 1), required)[0], /was not recorded, and the release's public text relies on it/);
+  assert.match(requiredStepProblems('C1-local', recorded('skip', { detail: 'a --yes run' }), required)[0], /was skipped: a --yes run/);
+  assert.match(requiredStepProblems('C1-local', recorded('fail'), required)[0], /failed/);
+  assert.match(requiredStepProblems('C1-local', recorded('pass', { required: false }), required)[0], /was recorded as optional/);
+  // A second record of the same step that failed fails it too.
+  assert.match(requiredStepProblems('C1-local', [...recorded('pass'), { name: required[0], status: 'fail', required: true }], required)[0], /failed/);
+  // Through the release decision: C1-local passes every step it recorded,
+  // but not the one the list requires of it.
+  const key = makeKey();
+  const { root, commit } = makeRepo();
+  trust(root, key);
+  writeBundle(root, commit, {
+    'A-x86': pathEvidence('A-x86', commit),
+    'C1-local': pathEvidence('C1-local', commit, { steps: [{ name: 'run fix go', status: 'pass', required: true }] }),
+  }, key);
+  const decision = decide(root, commitAll(root));
+  assert.equal(decision.ok, false);
+  assert.ok(decision.lines.some((line) => line === 'C1-local: step "run fix node-deps" was not recorded, and the release\'s public text relies on it'), decision.lines.join('\n'));
 });
 
 test('a tag with no evidence is refused, naming every missing path', () => {

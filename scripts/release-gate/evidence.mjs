@@ -23,8 +23,8 @@
 //            [--required docs/RELEASE_GATE.md --root DIR]
 //            without --required every path in the bundle must pass; with
 //            it, the bundle passes when it verifies and every required path
-//            passes (other failing paths are warnings), as release.yml
-//            decides
+//            passes with every step that file requires of it (other failing
+//            paths are warnings), as release.yml decides
 //   compare <previous-path.json> <path.json>   time and download vs the
 //            previous release, flagging growth over 20%
 
@@ -44,6 +44,8 @@ export const ENVELOPE_FILE = 'manifest.dsse.json';
 export const EVIDENCE_ROOT = 'release-evidence';
 export const REQUIRED_START = '<!-- release-gate:required-paths:start -->';
 export const REQUIRED_END = '<!-- release-gate:required-paths:end -->';
+export const STEPS_START = '<!-- release-gate:required-steps:start -->';
+export const STEPS_END = '<!-- release-gate:required-steps:end -->';
 export const SIXTEEN_GB_CONDITION = '(when the public copy names 16 GB)';
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const PATH_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
@@ -264,7 +266,7 @@ export function verifyBundle(dir, { keys, version, commit }) {
     }
     const pathProblems = checkPathEvidence(name, evidence, { version: manifest?.version, commit: manifest?.commit });
     if (entry.pass !== evidence.pass) pathProblems.push(`${name}: the manifest and ${entry.file} disagree on pass`);
-    paths.set(name, { pass: pathProblems.length === 0, problems: pathProblems });
+    paths.set(name, { pass: pathProblems.length === 0, problems: pathProblems, steps: evidence.steps });
   }
   return { problems, paths, key: opened.key, manifest };
 }
@@ -283,6 +285,58 @@ export function parseRequiredPaths(markdown) {
   }
   if (required.length === 0) throw new Error('the required-paths block lists no path');
   return required;
+}
+
+/**
+ * The steps docs/RELEASE_GATE.md requires of each path, as a Map of path name
+ * to step names: the evidence each sentence of the public text relies on, so
+ * a path whose script skipped or never recorded one cannot pass. The block
+ * lists a path as `- \`NAME\`` and each of its steps under it as
+ * `  - \`STEP\``.
+ */
+export function parseRequiredSteps(markdown) {
+  const start = markdown.indexOf(STEPS_START);
+  const end = markdown.indexOf(STEPS_END);
+  if (start < 0 || end < start) throw new Error(`the required-steps block (${STEPS_START} ... ${STEPS_END}) is missing`);
+  const steps = new Map();
+  let current = null;
+  for (const line of markdown.slice(start + STEPS_START.length, end).split('\n')) {
+    const pathLine = line.match(/^- `([^`]+)`\s*$/);
+    const stepLine = line.match(/^\s+- `([^`]+)`\s*$/);
+    if (pathLine) {
+      if (!PATH_NAME.test(pathLine[1])) throw new Error(`invalid gate path name ${JSON.stringify(pathLine[1])}`);
+      current = pathLine[1];
+      if (steps.has(current)) throw new Error(`${current} is listed twice in the required-steps block`);
+      steps.set(current, []);
+    } else if (stepLine) {
+      if (!current) throw new Error(`the required step ${JSON.stringify(stepLine[1])} is under no path`);
+      steps.get(current).push(stepLine[1]);
+    } else if (line.trim() !== '') {
+      throw new Error(`the required-steps block has a line that is neither a path nor a step: ${JSON.stringify(line.slice(0, 80))}`);
+    }
+  }
+  return steps;
+}
+
+/**
+ * Why `steps` (a path file's) does not show every step in `required`: each
+ * must be recorded as required and passed, and so must every other record
+ * of it.
+ */
+export function requiredStepProblems(name, steps, required) {
+  const problems = [];
+  const recorded = Array.isArray(steps) ? steps : [];
+  for (const wanted of required) {
+    const found = recorded.filter((step) => step?.name === wanted);
+    if (found.length === 0) {
+      problems.push(`${name}: step ${JSON.stringify(wanted)} was not recorded, and the release's public text relies on it`);
+    } else if (!found.every((step) => step.status === 'pass' && step.required !== false)) {
+      const step = found.find((each) => each.status !== 'pass' || each.required === false);
+      const what = step.required === false ? 'was recorded as optional' : step.status === 'skip' ? 'was skipped' : 'failed';
+      problems.push(`${name}: step ${JSON.stringify(wanted)} ${what}${step.detail ? `: ${String(step.detail).slice(0, 200)}` : ''}`);
+    }
+  }
+  return problems;
 }
 
 /** Public copy that may make a claim: the files the 16 GB condition reads. */
@@ -377,24 +431,35 @@ export function parseActors(text) {
 
 /**
  * The paths a release needs: every `always` path, and the C2 paths when the
- * public copy names 16 GB. Returns `{ needed, mentions }`.
+ * public copy names 16 GB, with the steps each must show. Returns
+ * `{ needed, mentions, requiredSteps }`.
  */
 export function neededPaths(root, requiredFile) {
-  const required = parseRequiredPaths(readFileSync(requiredFile, 'utf8'));
+  const markdown = readFileSync(requiredFile, 'utf8');
+  const required = parseRequiredPaths(markdown);
+  const requiredSteps = parseRequiredSteps(markdown);
   const mentions = sixteenGbMentions(root);
   return {
     needed: required.filter((entry) => entry.when === 'always' || mentions.length > 0).map((entry) => entry.name),
     mentions,
+    requiredSteps,
   };
 }
 
 /**
  * One bundle judged as the release judges it: it must verify, and every
- * needed path must be in it and pass. Paths it holds that the release does
- * not need may fail; they are listed as `extraFailing`.
+ * needed path must be in it and pass, with every step `requiredSteps` names
+ * for it recorded and passed. Paths it holds that the release does not need
+ * may fail; they are listed as `extraFailing`.
  */
-export function bundleDecision(dir, { keys, version, commit, needed }) {
+export function bundleDecision(dir, { keys, version, commit, needed, requiredSteps = new Map() }) {
   const bundle = verifyBundle(dir, { keys, version, commit });
+  for (const name of needed) {
+    const entry = bundle.paths.get(name);
+    if (!entry) continue;
+    const problems = requiredStepProblems(name, entry.steps, requiredSteps.get(name) ?? []);
+    if (problems.length > 0) bundle.paths.set(name, { ...entry, pass: false, problems: [...entry.problems, ...problems] });
+  }
   const missing = needed.filter((name) => !bundle.paths.has(name));
   const failing = needed.filter((name) => bundle.paths.has(name) && !bundle.paths.get(name).pass);
   const extraFailing = [...bundle.paths.keys()].filter((name) => !needed.includes(name) && !bundle.paths.get(name).pass);
@@ -417,7 +482,7 @@ export function decideRelease({
   if (!VERSION.test(version ?? '')) return fail(`invalid version ${JSON.stringify(version)}`);
   if (!COMMIT.test(tagCommit ?? '')) return fail(`invalid tag commit ${JSON.stringify(tagCommit)}`);
   const evaluate = () => {
-    const { needed, mentions } = neededPaths(root, requiredFile);
+    const { needed, mentions, requiredSteps } = neededPaths(root, requiredFile);
     if (mentions.length > 0) lines.push(`The public copy names 16 GB (${mentions.slice(0, 5).join(', ')}), so the C2 paths are required.`);
     const problems = [];
     let keys = [];
@@ -442,7 +507,7 @@ export function decideRelease({
         problems.push(`${EVIDENCE_ROOT}/${version}/${commit}: ${match.reason}`);
         continue;
       }
-      const bundle = bundleDecision(path.join(versionDir, commit), { keys, version, commit, needed });
+      const bundle = bundleDecision(path.join(versionDir, commit), { keys, version, commit, needed, requiredSteps });
       const { missing, failing } = bundle;
       const result = { commit, bundle, missing, failing };
       if (bundle.ok) {
@@ -661,9 +726,9 @@ function main(argv) {
       const keys = parseKeys(readFileSync(flags.keys, 'utf8'));
       if (flags.required) {
         // As release.yml decides: required paths must pass; others may not.
-        const { needed, mentions } = neededPaths(path.resolve(flags.root ?? '.'), flags.required);
+        const { needed, mentions, requiredSteps } = neededPaths(path.resolve(flags.root ?? '.'), flags.required);
         if (mentions.length > 0) console.log(`The public copy names 16 GB (${mentions.slice(0, 5).join(', ')}), so the C2 paths are required.`);
-        const result = bundleDecision(dir, { keys, version: flags.version, commit: flags.commit, needed });
+        const result = bundleDecision(dir, { keys, version: flags.version, commit: flags.commit, needed, requiredSteps });
         for (const problem of result.problems) console.log(`problem: ${problem}`);
         for (const [name, entry] of result.paths) {
           const required = needed.includes(name);

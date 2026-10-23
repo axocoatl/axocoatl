@@ -39,6 +39,16 @@ expect() {
 
 command -v node >/dev/null 2>&1 || { echo "test-release-gate: node is required" >&2; exit 1; }
 
+# required_steps PATH [DOC]: the steps docs/RELEASE_GATE.md requires of PATH,
+# one per line.
+required_steps() {
+  EVIDENCE_JS="$script_dir/evidence.mjs" node -e '
+    import(process.env.EVIDENCE_JS).then((m) => {
+      const steps = m.parseRequiredSteps(require("fs").readFileSync(process.argv[1], "utf8")).get(process.argv[2]) ?? [];
+      for (const step of steps) console.log(step);
+    });' "${2:-$repo_root/docs/RELEASE_GATE.md}" "$1"
+}
+
 # Nothing here may reach the developer's own Axocoatl: every variable that
 # would point the CLI at another data root or configuration goes, so each
 # case's temporary HOME is the only one it sees.
@@ -259,6 +269,159 @@ if [ "$lib_status" = 0 ]; then
   pass "lib.sh: new-user PATH, hiding a program, guard shims, run outputs, config readers, name checks, new shells, doctor's verdict, sudo in the journal, fixture commands"
 else
   fail "lib.sh helpers"
+fi
+
+# --- What answers on a daemon's port, decided as onboarding decides it, with
+# every request bounded; and the check that no accepted output of a run
+# holds tool-call markup, against the stand-in axocoatl's daemon.
+(
+  export HOME="$work/daemon-home"
+  mkdir -p "$HOME"
+  # shellcheck source=scripts/release-gate/lib.sh
+  . "$script_dir/lib.sh"
+  config="$work/daemon-config.yaml"
+  printf 'server:\n  port: 1\n' >"$config"
+  # A server that answers /health as asked: current (started now), stale
+  # (started before the file changed), old (no start time), other (no
+  # version), error (HTTP 500) or hang (never answers).
+  cat >"$work/health-server.mjs" <<'NODE'
+import { createServer } from 'node:http';
+import { writeFileSync } from 'node:fs';
+const [mode, portFile] = process.argv.slice(2);
+const server = createServer((req, res) => {
+  const body = {
+    current: { status: 'ok', version: '1.5.0', started_at_ms: Date.now() },
+    stale: { status: 'ok', version: '1.5.0', started_at_ms: 1 },
+    old: { status: 'ok', version: '1.4.0' },
+    other: { status: 'ok' },
+  }[mode];
+  if (mode === 'hang') return;
+  if (mode === 'error') { res.writeHead(500); res.end(); return; }
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+});
+server.listen(0, '127.0.0.1', () => writeFileSync(portFile, String(server.address().port)));
+NODE
+  touch -t 202001010000 "$config"
+  for mode in current stale old other error hang; do
+    rm -f "$work/health.port"
+    node "$work/health-server.mjs" "$mode" "$work/health.port" &
+    server=$!
+    for _ in $(seq 1 50); do [ -s "$work/health.port" ] && break; sleep 0.1; done
+    t0=$SECONDS
+    got=$(GATE_CURL_MAX_TIME=1 gate_daemon_state "$(cat "$work/health.port")" "$config")
+    took=$((SECONDS - t0))
+    kill "$server" 2>/dev/null
+    wait "$server" 2>/dev/null
+    case "$mode" in
+      current) want=current ;;
+      stale | old) want=stale ;;
+      other) want=other ;;
+      *) want=unknown ;;
+    esac
+    [ "$got" = "$want" ] || { echo "gate_daemon_state for a $mode /health: $got (want $want)" >&2; exit 1; }
+    [ "$took" -le 3 ] || { echo "gate_daemon_state waited ${took}s on a $mode /health" >&2; exit 1; }
+  done
+  # Nothing listening, and a config that changed after the daemon started.
+  free=$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')
+  [ "$(gate_daemon_state "$free" "$config")" = none ] || { echo "a closed port is not none" >&2; exit 1; }
+  # Every gate curl to a daemon or stub is bounded (the published install
+  # command is the person's, run as written).
+  for file in lib.sh newuser-linux.sh newuser-mac.sh newuser-mac-ci.sh; do
+    if grep -nE '(^|[^_[:alnum:]-])curl -' "$script_dir/$file" \
+      | grep -v -e 'real=$(command -v curl)' -e 'gate_curl() {' -e "^[0-9]*:GATE_DEFAULT_INSTALL='curl -fsSL"; then
+      echo "$file calls curl without gate_curl's timeouts" >&2
+      exit 1
+    fi
+  done
+
+  # gate_markup_check against the stand-in's daemon: its record names a
+  # Session whose answers the daemon serves with the local API token.
+  printf '#!/bin/sh\nexec node "%s" "$@"\n' "$script_dir/testdata/fake-axocoatl.mjs" >"$work/fake-bin-axocoatl"
+  mkdir -p "$work/markup-bin"
+  mv "$work/fake-bin-axocoatl" "$work/markup-bin/axocoatl"
+  chmod +x "$work/markup-bin/axocoatl"
+  export PATH="$work/markup-bin:$PATH"
+  port=$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); })')
+  conf=$(gate_config_path)
+  mkdir -p "$(dirname -- "$conf")"
+  printf 'server:\n  port: %s\n  host: "127.0.0.1"\n' "$port" >"$conf"
+  axocoatl dev >/dev/null 2>&1 &
+  dev=$!
+  for _ in $(seq 1 50); do gate_daemon_up "$port" && break; sleep 0.1; done
+  [ "$(gate_daemon_state "$port" "$conf")" = current ] || { echo "the stand-in daemon is not current" >&2; kill -INT "$dev"; exit 1; }
+  data=$(gate_data_dir)
+  repo="$work/markup-repo"
+  mkdir -p "$repo" && git -C "$repo" init -q -b main
+  printf 'a\n' >"$repo/a.txt"
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid add -A
+  git -C "$repo" -c user.name=t -c user.email=t@example.invalid commit -qm a
+  session() { # session ID ANSWER: a Session whose run ended with ANSWER
+    printf '{"session":{"id":"%s","working_dir":"%s","status":"closed"},"messages":[{"role":"user","content":"fix it"},{"role":"assistant","content":%s}]}' \
+      "$1" "$repo" "$(node -e 'console.log(JSON.stringify(process.argv[1]))' "$2")" >"$data/fake-sessions/$1.json"
+    printf '{"schema":"axocoatl.record-bundle/2","session_id":"%s"}\n' "$1" >"$work/record-$1.jsonl"
+  }
+  gate_begin "$work/evidence-markup" 1.5.0 "$(printf '7%.0s' $(seq 1 40))" A-markup A
+  GATE_DAEMON_PORT=$port
+  session ses-clean 'Fixed the paging bug.'
+  gate_markup_check clean "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  session ses-slip 'Done.<function=edit_file><parameter=path>src/a.js</parameter></function>'
+  gate_markup_check slipped "$repo" "$work/record-ses-slip.jsonl" 2>/dev/null
+  session ses-qwen 'Here is the call: </tool_call>'
+  gate_markup_check tool-call-tag "$repo" "$work/record-ses-qwen.jsonl" 2>/dev/null
+  printf 'b\n<function=write_file>\n' >>"$repo/a.txt"
+  gate_markup_check in-a-file "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  git -C "$repo" checkout -q -- a.txt
+  printf 'new\n</tool_call>\n' >"$repo/new.txt"
+  gate_markup_check in-a-new-file "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  rm -f "$repo/new.txt"
+  printf '{"schema":"axocoatl.record-bundle/2"}\n' >"$work/record-none.jsonl"
+  gate_markup_check no-session "$repo" "$work/record-none.jsonl" 2>/dev/null
+  kill -INT "$dev" 2>/dev/null
+  wait "$dev" 2>/dev/null
+  gate_markup_check daemon-down "$repo" "$work/record-ses-clean.jsonl" 2>/dev/null
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    const got = steps.map((s) => `${s.name.replace(/^no tool-call markup in the accepted output of the run on /, "")}: ${s.status}`);
+    const want = ["clean: pass", "slipped: fail", "tool-call-tag: fail", "in-a-file: fail", "in-a-new-file: fail", "no-session: fail", "daemon-down: fail"];
+    if (got.join("\n") !== want.join("\n")) { console.error(got.join("\n")); process.exit(1); }
+    if (!/1 answers of Session ses-clean checked/.test(steps[0].detail)) { console.error(steps[0].detail); process.exit(1); }
+    if (!/<function=edit_file>/.test(steps[1].detail) || !/files the run left changed/.test(steps[3].detail)) { console.error(steps[1].detail, steps[3].detail); process.exit(1); }
+    if (steps.some((s) => s.required === false)) process.exit(1);
+  ' "$GATE_STEPS" || exit 1
+  # The token went to curl on standard input, never on a command line.
+  grep -q 'header = "Authorization: Bearer %s"' "$script_dir/lib.sh" || exit 1
+  rm -rf -- "$GATE_TMP"
+
+  # A simulated operator's answer, kept in answers.txt and the record.
+  gate_begin "$work/evidence-ask" 1.5.0 "$(printf '6%.0s' $(seq 1 40))" A-ask A
+  GATE_SIMULATION=1 GATE_SIMULATED_ANSWER=y gate_confirm "asked and answered" "Did it work?" >/dev/null 2>&1
+  GATE_SIMULATION=1 GATE_SIMULATED_ANSWER=n gate_confirm "asked and refused" "Did it fail?" >/dev/null 2>&1
+  if ! grep -q $'\tDid it work?\ty\t' "$GATE_ATTACH/answers.txt" || ! grep -q $'\tDid it fail?\tn\tsimulated no' "$GATE_ATTACH/answers.txt"; then
+    cat "$GATE_ATTACH/answers.txt" >&2
+    exit 1
+  fi
+  node -e '
+    const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+    if (steps[0].status !== "pass" || !/answered yes at the terminal: Did it work\?/.test(steps[0].detail)) process.exit(1);
+    if (steps[1].status !== "fail" || !/answered no: simulated no/.test(steps[1].detail)) process.exit(1);
+  ' "$GATE_STEPS" || exit 1
+  # Onboarding logs written during a path are kept with it.
+  mkdir -p "$(gate_log_dir)"
+  printf 'old\n' >"$(gate_log_dir)/onboard-20200101T000000Z.log"
+  touch -t 202001010000 "$(gate_log_dir)/onboard-20200101T000000Z.log"
+  touch "$GATE_TMP/began"
+  sleep 1
+  printf 'GET /callback from 127.0.0.1\n' >"$(gate_log_dir)/onboard-20261023T000000Z.log"
+  gate_keep_onboarding_logs "$GATE_TMP/began"
+  [ "$(ls "$GATE_ATTACH/logs/onboarding")" = onboard-20261023T000000Z.log ] || { ls "$GATE_ATTACH/logs/onboarding" >&2; exit 1; }
+  rm -rf -- "$GATE_TMP"
+)
+daemon_status=$?
+if [ "$daemon_status" = 0 ]; then
+  pass "daemon state (current, stale, before 1.5.0, not Axocoatl, HTTP error, a hang within the bound, nothing listening); every gate curl bounded; no tool-call markup in a run's answers or changed files (fails closed); operator answers kept; onboarding logs kept"
+else
+  fail "daemon state, curl bounds, markup check, answers"
 fi
 
 # --- The image a run chose, read from the plan line the product prints.
@@ -540,6 +703,57 @@ if [ "$status" = 2 ] && printf '%s' "$out" | grep -Eq 'gate account|macOS gate';
 else
   fail "newuser-mac.sh refusal (exit $status): $out"
 fi
+# What the macOS gate runs, read from the script (it runs only in a gate
+# account): every C1 path by default, the questions the workbench path
+# asks, the strict verify-receipt workflow from the docs, and the Safari
+# driver the gate records answers from.
+(
+  set -e
+  mac="$script_dir/newuser-mac.sh"
+  grep -qx '    paths=local,claude-code,codex,openrouter,service,workbench,workbench-chromium,recovery,real-repo' "$mac"
+  # Every C1 path the release requires is in that default list.
+  for required in $(node -e '
+      import(process.argv[1]).then((m) => {
+        const doc = require("fs").readFileSync(process.argv[2], "utf8");
+        console.log(m.parseRequiredPaths(doc).filter((p) => p.name.startsWith("C1-")).map((p) => p.name.slice(3)).join(" "));
+      });' "$script_dir/evidence.mjs" "$repo_root/docs/RELEASE_GATE.md"); do
+    # The default list, as the script has it ("workbench" is workbench-webkit).
+    defaults=",$(sed -n 's/^    paths=\(local,claude-code.*\)$/\1/p' "$mac"),"
+    defaults=${defaults//,workbench,/,workbench-webkit,}
+    case "$defaults" in
+      *",$required,"*) ;;
+      *) echo "the required path C1-$required is not in newuser-mac.sh's default paths" >&2; exit 1 ;;
+    esac
+  done
+  # Source Control may show Last turn N >= 1 (a writer that also edits a
+  # test), never only exactly 1; the driver decides it the same way.
+  grep -q "Does it show 'Last turn N' (N of at least 1" "$mac"
+  if grep -q "Last turn 1" "$mac"; then echo "the gate still asks for exactly Last turn 1" >&2; exit 1; fi
+  grep -q 'Number(s.lastTurn) >= 1' "$script_dir/safari-workbench.mjs"
+  # The flushed transcript and the answers kept beside it.
+  grep -q 'exec script -q -t 0 ' "$mac"
+  grep -q 'exec script -q -e -f -c ' "$script_dir/newuser-linux.sh"
+  # The driver: its usage, the link on standard input, a refusal of bad
+  # usage before any browser starts.
+  node "$script_dir/safari-workbench.mjs" --help | grep -q -- '--link URL|-'
+  if node "$script_dir/safari-workbench.mjs" --backend webdriver --link - --home "$work" --repo "$work" --out "$work/driver" \
+    --preview-port 0 </dev/null >/dev/null 2>&1; then
+    echo "the driver took --preview-port 0" >&2
+    exit 1
+  fi
+  # The docs' strict workflow, which keeps require-receipt at true.
+  strict=$(node "$script_dir/published-commands.mjs" yaml-block "$repo_root/sites/docs/src/content/docs/workbench/receipts.mdx" \
+    "startsWith(github.head_ref, 'axocoatl/')")
+  printf '%s' "$strict" | grep -q 'verify-receipt@'
+  if printf '%s' "$strict" | grep -q 'require-receipt: false'; then echo "the strict workflow sets require-receipt: false" >&2; exit 1; fi
+  grep -q "Verified the receipt of run %s" "$repo_root/actions/verify-receipt/verify.sh"
+)
+mac_status=$?
+if [ "$mac_status" = 0 ]; then
+  pass "newuser-mac.sh: every required C1 path by default, Last turn N >= 1 (and the driver alike), flushed transcripts, the driver's usage, the docs' strict verify-receipt workflow and the line the gate requires from the Action's log"
+else
+  fail "newuser-mac.sh's paths, questions, driver and workflow"
+fi
 out=$("$script_dir/newuser-linux.sh" --help 2>&1)
 status=$?
 if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- '--tarball'; then
@@ -668,7 +882,8 @@ PODMAN
       "config.yaml uses the free port 8243": "pass",
       "doctor: ready, no FAIL in sandbox, models, writers, daemon": "pass",
       "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": "pass",
-      "axocoatl dev serves on port 8243": "pass",
+      "axocoatl dev serves on its configured port": "pass",
+      "the README\u0027s command passed on every fixture, each receipt and record verified": fixtures.includes("node-plain") ? "pass" : "fail",
       "a check program that is absent: exit 3": "pass",
       "refused before any model call (0 tokens)": "pass",
       "reviewer anthropic:x: exit 3": "pass",
@@ -677,18 +892,21 @@ PODMAN
       "onboard prints the Podman install command": "pass",
       "onboard did not run sudo without --allow-sudo (PATH)": "pass",
       "onboard did not run sudo without --allow-sudo (system journal)": ["pass", "skip"],
-      "doctor FAILs an empty /etc/subuid with the usermod fix": "skip",
+      "doctor FAILs the subuid range with the usermod fix": "skip",
       "Ctrl+C stops axocoatl dev with exit 0": "pass",
     };
     for (const fixture of fixtures) {
-      for (const name of [`run fix on ${fixture}`, `receipt verify on ${fixture} (documented command)`, `record verify on ${fixture}`, `the model fixed ${fixture} once`]) want[name] = "pass";
+      for (const name of [`run fix on ${fixture}`, `receipt verify on ${fixture} (documented command)`, `record verify on ${fixture}`,
+        `the model fixed ${fixture} once`, `no tool-call markup in the accepted output of the run on ${fixture}`]) want[name] = "pass";
     }
     if (!fixtures.includes("node-plain")) want["fixture node-plain exists"] = "fail";
     const ok = (name, value) => (Array.isArray(value) ? value : [value]).includes(status[name]);
     const wrong = Object.entries(want).filter(([name, value]) => !ok(name, value)).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
+    // Every step docs/RELEASE_GATE.md requires of a Tier A path is recorded.
+    for (const name of process.argv[4].split("\n").filter(Boolean)) if (!(name in status)) wrong.push(`${name}: not recorded (required of A-x86)`);
     if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
     if (e.pass !== false) { console.error("a simulated path passed"); process.exit(1); }
-  ' "$sim/evidence/$version/$commit/A-sim.json" "$new_shell_expect" "$present"
+  ' "$sim/evidence/$version/$commit/A-sim.json" "$new_shell_expect" "$present" "$(required_steps A-x86)"
   # A fixture the model cannot fix fails its run.
   node -e '
     const f = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -696,7 +914,8 @@ PODMAN
     require("fs").writeFileSync(process.argv[2], JSON.stringify(f));
   ' "$script_dir/stub-fixes.json" "$sim/no-go-fix.json"
   set +e
-  env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" GATE_STUB_FIXES="$sim/no-go-fix.json" PATH="$sim/fakebin:$PATH" \
+  env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" GATE_STUB_FIXES="$sim/no-go-fix.json" \
+    FAKE_FINAL_TEXT='<function=edit_file><parameter=path>src/x.js</parameter></function>' PATH="$sim/fakebin:$PATH" \
     "$script_dir/newuser-linux.sh" --tarball "$tarball" --commit "$commit" --label A-sim-broken \
     --evidence-root "$sim/evidence" --port 8244 >"$sim/broken.log" 2>&1
   set -e
@@ -704,6 +923,11 @@ PODMAN
     const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const step = (name) => e.steps.find((s) => s.name === name)?.status;
     if (step("run fix on go") !== "fail" || step("run fix on rust") !== "pass") { console.error(JSON.stringify(e.steps.filter((s) => /go|rust/.test(s.name)))); process.exit(1); }
+    // A run whose turn ended on a slipped tool call passes its checks, but
+    // its accepted output fails the gate, and so does the path.
+    const markup = e.steps.find((s) => s.name === "no tool-call markup in the accepted output of the run on rust");
+    if (markup?.status !== "fail" || !/<function=edit_file>/.test(markup.detail)) { console.error(JSON.stringify(markup)); process.exit(1); }
+    if (step("the README\u0027s command passed on every fixture, each receipt and record verified") !== "fail") process.exit(1);
   ' "$sim/evidence/$version/$commit/A-sim-broken.json"
   # The gate read the image and setup each fixture's run chose from the plan
   # line the stand-in printed (the product's, testdata/run-plan-lines.txt).
@@ -728,15 +952,25 @@ PODMAN
   # stub stands for the models onboarding configured.
   live_home="$sim/live-home"
   mkdir -p "$live_home"
-  node "$script_dir/stub-model-server.mjs" --port 0 --port-file "$sim/live-stub.port" >"$sim/live-stub.log" 2>&1 &
+  node "$script_dir/stub-model-server.mjs" --port 0 --port-file "$sim/live-stub.port" \
+    --models qwen3-coder:30b,gpt-oss:20b,qwen3-coder:480b >"$sim/live-stub.log" 2>&1 &
   live_stub=$!
   for _ in $(seq 1 100); do [ -s "$sim/live-stub.port" ] && break; sleep 0.1; done
-  live_env=(env -u GITHUB_ACTIONS HOME="$live_home" GATE_SIMULATION=1 GATE_TMPDIR="$sim" GATE_IN_SCRIPT="$sim/live-transcript.txt"
-    FAKE_AXOCOATL_VERSION="$version" FAKE_ONBOARD_OPERATOR=1 FAKE_DEFAULT_PORT=8245
-    FAKE_OLLAMA_URL="http://127.0.0.1:$(cat "$sim/live-stub.port")" PATH="$sim/fakebin:$PATH")
+  # Copies of /etc/subuid and /etc/subgid: another user has 100000-165535,
+  # this account the next range, which the gate removes and the stand-in's
+  # onboarding (a person saying yes) adds again beside the other.
+  me=$(id -un)
+  for file in subuid subgid; do printf 'otheruser:100000:65536\n%s:165536:65536\n' "$me" >"$sim/$file"; done
+  # A new user's VM has no Ollama.
+  live_path=$(PATH="$sim/fakebin:$PATH" gate_path_without ollama "$sim/no-ollama")
+  # GATE_IN_SCRIPT names the log the run writes to, as script(1) would.
+  live_env=(env -u GITHUB_ACTIONS HOME="$live_home" GATE_SIMULATION=1 GATE_TMPDIR="$sim" GATE_IN_SCRIPT="$sim/live.log"
+    GATE_SIMULATED_ANSWER=y GATE_SUBID_FILES="$sim/subuid:$sim/subgid" FAKE_SUBID_FILES="$sim/subuid:$sim/subgid"
+    FAKE_AXOCOATL_VERSION="$version" FAKE_ONBOARD_OPERATOR=1 FAKE_DEFAULT_PORT=8245 FAKE_STEP6_CHOICE=service FAKE_SIGN_IN=openrouter
+    FAKE_OLLAMA_URL="http://127.0.0.1:$(cat "$sim/live-stub.port")" USER="$me" PATH="$live_path")
   set +e
   "${live_env[@]}" "$script_dir/newuser-linux.sh" --live --tarball "$tarball" --commit "$commit" --label D1-sim \
-    --evidence-root "$sim/evidence" </dev/null >"$sim/live.log" 2>&1
+    --evidence-root "$sim/evidence" --service-writer-model ollama:qwen3-coder:480b </dev/null >"$sim/live.log" 2>&1
   status=$?
   # The same account again is no longer brand-new: refused before anything.
   "${live_env[@]}" "$script_dir/newuser-linux.sh" --live --tarball "$tarball" --commit "$commit" --label D1-again \
@@ -752,16 +986,30 @@ PODMAN
     const want = {
       "onboard (interactive, every consent answered by the operator; --start none)": "pass",
       "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]": "pass",
-      "axocoatl dev serves on port 8245": "pass",
+      "axocoatl dev serves on its configured port": "pass",
       "negative cases with the scripted model server": "skip",
+      "the README\u0027s command passed on every fixture, each receipt and record verified": fixtures.includes("node-plain") ? "pass" : "fail",
+      // The stand-in Podman is on PATH from the start: the account was not
+      // without it, so onboarding cannot have installed it.
+      "the account started without Podman": "fail",
+      "onboarding installed Podman with apt": "fail",
     };
     for (const fixture of fixtures) for (const name of [`run fix on ${fixture}`, `record verify on ${fixture}`]) want[name] = "pass";
+    // Every other step docs/RELEASE_GATE.md requires of D1 is recorded and,
+    // with the stand-ins playing each part, passes.
+    for (const name of process.argv[3].split("\n").filter(Boolean)) if (!(name in want)) want[name] = "pass";
     const config = e.steps.find((s) => s.name.startsWith("onboarding wrote "));
     if (config?.status !== "pass" || !/server\.port 8245/.test(config.detail)) { console.error(JSON.stringify(config)); process.exit(1); }
     const wrong = Object.entries(want).filter(([name, value]) => status[name] !== value).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
     if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
     if (e.tier !== "D") { console.error(`tier ${e.tier}`); process.exit(1); }
-  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present"
+    const restart = e.steps.find((s) => s.name.startsWith("onboarding restarted the service"));
+    if (!/onboarding asked to restart it/.test(restart.detail)) { console.error(restart.detail); process.exit(1); }
+    if (!e.attachments.includes("D1-sim/answers.txt")) { console.error("no answers.txt"); process.exit(1); }
+  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present" "$(required_steps D1)"
+  # The account's range is back, beside the other user's, and the service
+  # was uninstalled.
+  grep -qx "$me:165536:65536" "$sim/subuid" || { cat "$sim/subuid" >&2; echo "the account has no range after onboarding" >&2; exit 1; }
   grep -q -- '--model' "$sim/evidence/$version/$commit/D1-sim/readme-command.txt" && { echo "the live run kept the README's --model options" >&2; exit 1; }
   if [ "$again" != 2 ] || ! grep -q 'needs a brand-new account' "$sim/live-again.log"; then
     cat "$sim/live-again.log" >&2
@@ -773,7 +1021,7 @@ PODMAN
 )
 sim_status=$?
 if [ "$sim_status" = 0 ]; then
-  pass "newuser-linux.sh against a stand-in axocoatl: every Tier A step recorded as the contract says; a fixture the model cannot fix fails its run; --live keeps the account's HOME, starts nothing from onboarding and finds the daemon on the port onboarding chose"
+  pass "newuser-linux.sh against a stand-in axocoatl: every Tier A step recorded as the contract says, every required step of A and D1 recorded; a fixture the model cannot fix fails its run, and a turn that ended on a slipped tool call fails the gate; --live keeps the account's HOME, starts nothing from onboarding, finds the daemon on the port onboarding chose, removes and sees onboarding add the account's subordinate ids, and runs the Always-On Service from Step 6 to uninstall"
 else
   fail "newuser-linux.sh simulation"
 fi
@@ -833,10 +1081,13 @@ done
         const text = require("fs").readFileSync(process.argv[1], "utf8");
         console.log(m.parseRequiredPaths(text).filter((p) => p.when === "always").map((p) => p.name).join(" "));
       });' "$repo/docs/RELEASE_GATE.md")
-  make_path() { # make_path DIR NAME STATUS
+  make_path() { # make_path DIR NAME STATUS: with every step RELEASE_GATE.md requires of NAME
     mkdir -p "$1/$2"
     printf '%s transcript\n' "$2" >"$1/$2/transcript.txt"
     node "$script_dir/evidence.mjs" add-step --file "$1/$2.steps" --name "run fix" --status "$3" --exit 0 --seconds 2 --bytes 10
+    while IFS= read -r step; do
+      node "$script_dir/evidence.mjs" add-step --file "$1/$2.steps" --name "$step" --status pass
+    done < <(required_steps "$2" "$repo/docs/RELEASE_GATE.md")
     node "$script_dir/evidence.mjs" path-file --steps "$1/$2.steps" --out "$1/$2.json" --path "$2" \
       --tier "${2%%-*}" --version 1.5.0 --commit "$commit" --attach "$2/transcript.txt" >/dev/null || true
     rm "$1/$2.steps"
@@ -847,7 +1098,7 @@ done
     case "$name" in A-*) ;; *) make_path "$from" "$name" pass ;; esac
   done
   # A path the release does not require may fail: a warning, not a refusal.
-  make_path "$from" C1-real-repo fail
+  make_path "$from" C1-workbench-chromium fail
 
   # A stand-in gh: run 111 is CI's push run of this commit; 222 is a fork's
   # pull request; 333 ran another commit; 444 is the release workflow.
@@ -930,7 +1181,7 @@ GH
     while IFS= read -r path; do rm -rf "$path"; done < <(HOME="$sign_home" "$script_dir/reset-mac-account.sh" --print-paths)
     HOME="$sign_home" PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
       --from "$from" --ci-run 111 --axocoatl "$bin" >"$work/collect.log" 2>&1 || { cat "$work/collect.log" >&2; exit 1; }
-    grep -q 'C1-real-repo: warning: failed (not a required path)' "$work/collect.log" || { cat "$work/collect.log" >&2; exit 1; }
+    grep -q 'C1-workbench-chromium: warning: failed (not a required path)' "$work/collect.log" || { cat "$work/collect.log" >&2; exit 1; }
     grep -q 'collected A-arm from' "$work/collect.log"
     grep -q '^Next:' "$work/collect.log"
     [ -z "$(ls -A "$pretend")" ] || { echo "AXOCOATL_DATA_DIR was written: $(ls -A "$pretend")" >&2; exit 1; }
