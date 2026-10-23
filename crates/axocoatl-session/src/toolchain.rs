@@ -441,8 +441,8 @@ pub fn ambiguous_message(candidates: &[Candidate], check: Option<&str>) -> Strin
     };
     format!(
         "the repository has the files of several toolchains: {found}, and {check}. Pass \
-         --toolchain <language>, where <language> is {names} (or --toolchain none for the plain \
-         image), or give the check with --check \"<command>\""
+         --toolchain LANGUAGE, where LANGUAGE is {names} (or --toolchain none for the plain \
+         image), or give the check with --check \"COMMAND\""
     )
 }
 
@@ -1666,7 +1666,7 @@ mod tests {
         assert!(message.contains("package.json (node)"), "{message}");
         assert!(message.contains("go.mod (go)"), "{message}");
         assert!(
-            message.contains("Pass --toolchain <language>, where <language> is node, python or go"),
+            message.contains("Pass --toolchain LANGUAGE, where LANGUAGE is node, python or go"),
             "{message}"
         );
         assert!(!message.contains('|'), "{message}");

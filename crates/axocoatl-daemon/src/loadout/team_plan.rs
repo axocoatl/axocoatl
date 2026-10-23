@@ -341,7 +341,7 @@ pub fn fill_detected_checks(
 fn no_detected_check(name: &str) -> String {
     format!(
         "the check {name} runs the repository's own check command, and none was detected: \
-         pass --check \"<command>\""
+         pass --check \"COMMAND\""
     )
 }
 
@@ -391,7 +391,7 @@ pub fn required_checks(
             }
             (None, None) => {
                 return Err(RunError::Usage(format!(
-                    "the check {} has no command: pass --check \"<command>\"",
+                    "the check {} has no command: pass --check \"COMMAND\"",
                     check.name
                 )))
             }

@@ -88,8 +88,8 @@ fn pipe_hint(name: &str) -> String {
             automation(name, "VAR")
         ),
         _ => format!(
-            "{READS} For example:\n  axocoatl secret set <name> --from-env VAR\n  \
-             axocoatl secret set <name> < token-file"
+            "{READS} For example:\n  axocoatl secret set NAME --from-env VAR\n  \
+             axocoatl secret set NAME < token-file"
         ),
     }
 }
@@ -278,8 +278,8 @@ pub async fn cmd_secret(command: SecretCommands) -> i32 {
                 if names.is_empty() {
                     eprintln!(
                         "No secrets stored. Add one with `axocoatl connect claude-code`, \
-                         `axocoatl secret set <name> --from-env VAR`, or \
-                         `<command that prints it> | axocoatl secret set <name>`"
+                         `axocoatl secret set NAME --from-env VAR`, or \
+                         `COMMAND | axocoatl secret set NAME`, where COMMAND prints the value"
                     );
                 }
                 for name in names {
@@ -395,7 +395,7 @@ mod tests {
         assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
         let (_, message) = set_from(root.path(), "other", &b"x"[..], true).unwrap_err();
         assert!(
-            message.contains("axocoatl secret set <name> < token-file"),
+            message.contains("axocoatl secret set NAME < token-file"),
             "{message}"
         );
 

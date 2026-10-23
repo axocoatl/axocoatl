@@ -3562,7 +3562,11 @@ async fn plan_shows_the_rootful_switch_the_service_and_the_first_run() {
          --rootful=false && podman machine start",
         "would ask: Install the Always-On Service",
         "would run: axocoatl service install && axocoatl service start",
-        "would copy the sample repository to a temporary directory and run: axocoatl run fix",
+        "would copy the sample repository to a temporary directory, SAMPLE, and run: axocoatl \
+         run fix --task",
+        "--repo SAMPLE/repo --receipt SAMPLE/receipt.json --record SAMPLE/record.jsonl",
+        "would then run: axocoatl receipt verify SAMPLE/receipt.json --key \"$(axocoatl receipt \
+         key)\" --repo SAMPLE/repo",
         "Plan only: nothing was changed.",
     ] {
         assert!(output.contains(expected), "{expected}\n{output}");

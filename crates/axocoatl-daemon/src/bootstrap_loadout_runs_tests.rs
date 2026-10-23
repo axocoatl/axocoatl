@@ -1743,7 +1743,7 @@ async fn toolchain_admission_child_body() {
             .await,
     );
     assert!(
-        message.contains("Pass --toolchain <language>, where <language> is node or go"),
+        message.contains("Pass --toolchain LANGUAGE, where LANGUAGE is node or go"),
         "{message}"
     );
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());

@@ -717,8 +717,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     }
     if o.facts.os.wsl() == Some(Wsl::One) {
         o.ui.fail(
-            "This is WSL 1, which cannot run Podman. In PowerShell run `wsl --set-version <distro> \
-             2` (wsl -l -v names the distro), then run axocoatl onboard again.",
+            "This is WSL 1, which cannot run Podman. In PowerShell run `wsl --set-version DISTRO \
+             2`, where DISTRO is the name `wsl -l -v` lists for this distribution, then run \
+             axocoatl onboard again.",
         );
         return exit::NOT_READY;
     }

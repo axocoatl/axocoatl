@@ -95,7 +95,7 @@ pub(crate) fn setup_failure_message(
     format!(
         "the toolchain setup `{}` ({}) failed after {:.1} s: {ended}. No writer or reviewer \
          turn ran. \
-         Fix the repository's dependency files, give the install with --setup \"<command>\", \
+         Fix the repository's dependency files, give the install with --setup \"COMMAND\", \
          or run without it with --no-setup. The last lines of its output:\n{output}",
         setup.command,
         setup.source.as_str(),
@@ -149,7 +149,7 @@ impl AxocoatlDaemon {
         }
         let command = plan
             .build_command()
-            .unwrap_or_else(|| "axocoatl recipe build <recipes>".into());
+            .unwrap_or_else(|| "axocoatl recipe build RECIPE".into());
         if !build {
             return Err(DaemonError::InvalidRequest(format!(
                 "the run's image {} is not built on this computer, and building it was turned \

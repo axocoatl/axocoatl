@@ -227,7 +227,7 @@ the language and the program. `--no-probe` skips the probe, for a check it is wr
 about.
 
 ```text
-axocoatl run: the check `npm run test` cannot run in this run's image: the program `jest` was not found. Image: localhost/axocoatl-recipe-node:3b267c748259, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. To fix it: declare it in package.json's devDependencies, or give its install with --setup "<command that installs jest>"; …
+axocoatl run: the check `npm run test` cannot run in this run's image: the program `jest` was not found. Image: localhost/axocoatl-recipe-node:3b267c748259, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. To fix it: declare it in package.json's devDependencies, or give its install with --setup "COMMAND", where COMMAND installs jest; …
 ```
 
 <Aside type="note">

@@ -638,7 +638,7 @@ pub fn pr_body(
     if receipt.is_some() && block.is_none() {
         body.push_str(&format!(
             "\nThe receipt is larger than a pull request description holds, so it is not \
-             here: verify it from the run's record bundle (`axocoatl run … --receipt <file>` \
+             here: verify it from the run's record bundle (`axocoatl run … --receipt FILE` \
              writes it; the daemon serves it at `GET /api/runs/{}/receipt`).\n",
             outcome.run_id.replace('`', "'")
         ));
@@ -647,7 +647,7 @@ pub fn pr_body(
     body.push_str("\n### Record\n\n");
     body.push_str(&format!(
         "Everything this run did is in its record, {run}. Export the record bundle \
-         (`axocoatl run … --record <file>` writes it; the daemon serves it at \
+         (`axocoatl run … --record FILE` writes it; the daemon serves it at \
          `GET /api/runs/{}/record`) and verify it:\n\n```sh\naxocoatl record verify {}.axorecord.jsonl\n```\n",
         outcome.run_id.replace('`', "'"),
         outcome.run_id.replace('`', "'"),
