@@ -160,7 +160,10 @@ export class SessionKnowledge extends HTMLElement {
   }
   edit(note) {
     if (this.busy) return;
-    this.tab = 'notes'; this.draft = note ? copy(note) : {id:`note-${crypto.randomUUID()}`,revision:0,title:'',body:'',kind:'note',links:[],sources:[]}; this.render(); this.q('.note-title').focus();
+    this.tab = 'notes'; this.draft = note ? copy(note) : {id:`note-${crypto.randomUUID()}`,revision:0,title:'',body:'',kind:'note',links:[],sources:[]}; this.render();
+    // Before the notes have loaded, render() draws nothing: the editor
+    // appears when they arrive.
+    this.q('.note-title')?.focus();
   }
   renderEditor(host) {
     const draft = this.draft, form = item('form',null,{class:'form'});

@@ -28,6 +28,21 @@ test('Knowledge HTTP preserves workspace ownership, exact revisions and immutabl
  const invalidRoute=await call(id,'/different-note',{...edit,expected_revision:2},'PUT');assert.equal(invalidRoute.status,400);
 });
 
+test('New note pressed while the notes still load opens the editor when they arrive, with no page error',async()=>{
+ const context=await newAuthorizedContext(browser, {viewport:{width:1280,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ // Hold the panel's first read of the notes until New note is pressed.
+ let release;const held=new Promise(resolve=>{release=resolve;});
+ await page.route(url=>/^\/api\/sessions\/[^/]+\/knowledge$/.test(url.pathname),async route=>{await held;await route.continue();});
+ try{
+  await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(runtime.fixtures.alpha.sessions[0].id)}`);
+  const panel=page.locator('ax-session-knowledge');await page.waitForFunction(id=>document.querySelector('ax-session-knowledge')?.getAttribute('session')===id,runtime.fixtures.alpha.sessions[0].id);
+  await panel.getByRole('button',{name:'Knowledge',exact:true}).click();await panel.getByText('Loading workspace knowledge…').waitFor();
+  await panel.getByRole('button',{name:'New note',exact:true}).click();release();
+  await panel.getByLabel('Title',{exact:true}).waitFor();assert.deepEqual(errors,[]);
+ }finally{release();await context.close();}
+});
+
 test('visible Session Knowledge creates a note and attaches its exact revision without starting work',async()=>{
  const context=await newAuthorizedContext(browser, {viewport:{width:1280,height:900},reducedMotion:'reduce'}),page=await context.newPage(),errors=[],mutations=[];
  page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(request.method()==='POST')mutations.push(new URL(request.url()).pathname);});
