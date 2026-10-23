@@ -1111,9 +1111,9 @@ struct OtherConfig<'a> {
 
 impl<'a> OtherConfig<'a> {
     /// `Some` when `config_path` is not `default`, the default
-    /// configuration.
+    /// configuration ([`same_file`]).
     fn of(config_path: &'a Path, default: &'a Path) -> Option<Self> {
-        (config_path != default).then_some(Self {
+        (!same_file(config_path, default)).then_some(Self {
             path: config_path,
             default,
         })
@@ -1128,6 +1128,42 @@ impl<'a> OtherConfig<'a> {
             self.default.display()
         )
     }
+}
+
+/// What to do about a configuration doctor was given with `--config` that
+/// does not exist: copy the default one there (written first by `axocoatl
+/// onboard` when there is none), or check the default one.
+fn missing_other_config_fix(other: &OtherConfig<'_>) -> String {
+    let quote = |path: &Path| crate::onboard::host::shell_quote(&path.display().to_string());
+    let copy = format!("cp {} {}", quote(other.default), quote(other.path));
+    if other.default.is_file() {
+        format!(
+            "Copy the default configuration there and change what this one needs (`{copy}`), \
+             or check the default one with `axocoatl doctor`"
+        )
+    } else {
+        format!(
+            "Write the default configuration with `axocoatl onboard` (it writes only {}), then \
+             copy it there and change what this one needs (`{copy}`)",
+            other.default.display()
+        )
+    }
+}
+
+/// Whether `a` and `b` name one file: as written, or once resolved (a
+/// relative path, `..`, or a symbolic link to the same file), or, for a file
+/// that does not exist yet, in the same resolved directory.
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    fn resolved(path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok().or_else(|| {
+            let parent = match path.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => parent,
+                _ => Path::new("."),
+            };
+            Some(std::fs::canonicalize(parent).ok()?.join(path.file_name()?))
+        })
+    }
+    a == b || matches!((resolved(a), resolved(b)), (Some(a), Some(b)) if a == b)
 }
 
 /// The fix for `model`, configured on Ollama and too large for this
@@ -1244,11 +1280,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 ),
                 match other {
                     None => "Run `axocoatl onboard`".to_string(),
-                    Some(other) => format!(
-                        "Write a configuration there, or check the default one with `axocoatl \
-                         doctor` (`axocoatl onboard` writes only the default configuration, {})",
-                        other.default.display()
-                    ),
+                    Some(other) => missing_other_config_fix(&other),
                 },
             ));
             None
@@ -1986,7 +2018,7 @@ fn provider_key(
 /// default one, else nothing: a command that stores a key or adds a
 /// provider then acts on that configuration and its data directory.
 fn config_flag(config_path: &Path, default: &Path) -> String {
-    if config_path == default {
+    if same_file(config_path, default) {
         String::new()
     } else {
         format!(

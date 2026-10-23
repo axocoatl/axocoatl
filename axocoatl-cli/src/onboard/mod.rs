@@ -121,7 +121,9 @@ impl WriterChoice {
 pub enum PodmanChoice {
     /// Set up a missing Podman: on a Mac, install it with Homebrew (Apple
     /// silicon) and create and start its machine; on Linux, install it with
-    /// apt-get, dnf, pacman or zypper (with sudo); elsewhere, say how
+    /// apt-get, dnf, pacman or zypper (with sudo), except on Ubuntu 22.04,
+    /// whose Podman 3.4.4 is too old (onboarding refuses it and says to use
+    /// Ubuntu 24.04 or newer); elsewhere, say how
     Create,
     /// Leave Podman as it is
     Skip,
@@ -166,8 +168,8 @@ pub struct OnboardArgs {
     pub ollama_url: Option<String>,
     /// create (the default): set up a missing Podman where onboarding can
     /// (Mac: Homebrew on Apple silicon, then the machine; Linux: the
-    /// distribution's package manager, with sudo); skip: leave Podman as it
-    /// is
+    /// distribution's package manager, with sudo; Ubuntu 22.04 is refused,
+    /// its Podman 3.4.4 is too old); skip: leave Podman as it is
     #[arg(long, value_enum)]
     pub podman: Option<PodmanChoice>,
     /// CPUs for a new Podman machine (default: min(6, half the cores))

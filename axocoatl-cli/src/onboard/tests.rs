@@ -2144,15 +2144,30 @@ async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents()
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Ollama
+            WriterChoice::Ollama,
+            Some("gpt-oss:20b")
         ),
         format!("for these models (`axocoatl onboard --replace --writer openrouter`){because}")
+    );
+    // Only the reviewer's context is too small: the local writer stays.
+    assert_eq!(
+        ollama::hosted_instead(
+            &o,
+            &[("gpt-oss:20b".to_string(), 4096)],
+            WriterChoice::Ollama,
+            Some("qwen3-coder:30b")
+        ),
+        format!(
+            "for the reviewer (`axocoatl onboard --replace --writer ollama --writer-model \
+             ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`){because}"
+        )
     );
     assert_eq!(
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Codex
+            WriterChoice::Codex,
+            None
         ),
         format!(
             "for the reviewer (`axocoatl onboard --replace --writer codex --reviewer \
@@ -4566,6 +4581,145 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
         assert!(shims.calls().is_empty(), "{:?}", shims.calls());
         assert_eq!(tree(shims.home.path()), before);
     }
+}
+
+/// Below 48 GB, a server that answered at Step 0 with a pair that fits,
+/// and is not ready after setup (its cloud models stay on until it is
+/// restarted by hand): the pair it has is chosen, as at Step 0, never the
+/// built-in pair "not tested at this memory size", and no step says to pull
+/// a model it has.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_server_not_ready_after_setup_keeps_the_pair_it_had() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    let facts = facts(
+        mac("26.6"),
+        32,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Manual,
+    )
+    .await;
+    assert_eq!(facts.ollama_server.models().len(), 2);
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    assert_eq!(ollama::writer_and_reviewer(&mut o, &mut choice).await, None);
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b (from the models on this \
+             server that fit this computer)"
+        ),
+        "{output}"
+    );
+    assert!(
+        !output.contains("not tested at this memory size"),
+        "{output}"
+    );
+    assert_eq!(
+        choice.writer_model,
+        Some(ModelRef::new(Provider::Ollama, "qwen3-coder:30b"))
+    );
+    assert_eq!(
+        choice.reviewer_model,
+        Some(ModelRef::new(Provider::Ollama, "gpt-oss:20b"))
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].starts_with("Restart your Ollama server"),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !o.steps.iter().any(|step| step.contains("Pull")),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// A setup without run defaults: for the default configuration doctor's
+/// fix is onboarding's; for another one (`doctor --config PATH`), which no
+/// onboarding command changes, it is the line to set in that file.
+#[tokio::test]
+async fn the_missing_run_models_fix_follows_the_configuration() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let config_path = shims.home.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        "# Writer: ollama (axocoatl run fix)\nagents: []\nproviders:\n  ollama:\n    \
+         base_url: \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+    let detail = |report: &crate::doctor::Report| {
+        report
+            .ready_for
+            .iter()
+            .find(|path| path.command == "axocoatl run fix")
+            .map(|path| path.detail.clone())
+            .unwrap()
+    };
+    let other = crate::doctor::collect(&config_path, &doctor_env(&shims)).await;
+    let in_file = format!(
+        "in {} (`axocoatl onboard` writes only the default configuration, {})",
+        config_path.display(),
+        shims.home.path().join("default/config.yaml").display()
+    );
+    let detail_other = detail(&other);
+    assert!(
+        detail_other.contains(&format!(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or set run.models.writer \
+             {in_file}"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        detail_other.contains(&format!(
+            "no reviewer model: set run.models.reviewer {in_file}, or pass --model \
+             reviewer=PROVIDER:MODEL"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        !detail_other.contains("axocoatl onboard --update"),
+        "{detail_other}"
+    );
+    let default = crate::doctor::Environment {
+        default_config: config_path.clone(),
+        ..doctor_env(&shims)
+    };
+    let detail_default = detail(&crate::doctor::collect(&config_path, &default).await);
+    assert!(
+        detail_default.contains(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl onboard \
+             --update --writer ollama`"
+        ),
+        "{detail_default}"
+    );
+    assert!(
+        detail_default.contains(
+            "no reviewer model: run `axocoatl onboard`, or pass --model reviewer=PROVIDER:MODEL"
+        ),
+        "{detail_default}"
+    );
 }
 
 mod interactive;

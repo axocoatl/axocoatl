@@ -190,3 +190,20 @@ async fn the_check_does_not_repeat_step_0() {
     assert!(!output.contains("Intel Mac"), "{output}");
     assert!(!output.contains("https_proxy"), "{output}");
 }
+
+/// `onboard --help` says that `--podman create` refuses Ubuntu 22.04.
+#[test]
+fn onboard_help_names_the_ubuntu_22_04_refusal() {
+    use clap::CommandFactory;
+    let mut cli = crate::Cli::command();
+    let help = cli
+        .find_subcommand_mut("onboard")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    assert!(
+        help.contains("Ubuntu 22.04 is refused, its Podman 3.4.4 is too old"),
+        "{help}"
+    );
+    assert!(help.contains("whose Podman 3.4.4 is too old"), "{help}");
+}
