@@ -2947,12 +2947,67 @@ mod tests {
         assert!(parsed.is_err());
     }
 
+    /// Set in the child process of
+    /// [`a_run_that_cannot_start_is_refused_before_its_image_is_built`]: the
+    /// file its stub `podman` appends each call to.
+    const STUB_PODMAN_LOG: &str = "AXOCOATL_RUN_CMD_STUB_PODMAN_LOG";
+
     /// A run whose toolchain image is not built asks the daemon's dry run
     /// first, loading no model: a run that cannot start (here a credential
     /// that is not stored) is refused in admission's words and with its
-    /// exit code, before anything is built or admitted.
+    /// exit code, before anything is built or admitted. The body runs in a
+    /// child process whose only `podman` is a stub that fails and logs its
+    /// call, so a regression can never build an image on this computer.
     #[tokio::test]
     async fn a_run_that_cannot_start_is_refused_before_its_image_is_built() {
+        if std::env::var_os(STUB_PODMAN_LOG).is_some() {
+            cannot_start_child_body().await;
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${STUB_PODMAN_LOG}\"\n\
+                 echo 'this test runs no Podman' >&2\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = root.path().join("podman.log");
+        let result = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "run_cmd::tests::a_run_that_cannot_start_is_refused_before_its_image_is_built",
+                "--nocapture",
+            ])
+            .env(STUB_PODMAN_LOG, &log)
+            .env_remove("AXOCOATL_DATA_DIR")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // The child ran its body, and asked Podman nothing.
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap_or_default(), "");
+    }
+
+    async fn cannot_start_child_body() {
         use axocoatl_daemon::loadout::api::{LoadoutGraph, LoadoutSummary};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};

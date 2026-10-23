@@ -55,7 +55,7 @@ each step.
 | `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python`, `rust` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. |
 | `--image <REF>` | Run this curated or trusted image as it is, without a toolchain. Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
 | `--no-setup` | Run no setup, not even the detected install. |
-| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` builds the image first and prints what it builds, its size and Podman's progress on standard error. |
+| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` first has the daemon check the run as [`--dry-run`](#the-dry-run) does, without loading any model, so a run that cannot start (a credential that is not stored, a reviewer on a provider that cannot review) is refused with that check's message and exit code and nothing is built; then it builds the image and prints what it builds, its size and Podman's progress on standard error. |
 | `--no-probe` | Skip the probe that refuses a run whose check cannot work in its image, for a check the probe is wrong about. |
 
 With a toolchain, `--setup` replaces the detected install and gets the same registries,
