@@ -155,12 +155,14 @@ axocoatl service restart
 axocoatl service uninstall
 ```
 
-`stop` returns once the daemon has exited (it ends its Sessions first) and leaves
-the definition installed. `start` starts a service that does not run and leaves
-one that runs as it is. `restart` stops a running service and starts it again
-with the installed definition, which is how a definition `install` rewrote, or a
-new `axocoatl` binary at the same path, takes effect; it starts a service that
-does not run. `uninstall` stops and removes the definition.
+`status` says whether the daemon runs and, when its last start failed, the line that
+start logged, also while launchd or systemd is starting it again. `stop` returns once
+the daemon has exited (it ends its Sessions first) and leaves the definition
+installed. `start` starts a service that does not run and leaves one that runs as it
+is. `restart` stops a running service and starts it again with the installed
+definition, which is how a definition `install` rewrote, or a new `axocoatl` binary
+at the same path, takes effect; it starts a service that does not run. `uninstall`
+stops the service, as `stop` does, and removes the definition.
 
 Stopping or restarting the service leaves a Podman machine the daemon started
 running: Axocoatl starts `podman machine start` in a session of its own, outside

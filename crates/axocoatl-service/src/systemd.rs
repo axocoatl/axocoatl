@@ -63,11 +63,24 @@ impl SystemdManager {
     /// `is-enabled` exit non-zero when inactive/disabled; that is
     /// information, not an error, so only the output is read.
     fn says(&self, verb: &str, want: &str) -> bool {
+        self.printed(&[verb, SERVICE_NAME]) == want
+    }
+
+    /// What `systemctl --user <args>` printed, whatever its exit status.
+    fn printed(&self, args: &[&str]) -> String {
         Command::new(&self.systemctl)
-            .args(["--user", verb, SERVICE_NAME])
+            .arg("--user")
+            .args(args)
             .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == want)
-            .unwrap_or(false)
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    }
+
+    /// The unit's state as `is-active` prints it: `active`, `activating`
+    /// (between the restarts of a start that keeps failing), `inactive`
+    /// (also for a unit systemd did not load), `failed`, ...
+    fn active_state(&self) -> String {
+        self.printed(&["is-active", SERVICE_NAME])
     }
 }
 
@@ -87,8 +100,39 @@ fn systemd_path(path: &Path) -> String {
     systemd_quote(&path.to_string_lossy())
 }
 
-fn render_unit(exe: &Path, config: &Path, environment: &ServiceEnvironment) -> String {
+/// `path` as `WorkingDirectory=` takes it: the rest of the line, unquoted,
+/// with `%%` keeping specifier expansion from rewriting it. systemd keeps
+/// quotes as part of the path, and then refuses the unit ("WorkingDirectory=
+/// path is not absolute"), so a quoted one never started. `None` when the
+/// line cannot hold the path: not absolute, or ending with whitespace,
+/// which systemd strips.
+fn systemd_working_directory(path: &Path) -> Option<String> {
+    let text = path.to_string_lossy();
+    (text.starts_with('/') && !text.ends_with(char::is_whitespace)).then(|| text.replace('%', "%%"))
+}
+
+fn render_unit(
+    exe: &Path,
+    config: &Path,
+    environment: &ServiceEnvironment,
+) -> Result<String, ServiceError> {
+    // A unit file is lines: a path with a line break (or another control
+    // character) would end its line.
+    if let Some(path) = [exe, config]
+        .into_iter()
+        .find(|path| path.to_string_lossy().chars().any(char::is_control))
+    {
+        return Err(ServiceError::Control(format!(
+            "a systemd unit cannot name {path:?}, which holds a control character"
+        )));
+    }
     let working_dir = config.parent().unwrap_or_else(|| Path::new("."));
+    let working_dir_line = systemd_working_directory(working_dir).ok_or_else(|| {
+        ServiceError::Control(format!(
+            "systemd cannot run the service in {working_dir:?}: the path ends with whitespace \
+             or is not absolute; move the configuration to another directory"
+        ))
+    })?;
     let environment: String = environment
         .variables()
         .iter()
@@ -99,14 +143,14 @@ fn render_unit(exe: &Path, config: &Path, environment: &ServiceEnvironment) -> S
             )
         })
         .collect();
-    format!(
+    Ok(format!(
         "[Unit]\n\
          Description=Axocoatl always-on agent daemon\n\
          After=network.target\n\
          \n\
          [Service]\n\
          Type=simple\n\
-         WorkingDirectory={working_dir}\n\
+         WorkingDirectory={working_dir_line}\n\
          {environment}\
          ExecStart={exe} serve --config {config}\n\
          Restart=on-failure\n\
@@ -116,8 +160,7 @@ fn render_unit(exe: &Path, config: &Path, environment: &ServiceEnvironment) -> S
          WantedBy=default.target\n",
         exe = systemd_path(exe),
         config = systemd_path(config),
-        working_dir = systemd_path(working_dir),
-    )
+    ))
 }
 
 impl ServiceManager for SystemdManager {
@@ -131,7 +174,7 @@ impl ServiceManager for SystemdManager {
         config: &Path,
         environment: &ServiceEnvironment,
     ) -> Result<(), ServiceError> {
-        let unit = render_unit(exe, config, environment);
+        let unit = render_unit(exe, config, environment)?;
         if let Some(dir) = self.unit_path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -173,12 +216,14 @@ impl ServiceManager for SystemdManager {
     }
 
     fn start(&self) -> Result<ServiceStart, ServiceError> {
-        if self.says("is-active", "active") {
-            self.systemctl(&["enable", SERVICE_NAME])?;
+        let running = self.says("is-active", "active");
+        self.systemctl(&["enable", SERVICE_NAME])?;
+        if running {
             return Ok(ServiceStart::AlreadyRunning);
         }
-        // `enable --now` starts the service AND sets it to run at login.
-        self.systemctl(&["enable", "--now", SERVICE_NAME])?;
+        // `start`, not `enable --now`, which exits 0 when systemd cannot
+        // start the unit.
+        self.systemctl(&["start", SERVICE_NAME])?;
         Ok(ServiceStart::Started)
     }
 
@@ -196,6 +241,10 @@ impl ServiceManager for SystemdManager {
     }
 
     fn stop(&self) -> Result<(), ServiceError> {
+        // Nothing runs: `stop` would fail on a unit systemd did not load.
+        if matches!(self.active_state().as_str(), "inactive" | "failed") {
+            return Ok(());
+        }
         // `stop` returns once the process has exited.
         self.systemctl(&["stop", SERVICE_NAME])?;
         Ok(())
@@ -204,7 +253,8 @@ impl ServiceManager for SystemdManager {
     fn status(&self) -> Result<ServiceStatus, ServiceError> {
         let installed = self.unit_path.exists();
 
-        let running = self.says("is-active", "active");
+        let state = self.active_state();
+        let running = state == "active";
         let enabled = self.says("is-enabled", "enabled");
 
         let detail = if !installed {
@@ -213,7 +263,16 @@ impl ServiceManager for SystemdManager {
             self.systemctl(&["show", SERVICE_NAME, "--property=MainPID"])
                 .unwrap_or_else(|_| "running".to_string())
         } else {
-            "installed, stopped".to_string()
+            match self
+                .printed(&["show", SERVICE_NAME, "--property=LoadState", "--value"])
+                .as_str()
+            {
+                load @ ("bad-setting" | "error" | "not-found" | "masked") => format!(
+                    "installed, but systemd does not load the unit ({load}): see `systemctl \
+                     --user status {SERVICE_NAME}`"
+                ),
+                _ => format!("installed, not running ({state})"),
+            }
         };
 
         Ok(ServiceStatus {
@@ -265,11 +324,16 @@ D="$(dirname "$0")"
 shift
 echo "$*" >> "$D/calls"
 case "$1" in
-is-active) if [ -f "$D/active" ]; then echo active; else echo inactive; exit 3; fi ;;
+is-active) if [ -f "$D/active" ]; then cat "$D/active"; else echo inactive; exit 3; fi ;;
 is-enabled) echo enabled ;;
-restart|start) touch "$D/active" ;;
-enable) [ "$2" = --now ] && touch "$D/active" ;;
-stop) rm -f "$D/active" ;;
+show) case "$*" in *LoadState*) cat "$D/load" 2>/dev/null || echo loaded ;; *) echo MainPID=42 ;; esac ;;
+restart|start)
+  if [ -f "$D/load" ]; then echo "Failed to $1 axocoatl.service: Unit axocoatl.service has a bad unit file setting." >&2; exit 1; fi
+  echo active > "$D/active" ;;
+enable) [ "$2" = --now ] && echo active > "$D/active" ;;
+stop)
+  [ -f "$D/load" ] && { echo 'Failed to stop axocoatl.service: Unit axocoatl.service not loaded.' >&2; exit 5; }
+  rm -f "$D/active" ;;
 esac
 exit 0
 "#,
@@ -282,34 +346,76 @@ exit 0
             std::fs::read_to_string(dir.path().join("calls"))
                 .unwrap()
                 .lines()
-                .filter(|call| !call.starts_with("is-"))
+                .filter(|call| !call.starts_with("is-") && !call.starts_with("show"))
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         };
         assert_eq!(manager.start().unwrap(), ServiceStart::Started);
-        assert_eq!(calls(), ["enable --now axocoatl"]);
+        assert_eq!(calls(), ["enable axocoatl", "start axocoatl"]);
         assert_eq!(manager.start().unwrap(), ServiceStart::AlreadyRunning);
-        assert_eq!(calls()[1..], ["enable axocoatl"]);
+        assert_eq!(calls()[2..], ["enable axocoatl"]);
         assert_eq!(manager.restart().unwrap(), ServiceStart::Restarted);
-        assert_eq!(calls()[2..], ["enable axocoatl", "restart axocoatl"]);
+        assert_eq!(calls()[3..], ["enable axocoatl", "restart axocoatl"]);
         manager.stop().unwrap();
         assert_eq!(manager.restart().unwrap(), ServiceStart::Started);
         assert_eq!(
-            calls()[4..],
+            calls()[5..],
             ["stop axocoatl", "enable axocoatl", "restart axocoatl"]
         );
+        std::fs::write(dir.path().join("axocoatl.service"), "").unwrap();
         assert!(manager.status().unwrap().running);
+
+        // Between the restarts of a start that keeps failing it is not
+        // running, and `stop` still stops it.
+        std::fs::write(dir.path().join("active"), "activating\n").unwrap();
+        let status = manager.status().unwrap();
+        assert!(!status.running);
+        assert_eq!(status.detail, "installed, not running (activating)");
+        manager.stop().unwrap();
+        assert_eq!(calls().last().unwrap(), "stop axocoatl");
+
+        // A unit systemd refuses: `start` says so (`enable --now` exited 0),
+        // `stop` has nothing to stop, and status names it.
+        std::fs::write(dir.path().join("load"), "bad-setting\n").unwrap();
+        let error = manager.start().unwrap_err().to_string();
+        assert!(error.contains("bad unit file setting"), "{error}");
+        manager.stop().unwrap();
+        let status = manager.status().unwrap();
+        assert!(!status.running);
+        assert!(
+            status
+                .detail
+                .starts_with("installed, but systemd does not load the unit (bad-setting)"),
+            "{}",
+            status.detail
+        );
     }
 
+    /// `WorkingDirectory=` takes the rest of its line as the path, so it is
+    /// written unquoted (systemd refused the quoted one as "not absolute",
+    /// and the service never started); `ExecStart=` quotes its words. A
+    /// path a unit line cannot hold is refused.
     #[test]
     fn unit_uses_config_directory_and_quotes_paths() {
         let unit = render_unit(
             Path::new("/opt/Axo tools/axocoatl"),
             Path::new("/home/test/My % project/axocoatl.yaml"),
             &environment(&[("PATH", "/home/test/.local/bin")]),
-        );
-        assert!(unit.contains("WorkingDirectory=\"/home/test/My %% project\""));
+        )
+        .unwrap();
+        assert!(unit.contains("\nWorkingDirectory=/home/test/My %% project\n"));
         assert!(unit.contains("ExecStart=\"/opt/Axo tools/axocoatl\" serve --config \"/home/test/My %% project/axocoatl.yaml\""));
+        for config in [
+            "/home/test/trailing /axocoatl.yaml",
+            "/home/test/line\nExecStartPre=/bin/true/axocoatl.yaml",
+        ] {
+            assert!(render_unit(
+                Path::new("/usr/bin/axocoatl"),
+                Path::new(config),
+                &environment(&[])
+            )
+            .is_err());
+        }
     }
 
     #[test]
@@ -323,9 +429,10 @@ exit 0
                 ("CONTAINER_HOST", "unix:///run/user/1000/podman/podman.sock"),
                 ("OPENROUTER_API_KEY", "sk-or-secret"),
             ]),
-        );
+        )
+        .unwrap();
         assert!(unit.contains(
-            "[Service]\nType=simple\nWorkingDirectory=\"/home/test/.config/axocoatl\"\n\
+            "[Service]\nType=simple\nWorkingDirectory=/home/test/.config/axocoatl\n\
              Environment=\"PATH=/home/test/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\"\n\
              Environment=\"CONTAINER_CONNECTION=build \\\"50%%\\\" box\"\n\
              Environment=\"CONTAINER_HOST=unix:///run/user/1000/podman/podman.sock\"\n\

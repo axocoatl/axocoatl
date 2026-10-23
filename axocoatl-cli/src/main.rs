@@ -907,18 +907,9 @@ fn cmd_service_status() {
     };
     match mgr.status() {
         Ok(s) => {
-            println!("Always-On Service ({} backend)", mgr.backend());
-            println!("  installed: {}", if s.installed { "yes" } else { "no" });
-            println!("  running:   {}", if s.running { "yes" } else { "no" });
-            println!("  at login:  {}", if s.enabled { "yes" } else { "no" });
-            println!("  detail:    {}", s.detail);
-            println!("  logs:      {}", mgr.logs());
-            // A service that keeps restarting and failing is "not running"
-            // most of the time; say why it last failed.
-            if s.installed && !s.running {
-                if let Some(failure) = mgr.last_start_failure() {
-                    println!("  last start failed:\n    {failure}");
-                }
+            let failure = s.installed.then(|| mgr.last_start_failure()).flatten();
+            for line in service_status_lines(mgr.backend(), &s, &mgr.logs(), failure) {
+                println!("{line}");
             }
             if s.installed {
                 println!("\n{SERVICE_SIGN_IN_HINT}");
@@ -934,6 +925,36 @@ fn cmd_service_status() {
             std::process::exit(1);
         }
     }
+}
+
+/// What `service status` says of `status`, before its hints. `failure`: the
+/// line the last start logged, when it failed. A service whose start keeps
+/// failing is started again by its manager, so it may be running (starting
+/// again) when this looks: the failure is shown whenever the last start
+/// failed, and a running one is said to be starting again.
+fn service_status_lines(
+    backend: &str,
+    status: &axocoatl_service::ServiceStatus,
+    logs: &str,
+    failure: Option<String>,
+) -> Vec<String> {
+    let yes = |value: bool| if value { "yes" } else { "no" };
+    let running = match (&failure, status.running) {
+        (Some(_), true) => "yes, starting again after its last start failed",
+        (_, running) => yes(running),
+    };
+    let mut lines = vec![
+        format!("Always-On Service ({backend} backend)"),
+        format!("  installed: {}", yes(status.installed)),
+        format!("  running:   {running}"),
+        format!("  at login:  {}", yes(status.enabled)),
+        format!("  detail:    {}", status.detail),
+        format!("  logs:      {logs}"),
+    ];
+    if let Some(failure) = failure {
+        lines.push(format!("  last start failed:\n    {failure}"));
+    }
+    lines
 }
 
 /// Run a service action and report success (the line it returns) or
@@ -4032,6 +4053,46 @@ mod tests {
                 Some(format!("ollama:{text}"))
             );
         }
+    }
+
+    /// A service whose start keeps failing is started again by launchd or
+    /// systemd, so `status` may find it running: the last failure is shown
+    /// whenever the last start failed (it was shown only while the service
+    /// did not run, so a live crash loop showed "running: yes" and nothing
+    /// else), and none when the last start succeeded.
+    #[test]
+    fn service_status_shows_the_last_failed_start_whether_or_not_it_runs() {
+        let status = |running| axocoatl_service::ServiceStatus {
+            installed: true,
+            running,
+            enabled: true,
+            detail: "loaded".into(),
+        };
+        let failure = || Some("Failed to bootstrap daemon: Session error: no".to_string());
+        let lines = service_status_lines("launchd", &status(true), "/l/daemon.log", failure());
+        assert_eq!(
+            lines[2],
+            "  running:   yes, starting again after its last start failed"
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "  last start failed:\n    Failed to bootstrap daemon: Session error: no"
+        );
+        let lines = service_status_lines("launchd", &status(false), "/l/daemon.log", failure());
+        assert_eq!(lines[2], "  running:   no");
+        assert!(lines.last().unwrap().starts_with("  last start failed:"));
+        let lines = service_status_lines("systemd", &status(true), "journalctl", None);
+        assert_eq!(
+            lines,
+            [
+                "Always-On Service (systemd backend)",
+                "  installed: yes",
+                "  running:   yes",
+                "  at login:  yes",
+                "  detail:    loaded",
+                "  logs:      journalctl",
+            ]
+        );
     }
 
     #[test]

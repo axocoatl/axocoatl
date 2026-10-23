@@ -261,8 +261,11 @@ impl ServiceManager for LaunchdManager {
     }
 
     fn uninstall(&self) -> Result<(), ServiceError> {
-        // Best-effort bootout — the agent may not be loaded.
-        let _ = self.launchctl(&["bootout", &self.service_target()]);
+        // Stopped as `stop` stops it, once its process has exited, so an
+        // `install` and `start` right after load it again.
+        if self.loaded().is_some() {
+            self.unload()?;
+        }
         if self.plist_path.exists() {
             std::fs::remove_file(&self.plist_path)?;
         }
@@ -549,6 +552,33 @@ esac
         let error = manager.restart().unwrap_err().to_string();
         assert!(error.contains("did not exit"), "{error}");
         assert!(!launchctl.changes().last().unwrap().starts_with("bootstrap"));
+    }
+
+    /// `uninstall` returns once the daemon has exited and the plist is
+    /// gone, so `install` and `start` right after it load the agent again
+    /// (a `bootstrap` while launchd still lists the exiting agent failed);
+    /// an agent that is not loaded only loses its plist.
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_waits_for_the_daemon_to_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        std::fs::create_dir_all(manager.plist_path.parent().unwrap()).unwrap();
+        std::fs::write(&manager.plist_path, "plist").unwrap();
+        launchctl.set(Some("running"));
+
+        manager.uninstall().unwrap();
+        assert_eq!(launchctl.state(), None);
+        assert!(!manager.plist_path.exists());
+        std::fs::write(&manager.plist_path, "plist").unwrap();
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+
+        launchctl.set(None);
+        let before = launchctl.changes().len();
+        manager.uninstall().unwrap();
+        assert_eq!(launchctl.changes().len(), before);
+        assert!(!manager.plist_path.exists());
     }
 
     #[test]

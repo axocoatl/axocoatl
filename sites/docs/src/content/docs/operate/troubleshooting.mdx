@@ -154,7 +154,8 @@ tail -n 100 ~/Library/Logs/Axocoatl/daemon.log
 | Sessions started by the service say Podman is not installed, but `podman` works in your shell | The service definition was written before install recorded `PATH`, or Podman moved. Run `axocoatl service install` again from a shell where `podman` works, then `axocoatl service restart` |
 | The service uses a different Podman machine than your shell | Export `CONTAINER_CONNECTION` (or `CONTAINER_HOST`) before `axocoatl service install`; install records it in the definition |
 | The macOS service log is missing | The definition predates the log setting; reinstall and restart the service as above |
-| The service restarts every few seconds and is never up | Its start fails each time. `axocoatl service status` shows the line the last failed start logged (1.5.0 and later); fix that cause, such as a copied data root under 1.4.0 above |
+| The service restarts every few seconds and is never up | Its start fails each time. `axocoatl service status` shows the line the last failed start logged (1.5.0 and later), also while the service manager is starting it again; fix that cause, such as a copied data root under 1.4.0 above |
+| Linux: `axocoatl service start` said the service started, but nothing answers, and `systemctl --user status axocoatl` says “bad unit file setting” (the journal: “WorkingDirectory= path is not absolute”) | A unit written before 1.5.0 quoted its working directory, which systemd refuses, so it never started. Run `axocoatl service install` again with 1.5.0 or later, then `axocoatl service restart`. Since 1.5.0, `service start` fails when systemd cannot start the unit, and `service status` says when systemd does not load it |
 
 Re-run `axocoatl service install` when the binary, the user configuration path,
 or the Podman location or connection changes. Use `--config ...` only for an explicit advanced configuration.
