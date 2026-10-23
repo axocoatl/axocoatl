@@ -356,10 +356,10 @@ published on. Such a page can:
   signed out, a navigation you start then passes through the retry page once,
   which clears it, before the sign-in page.
 - Sign Safari out of the workbench's API. Safari sends at most about 200 KB
-  of cookies with a request, puts the cookies with the longest path first and,
-  among cookies of one path, sorts them by name, and leaves out each one that
-  no longer fits; Chromium sent them all (both measured in Playwright on
-  macOS). Cookies for `127.0.0.1` with `Path=/api`, 51 of 4,000 bytes and then
+  of cookies with a request, puts the cookies with the longest path first
+  and, among cookies of one path, those set or changed in a later second
+  first, then by name, and leaves out each one that no longer fits; Chromium
+  sent them all (both measured in Playwright on macOS). Cookies for `127.0.0.1` with `Path=/api`, 51 of 4,000 bytes and then
   smaller ones that fill what is left (the large ones alone still leave room
   for it), leave the token cookie off every API request, while `/` still gets
   it, so the API answers 401. The workbench page then reloads once and shows
@@ -367,10 +367,12 @@ published on. Such a page can:
   minute, where it used to reload without end. Opening the sign-in link again
   does not help while those cookies stay.
 - Sign Safari out of the workbench entirely, with the same cookies for
-  `Path=/` and names that sort before `axocoatl-token-`: the token cookie
-  then stays off every request, `/` included, so a workbench page gets the
-  sign-in page, which says what to do. Opening the sign-in link again does
-  not help while those cookies stay.
+  `Path=/`, written after the sign-in: the token cookie then stays off every
+  request, `/` included, so a workbench page gets the sign-in page, which
+  says what to do. Opening the sign-in link again a second or more later
+  sets the token cookie again as the newest of its path, which Safari then
+  sends first, so the browser is signed in until that page writes its
+  cookies again.
 - Keep the workbench's live connection from opening, with the same cookies
   for `Path=/ws`. A WebSocket never sees the 401 of a refused handshake, so
   after three failed attempts in a row the workbench asks `/ws` with an

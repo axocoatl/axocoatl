@@ -28,13 +28,13 @@ import {
 // message, and no further automatic reload in the seconds each one waits
 // after it; a journey with a fake clock pins the one-minute window itself.
 //
-// The first and third journeys make the API answer 401 with Playwright, and
-// the second clears the browser's cookies. The cookie journeys set the
-// cookies from real pages: a top-level page on another `*.localhost`
-// address, and one on another 127.0.0.1 port, with Path=/api, Path=/ and
-// Path=/ws, against the real daemon. In WebKit on macOS, which caps the
-// Cookie header, the 127.0.0.1 ones assert what the person then sees; in
-// Chromium, that the workbench keeps working.
+// The first three journeys and the fifth make the API answer 401 with
+// Playwright, and the fourth clears the browser's cookies. The cookie
+// journeys set the cookies from real pages: a top-level page on another
+// `*.localhost` address, and one on another 127.0.0.1 port, with Path=/api,
+// Path=/ and Path=/ws, against the real daemon. In WebKit on macOS, which
+// caps the Cookie header, the 127.0.0.1 ones assert what the person then
+// sees; in Chromium, that the workbench keeps working.
 const engines = await browserEngines();
 let runtime;
 let pages;
@@ -46,7 +46,25 @@ before(async () => {
   pages = await startCookieEcho();
 });
 
+// One browser per engine for the whole file, as the other files keep one:
+// each journey works in contexts of its own, which share no cookies, and
+// closes them. Closing a browser took up to 25 seconds on a loaded Mac, even
+// with only a blank page open, which a journey's own time budget should not
+// have to absorb.
+const launched = new Map();
+async function browserFor(engine) {
+  if (!launched.has(engine.name)) launched.set(engine.name, engine.launch());
+  return launched.get(engine.name);
+}
+async function closeContexts(browser) {
+  await Promise.all(browser.contexts().map((context) => context.close()));
+}
+
 after(async () => {
+  for (const launching of launched.values()) {
+    const browser = await launching.catch(() => null);
+    await browser?.close();
+  }
   await pages?.close();
   await runtime?.stop();
 });
@@ -137,19 +155,22 @@ async function refuseTheApi(context) {
  * Open `origin` top-level, a real page Axocoatl does not serve, and set from
  * its script, with `cookiePath` (and `attributes`), 51 cookies of 4,000
  * bytes and then smaller ones down to 8 bytes. WebKit puts cookies with a
- * longer path first and, among cookies of one path, sorts them by name
- * (measured with Playwright 1.64's WebKit on macOS); it skips a cookie that
- * no longer fits under its cap and goes on with the next, so the smaller
- * ones fill what is left and no room remains for the token cookie, whatever
- * its length. Their names start with `a-`, before `axocoatl-token-`, so with
- * Path=/ they come first too. Returns how many the browser stored for
- * `storedFor`.
+ * longer path first, then, among cookies of one path, those set or changed
+ * in a later second first, then by name (Playwright 1.64's WebKit on macOS).
+ * It skips a cookie that no longer fits under its cap and goes on with the
+ * next, so the smaller ones fill what is left and no room remains for the
+ * token cookie, whatever its length. The cookies are written right after a
+ * second begins, all in that second, which is later than the sign-in's: a
+ * flood that crossed into the next second put some small ones first and
+ * left room for the token cookie (1 run in 20). Returns how many the
+ * browser stored for `storedFor`.
  */
 async function fillCookieHeader(context, origin, cookiePath, attributes, storedFor) {
   const page = await context.newPage();
   try {
     await page.goto(`${origin}/fill`);
-    await page.evaluate(({ cookiePath, attributes }) => {
+    await page.evaluate(async ({ cookiePath, attributes }) => {
+      await new Promise((resolve) => setTimeout(resolve, 1000 - (Date.now() % 1000) + 5));
       const suffix = `${attributes}; Path=${cookiePath}; Max-Age=3600`;
       for (let i = 0; i < 51; i += 1) document.cookie = `a-fill-${i}=${'x'.repeat(4000)}${suffix}`;
       [2048, 1024, 512, 256, 128, 64, 32, 16, 8].forEach((size, i) => {
@@ -214,7 +235,7 @@ async function tokenLeftOff(context, browser, path) {
 
 for (const engine of engines) {
   test(`${engine.name}: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out`, { timeout: 120_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       await refuseTheApi(context);
@@ -238,7 +259,7 @@ for (const engine of engines) {
       await page.waitForTimeout(3_000);
       assert.deepEqual(loads, [200, 200, 200]);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
@@ -246,7 +267,7 @@ for (const engine of engines) {
   // 59 s after it shows the message, one 61 s after it reloads once more.
   // Date.now() is fixed by Playwright's clock; the page's timers run as usual.
   test(`${engine.name}: the shell reloads on a 401 at most once a minute`, { timeout: 120_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       const start = Date.parse('2026-10-01T12:00:00Z');
@@ -277,14 +298,14 @@ for (const engine of engines) {
       assert.deepEqual(loads, [200, 200, 200, 200, 200], '61 s after the automatic reload');
       assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), RELOADED_AT), String(start + 61_000));
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
   // A modal <dialog> sits in the top layer, above the message however that is
   // styled; it used to hide the message until Escape.
   test(`${engine.name}: the signed-out message closes an open modal dialog and stays on top`, { timeout: 120_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       const page = await context.newPage();
@@ -314,12 +335,12 @@ for (const engine of engines) {
       await assertSignedOutMessage(page, loads);
       assert.deepEqual(loads, [200]);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
   test(`${engine.name}: a browser whose sign-in cookie is gone reloads once into the sign-in page`, { timeout: 120_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -345,12 +366,12 @@ for (const engine of engines) {
       assert.equal(await page.title(), 'Sign in to Axocoatl');
       assert.equal(await signedOutMessage(page).count(), 0);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
   test(`${engine.name}: without sessionStorage the shell never reloads on a 401 and says it is signed out`, { timeout: 120_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       await context.addInitScript(() => {
@@ -367,7 +388,7 @@ for (const engine of engines) {
       await page.waitForTimeout(3_000);
       assert.deepEqual(loads, [200]);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
@@ -378,7 +399,7 @@ for (const engine of engines) {
   // working in every engine. (Before 1.5.0 the workbench was at localhost,
   // and these cookies signed Safari out of it.)
   test(`${engine.name}: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench`, { timeout: 180_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     const keepsDomainLocalhost = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';
     try {
@@ -403,12 +424,12 @@ for (const engine of engines) {
       assert.deepEqual(loads, [200]);
       assert.equal(await signedOutMessage(page).count(), 0);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
   test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       assert.equal(await fillFrom127Page(context, '/api'), 60);
@@ -456,14 +477,14 @@ for (const engine of engines) {
       assert.equal(await signedOutMessage(page).count(), 0);
       assert.deepEqual(loads, [303, 200]);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
   // With Path=/ the token cookie stays off `/` too, so the browser only ever
   // sees the daemon's sign-in page: that page says what to do.
   test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/ sign Safari out entirely, and the sign-in page says what to do`, { timeout: 180_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       assert.equal(await fillFrom127Page(context, '/'), 60);
@@ -482,21 +503,26 @@ for (const engine of engines) {
       assert.deepEqual(loads, [401]);
       assert.equal(await page.title(), 'Sign in to Axocoatl');
       assert.match(await page.locator('body').innerText(), REMEDY);
-      // Opening the sign-in link again stores the cookie, and the browser
-      // still leaves it off.
-      loads.length = 0;
-      await page.goto(runtime.signInUrl);
-      assert.deepEqual(loads, [303, 401]);
-      assert.match(await page.locator('body').innerText(), REMEDY);
-
-      // What it says to do restores the workbench.
-      await context.clearCookies({ domain: '127.0.0.1' });
+      // Opening the sign-in link again a second or more after the flood
+      // sets the token cookie again, now the newest of its path, so WebKit
+      // sends it first and the browser is signed in until the page writes
+      // its cookies again.
+      await page.waitForTimeout(1_100);
       loads.length = 0;
       await page.goto(runtime.signInUrl);
       await page.waitForFunction(connected);
       assert.deepEqual(loads, [303, 200]);
+      await page.close();
+
+      // What it says to do restores the workbench.
+      await context.clearCookies({ domain: '127.0.0.1' });
+      const restored = await context.newPage();
+      const restoredLoads = documentLoads(restored);
+      await restored.goto(runtime.signInUrl);
+      await restored.waitForFunction(connected);
+      assert.deepEqual(restoredLoads, [303, 200]);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 
@@ -506,7 +532,7 @@ for (const engine of engines) {
   // API does. It used to say only that the live connection was reconnecting,
   // forever.
   test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep Safari's live connection from opening, and the shell says it is signed out`, { timeout: 180_000 }, async () => {
-    const browser = await engine.launch();
+    const browser = await browserFor(engine);
     try {
       const context = await signedInContext(browser);
       assert.equal(await fillFrom127Page(context, '/ws'), 60);
@@ -544,7 +570,7 @@ for (const engine of engines) {
       await page.waitForFunction(connected);
       assert.equal(await signedOutMessage(page).count(), 0);
     } finally {
-      await browser.close();
+      await closeContexts(browser);
     }
   });
 }

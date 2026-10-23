@@ -479,14 +479,18 @@ the Preview and failure paths called out below.
   `Path=/ws`, never reach the workbench at `127.0.0.1` (WebKit on macOS keeps
   them for `localhost`; Chromium refuses them), which stays signed in and
   connected. A page on another `127.0.0.1` port sets 51 cookies of 4,000
-  bytes and smaller ones, named to sort before `axocoatl-token-`, which fill
-  WebKit's Cookie header cap: in WebKit on macOS (Safari), with `Path=/api`
+  bytes and smaller ones, all in one second later than the sign-in (WebKit
+  sends the cookies of one path set in a later second first, then by name),
+  which fill WebKit's Cookie header cap: in WebKit on macOS (Safari), with
+  `Path=/api`
   the token cookie is left off API requests, which answer 401, and the
   workbench loads twice and then shows the message (a shell that reloads on
   every 401 loaded 167 documents in 20 seconds here), opening the sign-in
   link again shows it again without a reload, and clearing `127.0.0.1`'s
   cookies and signing in again restores the workbench; with `Path=/` every
-  request gets the sign-in page, which names the same remedy; with
+  request gets the sign-in page, which names the same remedy, and the
+  sign-in link opened again a second later signs it back in (the token
+  cookie is then the newest of its path, which WebKit sends first); with
   `Path=/ws` the live connection fails, the shell's check of `/ws` gets 401,
   and it shows the message. Chromium sends all the cookies, and the journeys
   assert the workbench works there (and that `/ws` answers an ordinary

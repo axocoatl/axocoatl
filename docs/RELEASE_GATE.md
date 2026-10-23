@@ -575,14 +575,15 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   `*.localhost` address sets for `Domain=localhost` (51 of 4,000 bytes, then
   9 from 2,048 down to 8 bytes), with `Path=/api`, `Path=/` and `Path=/ws`,
   never reach the workbench at `127.0.0.1`, in every engine. The same cookies
-  set for `127.0.0.1` by a page on another `127.0.0.1` port, named to sort
-  before `axocoatl-token-`, in WebKit on a Mac:
+  set for `127.0.0.1` by a page on another `127.0.0.1` port, in WebKit on a
+  Mac:
   - with `Path=/api`, the token cookie stays stored but API requests get 401;
     the workbench loads twice, then shows the message, and does not reload
     in the next 5 seconds, nor in the 3 seconds after the sign-in link is
     opened again;
   - with `Path=/`, every request gets the sign-in page, which names the
-    remedy;
+    remedy, and the sign-in link opened again a second later signs the
+    browser back in (the token cookie is then the newest of its path);
   - with `Path=/ws`, the live connection fails, the workbench's check of
     `/ws` gets 401, and it shows the message.
   In each case clearing `127.0.0.1`'s cookies and signing in again restores

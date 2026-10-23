@@ -92,7 +92,7 @@
      cookie, or a rotated local API token), `/` serves the sign-in page
      instead of this shell, so one reload shows it. But `/` can go on serving
      this shell while the API answers 401. Safari on macOS sends at most about
-     200 KB of cookies with a request, longest path first (then by name), and
+     200 KB of cookies with a request, longest path first, and
      skips each one that no longer fits; so cookies set for 127.0.0.1 with
      Path=/api, 51 of
      4,000 bytes and then smaller ones that fill what is left, leave the token
