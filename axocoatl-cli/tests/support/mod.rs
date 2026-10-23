@@ -44,7 +44,9 @@ impl Daemon {
         let child = axocoatl(root)
             .args(["serve", "--config"])
             .arg(config)
-            .env("RUST_LOG", "info")
+            // The daemon's default logs, and each HTTP request it answers
+            // (logged at debug), so a test can check what that log holds.
+            .env("RUST_LOG", "info,axocoatl_server=debug")
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)

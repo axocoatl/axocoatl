@@ -174,7 +174,12 @@ async fn local_api_requires_the_per_daemon_token() {
     // The token survives a restart and keeps working.
     daemon.stop();
     let logs = daemon.logs();
-    assert!(logs.contains("HTTP request"), "{logs}");
+    // Each request is logged at debug, the sign-in link's token redacted.
+    assert!(
+        logs.lines()
+            .any(|line| line.contains("DEBUG") && line.contains("HTTP request")),
+        "{logs}"
+    );
     assert!(logs.contains("token=REDACTED"), "{logs}");
     assert!(logs.contains("axocoatl url --config"), "{logs}");
     assert!(!logs.contains(&token), "the token reached the logs");
