@@ -1573,6 +1573,18 @@ impl AxocoatlDaemon {
                 None
             }
         };
+        // The run's Session mounts the repository read-write, so a run
+        // keeps to the Workspace scope rules as Session creation does.
+        let repo = match repo {
+            Some(repo) => match self.run_workspace_scope(&repo).await {
+                Ok(()) => Some(repo),
+                Err((code, message)) => {
+                    problems.usage(code, message);
+                    None
+                }
+            },
+            None => None,
+        };
         let repo_text = repo
             .as_ref()
             .map(|repo| repo.display().to_string())
@@ -2048,6 +2060,44 @@ impl AxocoatlDaemon {
         }
         report.problems = problems;
         report
+    }
+
+    /// Whether a run may use `repo` (canonical) as its Workspace, as Session
+    /// creation decides ([`Self::check_workspace_scope`]): one of Axocoatl's
+    /// own directories, or a folder inside one, never; a folder too broad to
+    /// be a Workspace (the file system root, the home folder and the folders
+    /// above it, a folder that contains one of Axocoatl's own directories)
+    /// only once it was opened as a Workspace, which asks the person to
+    /// confirm it. A refusal is the problem's code and message.
+    async fn run_workspace_scope(
+        &self,
+        repo: &std::path::Path,
+    ) -> Result<(), (&'static str, String)> {
+        match self.workspace_scope().check(repo) {
+            Ok(()) => Ok(()),
+            Err(WorkspaceScopeRefusal::Protected(message)) => {
+                Err((WORKSPACE_PROTECTED_CODE, message))
+            }
+            Err(WorkspaceScopeRefusal::Broad(message)) => {
+                let confirmed = self
+                    .workspace_store
+                    .lock()
+                    .await
+                    .get_by_path(repo)
+                    .is_some();
+                if confirmed {
+                    return Ok(());
+                }
+                Err((
+                    WORKSPACE_TOO_BROAD_CODE,
+                    format!(
+                        "{message} A run's Agents can read and change everything in its \
+                         repository, so a run uses a folder this broad only after you opened \
+                         it with Open workspace… in the workbench and confirmed it."
+                    ),
+                ))
+            }
+        }
     }
 
     /// `POST /api/runs/preflight`: admission's checks of `request`, with

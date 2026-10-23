@@ -690,7 +690,10 @@ SHA-256 of its bytes. The lattice in Settings displays a loadout's graph read-on
 no execution path for loadouts.
 
 **Admission.** `POST /api/runs` (from `axocoatl run`) resolves parameters (unknown names
-refused, missing required ones a usage error), canonicalizes the repository and finds or
+refused, missing required ones a usage error), canonicalizes the repository and checks it
+against `WorkspaceScope` as Session creation does (one of Axocoatl's own directories is
+`workspace_protected`; a broad folder is `workspace_too_broad` unless it is already a
+Workspace, which Open workspace… registers only after the person confirms it), finds or
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the

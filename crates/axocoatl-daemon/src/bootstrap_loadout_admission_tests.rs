@@ -921,6 +921,104 @@ async fn more_problems_child_body() {
     daemon.shutdown().await.unwrap();
 }
 
+/// A run's repository keeps to the Workspace scope rules: the home folder
+/// (here the child's own) and the file system root are too broad, and the
+/// data directory and a folder inside it are Axocoatl's own. Each is a
+/// usage problem before Podman, with nothing created; a broad folder the
+/// person opened as a Workspace after confirming it is accepted.
+async fn scope_child_body() {
+    let server = ollama().await;
+    let (daemon, _dir) = daemon(&server.uri(), "").await;
+    let writer = format!("ollama:{WRITER}");
+    let reviewer = format!("ollama:{REVIEWER}");
+    let params = [
+        ("writer_model", writer.as_str()),
+        ("reviewer_model", reviewer.as_str()),
+    ];
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+    let data = daemon.data_root.path().to_path_buf();
+    let inside = data.join("inside-data");
+    std::fs::create_dir(&inside).unwrap();
+    for (index, (repo, code, says)) in [
+        (
+            home.clone(),
+            WORKSPACE_TOO_BROAD_CODE,
+            "is your home folder",
+        ),
+        (
+            std::path::PathBuf::from("/"),
+            WORKSPACE_TOO_BROAD_CODE,
+            "is the root of the file system",
+        ),
+        (
+            data.clone(),
+            WORKSPACE_PROTECTED_CODE,
+            "is inside Axocoatl's data directory",
+        ),
+        (
+            inside.clone(),
+            WORKSPACE_PROTECTED_CODE,
+            "is inside Axocoatl's data directory",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        forget_podman_calls();
+        let message = usage(
+            admit(
+                &daemon,
+                request("fix", &repo, &params, &format!("scope-{index}")),
+            )
+            .await,
+        );
+        assert_eq!(podman_calls(), Vec::<String>::new());
+        assert!(message.contains(says), "{message}");
+        if code == WORKSPACE_TOO_BROAD_CODE {
+            assert!(
+                message.contains("only after you opened it with Open workspace…"),
+                "{message}"
+            );
+        } else {
+            assert!(
+                message.contains("never opens its own state as a Workspace"),
+                "{message}"
+            );
+        }
+        let preflight = daemon
+            .preflight_loadout_run(request("fix", &repo, &params, "dry"))
+            .await;
+        assert!(!preflight.ready);
+        assert_eq!(preflight.exit_code, exit_code::USAGE);
+        let codes: Vec<&str> = preflight
+            .problems
+            .iter()
+            .map(|problem| problem.code.as_str())
+            .collect();
+        assert_eq!(codes, [code], "{:?}", preflight.problems);
+    }
+    nothing_created(&daemon).await;
+
+    // The home folder opened with Open workspace… after the person
+    // confirmed it: a run may use it, as a Session may.
+    daemon
+        .open_workspace(&home.display().to_string(), None, true)
+        .await
+        .unwrap();
+    let preflight = daemon
+        .preflight_loadout_run(request("fix", &home, &params, "confirmed"))
+        .await;
+    assert!(
+        !preflight
+            .problems
+            .iter()
+            .any(|problem| problem.code.starts_with("workspace_")),
+        "{:?}",
+        preflight.problems
+    );
+    daemon.shutdown().await.unwrap();
+}
+
 async fn rootful_child_body() {
     let server = ollama().await;
     let (daemon, _dir) = daemon(&server.uri(), "").await;
@@ -984,6 +1082,12 @@ fn idle_podman() -> Podman {
 
 /// Run `name` in a child process with its own data root and `podman`.
 async fn run_child(name: &str, podman: Podman) {
+    run_child_with(name, podman, false).await
+}
+
+/// [`run_child`]; with `own_home` the child's HOME is an empty folder of
+/// its own.
+async fn run_child_with(name: &str, podman: Podman, own_home: bool) {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -1032,9 +1136,15 @@ esac
         }
         _ => format!("{}:/usr/bin:/bin", bin.display()),
     };
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    if own_home {
+        let home = root.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        command.env("HOME", home);
+    }
     let result = tokio::time::timeout(
         Duration::from_secs(300),
-        tokio::process::Command::new(std::env::current_exe().unwrap())
+        command
             .args(["--exact", name, "--nocapture"])
             .env(CHILD, "1")
             .env(PODMAN_LOG, &log)
@@ -1169,6 +1279,23 @@ async fn a_machine_switched_to_rootless_is_seen_without_a_restart() {
     run_child(
         "bootstrap::loadout_runs::admission_tests::a_machine_switched_to_rootless_is_seen_without_a_restart",
         Podman::Rootful,
+    )
+    .await;
+}
+
+/// `--repo` that is the home folder, the file system root, Axocoatl's data
+/// directory or a folder inside it is refused before Podman, creating
+/// nothing; a broad folder opened as a Workspace after confirmation is not.
+#[tokio::test]
+async fn a_run_keeps_to_the_workspace_scope_rules() {
+    if std::env::var_os(CHILD).is_some() {
+        scope_child_body().await;
+        return;
+    }
+    run_child_with(
+        "bootstrap::loadout_runs::admission_tests::a_run_keeps_to_the_workspace_scope_rules",
+        idle_podman(),
+        true,
     )
     .await;
 }
