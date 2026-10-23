@@ -309,16 +309,28 @@ Lead and Reviewer pair onboarding offers with 48 to 95 GB of memory when no inst
 pair fits. Axocoatl sets nothing that keeps both loaded or unloads either (no
 `keep_alive`): whether both stay in memory is up to Ollama.
 
-**Contract probes.** When Team & budget observes a model's context, Axocoatl sends two
+**Contract probes.** When Team & budget observes a model's context, Axocoatl sends a few
 small requests to your server with that context and the settings every call uses
-(`truncate: false`, `shift: false`): a prompt about four times longer than the context,
-which Ollama must refuse before generating anything, and a one-token request, which
-must stop after one token. A model that fails either is refused, and the error names
-the guarantee that failed. The result is kept per Ollama version, model digest and
-context; after an upgrade to another accepted Ollama version, the probes run again on
-it before it serves an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be
-reviewed again. Axocoatl's own scheduled check runs the same two probes against each
-new Ollama release and release candidate, with a small model, as they are published.
+(`truncate: false`, `shift: false`):
+
+- a prompt about four times longer than the context, which Ollama must refuse before
+  generating anything;
+- a one-token request, which must stop after one token;
+- a request for hundreds of lines with an output limit of 64 tokens, which must stop by
+  64 generated tokens, report exactly 64 when the limit ended it, and stream no more
+  pieces of text than the tokens it reports (a model Ollama runs with speculative
+  decoding, such as the `-mtp` tags, accepts several drafted tokens at a time);
+- for a model that reports tool calling, a request to call the one tool it is offered,
+  within 512 tokens (room for a thinking model's reasoning), which must come back as a
+  call of that tool with a call id and a string argument, read the way Axocoatl reads
+  every answer.
+
+A model that fails one is refused, and the error names the guarantee that failed. The
+result is kept per Ollama version, model digest, context and tool calling; after an
+upgrade to another accepted Ollama version, the probes run again on it before it serves
+an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be reviewed again.
+Axocoatl's own scheduled check runs the same probes against each new Ollama release and
+release candidate, with a small model, as they are published.
 
 ```yaml
 agents:

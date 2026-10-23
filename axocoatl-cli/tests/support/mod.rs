@@ -130,24 +130,16 @@ pub fn client(port: u16) -> reqwest::Client {
         .unwrap()
 }
 
-/// Answer native Ollama's contract probes on `server` the way Ollama 0.40.6
-/// does, before any other `/api/chat` mock: the over-long prompt is refused
-/// with HTTP 400, the one-token request stops after one token.
+/// Answer native Ollama's contract probes on `server` the way Ollama 0.40
+/// does ([`axocoatl_llm_ollama::ContractProbe::answer`]), before any other
+/// `/api/chat` mock: the over-long prompt is refused with HTTP 400, the
+/// one-token request stops after one token, the long answer stops at its
+/// limit and the request to call the offered tool calls it.
 pub async fn mount_contract_probes(server: &wiremock::MockServer) {
+    use axocoatl_llm_ollama::ContractProbe;
     struct Probe;
-    fn kind(body: &[u8]) -> Option<bool> {
-        let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-        if value.pointer("/options/num_predict") != Some(&serde_json::json!(1))
-            || value.get("truncate") != Some(&serde_json::json!(false))
-        {
-            return None;
-        }
-        let content = value.pointer("/messages/0/content")?.as_str()?;
-        if content == axocoatl_llm_ollama::CONTRACT_STOP_PROBE_PROMPT {
-            Some(false)
-        } else {
-            content.starts_with("x x ").then_some(true)
-        }
+    fn kind(body: &[u8]) -> Option<ContractProbe> {
+        ContractProbe::of(&serde_json::from_slice(body).ok()?)
     }
     impl wiremock::Match for Probe {
         fn matches(&self, request: &wiremock::Request) -> bool {
@@ -158,17 +150,9 @@ pub async fn mount_contract_probes(server: &wiremock::MockServer) {
         .and(Probe)
         .respond_with(|request: &wiremock::Request| {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            if kind(&request.body) == Some(true) {
-                return wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                    "error": "request exceeds the available context size, try increasing it"
-                }));
-            }
-            let record = serde_json::json!({"model": body["model"],
-                "created_at": "2026-10-19T00:00:00Z",
-                "message": {"role": "assistant", "content": "ready"}, "done": true,
-                "done_reason": "length", "prompt_eval_count": 14, "eval_count": 1});
-            wiremock::ResponseTemplate::new(200)
-                .set_body_raw(format!("{record}\n"), "application/x-ndjson")
+            let (status, content_type, answer) =
+                kind(&request.body).expect("a contract probe").answer(&body);
+            wiremock::ResponseTemplate::new(status).set_body_raw(answer, content_type)
         })
         .with_priority(1)
         .mount(server)

@@ -1,6 +1,6 @@
-//! Contract probes: two cheap requests on the person's own server and model
-//! that check the guarantees native execution relies on, instead of trusting
-//! the audited source alone.
+//! Contract probes: cheap requests on the person's own server and model that
+//! check the guarantees native execution relies on, instead of trusting the
+//! audited source alone.
 //!
 //! - Over-long refusal: one user message of about four times the observed
 //!   context in bytes, sent with `truncate:false`, `shift:false` and the
@@ -9,35 +9,143 @@
 //! - Output stop: a short prompt with `num_predict:1` must finish
 //!   (`done:true`, `done_reason` `stop` or `length`) after at most one
 //!   generated token, with a prompt count between zero and the context.
+//! - Long output: a prompt that asks for hundreds of lines, with
+//!   `num_predict` [`LONG_OUTPUT_TOKENS`], must finish after at most that
+//!   many generated tokens, report exactly that many when the limit ended
+//!   it (`length`), and never stream more pieces of text than the tokens it
+//!   reports. A runner that decodes speculatively, accepting several drafted
+//!   tokens at a time, is where a bound could be overshot or a count could
+//!   fall short.
+//! - Tool call, for a model that reports tool calling: asked to call the one
+//!   tool it is offered, within [`TOOL_CALL_TOKENS`], the answer is read the
+//!   way inference reads one ([`super::NativeResponse`]) and must call that
+//!   tool, with a call id and a string argument. This holds whichever
+//!   template Ollama renders the model with (its own renderer, a Go
+//!   template, the model's chat template in llama-server, or Harmony).
 //!
-//! Both send the same `num_ctx` and `shift:false` as inference (and as the
-//! observation's load request), so neither makes Ollama reload the model.
-//! A pass is kept for this process per server, version, model digest and
-//! context; a new Ollama version is probed again before it serves.
+//! All send the same `num_ctx` and `shift:false` as inference (and as the
+//! observation's load request), so none makes Ollama reload the model.
+//! A pass is kept for this process per server, version, model digest,
+//! context and tool calling; a new Ollama version is probed again before it
+//! serves.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use axocoatl_llm::{transport::validated_endpoint, ProviderError};
+use axocoatl_llm::{transport::validated_endpoint, ChatRequest, ProviderError, ToolDefinition};
 use serde_json::{json, Value};
 
-use super::{invalid, PROVIDER};
+use super::{invalid, NativeResponse, PROVIDER};
 
-/// Longest probe answer read. A refusal or a one-token answer is far smaller.
+/// Longest probe answer read. A refusal or a one-token answer is far smaller,
+/// and a bounded long or tool-call answer is a few kilobytes.
 const MAX_PROBE_RESPONSE_BYTES: usize = 256 * 1024;
 
 /// The stop probe's prompt: any short prompt works; this one invites a
 /// one-word answer, so a stop before the limit is also a pass.
 pub const STOP_PROBE_PROMPT: &str = "Reply with the single word: ready";
 
-/// What a passed probe pair is valid for.
+/// The long-output probe's prompt: an answer far longer than
+/// [`LONG_OUTPUT_TOKENS`], so the limit, not the model, ends it.
+pub const LONG_OUTPUT_PROBE_PROMPT: &str =
+    "Write the numbers from 1 to 300, one per line. Write only the numbers.";
+
+/// The long-output probe's `num_predict`.
+pub const LONG_OUTPUT_TOKENS: usize = 64;
+
+/// The tool-call probe's prompt.
+pub const TOOL_PROBE_PROMPT: &str = "Call the report_ready tool with word set to ready.";
+
+/// The one tool the tool-call probe offers.
+pub const PROBE_TOOL: &str = "report_ready";
+
+/// The tool-call probe's `num_predict`: room for a thinking model's
+/// reasoning before its call (Ollama 0.40.8 measured 31 tokens for
+/// gpt-oss:20b, 84 to 101 for qwen3.5:0.8b), still a bounded cost.
+pub const TOOL_CALL_TOKENS: usize = 512;
+
+/// Which contract probe a `/api/chat` request is, and what Ollama 0.40
+/// answers to it, for test servers that stand in for Ollama.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContractProbe {
+    /// The over-long prompt (`"x "` repeated): refused.
+    OverLong,
+    /// The one-token request ([`STOP_PROBE_PROMPT`]).
+    Stop,
+    /// The bounded long answer ([`LONG_OUTPUT_PROBE_PROMPT`]).
+    LongOutput,
+    /// The request to call [`PROBE_TOOL`] ([`TOOL_PROBE_PROMPT`]).
+    ToolCall,
+}
+
+impl ContractProbe {
+    /// The probe a parsed `/api/chat` body is, or `None` for any other request.
+    pub fn of(body: &Value) -> Option<Self> {
+        if body.get("truncate") != Some(&Value::Bool(false)) {
+            return None;
+        }
+        match body.pointer("/messages/0/content")?.as_str()? {
+            STOP_PROBE_PROMPT => Some(Self::Stop),
+            LONG_OUTPUT_PROBE_PROMPT => Some(Self::LongOutput),
+            TOOL_PROBE_PROMPT => Some(Self::ToolCall),
+            content if content.starts_with("x x ") => Some(Self::OverLong),
+            _ => None,
+        }
+    }
+
+    /// The HTTP status, content type and body Ollama 0.40 answers to this
+    /// probe `body` with: the shapes Ollama 0.40.8 gave (a refusal, one token,
+    /// the limit reached, and the call in the final record, as gpt-oss:20b
+    /// answers).
+    pub fn answer(self, body: &Value) -> (u16, &'static str, String) {
+        let model = &body["model"];
+        let records = match self {
+            Self::OverLong => {
+                return (
+                    400,
+                    "application/json",
+                    json!({"error": "request exceeds the available context size, try \
+                                     increasing it"})
+                    .to_string(),
+                )
+            }
+            Self::Stop => vec![json!({"model": model, "created_at": "2026-10-19T00:00:00Z",
+                "message": {"role": "assistant", "content": "ready"}, "done": true,
+                "done_reason": "length", "prompt_eval_count": 14, "eval_count": 1})],
+            Self::LongOutput => vec![
+                json!({"model": model, "created_at": "2026-10-19T00:00:00Z",
+                    "message": {"role": "assistant", "content": "1\n2\n3\n"}, "done": false}),
+                json!({"model": model, "created_at": "2026-10-19T00:00:00Z",
+                    "message": {"role": "assistant", "content": ""}, "done": true,
+                    "done_reason": "length", "prompt_eval_count": 33,
+                    "eval_count": body.pointer("/options/num_predict")}),
+            ],
+            Self::ToolCall => vec![json!({"model": model, "created_at": "2026-10-19T00:00:00Z",
+                "message": {"role": "assistant", "content": "", "tool_calls": [{
+                    "id": "call_probe", "function": {"index": 0, "name": PROBE_TOOL,
+                    "arguments": {"word": "ready"}}}]},
+                "done": true, "done_reason": "stop", "prompt_eval_count": 138,
+                "eval_count": 31})],
+        };
+        let mut ndjson = String::new();
+        for record in records {
+            ndjson.push_str(&record.to_string());
+            ndjson.push('\n');
+        }
+        (200, "application/x-ndjson", ndjson)
+    }
+}
+
+/// What a passed probe set is valid for.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ProbeKey {
     pub(crate) base_url: String,
     pub(crate) server_version: String,
     pub(crate) model_digest: String,
     pub(crate) context_tokens: usize,
+    /// The model reports tool calling, so the tool-call probe runs.
+    pub(crate) tools: bool,
 }
 
 fn passed() -> &'static Mutex<HashSet<ProbeKey>> {
@@ -72,10 +180,13 @@ fn failed(guarantee: &str, model: &str, version: &str, detail: impl AsRef<str>) 
 
 const OVER_LONG: &str = "over-long prompt refusal (truncate:false)";
 const STOP: &str = "output limit (num_predict)";
+const LONG_OUTPUT: &str = "long output limit and count (num_predict, eval_count)";
+const TOOL_CALL: &str = "tool call";
 
-/// Run both probes unless they already passed for `key`, each answer
-/// within `timeout` (the observation's load timeout: a model Ollama has
-/// unloaded since is loaded again first).
+/// Run the probes unless they already passed for `key` (the tool-call probe
+/// only for a model that reports tool calling), each answer within `timeout`
+/// (the observation's load timeout: a model Ollama has unloaded since is
+/// loaded again first).
 pub(crate) async fn ensure_contract(
     client: &reqwest::Client,
     key: ProbeKey,
@@ -87,24 +198,29 @@ pub(crate) async fn ensure_contract(
     }
     over_long_probe(client, &key, model, timeout).await?;
     stop_probe(client, &key, model, timeout).await?;
+    long_output_probe(client, &key, model, timeout).await?;
+    if key.tools {
+        tool_call_probe(client, &key, model, timeout).await?;
+    }
     tracing::info!(
         model,
         server_version = %key.server_version,
         context = key.context_tokens,
+        tools = key.tools,
         "native Ollama contract probes passed"
     );
     remember_passed(key);
     Ok(())
 }
 
-fn probe_body(model: &str, content: &str, context: usize) -> Value {
+fn probe_body(model: &str, content: &str, context: usize, num_predict: usize) -> Value {
     json!({
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "stream": true,
         "truncate": false,
         "shift": false,
-        "options": {"num_ctx": context, "num_predict": 1},
+        "options": {"num_ctx": context, "num_predict": num_predict},
     })
 }
 
@@ -171,7 +287,7 @@ async fn over_long_probe(
     let (status, records) = post(
         client,
         &key.base_url,
-        &probe_body(model, &content, key.context_tokens),
+        &probe_body(model, &content, key.context_tokens, 1),
         timeout,
     )
     .await
@@ -227,102 +343,247 @@ async fn over_long_probe(
     }
 }
 
-async fn stop_probe(
-    client: &reqwest::Client,
-    key: &ProbeKey,
-    model: &str,
-    timeout: Duration,
-) -> Result<(), ProviderError> {
-    let version = &key.server_version;
-    let (status, records) = post(
-        client,
-        &key.base_url,
-        &probe_body(model, STOP_PROBE_PROMPT, key.context_tokens),
-        timeout,
-    )
-    .await
-    .map_err(|detail| failed(STOP, model, version, detail))?;
-    if !(200..300).contains(&status) || error_text(&records).is_some() {
-        return Err(failed(
-            STOP,
-            model,
-            version,
-            format!(
-                "a one-token request was refused (status {status}: {})",
-                error_text(&records).unwrap_or_default()
-            ),
+/// Why a probe answer that should have been generated was not: a status that
+/// is not 2xx, or an error record. `what` names the request.
+fn refused(status: u16, records: &[Value], what: &str) -> Result<(), String> {
+    if !(200..300).contains(&status) || error_text(records).is_some() {
+        return Err(format!(
+            "{what} was refused (status {status}: {})",
+            error_text(records).unwrap_or_default()
         ));
     }
+    Ok(())
+}
+
+/// The one `done` record a generated probe answer ends with, its
+/// `done_reason` (`stop` or `length`) and the generated-token count it
+/// reports (Ollama omits a zero count). `what` names the request.
+fn finished<'a>(records: &'a [Value], what: &str) -> Result<(&'a Value, &'a str, u64), String> {
     let done: Vec<&Value> = records
         .iter()
         .filter(|record| record.get("done").and_then(Value::as_bool) == Some(true))
         .collect();
     let [last] = done.as_slice() else {
-        return Err(failed(
-            STOP,
-            model,
-            version,
-            format!(
-                "a one-token request ended with {} final records instead of one",
-                done.len()
-            ),
+        return Err(format!(
+            "{what} ended with {} final records instead of one",
+            done.len()
         ));
     };
     if !records
         .last()
         .is_some_and(|record| std::ptr::eq(record, *last))
     {
-        return Err(failed(
-            STOP,
-            model,
-            version,
-            "a one-token request went on after its final record",
-        ));
+        return Err(format!("{what} went on after its final record"));
     }
-    let reason = last.get("done_reason").and_then(Value::as_str);
-    if !matches!(reason, Some("stop" | "length")) {
-        return Err(failed(
-            STOP,
-            model,
-            version,
-            format!("a one-token request finished with done_reason {reason:?}"),
-        ));
-    }
-    // Ollama omits a zero count.
+    let reason = match last.get("done_reason").and_then(Value::as_str) {
+        Some(reason @ ("stop" | "length")) => reason,
+        reason => return Err(format!("{what} finished with done_reason {reason:?}")),
+    };
     let generated = match last.get("eval_count") {
         None => 0,
-        Some(count) => count.as_u64().ok_or_else(|| {
-            failed(
-                STOP,
-                model,
-                version,
-                "a one-token request reported a malformed eval_count",
-            )
-        })?,
+        Some(count) => count
+            .as_u64()
+            .ok_or_else(|| format!("{what} reported a malformed eval_count"))?,
     };
-    if generated > 1 {
-        return Err(failed(
-            STOP,
-            model,
-            version,
-            format!(
-                "asked for at most 1 token (num_predict:1), the model generated {generated}; \
-                 Axocoatl cannot bound this model's output"
-            ),
-        ));
-    }
+    Ok((last, reason, generated))
+}
+
+/// The prompt count `last` reports is between zero and the context.
+fn prompt_counted(last: &Value, key: &ProbeKey, what: &str) -> Result<(), String> {
     let prompt = last.get("prompt_eval_count").and_then(Value::as_u64);
     match prompt {
         Some(prompt) if prompt > 0 && prompt < key.context_tokens as u64 => Ok(()),
-        _ => Err(failed(
-            STOP,
-            model,
-            version,
-            format!(
-                "a one-token request reported a prompt count of {prompt:?}, not between 0 and the \
-                 {}-token context",
-                key.context_tokens
-            ),
+        _ => Err(format!(
+            "{what} reported a prompt count of {prompt:?}, not between 0 and the {}-token context",
+            key.context_tokens
         )),
     }
+}
+
+async fn stop_probe(
+    client: &reqwest::Client,
+    key: &ProbeKey,
+    model: &str,
+    timeout: Duration,
+) -> Result<(), ProviderError> {
+    const WHAT: &str = "a one-token request";
+    let fail = |detail: String| failed(STOP, model, &key.server_version, detail);
+    let (status, records) = post(
+        client,
+        &key.base_url,
+        &probe_body(model, STOP_PROBE_PROMPT, key.context_tokens, 1),
+        timeout,
+    )
+    .await
+    .map_err(fail)?;
+    refused(status, &records, WHAT).map_err(fail)?;
+    let (last, _, generated) = finished(&records, WHAT).map_err(fail)?;
+    if generated > 1 {
+        return Err(fail(format!(
+            "asked for at most 1 token (num_predict:1), the model generated {generated}; \
+             Axocoatl cannot bound this model's output"
+        )));
+    }
+    prompt_counted(last, key, WHAT).map_err(fail)
+}
+
+async fn long_output_probe(
+    client: &reqwest::Client,
+    key: &ProbeKey,
+    model: &str,
+    timeout: Duration,
+) -> Result<(), ProviderError> {
+    const WHAT: &str = "a long answer";
+    let fail = |detail: String| failed(LONG_OUTPUT, model, &key.server_version, detail);
+    let limit = LONG_OUTPUT_TOKENS as u64;
+    let (status, records) = post(
+        client,
+        &key.base_url,
+        &probe_body(
+            model,
+            LONG_OUTPUT_PROBE_PROMPT,
+            key.context_tokens,
+            LONG_OUTPUT_TOKENS,
+        ),
+        timeout,
+    )
+    .await
+    .map_err(fail)?;
+    refused(status, &records, WHAT).map_err(fail)?;
+    let (last, reason, generated) = finished(&records, WHAT).map_err(fail)?;
+    if generated > limit {
+        return Err(fail(format!(
+            "asked for at most {limit} tokens (num_predict:{limit}), the model generated \
+             {generated}; Axocoatl cannot bound this model's output"
+        )));
+    }
+    if reason == "length" && generated != limit {
+        return Err(fail(format!(
+            "the answer ended at its {limit}-token limit (done_reason length) but reported \
+             {generated} generated tokens; Axocoatl cannot count this model's output"
+        )));
+    }
+    // Every piece of text streamed before the final record is at least one
+    // generated token, however many tokens a step accepts.
+    let pieces = records[..records.len() - 1]
+        .iter()
+        .filter(|record| {
+            ["/message/content", "/message/thinking"]
+                .iter()
+                .any(|field| {
+                    record
+                        .pointer(field)
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty())
+                })
+        })
+        .count() as u64;
+    if pieces > generated {
+        return Err(fail(format!(
+            "the answer streamed {pieces} pieces of text but reported {generated} generated \
+             tokens; Axocoatl cannot count this model's output"
+        )));
+    }
+    prompt_counted(last, key, WHAT).map_err(fail)
+}
+
+/// The tool the tool-call probe offers.
+fn probe_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: PROBE_TOOL.into(),
+        description: "Report the word you were asked to report.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {"word": {"type": "string", "description": "The word to report."}},
+            "required": ["word"],
+        }),
+        concurrency: Default::default(),
+    }
+}
+
+/// Read a probe answer the way inference reads a response: its records in
+/// order, then what ends it, with any refusal of its calls.
+fn read_as_inference(
+    answer: &mut NativeResponse,
+    records: &[Value],
+    status: u16,
+) -> Result<(), ProviderError> {
+    for record in records {
+        answer.observe_counts(record);
+        answer.record(record, status)?;
+    }
+    if let Some((_, error)) = answer.take_rejection() {
+        return Err(error);
+    }
+    answer.finish()?;
+    match answer.take_rejection() {
+        Some((_, error)) => Err(error),
+        None => Ok(()),
+    }
+}
+
+async fn tool_call_probe(
+    client: &reqwest::Client,
+    key: &ProbeKey,
+    model: &str,
+    timeout: Duration,
+) -> Result<(), ProviderError> {
+    const WHAT: &str = "a request to call the offered tool";
+    let fail = |detail: String| failed(TOOL_CALL, model, &key.server_version, detail);
+    let limit = TOOL_CALL_TOKENS as u64;
+    let mut request = ChatRequest::simple(TOOL_PROBE_PROMPT);
+    request.tools.push(probe_tool());
+    request.max_tokens = Some(TOOL_CALL_TOKENS);
+    let mut body = probe_body(
+        model,
+        TOOL_PROBE_PROMPT,
+        key.context_tokens,
+        TOOL_CALL_TOKENS,
+    );
+    body["tools"] = crate::tools_json(&request.tools);
+    let (status, records) = post(client, &key.base_url, &body, timeout)
+        .await
+        .map_err(fail)?;
+    refused(status, &records, WHAT).map_err(fail)?;
+    let (_, reason, generated) = finished(&records, WHAT).map_err(fail)?;
+    if generated > limit {
+        return Err(fail(format!(
+            "asked for at most {limit} tokens (num_predict:{limit}), the model generated \
+             {generated}; Axocoatl cannot bound this model's output"
+        )));
+    }
+    let mut answer = NativeResponse::new(
+        model.to_owned(),
+        request,
+        MAX_PROBE_RESPONSE_BYTES,
+        (key.context_tokens + TOOL_CALL_TOKENS) as u64,
+    );
+    let read = read_as_inference(&mut answer, &records, status);
+    if answer.calls.is_empty() {
+        return Err(fail(match (reason, read) {
+            ("length", _) => format!(
+                "asked to call {PROBE_TOOL}, the model reached its {limit}-token limit without \
+                 a tool call"
+            ),
+            (_, Err(error)) => format!("the answer is not a tool call Axocoatl can run: {error}"),
+            (_, Ok(())) => {
+                format!("asked to call {PROBE_TOOL}, the model answered without a tool call")
+            }
+        }));
+    }
+    read.map_err(|error| fail(format!("the tool call cannot run: {error}")))?;
+    for call in &answer.calls {
+        if call.name != PROBE_TOOL || !call.arguments.get("word").is_some_and(Value::is_string) {
+            return Err(fail(format!(
+                "asked to call {PROBE_TOOL} with a string word, the model called {} with {}",
+                super::shown_name(&call.name),
+                call.arguments
+                    .to_string()
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            )));
+        }
+    }
+    Ok(())
 }

@@ -370,6 +370,7 @@ async fn observe(
             server_version: capabilities.version.clone(),
             model_digest: first.digest.clone(),
             context_tokens: context,
+            tools: capabilities.tools,
         },
         model,
         load_timeout,
@@ -465,6 +466,7 @@ fn probe_key(observation: &NativeOllamaContextObservation, server_version: &str)
         server_version: server_version.to_owned(),
         model_digest: observation.model_digest.clone(),
         context_tokens: observation.context_tokens,
+        tools: observation.tools_supported,
     }
 }
 

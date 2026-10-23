@@ -6,8 +6,8 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  DEFAULT_MODELS, OLLAMA_VERSION, STOP_PROBE_PROMPT, classify, decide, digestOf, loadFixes,
-  parseFixes, startStubServer, toolHistory, writerStep,
+  DEFAULT_MODELS, LONG_OUTPUT_PROBE_PROMPT, OLLAMA_VERSION, STOP_PROBE_PROMPT, TOOL_PROBE_PROMPT,
+  classify, decide, digestOf, loadFixes, parseFixes, startStubServer, toolHistory, writerStep,
 } from './stub-model-server.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -142,6 +142,10 @@ test('requests are told apart: writer, reviewer, contract probe and anything els
   assert.equal(classify({ messages: [{ role: 'user', content: 'Give VERDICT: APPROVE or VERDICT: CHANGES' }] }), 'reviewer');
   assert.equal(classify({ truncate: false, options: { num_predict: 1 }, messages: [{ role: 'user', content: STOP_PROBE_PROMPT }] }), 'probe');
   assert.equal(classify({ truncate: false, options: { num_predict: 1 }, messages: [{ role: 'user', content: 'x x x x' }] }), 'probe');
+  assert.equal(classify({ truncate: false, options: { num_predict: 64 }, messages: [{ role: 'user', content: LONG_OUTPUT_PROBE_PROMPT }] }), 'probe');
+  // The tool-call probe offers a tool, and is still a probe, not a reviewer.
+  assert.equal(classify({ truncate: false, options: { num_predict: 512 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] }), 'probe');
+  assert.equal(classify({ messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] }), 'other');
   assert.equal(classify({ messages: [{ role: 'user', content: 'hello' }] }), 'other');
   const review = decide({ tools: REVIEWER_TOOLS, messages: [{ role: 'user', content: 'review' }] }, fixes);
   assert.match(review.text, /^VERDICT: APPROVE\n/);
@@ -204,7 +208,7 @@ test('the server reports an audited, cloud-off Ollama with local GGUF models tha
   }
 });
 
-test('the contract probes get Ollama 0.40.6 answers and are counted apart from model calls', async () => {
+test('the contract probes get Ollama 0.40 answers and are counted apart from model calls', async () => {
   await call('/__gate/reset', {});
   const overLong = await call('/api/chat', { model: 'qwen3-coder:30b', truncate: false, shift: false, stream: true, options: { num_ctx: 32768, num_predict: 1 }, messages: [{ role: 'user', content: 'x x x x x' }] });
   assert.equal(overLong.status, 400);
@@ -213,8 +217,19 @@ test('the contract probes get Ollama 0.40.6 answers and are counted apart from m
   const record = JSON.parse(stop.text.trim());
   assert.equal(record.done_reason, 'length');
   assert.equal(record.eval_count, 1);
+  // The long answer stops at its limit and reports exactly that many tokens.
+  const long = await call('/api/chat', { model: 'qwen3-coder:30b', truncate: false, shift: false, stream: true, options: { num_ctx: 32768, num_predict: 64 }, messages: [{ role: 'user', content: LONG_OUTPUT_PROBE_PROMPT }] });
+  const longRecords = long.text.trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(longRecords.at(-1).done_reason, 'length');
+  assert.equal(longRecords.at(-1).eval_count, 64);
+  assert.ok(longRecords.filter((entry) => entry.message.content).length <= 64);
+  // Asked to call the offered tool, the model calls it, with a call id.
+  const tool = await call('/api/chat', { model: 'gpt-oss:20b', truncate: false, shift: false, stream: true, options: { num_ctx: 32768, num_predict: 512 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] });
+  const call0 = JSON.parse(tool.text.trim()).message.tool_calls[0];
+  assert.ok(call0.id);
+  assert.deepEqual([call0.function.name, call0.function.arguments], ['report_ready', { word: 'ready' }]);
   const stats = JSON.parse((await call('/__gate/stats')).text);
-  assert.equal(stats.probes, 2);
+  assert.equal(stats.probes, 4);
   assert.equal(stats.writer + stats.reviewer + stats.other, 0);
 });
 

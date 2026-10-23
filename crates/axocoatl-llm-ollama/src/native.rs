@@ -2,10 +2,10 @@
 //!
 //! The audited Ollama 0.40.6 runs every GGUF model in llama.cpp's
 //! `llama-server`, which rejects oversized inputs with `truncate:false` and
-//! stops at a positive `num_predict`; the contract probes check both on the
-//! person's own server and model before a Team uses it. Thinking+structured
-//! output runs in one pass on 0.40, but format requests still reserve two full
-//! passes (a valid, loose bound). Reported final metrics cover only the last
+//! stops at a positive `num_predict`; the contract probes check both, and a
+//! long answer's count and a tool call, on the person's own server and model
+//! before a Team uses it. Thinking+structured output runs in one pass on 0.40,
+//! but format requests still reserve two full passes (a valid, loose bound). Reported final metrics cover only the last
 //! pass and are consequently lower bounds for format requests.
 //! This is an operator-configured server capability, not model-weight attestation.
 //! The existing OpenAI-compatible provider is intentionally unchanged.
@@ -39,6 +39,9 @@ use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 
 mod contract_probe;
+/// Which contract probe a request is and what Ollama answers to it, for test
+/// servers that stand in for Ollama.
+pub use contract_probe::ContractProbe;
 /// The stop probe's prompt, for test servers that stand in for Ollama and
 /// answer the contract probes. The over-long probe's message is `"x "`
 /// repeated.

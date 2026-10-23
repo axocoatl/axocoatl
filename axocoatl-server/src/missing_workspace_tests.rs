@@ -99,7 +99,7 @@ const MODEL: &str = "folder-model:latest";
 
 /// A stand-in for the audited local Ollama, enough for admission to observe
 /// [`MODEL`] (version, cloud mode, model, a generation-free load, its
-/// loaded context, and the two contract probes). No turn ever runs: every
+/// loaded context, and the contract probes). No turn ever runs: every
 /// run's environment fails under the fake Podman. Returns its base URL.
 async fn ollama() -> String {
     use axum::routing::{get, post};
@@ -138,8 +138,10 @@ async fn ollama() -> String {
                 )
             }),
         )
-        // The contract probes: the over-long prompt is refused, the
-        // one-token request stops after one token.
+        // The contract probes, as Ollama 0.40 answers them
+        // (`axocoatl_llm_ollama::ContractProbe`): the over-long prompt is
+        // refused, the one-token and the long request stop at their limit,
+        // and the request offered a tool calls it.
         .route(
             "/api/chat",
             post(|Json(body): Json<Value>| async move {
@@ -153,9 +155,23 @@ async fn ollama() -> String {
                         json!({"error": "request exceeds the available context size"}).to_string(),
                     );
                 }
+                let (message, reason, generated) = match body.get("tools") {
+                    Some(_) => (
+                        json!({"role": "assistant", "content": "", "tool_calls": [{
+                            "id": "call_probe", "function": {"name": "report_ready",
+                            "arguments": {"word": "ready"}}}]}),
+                        "stop",
+                        json!(31),
+                    ),
+                    None => (
+                        json!({"role": "assistant", "content": "ready"}),
+                        "length",
+                        body["options"]["num_predict"].clone(),
+                    ),
+                };
                 let record = json!({"model": body["model"], "created_at": "2026-10-19T00:00:00Z",
-                    "message": {"role": "assistant", "content": "ready"}, "done": true,
-                    "done_reason": "length", "prompt_eval_count": 14, "eval_count": 1});
+                    "message": message, "done": true, "done_reason": reason,
+                    "prompt_eval_count": 14, "eval_count": generated});
                 (StatusCode::OK, format!("{record}\n"))
             }),
         );

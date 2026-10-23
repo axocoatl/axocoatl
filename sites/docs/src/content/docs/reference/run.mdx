@@ -164,8 +164,10 @@ nothing: no Workspace, Session or run record is created, and Podman is asked
 (`podman info`, `podman machine list`) but never started, so a stopped machine is reported
 as "a run starts it first" rather than as a problem, and an image that is not built is
 noted as one a run builds first. It is not free for Ollama: as a run's
-admission does, it loads each Ollama model once, without a prompt, and runs the two
-one-token contract probes, so the model then holds its memory until Ollama unloads it.
+admission does, it loads each Ollama model once, without a prompt, and runs the
+contract probes (a few bounded requests: at most 64 generated tokens, and 512 for the
+tool-call probe of a model with tool calling), so the model then holds its memory until
+Ollama unloads it.
 `--task` is optional (without one the task is not checked, and none is sent); `--junit`,
 `--record` and `--receipt` are refused, since there is no run. When the check takes more
 than a few seconds, a line says what it is doing. It prints the Ollama models with the

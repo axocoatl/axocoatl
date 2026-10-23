@@ -205,25 +205,15 @@ impl FakeOllama {
             })
             .mount(&server)
             .await;
+        // The contract probes, as Ollama 0.40 answers them.
         Mock::given(method("POST"))
             .and(path("/api/chat"))
             .respond_with(|request: &wiremock::Request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
-                let content = body["messages"][0]["content"].as_str().unwrap_or_default();
-                if content.starts_with("x x ") {
-                    ResponseTemplate::new(400).set_body_json(json!({"error":
-                        "the prompt is longer than the context length"}))
-                } else {
-                    ResponseTemplate::new(200).set_body_raw(
-                        format!(
-                            "{}\n",
-                            json!({"model": body["model"], "message": {"role": "assistant",
-                                "content": "ready"}, "done": true, "done_reason": "length",
-                                "prompt_eval_count": 14, "eval_count": 1})
-                        ),
-                        "application/x-ndjson",
-                    )
-                }
+                let probe = axocoatl_llm_ollama::ContractProbe::of(&body)
+                    .expect("onboarding sends only the contract probes");
+                let (status, kind, answer) = probe.answer(&body);
+                ResponseTemplate::new(status).set_body_raw(answer, kind)
             })
             .mount(&server)
             .await;

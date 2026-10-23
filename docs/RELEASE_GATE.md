@@ -388,7 +388,7 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    current shell alone fails.
 3. A scripted model server (`scripts/release-gate/stub-model-server.mjs`):
    an Ollama 0.40.6 on 127.0.0.1 with cloud models off, `qwen3-coder:30b`
-   and `gpt-oss:20b` "installed", Axocoatl's two contract probes answered as
+   and `gpt-oss:20b` "installed", Axocoatl's contract probes answered as
    Ollama answers them, and an OpenAI-compatible endpoint. Its writer reads
    each fixture's buggy file and fixes it with `edit_file`
    (`scripts/release-gate/stub-fixes.json`); its reviewer approves.

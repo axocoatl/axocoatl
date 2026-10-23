@@ -1,6 +1,7 @@
 use std::pin::Pin;
 
 mod native;
+pub use native::ContractProbe;
 pub use native::{
     check_native_ollama_server, check_shown_model, describe_native_ollama_error,
     inspect_native_ollama_model, native_ollama_error_hint, observe_native_ollama_context,

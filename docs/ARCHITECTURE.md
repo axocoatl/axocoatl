@@ -386,12 +386,19 @@ GGUF completion model before inference; a model Ollama shows as non-GGUF or MLX,
 any runner but llama.cpp's `llama-server`, is refused, since MLX does not hold `num_ctx` as a
 hard limit. Native `/api/chat` requests set finite context/prediction limits and disable implicit
 history truncation and shifting; the context observation's load sends `shift:false` too, so the
-first inference does not reload the model. After the context is observed, two contract probes on
+first inference does not reload the model. After the context is observed, contract probes on
 the person's own server and model check the guarantees the bound relies on: a prompt about four
-times the context (`truncate:false`) must be refused before any generation, and a one-token
-request must stop after one token. Passes are cached per server, version, model digest and
-context; a newer accepted version is probed again before it serves a retained profile. The
-scheduled `ollama-watch` workflow runs both probes daily against each new Ollama release and
+times the context (`truncate:false`) must be refused before any generation; a one-token
+request must stop after one token; a request for hundreds of lines with `num_predict` 64 must
+stop by 64 generated tokens, report exactly 64 when the limit ended it, and stream no more
+pieces of text than the tokens it reports (where speculative decoding, which accepts several
+drafted tokens per step, could overshoot or undercount); and, for a model that reports tool
+calling, a request to call the one offered tool within 512 tokens must come back as a call
+of that tool with an id and a string argument, read by the same parser as inference (so it
+holds for Ollama's own renderers, Go templates, the model's chat template in `llama-server`
+and Harmony alike). Passes are cached per server, version, model digest, context and tool
+calling; a newer accepted version is probed again before it serves a retained profile. The
+scheduled `ollama-watch` workflow runs the probes daily against each new Ollama release and
 release candidate (an ignored test, `native::observed_context::watch`, that bypasses the version
 policy so a release candidate is probed too). Plain
 calls reserve context plus prediction capacity; JSON calls reserve two full passes (Ollama 0.40
