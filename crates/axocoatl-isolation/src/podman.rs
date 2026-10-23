@@ -501,25 +501,47 @@ pub async fn ensure_ready() -> Result<(), IsolationError> {
 
 /// Start an existing (stopped) `podman machine`: the one in use, by name
 /// ([`machine_to_start`]), so a machine with another name than
-/// `podman-machine-default` starts too.
+/// `podman-machine-default` starts too. A stale API socket the machine left
+/// when its VM was killed is removed first ([`remove_stale_socket`]), and
+/// `podman machine start` runs in a session of its own
+/// ([`start_in_own_session`]) until it ends.
 async fn machine_start(
     program: &str,
     connection: &ConnectionOverride,
 ) -> Result<(), IsolationError> {
     // Podman starts `podman-machine-default` when no name is given.
-    let name = match machine_list_with(program).await {
-        Ok(machines) => {
-            machine_to_start(&machines, connection).filter(|name| name != "podman-machine-default")
-        }
+    let to_start = match machine_list_with(program).await {
+        Ok(machines) => machine_to_start(&machines, connection),
         Err(_) => None,
     };
+    let name = to_start
+        .clone()
+        .filter(|name| name != "podman-machine-default");
+    let inspected = to_start.as_deref().unwrap_or("podman-machine-default");
+    if let Some(socket) = machine_api_socket(program, inspected).await {
+        match remove_stale_socket(&socket) {
+            Ok(true) => tracing::warn!(
+                machine = inspected,
+                socket = %socket.display(),
+                "removed the Podman API socket a machine that did not stop cleanly left \
+                 behind; Podman would not start the machine while it is there"
+            ),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                machine = inspected,
+                socket = %socket.display(),
+                %error,
+                "could not check the Podman machine's API socket"
+            ),
+        }
+    }
     tracing::info!(
         machine = name.as_deref().unwrap_or("default"),
         "starting the podman machine"
     );
     let mut args = vec!["machine", "start"];
     args.extend(name.as_deref());
-    let output = bounded_output(program, &args, MACHINE_START_TIMEOUT)
+    let output = machine_start_output(program, &args, MACHINE_START_TIMEOUT)
         .await
         .map_err(|error| {
             IsolationError::OciSetupFailed(format!("podman machine start: {error}"))
@@ -540,6 +562,170 @@ async fn machine_start(
             stderr.trim()
         )))
     }
+}
+
+/// Make `command` start in a session (and process group) of its own
+/// (`setsid`). The VM `podman machine start` starts (vfkit and gvproxy on
+/// macOS) keeps the session and process group of whatever ran that command,
+/// so in the starter's it died with the starter's: a Ctrl-C or the hangup
+/// when the terminal closes (onboarding, `axocoatl dev`), or launchd stopping
+/// the Always-On Service, which kills what is left of the daemon's process
+/// group. It died uncleanly, leaving a stale API socket that made the next
+/// start fail. Only the terminal's foreground process group gets a Ctrl-C,
+/// and a session of its own has no terminal, so none of these reach it. Its
+/// output still goes where the command's goes.
+pub fn start_in_own_session(command: &mut Command) {
+    #[cfg(unix)]
+    // SAFETY: between `fork` and `exec` the closure only calls `setsid`,
+    // which is async-signal-safe, and allocates nothing.
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::setsid()
+                .map(drop)
+                .map_err(std::io::Error::from)
+        });
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
+/// The Podman API socket `podman machine inspect` names for its machine.
+pub fn api_socket_from_inspect(stdout: &str) -> Option<std::path::PathBuf> {
+    let inspected: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    let machine = match &inspected {
+        serde_json::Value::Array(machines) => machines.first()?,
+        other => other,
+    };
+    let path = machine
+        .get("ConnectionInfo")?
+        .get("PodmanSocket")?
+        .get("Path")?
+        .as_str()?;
+    let path = std::path::PathBuf::from(path);
+    path.is_absolute().then_some(path)
+}
+
+/// The API socket of the machine `name`, as `podman machine inspect` names
+/// it; `None` when Podman does not say.
+async fn machine_api_socket(program: &str, name: &str) -> Option<std::path::PathBuf> {
+    let output = bounded_output(
+        program,
+        &["machine", "inspect", name],
+        READINESS_COMMAND_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    if output.timed_out || !output.status.success() {
+        return None;
+    }
+    api_socket_from_inspect(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Remove the Unix socket at `path` when nothing listens on it: what a
+/// Podman machine whose VM was killed leaves behind. While it is there the
+/// next `podman machine start` fails (gvproxy: "bind: address already in
+/// use", exit 125). `Ok(true)` when it was removed. Anything else at `path`
+/// (no file, another kind of file, a link, a socket that answers) is left as
+/// it is. Call it only for a machine that is stopped.
+pub fn remove_stale_socket(path: &std::path::Path) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        if !metadata.file_type().is_socket() {
+            return Ok(false);
+        }
+        match std::os::unix::net::UnixStream::connect(path) {
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                match std::fs::remove_file(path) {
+                    Ok(()) => Ok(true),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(false)
+    }
+}
+
+/// Run `podman machine start` (`args`) in a session of its own and wait for
+/// it, at most `timeout`; only then is it killed. Its standard error goes to
+/// a file whose name is removed at once, not to a pipe, and it is not killed
+/// when its caller stops waiting (the daemon shutting down): a closed pipe or
+/// a kill would end it half-way through starting the VM. Standard output,
+/// which Axocoatl does not read, is discarded.
+async fn machine_start_output(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<BoundedCommandOutput, IsolationError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut stderr = unnamed_file()?;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(stderr.try_clone()?);
+    start_in_own_session(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| IsolationError::OciSetupFailed(error.to_string()))?;
+    let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(status) => (status?, false),
+        Err(_) => {
+            let _ = child.start_kill();
+            let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+                .await
+                .map_err(|_| IsolationError::Timeout(timeout))??;
+            (status, true)
+        }
+    };
+    let length = stderr.seek(SeekFrom::End(0))?;
+    let kept = length.min(MACHINE_START_STDERR_BYTES);
+    stderr.seek(SeekFrom::Start(length - kept))?;
+    let mut bytes = Vec::new();
+    stderr.take(kept).read_to_end(&mut bytes)?;
+    Ok(BoundedCommandOutput {
+        status,
+        stdout: Vec::new(),
+        stderr: bytes,
+        stdout_truncated: false,
+        stderr_truncated: kept < length,
+        timed_out,
+    })
+}
+
+/// How much of the end of `podman machine start`'s standard error is read.
+const MACHINE_START_STDERR_BYTES: u64 = 64 * 1024;
+
+/// A new file only this process can open: created owner-only under a random
+/// name in the temporary directory, its name removed at once.
+fn unnamed_file() -> std::io::Result<std::fs::File> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|error| std::io::Error::other(error.to_string()))?;
+    let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let path = std::env::temp_dir().join(format!(".axocoatl-machine-start-{name}"));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&path)?;
+    std::fs::remove_file(&path)?;
+    Ok(file)
 }
 
 /// How to install Podman on this computer: [`install_fix`] for
@@ -1090,6 +1276,193 @@ esac"#,
         assert!(!calls(directory.path())
             .iter()
             .any(|call| call == "machine start"));
+    }
+
+    /// The process group of this process.
+    #[cfg(unix)]
+    fn own_process_group() -> String {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "pgid=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The daemon's start of a stopped machine (`axocoatl dev`, a run,
+    /// `recipe build`, `connect codex`) removes the API socket the machine
+    /// left when its VM was killed, which made the start fail once ("bind:
+    /// address already in use"), and leaves one that answers. `podman machine
+    /// start` runs in a session of its own (its process group is its own, not
+    /// the daemon's), so the VM it starts outlives a Ctrl-C at `axocoatl dev`
+    /// and launchd stopping the service.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn machine_start_clears_a_stale_api_socket_and_runs_in_its_own_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("api.sock");
+        let podman = shim(
+            directory.path(),
+            &format!(
+                r#"D="$(dirname "$0")"
+case "$*" in
+  "machine list --format json") echo '[{{"Name":"podman-machine-default","Default":true,"Running":false}}]' ;;
+  "machine inspect podman-machine-default")
+    echo '[{{"Name":"podman-machine-default","ConnectionInfo":{{"PodmanSocket":{{"Path":"{socket}"}}}}}}]' ;;
+  "machine start")
+    if [ -e "{socket}" ]; then
+      echo 'Error: gvproxy exiting: listen unix {socket}: bind: address already in use' >&2
+      exit 125
+    fi
+    echo "$$ $(ps -o pgid= -p $$ | tr -d ' ')" > "$D/started"
+    touch "$D/running" ;;
+  "info --format json") if [ -f "$D/running" ]; then echo '{{"host":{{}}}}'; else echo "Cannot connect to Podman" >&2; exit 125; fi ;;
+  *) echo "unexpected: $*" >&2; exit 125 ;;
+esac"#,
+                socket = socket.display()
+            ),
+        );
+        // What a killed VM leaves: a socket nothing listens on.
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        machine_start(&podman, &ConnectionOverride::None)
+            .await
+            .unwrap();
+        assert!(!socket.exists());
+        let ids = std::fs::read_to_string(directory.path().join("started")).unwrap();
+        let ids: Vec<&str> = ids.split_whitespace().collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        // Its own group (the group id is its process id), not the daemon's.
+        assert_eq!(ids[0], ids[1]);
+        assert_ne!(ids[1], own_process_group());
+
+        // A socket that answers is left, and the start fails as Podman says.
+        std::fs::remove_file(directory.path().join("running")).unwrap();
+        let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let error = machine_start(&podman, &ConnectionOverride::None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bind: address already in use"), "{error}");
+        assert!(socket.exists());
+    }
+
+    /// A `podman machine start` whose caller stops waiting, or whose daemon
+    /// shuts down (its runtime ends) while the machine starts, runs to its
+    /// end: it is neither killed nor ended by a closed pipe half-way through
+    /// starting the VM. Only the deadline kills it.
+    #[cfg(unix)]
+    #[test]
+    fn a_machine_start_runs_to_its_end_when_its_daemon_stops_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let podman = shim(
+            directory.path(),
+            r#"D="$(dirname "$0")"
+sleep 1
+echo "starting VM" >&2
+echo "started" > "$D/$1""#,
+        );
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        {
+            let podman = podman.clone();
+            runtime.spawn(async move {
+                let _ = machine_start_output(&podman, &["stopped"], MACHINE_START_TIMEOUT).await;
+            });
+        }
+        let dropped = podman.clone();
+        runtime.block_on(async move {
+            let start = machine_start_output(&dropped, &["dropped"], MACHINE_START_TIMEOUT);
+            assert!(tokio::time::timeout(Duration::from_millis(100), start)
+                .await
+                .is_err());
+        });
+        // The daemon's runtime ends while the first start still runs.
+        runtime.shutdown_background();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        for name in ["stopped", "dropped"] {
+            while !directory.path().join(name).exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the {name} start was ended"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(machine_start_output(
+                &podman,
+                &["waited"],
+                Duration::from_secs(30),
+            ))
+            .unwrap();
+        assert!(output.status.success() && !output.timed_out);
+        assert_eq!(output.stderr, b"starting VM\n");
+        let output = runtime
+            .block_on(machine_start_output(
+                &podman,
+                &["late"],
+                Duration::from_millis(100),
+            ))
+            .unwrap();
+        assert!(output.timed_out);
+    }
+
+    /// The socket is where `podman machine inspect` says (Podman 5 and 6
+    /// print an array of machines); nothing else is taken for it.
+    #[test]
+    fn the_api_socket_is_read_from_machine_inspect() {
+        let inspected = r#"[
+     {
+          "ConfigDir": {"Path": "/Users/a/.config/containers/podman/machine/applehv"},
+          "ConnectionInfo": {
+               "PodmanSocket": {"Path": "/var/folders/x/T/podman/podman-machine-default-api.sock"},
+               "PodmanPipe": null
+          },
+          "Name": "podman-machine-default",
+          "State": "stopped"
+     }
+]"#;
+        assert_eq!(
+            api_socket_from_inspect(inspected),
+            Some(std::path::PathBuf::from(
+                "/var/folders/x/T/podman/podman-machine-default-api.sock"
+            ))
+        );
+        for other in [
+            "[]",
+            "not json",
+            r#"[{"Name":"m"}]"#,
+            r#"[{"ConnectionInfo":{"PodmanSocket":null}}]"#,
+            r#"[{"ConnectionInfo":{"PodmanSocket":{"Path":"relative.sock"}}}]"#,
+        ] {
+            assert_eq!(api_socket_from_inspect(other), None, "{other}");
+        }
+    }
+
+    /// Only a socket that nothing answers on is removed: not a missing
+    /// file, a regular file, a link to a stale socket, or a socket that
+    /// answers.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_socket_nothing_answers_on_is_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("s.sock");
+        assert!(!remove_stale_socket(&socket).unwrap());
+        let file = directory.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(!remove_stale_socket(&file).unwrap());
+        assert!(file.exists());
+        drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+        let link = directory.path().join("link");
+        std::os::unix::fs::symlink(&socket, &link).unwrap();
+        assert!(!remove_stale_socket(&link).unwrap());
+        assert!(socket.exists() && link.exists());
+        let listening =
+            std::os::unix::net::UnixListener::bind(directory.path().join("l.sock")).unwrap();
+        assert!(!remove_stale_socket(&directory.path().join("l.sock")).unwrap());
+        drop(listening);
+        assert!(remove_stale_socket(&socket).unwrap());
+        assert!(!socket.exists());
     }
 
     /// Runs [`detect_with_honours_the_connection_override_like_onboarding`]

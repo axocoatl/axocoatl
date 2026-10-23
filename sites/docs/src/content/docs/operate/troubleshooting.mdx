@@ -80,6 +80,7 @@ workbench uses.
 | Session environment failed | Read the retained setup result/error, correct the runtime or command, then choose Rebuild environment |
 | Files, Source Control, Terminal, Preview, or Send returns a lifecycle conflict | The Session is not Ready; review or rebuild its environment. These tools do not fall back to the host checkout |
 | Session creation fails | Podman readiness, existing canonical directory, curated/arbitrary image policy, malformed `.devcontainer` metadata, selected Agent |
+| `podman machine start` fails with exit 125 and “bind: address already in use” on a `…-api.sock` | The machine's VM was killed and left its API socket behind: before 1.5.0, a VM that onboarding, `axocoatl dev` or the service started ran in their process group, so a Ctrl-C, a closed terminal or a service stop killed it. Since 1.5.0 Axocoatl starts the machine in a session of its own, and removes such a socket (one nothing listens on) before it starts the machine. Started by hand: remove the socket file the error names, then run `podman machine start` again |
 | Podman is missing, or has no machine | Run `axocoatl onboard`: with Homebrew on Apple silicon, or a package manager it knows on Linux, it installs Podman after asking; otherwise it names the installer. It creates the machine after asking. Session startup, `axocoatl run`, `recipe build` and `connect` never run a package manager or create the machine; they start an existing stopped machine by its name (the one `CONTAINER_CONNECTION` names, else the default one, else the only one) |
 | Onboarding says Podman is installed but its directory is not on your `PATH` | Homebrew put Podman in `/opt/homebrew/bin` (or `/usr/local/bin`), and this shell does not have that on `PATH`, so `axocoatl dev` and runs would not find it | Add `eval "$(/opt/homebrew/bin/brew shellenv)"` to `~/.zprofile`, open a new terminal and run `axocoatl onboard` again |
 | `axocoatl run` stops with exit 5 and doctor says “Podman runs containers as root” | The machine is rootful (Podman Desktop creates one by default); every built-in loadout needs rootless Podman | `podman machine stop && podman machine set --rootful=false && podman machine start`, with the machine's name after each when it is not `podman-machine-default` (doctor prints the exact commands; it affects other tools that use this machine); `axocoatl onboard` asks to do it. Through `CONTAINER_HOST`, or a `CONTAINER_CONNECTION` that is not a machine, point it at a rootless Podman instead |
@@ -150,7 +151,7 @@ tail -n 100 ~/Library/Logs/Axocoatl/daemon.log
 
 | Symptom | Cause/action |
 | --- | --- |
-| Sessions started by the service say Podman is not installed, but `podman` works in your shell | The service definition was written before install recorded `PATH`, or Podman moved. Run `axocoatl service install` again from a shell where `podman` works, then `axocoatl service stop && axocoatl service start` |
+| Sessions started by the service say Podman is not installed, but `podman` works in your shell | The service definition was written before install recorded `PATH`, or Podman moved. Run `axocoatl service install` again from a shell where `podman` works, then `axocoatl service restart` |
 | The service uses a different Podman machine than your shell | Export `CONTAINER_CONNECTION` (or `CONTAINER_HOST`) before `axocoatl service install`; install records it in the definition |
 | The macOS service log is missing | The definition predates the log setting; reinstall and restart the service as above |
 | The service restarts every few seconds and is never up | Its start fails each time. `axocoatl service status` shows the line the last failed start logged (1.5.0 and later); fix that cause, such as a copied data root under 1.4.0 above |
@@ -158,7 +159,8 @@ tail -n 100 ~/Library/Logs/Axocoatl/daemon.log
 Re-run `axocoatl service install` when the binary, the user configuration path,
 or the Podman location or connection changes. Use `--config ...` only for an explicit advanced configuration.
 Installation does not start the service; follow it with
-`axocoatl service start`.
+`axocoatl service start`, or, when the service runs, `axocoatl service restart`
+(`start` leaves a running service on the definition it started with).
 
 <Aside type="caution" title="Do not clear data as a first fix">
 The data root contains Session history, checkpoints, Automations, permissions,

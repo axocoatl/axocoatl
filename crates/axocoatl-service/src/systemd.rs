@@ -10,12 +10,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::{ServiceEnvironment, ServiceError, ServiceManager, ServiceStatus, SERVICE_NAME};
+use crate::{
+    ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus, SERVICE_NAME,
+};
 
 /// Manages the daemon as a systemd user service.
 pub struct SystemdManager {
     /// `~/.config/systemd/user/axocoatl.service`
     unit_path: PathBuf,
+    /// The `systemctl` program (a test's stand-in).
+    systemctl: PathBuf,
 }
 
 impl SystemdManager {
@@ -29,12 +33,15 @@ impl SystemdManager {
             .join("systemd")
             .join("user")
             .join(format!("{SERVICE_NAME}.service"));
-        Ok(Self { unit_path })
+        Ok(Self {
+            unit_path,
+            systemctl: PathBuf::from("systemctl"),
+        })
     }
 
     /// Run `systemctl --user <args>`, returning trimmed stdout on success.
     fn systemctl(&self, args: &[&str]) -> Result<String, ServiceError> {
-        let out = Command::new("systemctl")
+        let out = Command::new(&self.systemctl)
             .arg("--user")
             .args(args)
             .output()
@@ -50,6 +57,17 @@ impl SystemdManager {
                 if stderr.is_empty() { stdout } else { stderr }
             )))
         }
+    }
+
+    /// `systemctl --user <verb> axocoatl` printed `want`. `is-active` and
+    /// `is-enabled` exit non-zero when inactive/disabled; that is
+    /// information, not an error, so only the output is read.
+    fn says(&self, verb: &str, want: &str) -> bool {
+        Command::new(&self.systemctl)
+            .args(["--user", verb, SERVICE_NAME])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == want)
+            .unwrap_or(false)
     }
 }
 
@@ -154,13 +172,31 @@ impl ServiceManager for SystemdManager {
         Ok(())
     }
 
-    fn start(&self) -> Result<(), ServiceError> {
+    fn start(&self) -> Result<ServiceStart, ServiceError> {
+        if self.says("is-active", "active") {
+            self.systemctl(&["enable", SERVICE_NAME])?;
+            return Ok(ServiceStart::AlreadyRunning);
+        }
         // `enable --now` starts the service AND sets it to run at login.
         self.systemctl(&["enable", "--now", SERVICE_NAME])?;
-        Ok(())
+        Ok(ServiceStart::Started)
+    }
+
+    fn restart(&self) -> Result<ServiceStart, ServiceError> {
+        let running = self.says("is-active", "active");
+        self.systemctl(&["enable", SERVICE_NAME])?;
+        // `restart` waits for the old process to stop, then starts the unit
+        // `install` wrote and reloaded; it starts a stopped unit.
+        self.systemctl(&["restart", SERVICE_NAME])?;
+        Ok(if running {
+            ServiceStart::Restarted
+        } else {
+            ServiceStart::Started
+        })
     }
 
     fn stop(&self) -> Result<(), ServiceError> {
+        // `stop` returns once the process has exited.
         self.systemctl(&["stop", SERVICE_NAME])?;
         Ok(())
     }
@@ -168,17 +204,8 @@ impl ServiceManager for SystemdManager {
     fn status(&self) -> Result<ServiceStatus, ServiceError> {
         let installed = self.unit_path.exists();
 
-        // `is-active` / `is-enabled` exit non-zero when inactive/disabled —
-        // that is information, not an error, so inspect the output directly.
-        let probe = |verb: &str, want: &str| -> bool {
-            Command::new("systemctl")
-                .args(["--user", verb, SERVICE_NAME])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim() == want)
-                .unwrap_or(false)
-        };
-        let running = probe("is-active", "active");
-        let enabled = probe("is-enabled", "enabled");
+        let running = self.says("is-active", "active");
+        let enabled = self.says("is-enabled", "enabled");
 
         let detail = if !installed {
             "not installed".to_string()
@@ -221,6 +248,57 @@ mod tests {
             },
             |candidate| candidate == Path::new("/home/test/.local/bin/podman"),
         )
+    }
+
+    /// `start` starts and enables a stopped unit and only enables a running
+    /// one; `restart` restarts a running unit (systemd waits for the old
+    /// process) and starts a stopped one, enabling it either way.
+    #[cfg(unix)]
+    #[test]
+    fn start_leaves_a_running_unit_running_and_restart_restarts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("systemctl");
+        crate::test_support::write_program(
+            &program,
+            r#"#!/bin/sh
+D="$(dirname "$0")"
+shift
+echo "$*" >> "$D/calls"
+case "$1" in
+is-active) if [ -f "$D/active" ]; then echo active; else echo inactive; exit 3; fi ;;
+is-enabled) echo enabled ;;
+restart|start) touch "$D/active" ;;
+enable) [ "$2" = --now ] && touch "$D/active" ;;
+stop) rm -f "$D/active" ;;
+esac
+exit 0
+"#,
+        );
+        let manager = SystemdManager {
+            unit_path: dir.path().join("axocoatl.service"),
+            systemctl: program,
+        };
+        let calls = || {
+            std::fs::read_to_string(dir.path().join("calls"))
+                .unwrap()
+                .lines()
+                .filter(|call| !call.starts_with("is-"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+        assert_eq!(calls(), ["enable --now axocoatl"]);
+        assert_eq!(manager.start().unwrap(), ServiceStart::AlreadyRunning);
+        assert_eq!(calls()[1..], ["enable axocoatl"]);
+        assert_eq!(manager.restart().unwrap(), ServiceStart::Restarted);
+        assert_eq!(calls()[2..], ["enable axocoatl", "restart axocoatl"]);
+        manager.stop().unwrap();
+        assert_eq!(manager.restart().unwrap(), ServiceStart::Started);
+        assert_eq!(
+            calls()[4..],
+            ["stop axocoatl", "enable axocoatl", "restart axocoatl"]
+        );
+        assert!(manager.status().unwrap().running);
     }
 
     #[test]

@@ -1404,8 +1404,8 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     "Daemon",
                     format!("the running daemon is Axocoatl {version}; this CLI is {cli}"),
                     Some(
-                        "Restart it so it runs this version: `axocoatl service stop && axocoatl \
-                         service start`, or stop `axocoatl dev` and start it again"
+                        "Restart it so it runs this version: `axocoatl service restart`, or stop \
+                         `axocoatl dev` and start it again"
                             .to_string(),
                     ),
                 ),
@@ -1487,7 +1487,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     ),
                     Some(
                         "Install it again from this axocoatl: `axocoatl service install`, then \
-                     `axocoatl service stop && axocoatl service start`"
+                     `axocoatl service restart`"
                             .to_string(),
                     ),
                 )

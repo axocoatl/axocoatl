@@ -253,8 +253,10 @@ enum ServiceCommands {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
-    /// Start the Always-On Service now (and enable it at login)
+    /// Start the Always-On Service now (and enable it at login); one that runs is left running
     Start,
+    /// Restart the Always-On Service with its installed definition (or start it)
+    Restart,
     /// Stop the Always-On Service
     Stop,
     /// Show whether the Always-On Service is installed and running
@@ -620,6 +622,7 @@ async fn main() {
         Commands::Service { command } => match command {
             ServiceCommands::Install { config } => cmd_service_install(&config),
             ServiceCommands::Start => cmd_service_start(),
+            ServiceCommands::Restart => cmd_service_restart(),
             ServiceCommands::Stop => cmd_service_stop(),
             ServiceCommands::Status => cmd_service_status(),
             ServiceCommands::Uninstall => cmd_service_uninstall(),
@@ -818,7 +821,7 @@ fn cmd_service_install(config: &std::path::Path) {
                 println!("\n{hint}");
             }
             println!("\nStart it with:  axocoatl service start");
-            println!("If it was already running, load the new definition with:  axocoatl service stop && axocoatl service start");
+            println!("If it was already running, load the new definition with:  axocoatl service restart");
             // `serve` writes only an `axocoatl url` hint to the service log,
             // never the link with its token, so give it here.
             println!(
@@ -856,19 +859,42 @@ fn service_install_summary(
 const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config <config>`, using the config the service was installed with.";
 
 fn cmd_service_start() {
-    with_manager(
-        |m| m.start(),
-        "Always-On Service started — the daemon now runs 24/7",
-    );
+    with_manager(|m| m.start().map(service_started_line));
     println!("{SERVICE_SIGN_IN_HINT}");
 }
 
+fn cmd_service_restart() {
+    with_manager(|m| m.restart().map(service_started_line));
+    println!("{SERVICE_SIGN_IN_HINT}");
+}
+
+/// What `service start` or `service restart` says it did.
+fn service_started_line(started: axocoatl_service::ServiceStart) -> String {
+    match started {
+        axocoatl_service::ServiceStart::Started => {
+            "Always-On Service started — the daemon now runs 24/7".to_string()
+        }
+        axocoatl_service::ServiceStart::Restarted => {
+            "Always-On Service restarted with its installed definition — the daemon now runs 24/7"
+                .to_string()
+        }
+        axocoatl_service::ServiceStart::AlreadyRunning => {
+            "Always-On Service is already running. To load a definition `axocoatl service \
+             install` rewrote since it started, run `axocoatl service restart`"
+                .to_string()
+        }
+    }
+}
+
 fn cmd_service_stop() {
-    with_manager(|m| m.stop(), "Always-On Service stopped");
+    with_manager(|m| m.stop().map(|()| "Always-On Service stopped".to_string()));
 }
 
 fn cmd_service_uninstall() {
-    with_manager(|m| m.uninstall(), "Always-On Service uninstalled");
+    with_manager(|m| {
+        m.uninstall()
+            .map(|()| "Always-On Service uninstalled".to_string())
+    });
 }
 
 fn cmd_service_status() {
@@ -910,12 +936,12 @@ fn cmd_service_status() {
     }
 }
 
-/// Run a service action and report success/failure uniformly.
+/// Run a service action and report success (the line it returns) or
+/// failure uniformly.
 fn with_manager(
     action: impl FnOnce(
         &dyn axocoatl_service::ServiceManager,
-    ) -> Result<(), axocoatl_service::ServiceError>,
-    ok_msg: &str,
+    ) -> Result<String, axocoatl_service::ServiceError>,
 ) {
     let mgr = match axocoatl_service::manager() {
         Ok(m) => m,
@@ -925,7 +951,7 @@ fn with_manager(
         }
     };
     match action(mgr.as_ref()) {
-        Ok(()) => println!("✓ {ok_msg}"),
+        Ok(line) => println!("✓ {line}"),
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);

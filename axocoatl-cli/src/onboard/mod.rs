@@ -1405,30 +1405,37 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
     }
 }
 
-/// Install and start the Always-On Service (asked for with Step 6):
-/// `Some(true)` when it was started, `Some(false)` when that was declined,
-/// `None` (with the step left) when it failed.
+/// Install and start the Always-On Service (asked for with Step 6), or
+/// reinstall and restart one that runs, so it runs this configuration and
+/// this `axocoatl`: `Some(true)` when it was started, `Some(false)` when that
+/// was declined, `None` (with the step left) when it failed.
 async fn start_service(o: &mut Onboarding) -> Option<bool> {
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();
     if let Err(error) = crate::reject_uninherited_service_environment(&config) {
         o.step_left(format!("Cannot install the Always-On Service: {error}"));
         return None;
     }
-    if !o.ui.consent(
-        "Install the Always-On Service (it starts Axocoatl at login and keeps it running)?",
-        true,
-        false,
-    ) {
+    let running = !o.ui.plan() && smoke::service_running(o).await;
+    let question = if running {
+        "The Always-On Service is running. Install it again with this configuration and restart \
+         it (this ends any Session turn or run in progress)?"
+    } else {
+        "Install the Always-On Service (it starts Axocoatl at login and keeps it running)?"
+    };
+    if !o.ui.consent(question, true, false) {
         return Some(false);
     }
     if o.ui.plan() {
-        o.ui.say("    would run: axocoatl service install && axocoatl service start");
+        o.ui.say("    would run: axocoatl service install && axocoatl service restart");
         return Some(true);
     }
     let config = o.paths.config_path.display().to_string();
+    // `restart` loads the definition `install` just wrote, starting a
+    // service that does not run and restarting one that does (whose
+    // `start` would leave it running the old definition).
     for args in [
         vec!["service", "install", "--config", &config],
-        vec!["service", "start"],
+        vec!["service", "restart"],
     ] {
         let cmd = Cmd::new(&o.host.exe.display().to_string(), &args);
         if let Err(error) = o.host.run(&cmd).await {

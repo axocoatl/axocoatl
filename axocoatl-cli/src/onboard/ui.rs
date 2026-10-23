@@ -299,6 +299,15 @@ impl Ui {
                 cmd.display()
             ));
         }
+        if let Some(machine) = &cmd.starts_machine {
+            if let Some(socket) = host.clear_stale_machine_socket(machine).await {
+                self.say(format!(
+                    "  Removed {}, the API socket {machine} left when it did not stop cleanly \
+                     (Podman would not start it while it was there)",
+                    socket.display()
+                ));
+            }
+        }
         self.say(format!("  $ {}", cmd.display()));
         host.run(cmd).await
     }

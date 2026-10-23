@@ -153,8 +153,9 @@ bench`. Run those commands from a source checkout.
 | Command | Purpose |
 | --- | --- |
 | `axocoatl service install [-c, --config CONFIG]` | Write/register a per-user systemd or launchd definition; config defaults to the resolved user configuration and is recorded as an absolute path. Records a `PATH` that contains the install-time `podman`, and `CONTAINER_CONNECTION`/`CONTAINER_HOST` when set; on macOS, logs to `~/Library/Logs/Axocoatl/daemon.log` |
-| `axocoatl service start` | Start now and enable at login |
-| `axocoatl service stop` | Stop without uninstalling |
+| `axocoatl service start` | Start now and enable at login; a running service is left as it is |
+| `axocoatl service restart` | Stop a running service and start it again with the installed definition (what `install` last wrote), enabled at login; start one that does not run |
+| `axocoatl service stop` | Stop without uninstalling; returns once the daemon has exited |
 | `axocoatl service status` | Report backend, installed/running/enabled state, detail, and where the logs are |
 | `axocoatl service uninstall` | Stop, deregister, and remove the definition |
 

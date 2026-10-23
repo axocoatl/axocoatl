@@ -1,6 +1,6 @@
 //! OS background-service management for the Axocoatl daemon.
 //!
-//! Powers `axocoatl service install/start/stop/status/uninstall`: registering
+//! Powers `axocoatl service install/start/restart/stop/status/uninstall`: registering
 //! the daemon as a real OS service — a **systemd user unit** on Linux, a
 //! **launchd user agent** on macOS — so it runs continuously and survives
 //! reboots. This is the "Always-On Service" mode: it is about keeping the
@@ -38,6 +38,19 @@ pub enum ServiceError {
     NoHome,
 }
 
+/// What [`ServiceManager::start`] or [`ServiceManager::restart`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceStart {
+    /// The service was not running and now runs its installed definition.
+    Started,
+    /// `start`: the service already ran, and was left as it was (it keeps
+    /// the definition it was started with).
+    AlreadyRunning,
+    /// `restart`: the service ran, was stopped, and now runs its installed
+    /// definition.
+    Restarted,
+}
+
 /// A snapshot of the installed service's state.
 #[derive(Debug, Clone)]
 pub struct ServiceStatus {
@@ -69,10 +82,17 @@ pub trait ServiceManager {
     /// Stop, deregister, and remove the service definition.
     fn uninstall(&self) -> Result<(), ServiceError>;
 
-    /// Start the service now and enable it for login/boot.
-    fn start(&self) -> Result<(), ServiceError>;
+    /// Start the service now and enable it for login/boot. A service that
+    /// already runs is left running ([`ServiceStart::AlreadyRunning`]).
+    fn start(&self) -> Result<ServiceStart, ServiceError>;
 
-    /// Stop the running service.
+    /// Stop the service when it runs and start it again with the installed
+    /// definition (what `install` wrote), enabled for login/boot; start it
+    /// when it does not run.
+    fn restart(&self) -> Result<ServiceStart, ServiceError>;
+
+    /// Stop the service and return once its process has exited. A service
+    /// that does not run is left as it is.
     fn stop(&self) -> Result<(), ServiceError>;
 
     /// Report the current service state.
@@ -152,6 +172,35 @@ pub fn manager() -> Result<Box<dyn ServiceManager>, ServiceError> {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         Err(ServiceError::Unsupported)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod test_support {
+    use std::path::Path;
+
+    /// Write the program at `path` (mode 755) with `text`, in a child
+    /// process, so this multi-threaded test process never holds a
+    /// descriptor open for writing it: on Linux a test on another thread
+    /// that forks meanwhile would pass it to its child, and running the
+    /// program before that child execs fails with ETXTBSY.
+    pub(crate) fn write_program(path: &Path, text: &str) {
+        use std::io::Write;
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("cat > \"$1.new\" && chmod 755 \"$1.new\" && mv -f \"$1.new\" \"$1\"")
+            .arg("sh")
+            .arg(path)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(text.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success(), "{}", path.display());
     }
 }
 
