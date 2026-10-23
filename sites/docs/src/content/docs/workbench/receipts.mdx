@@ -215,9 +215,10 @@ cuts.
 pull request's description carries, the way Keep as PR puts it there. Both are for GitHub
 only: the action runs in GitHub Actions and reads the pull request through GitHub's API,
 and [Keep as PR](/workbench/keep-as-pr/) opens pull requests with `gh`. On GitLab,
-Bitbucket or another host there is no such action; `axocoatl receipt verify`
-(above), with `--require-pass`, checks a receipt you saved from a merge request
-description in any CI job that can run it. Set the action up in this order, each step
+Bitbucket or another host there is no such action, and Keep writes no description
+there: `axocoatl receipt verify` (above), with `--require-pass`, checks the receipt file
+the run wrote (`--receipt`, or **Download receipt** in the workbench), kept with the
+merge request, in any CI job that can run it. Set the action up in this order, each step
 through a pull request of its own:
 
 1. Trust the computer that signs. On it, with the daemon's `--config` and data
