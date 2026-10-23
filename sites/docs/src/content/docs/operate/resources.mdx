@@ -45,10 +45,13 @@ with these maxima:
 | CPU | 2 cores |
 | PIDs | 512 |
 
-They are maximums, not preallocated reservations. When rootless cgroups cannot
-apply them, the default `require_resource_limits: false` continues uncapped and
-logs a warning. Set the flag to `true` when failing closed is safer than running
-without limits.
+They are maximums, not preallocated reservations. Each needs its cgroup
+controller, and rootless Podman has the ones your system delegates to your user.
+When one is missing, the default `require_resource_limits: false` starts the
+container without that cap (the others still apply), logs a warning, and records
+it in the Session and in a run's notes and receipt; `axocoatl doctor` prints how
+to delegate it. Set the flag to `true` when failing closed is safer than running
+without a limit.
 
 ## Count Attempt concurrency
 

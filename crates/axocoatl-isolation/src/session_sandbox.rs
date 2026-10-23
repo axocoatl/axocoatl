@@ -216,7 +216,7 @@ echo sealed
 "#;
 
 const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const SANDBOX_PROVISION_TIMEOUT: Duration = Duration::from_secs(300);
 const SANDBOX_SETUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(900);
 const SANDBOX_START_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
@@ -415,11 +415,6 @@ const DROPPED_CAPS: &[&str] = &[
     "MKNOD",           // create device nodes
     "AUDIT_WRITE",     // write to the kernel audit log
 ];
-
-/// Per-session container fork-bomb cap. Generous enough for parallel installs
-/// and build tools, low enough to bound a runaway. Applied with the other
-/// cgroup-backed limits (see `with_limits`).
-const PIDS_LIMIT: &str = "512";
 
 /// Every `podman run` passes this. Without it Podman copies the host's
 /// `http_proxy`, `https_proxy`, `ftp_proxy` and `no_proxy` variables (either
@@ -1103,6 +1098,9 @@ pub struct SessionSandbox {
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
     terminals: std::sync::Mutex<Vec<std::sync::Arc<crate::pty::PtyTerminal>>>,
+    /// The resource caps the container got; `None` on a handle that did
+    /// not start it.
+    resource_caps: Option<crate::container_host::ResourceCaps>,
 }
 
 /// Stops a sidecar, and removes an egress Preview container, started for a
@@ -2001,12 +1999,37 @@ impl SessionSandbox {
             })?;
         }
 
-        // Start the long-lived idle container. Resource caps remain a
-        // best-effort compatibility toggle. Ports are different: every
+        // Start the long-lived idle container. It gets each resource cap
+        // whose cgroup controller Podman can use (`container_host`), and
+        // says which it does not get, unless the operator requires them
+        // all. Ports are different: every
         // Session receives its own Podman-assigned loopback host ports, and a
         // startup that cannot preserve those mappings fails honestly instead
         // of opening a container whose Preview is known to be unreachable.
-        let mut with_limits = true;
+        let host = crate::container_host::container_host().await;
+        let mut caps = host
+            .as_ref()
+            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
+        let label_disable = host.as_ref().is_some_and(|host| host.label_disable);
+        if let Some(host) = &host {
+            if policy.require_resource_limits {
+                if let Some(refusal) =
+                    crate::container_host::required_caps_missing(host.caps, &host.controllers)
+                {
+                    let error = IsolationError::OciContainerFailed(refusal);
+                    return Err(Self::failed_start_with_name_cleanup(&container, error).await);
+                }
+            }
+            let missing = host.caps.not_applied();
+            if !missing.is_empty() {
+                tracing::warn!(
+                    controllers = %host.controllers.join(", "),
+                    "this host's Podman cannot apply the Session container's {} cap:                      starting it without {}",
+                    missing.join(", "),
+                    if missing.len() == 1 { "that cap" } else { "those caps" }
+                );
+            }
+        }
         let mut seen_ports = HashSet::new();
         let publish: Vec<u16> = exposed_ports
             .iter()
@@ -2044,7 +2067,8 @@ impl SessionSandbox {
                 dependency_mountpoint_labels
                     .as_ref()
                     .map(|labels| labels.as_slice()),
-                with_limits,
+                caps,
+                label_disable,
                 &publish,
                 &effective_policy,
                 &read_only_paths,
@@ -2053,7 +2077,7 @@ impl SessionSandbox {
             .await
             {
                 Ok(container_id) => break container_id,
-                Err(e) if e.contains("cgroup") && with_limits && policy.require_resource_limits => {
+                Err(e) if e.contains("cgroup") && caps.any() && policy.require_resource_limits => {
                     // Fail closed: the operator asked for guaranteed caps and we
                     // can't provide them. Surface the error instead of silently
                     // running an uncapped (fork-bomb / OOM-prone) container.
@@ -2065,13 +2089,14 @@ impl SessionSandbox {
                     ));
                     return Err(Self::failed_start_with_name_cleanup(&container, error).await);
                 }
-                Err(e) if e.contains("cgroup") && with_limits => {
+                Err(e) if e.contains("cgroup") && caps.any() => {
                     tracing::warn!(
+                        error = %e,
                         "this host cannot apply container resource limits \
                          (rootless podman / no cgroup delegation) — starting \
-                         the sandbox without memory/CPU caps"
+                         the sandbox without memory, CPU and process caps"
                     );
-                    with_limits = false;
+                    caps = crate::container_host::ResourceCaps::NONE;
                 }
                 Err(e) if Self::is_port_conflict(&e) && !publish.is_empty() => {
                     if dynamic_port_retries >= DYNAMIC_PORT_START_RETRIES {
@@ -2214,6 +2239,7 @@ impl SessionSandbox {
             workload,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: Some(caps),
         };
         if let Some(selected) = &supervisor_image {
             let handshake = async {
@@ -2667,7 +2693,14 @@ impl SessionSandbox {
             workload: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: None,
         }
+    }
+
+    /// The resource caps this handle's container got when it started
+    /// (`None` for a handle attached to a running container).
+    pub fn resource_caps(&self) -> Option<crate::container_host::ResourceCaps> {
+        self.resource_caps
     }
 
     /// Attach to the deterministic container owned by `session_id` without
@@ -3725,6 +3758,7 @@ impl SessionSandbox {
     /// (canonical paths below `dir`) bound read-only at their own paths over
     /// the read-write Workspace mount. Podman mounts the deeper destination
     /// after its parent, so the read-only view wins.
+    /// `with_limits` is the resource caps it gets (`true` for every one).
     #[allow(clippy::too_many_arguments)]
     fn build_run_args_with_mounts(
         session_id: &str,
@@ -3732,7 +3766,7 @@ impl SessionSandbox {
         dir: &str,
         image: &str,
         node_dependency_volume: Option<&str>,
-        with_limits: bool,
+        with_limits: impl Into<crate::container_host::ResourceCaps>,
         ports: &[u16],
         policy: &SandboxPolicy,
         read_only: &[String],
@@ -3907,16 +3941,10 @@ impl SessionSandbox {
             ));
         }
 
-        if with_limits {
-            args.extend([
-                "--memory".into(),
-                "2g".into(),
-                "--cpus".into(),
-                "2".into(),
-                "--pids-limit".into(),
-                PIDS_LIMIT.into(),
-            ]);
-        }
+        // 2 GiB, 2 CPUs and 512 processes (a fork-bomb cap generous enough
+        // for parallel installs and build tools), each when its cgroup
+        // controller is there.
+        args.extend(with_limits.into().args());
         for p in ports {
             args.push("-p".into());
             // Keep configured URLs container-local and stable while Podman
@@ -3963,8 +3991,9 @@ impl SessionSandbox {
         args
     }
 
-    /// `podman run -d` the idle session container. `with_limits` adds
-    /// memory/CPU caps. `ports` receive dynamic loopback host mappings. On
+    /// `podman run -d` the idle session container. `caps` are its resource
+    /// caps; `label_disable` turns SELinux labelling off for it
+    /// (`container_host`). `ports` receive dynamic loopback host mappings. On
     /// failure returns Podman's stderr so the caller can decide how to recover.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
@@ -3974,7 +4003,8 @@ impl SessionSandbox {
         image: &str,
         node_dependency_volume: Option<&str>,
         dependency_mountpoint_labels: Option<&[String]>,
-        with_limits: bool,
+        caps: crate::container_host::ResourceCaps,
+        label_disable: bool,
         ports: &[u16],
         policy: &SandboxPolicy,
         read_only: &[String],
@@ -3986,7 +4016,7 @@ impl SessionSandbox {
             dir,
             image,
             node_dependency_volume,
-            with_limits,
+            caps,
             ports,
             policy,
             read_only,
@@ -3994,6 +4024,9 @@ impl SessionSandbox {
         Self::insert_named_volume_mounts(&mut args, named_volumes);
         if let Some(labels) = dependency_mountpoint_labels {
             crate::dependency_mountpoint::insert_labels(&mut args, labels);
+        }
+        if label_disable {
+            crate::container_host::insert_label_disable(&mut args);
         }
 
         let mut command = Command::new(PODMAN);
@@ -5852,6 +5885,7 @@ impl Sandbox for SessionSandbox {
             workload: self.workload,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: self.resource_caps,
         })
     }
     async fn stop(&self) {
@@ -8696,6 +8730,36 @@ mod tests {
         let sb = SessionSandbox::start("test", dir.path(), None, &[], &[], &policy)
             .await
             .expect("sandbox should start");
+
+        // It got each resource cap whose cgroup controller this host's
+        // Podman has, and runs with SELinux labelling off on a Linux host
+        // with SELinux enabled.
+        let host = crate::container_host::container_host()
+            .await
+            .expect("podman info names the cgroup controllers");
+        assert_eq!(sb.resource_caps(), Some(host.caps));
+        let mut inspect = Command::new(PODMAN);
+        inspect.args([
+            "inspect",
+            "--format",
+            "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}} {{json .HostConfig.SecurityOpt}}",
+            &sb.container,
+        ]);
+        let inspected = SessionSandbox::run_bounded_command(inspect, Duration::from_secs(20))
+            .await
+            .unwrap();
+        let inspected = String::from_utf8_lossy(&inspected.stdout)
+            .trim()
+            .to_string();
+        let fields: Vec<&str> = inspected.splitn(4, ' ').collect();
+        assert_eq!(fields[0] == "2147483648", host.caps.memory, "{inspected}");
+        assert_eq!(fields[1] == "2000000000", host.caps.cpus, "{inspected}");
+        assert_eq!(fields[2] == "512", host.caps.pids, "{inspected}");
+        assert_eq!(
+            fields[3].contains("label=disable"),
+            host.label_disable,
+            "{inspected}"
+        );
 
         // A command runs inside the container.
         let r = sb

@@ -957,8 +957,10 @@ fn landlock(o: &mut Onboarding) -> bool {
         .as_ref()
         .is_some_and(|runtime| runtime.selinux == Some(true))
     {
-        o.ui.warn(
-            "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet",
+        o.ui.ok(
+            "SELinux is enabled: Session and browser containers run with SELinux labelling off \
+             (--security-opt label=disable), so they can use your repository without \
+             relabelling it; their other limits stay",
         );
     }
     let item = crate::doctor::landlock_item(o.facts.landlock_abi, Some(&release), wsl.is_some());

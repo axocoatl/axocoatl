@@ -2752,7 +2752,22 @@ struct PreparedSessionSandbox {
     effective_image: String,
     runtime: Option<SessionRuntimeIdentity>,
     setup_results: Vec<SessionSetupResult>,
+    /// The resource caps a local container got.
+    resource_limits: Option<axocoatl_session::SessionResourceLimits>,
     rollback_armed: bool,
+}
+
+/// What a Session's record says of the resource caps its container got.
+pub(crate) fn recorded_resource_limits(
+    caps: axocoatl_isolation::container_host::ResourceCaps,
+) -> axocoatl_session::SessionResourceLimits {
+    use axocoatl_isolation::container_host::{CPUS_CAP, MEMORY_CAP, PIDS_CAP};
+    axocoatl_session::SessionResourceLimits {
+        memory: caps.memory.then(|| MEMORY_CAP.to_string()),
+        cpus: caps.cpus.then(|| CPUS_CAP.to_string()),
+        pids: caps.pids.then(|| PIDS_CAP.parse().ok()).flatten(),
+        not_applied: caps.not_applied(),
+    }
 }
 
 struct CreatedE2bSandbox {
@@ -8954,6 +8969,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(runtime),
                     setup_results,
+                    resource_limits: None,
                     rollback_armed: true,
                 })
             }
@@ -9125,6 +9141,7 @@ impl AxocoatlDaemon {
                     .effective_image()
                     .unwrap_or(axocoatl_isolation::session_sandbox::DEFAULT_IMAGE)
                     .to_string();
+                let resource_limits = sandbox.resource_caps().map(recorded_resource_limits);
                 let setup_results = match sandbox.run_setup_commands(&commands).await {
                     Ok(results) => persisted_setup_results(results),
                     Err(error) => {
@@ -9169,6 +9186,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(Self::podman_runtime_identity(&session.id)),
                     setup_results,
+                    resource_limits,
                     rollback_armed: true,
                 })
             }
@@ -9268,13 +9286,12 @@ impl AxocoatlDaemon {
                     .session_store
                     .lock()
                     .await
-                    .set_environment(
+                    .set_environment_ready(
                         &session.id,
-                        SessionEnvironmentState::Ready,
                         Some(prepared.effective_image.clone()),
                         prepared.runtime.clone(),
                         prepared.setup_results.clone(),
-                        None,
+                        prepared.resource_limits.clone(),
                     )
                     .map_err(|error| DaemonError::Session(error.to_string()));
                 match ready {

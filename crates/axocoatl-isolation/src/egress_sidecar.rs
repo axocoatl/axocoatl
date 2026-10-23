@@ -197,17 +197,22 @@ fn labels(spec: &SidecarSpec, role: &str) -> Vec<String> {
 
 /// The sidecar's `podman run` arguments (pure). No environment, no secret and
 /// no bind mount: the only mount is the proxy socket's volume.
-pub fn build_sidecar_args(spec: &SidecarSpec, with_limits: bool) -> Vec<String> {
+pub fn build_sidecar_args(
+    spec: &SidecarSpec,
+    with_limits: impl Into<crate::container_host::ResourceCaps>,
+) -> Vec<String> {
     build_sidecar_args_with(spec, SidecarOptions::default(), with_limits)
 }
 
 /// [`build_sidecar_args`] with options: with an identity socket, its volume
-/// is the one other mount.
+/// is the one other mount. `with_limits`: its process and memory caps, each
+/// when its cgroup controller is there.
 pub fn build_sidecar_args_with(
     spec: &SidecarSpec,
     options: SidecarOptions,
-    with_limits: bool,
+    with_limits: impl Into<crate::container_host::ResourceCaps>,
 ) -> Vec<String> {
+    let caps = with_limits.into();
     let mut args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
@@ -228,13 +233,14 @@ pub fn build_sidecar_args_with(
         "--user".into(),
         "0:0".into(),
     ]);
-    if with_limits {
+    if caps.pids {
         args.extend([
             "--pids-limit".into(),
             (spec.max_connections + 32).to_string(),
-            "--memory".into(),
-            SIDECAR_MEMORY.into(),
         ]);
+    }
+    if caps.memory {
+        args.extend(["--memory".into(), SIDECAR_MEMORY.into()]);
     }
     if let Some(network) = &spec.network {
         args.push("--network".into());
@@ -623,7 +629,11 @@ async fn reap(child: &mut Child) {
 }
 
 /// Start one sidecar process and complete its handshake.
-async fn launch(shared: &Shared, number: u32, with_limits: bool) -> Result<Generation, String> {
+async fn launch(
+    shared: &Shared,
+    number: u32,
+    with_limits: crate::container_host::ResourceCaps,
+) -> Result<Generation, String> {
     let container = shared.spec.container();
     remove_container(&container).await?;
     let mut command = Command::new("podman");
@@ -780,12 +790,14 @@ impl EgressSidecar {
                 container: Some(container.clone()),
             })
             .await;
-        let mut with_limits = true;
+        let mut with_limits = crate::container_host::container_host()
+            .await
+            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
         let first = loop {
             match launch(&shared, first_generation, with_limits).await {
                 Ok(generation) => break generation,
                 Err(error)
-                    if with_limits
+                    if with_limits.any()
                         && error.contains("cgroup")
                         && !shared.spec.require_resource_limits =>
                 {
@@ -793,7 +805,7 @@ impl EgressSidecar {
                         container = %container,
                         "this host cannot apply resource limits to the egress sidecar; starting it without pid and memory limits"
                     );
-                    with_limits = false;
+                    with_limits = crate::container_host::ResourceCaps::NONE;
                 }
                 Err(error) => {
                     shared
@@ -881,7 +893,11 @@ impl Drop for EgressSidecar {
     }
 }
 
-async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bool) {
+async fn supervise(
+    shared: Arc<Shared>,
+    mut current: Generation,
+    with_limits: crate::container_host::ResourceCaps,
+) {
     let mut recent: VecDeque<Instant> = VecDeque::new();
     let mut restarts = 0u32;
     let mut stop = shared.stop_signal.subscribe();
@@ -1069,6 +1085,18 @@ mod tests {
         assert!(build_sidecar_args(&spec, true)
             .join(" ")
             .contains("--pids-limit 40"));
+        // Without the pids controller it keeps its memory cap.
+        let memory_only = build_sidecar_args(
+            &spec,
+            crate::container_host::ResourceCaps {
+                memory: true,
+                cpus: true,
+                pids: false,
+            },
+        )
+        .join(" ");
+        assert!(!memory_only.contains("--pids-limit"), "{memory_only}");
+        assert!(memory_only.contains("--memory 128m"), "{memory_only}");
         let volume = volume_create_args(&spec, "axo-svc-ses-1234", "service-sockets").join(" ");
         assert!(volume.starts_with("volume create --ignore"));
         assert!(volume.contains("--label io.axocoatl.role=service-sockets"));

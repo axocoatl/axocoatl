@@ -401,8 +401,13 @@ The local default is rootless Podman with `no-new-privileges`, dropped
 capabilities, fixed resource-limit requests, and trust gates for custom images
 and repository post-create commands. Two defaults are open: `network: bridge`
 lets Session containers make outbound connections, and
-`require_resource_limits: false` lets a Session start without resource limits
-when the host cannot apply them. For a repository you do not trust, set:
+`require_resource_limits: false` lets a Session start without a resource limit
+the host cannot apply (the Session's record and a run's receipt name it). On a
+Linux computer with SELinux enabled, Session and browser containers run with
+SELinux labelling off (`--security-opt label=disable`), so SELinux confines
+them as it confines your own processes rather than as containers; the user
+namespace, dropped capabilities, seccomp and `no-new-privileges` stay. See
+[Sandboxes](/configure/sandboxes/). For a repository you do not trust, set:
 
 ```yaml
 sandbox:

@@ -188,7 +188,8 @@ On **Linux and WSL2**:
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
   shells need Linux 6.7.
-- SELinux enforcing is reported as not yet verified; WSL without systemd is told that
+- SELinux is reported with what Axocoatl does about it: Session and browser
+  containers run with SELinux labelling off; WSL without systemd is told that
   the Always-On Service is unavailable and that `axocoatl dev` works.
 
 Then one throwaway container proves the setup: onboarding pulls
@@ -583,7 +584,7 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Section | Checks | Failure level |
 |---|---|---|
 | Sandbox | Podman installed, its machine (on macOS) created, rootless, 4.3 or later, and, rootless, a range of subordinate ids; the client and server versions, the machine's provider, CPUs and memory (under 4 GiB warns), the kernel | FAIL, except a stopped machine (OK: it starts on first use), an untested version or provider, and a small machine (WARN) |
-| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (warns) | As described |
+| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (OK: containers run with its labelling off); the cgroup controllers rootless Podman can use for Session containers' memory, CPU and process caps (a missing one warns) | As described |
 | Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
 | Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
 | Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |

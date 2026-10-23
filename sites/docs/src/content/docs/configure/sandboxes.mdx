@@ -134,10 +134,22 @@ without a container network, and a repository setup command that needs packages
 will likewise fail with retained evidence. Podman may still pull the selected
 image as a host operation; that is not Session container egress.
 
-When supported by the host, local Session containers request 2 GiB memory, two
-CPUs, and 512 PIDs. With `require_resource_limits: false`, a host that cannot
-apply cgroup limits falls back to an uncapped container and logs a warning.
-Set it to `true` to fail Session creation instead.
+Local Session containers request 2 GiB memory, two CPUs, and 512 PIDs. Each cap
+needs its cgroup controller (`memory`, `cpu`, `pids`), and rootless Podman has
+only those your system delegates to your user (`podman info` lists them as
+`cgroupControllers`). A container gets each cap whose controller is there. With
+`require_resource_limits: false`, a cap that cannot apply is left out with a
+warning: the Session's record and a run's notes and receipt name each cap the
+container runs without, and `axocoatl doctor` warns and prints how to delegate
+the missing controllers. Set it to `true` to fail Session creation instead.
+
+On a Linux computer with SELinux enabled (Fedora, RHEL), Session and browser
+containers run with SELinux labelling off (`--security-opt label=disable`), the
+way Toolbox runs its containers. Without it SELinux refuses them your
+repository, which is labelled as your home directory's files, and relabelling
+it would change the labels of your own files. Their other limits stay: the user
+namespace, dropped capabilities, seccomp, `no-new-privileges` and, in a hardened
+Session, the supervisor's Landlock filter. `axocoatl doctor` says so.
 
 ## Network egress
 
