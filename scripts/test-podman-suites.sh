@@ -233,6 +233,8 @@ run() {
     read -r -a args <<<"$(targets "$crate")"
     filters=()
     if [[ $group == ollama ]]; then
+      # The live Ollama tests are unit tests: build only the library's.
+      args=(-p "$crate" --lib)
       for name in "${ollama_tests[@]}"; do
         [[ ${name%% *} == "$crate" ]] && filters+=("${name#* }")
       done
