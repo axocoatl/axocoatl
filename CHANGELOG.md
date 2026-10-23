@@ -774,8 +774,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool call as text.** `qwen3-coder:30b` on Ollama 0.40.8 sometimes writes a call
   without its opening `<tool_call>` tag. Ollama returns such a call as the answer, so
   the turn ended "done" without running it. The native Ollama provider now recovers
-  these calls (only for tools the turn offered, never from bare JSON) instead of taking
-  them as the final answer.
+  such calls when they end the answer and name a tool the turn offered, instead of
+  taking them as the final answer. A call quoted in an answer (in a code fence, or with
+  prose after it) stays text, and the provider recovers no bare JSON.
 
 ### Security
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its

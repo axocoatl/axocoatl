@@ -1107,7 +1107,75 @@ fn typed_text(text: &str, declared: &[&str]) -> Option<Value> {
             return Some(false.into());
         }
     }
+    if declared.contains(&"null") && text == "null" {
+        return Some(Value::Null);
+    }
+    if declared.contains(&"array") || declared.contains(&"object") {
+        if let Ok(json) = serde_json::from_str::<Value>(text) {
+            if (json.is_array() && declared.contains(&"array"))
+                || (json.is_object() && declared.contains(&"object"))
+            {
+                return Some(json);
+            }
+        }
+    }
     None
+}
+
+/// Where the call markup that ends `content` starts: the first marker, not
+/// inside an open code fence, after which there is nothing but call blocks,
+/// `<tool_call>` tags and whitespace. A call quoted in an answer, or one with
+/// prose after it, is not a call the model made.
+fn trailing_call_markup(content: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(at) = TEXT_CALL_MARKERS
+        .iter()
+        .filter_map(|marker| content[from..].find(marker))
+        .min()
+    {
+        let start = from + at;
+        if content[..start].matches("```").count().is_multiple_of(2)
+            && only_call_markup(&content[start..])
+        {
+            return Some(start);
+        }
+        from = start + 1;
+    }
+    None
+}
+
+/// Whether `rest` is one or more call blocks with only `<tool_call>` tags and
+/// whitespace around them.
+fn only_call_markup(mut rest: &str) -> bool {
+    let mut calls = 0usize;
+    loop {
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return calls > 0;
+        }
+        if let Some(after) = rest.strip_prefix("</tool_call>") {
+            rest = after;
+        } else if let Some(after) = rest.strip_prefix("<tool_call>") {
+            let body = after.trim_start();
+            if body.starts_with('{') {
+                let Some(end) = body.find("</tool_call>") else {
+                    return false;
+                };
+                rest = &body[end + "</tool_call>".len()..];
+                calls += 1;
+            } else {
+                rest = after;
+            }
+        } else if rest.starts_with("<function=") {
+            let Some(end) = rest.find("</function>") else {
+                return false;
+            };
+            rest = &rest[end + "</function>".len()..];
+            calls += 1;
+        } else {
+            return false;
+        }
+    }
 }
 
 struct NativeResponse {
@@ -1180,11 +1248,14 @@ impl NativeResponse {
     }
     /// Calls Qwen3-Coder wrote as text after sampling a plain `<` instead of
     /// its `<tool_call>` token: Ollama's parser lifts only calls that open with
-    /// that token and returns the rest as content, ended by `stop`. Only the
-    /// markup shapes and only offered tools are read, never bare JSON. Each
-    /// call gets an id no call in the history has, and its text values the
-    /// types the tool's schema declares, as Ollama's own parser gives them.
-    fn recover_text_calls(&self) -> Result<Vec<ToolCall>, ProviderError> {
+    /// that token and returns the rest as content, ended by `stop`. Only call
+    /// markup that ends the answer is read ([`trailing_call_markup`]), only for
+    /// offered tools, never bare JSON. Each call gets an id no call in the
+    /// history has, and its text values the types the tool's schema declares,
+    /// as Ollama's own parser gives them. `None` (the text stays the answer)
+    /// when there is no such markup or a call in it does not validate.
+    fn recover_text_calls(&self) -> Option<(usize, Vec<ToolCall>)> {
+        let start = trailing_call_markup(&self.content)?;
         let names: Vec<String> = self
             .request
             .tools
@@ -1199,7 +1270,10 @@ impl NativeResponse {
             .map(|call| call.id.as_str())
             .collect();
         let mut next = 0usize;
-        let mut calls = super::parse_markup_tool_calls(&self.content, &names)?;
+        let mut calls = super::parse_markup_tool_calls(&self.content[start..], &names).ok()?;
+        if calls.is_empty() {
+            return None;
+        }
         for call in &mut calls {
             call.id = loop {
                 let id = format!("call_text_{next}");
@@ -1216,14 +1290,10 @@ impl NativeResponse {
             {
                 coerce_text_arguments(&mut call.arguments, &tool.parameters);
             }
-            validate_response_tool_call(
-                PROVIDER,
-                &call.name,
-                &call.arguments,
-                &self.request.tools,
-            )?;
+            validate_response_tool_call(PROVIDER, &call.name, &call.arguments, &self.request.tools)
+                .ok()?;
         }
-        Ok(calls)
+        Some((start, calls))
     }
     fn observe_counts(&mut self, value: &Value) -> Option<MeasuredTokenUsage> {
         let input = value
@@ -1489,21 +1559,23 @@ impl NativeResponse {
             && self.calls.is_empty()
             && self.request.response_format != Some(ResponseFormat::Json)
         {
-            self.recover_text_calls()?
+            self.recover_text_calls()
         } else {
-            Vec::new()
+            None
         };
-        if recovered.is_empty() {
-            // Not a call after all: the held text is part of the answer.
-            if self.released < self.content.len() {
-                events.push(StreamEvent::TextDelta {
-                    delta: self.content[self.released..].to_owned(),
-                });
-                self.released = self.content.len();
-            }
-        } else {
-            // The held markup is replaced by the calls it wrote, so the
-            // transcript keeps the prose before it and each call once.
+        let answer_end = recovered
+            .as_ref()
+            .map_or(self.content.len(), |(start, _)| *start);
+        // The held text up to any recovered markup is part of the answer.
+        if self.released < answer_end {
+            events.push(StreamEvent::TextDelta {
+                delta: self.content[self.released..answer_end].to_owned(),
+            });
+            self.released = answer_end;
+        }
+        if let Some((_, recovered)) = recovered {
+            // The markup is replaced by the calls it wrote, so the transcript
+            // keeps the prose before it and each call once.
             for call in recovered {
                 events.push(StreamEvent::ToolCallDelta {
                     index: Some(self.calls.len()),

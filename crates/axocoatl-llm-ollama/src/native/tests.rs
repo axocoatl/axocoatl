@@ -1258,6 +1258,8 @@ async fn a_real_ollama_stream_of_a_text_call_runs_the_call() {
 /// request, is ever read as a call: these answers stay what the model wrote.
 #[tokio::test]
 async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
+    // More candidates than the parser's scan bound: the text, not an error.
+    let many_calls = "<function=x>y</function>".repeat(1025);
     let quoted_call = r#"{"note":"<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>"}"#;
     let mut not_offered = workbench_request();
     not_offered.tools.retain(|tool| tool.name != "glob");
@@ -1275,6 +1277,27 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
             r#"Run {"name":"bash","arguments":{"command":"rm -rf build"}} to clean."#,
             workbench_request(),
         ),
+        (
+            "Qwen3-Coder writes a call like this:\n```\n<function=bash>\n<parameter=command>\n\
+             rm -rf build\n</parameter>\n</function>\n```\nThat is how it looks.",
+            workbench_request(),
+        ),
+        (
+            "The Hermes format is <tool_call>{\"name\":\"bash\",\"arguments\":{\"command\":\
+             \"rm -rf build\"}}</tool_call> and that's it.",
+            workbench_request(),
+        ),
+        (
+            "<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n\
+             </tool_call>\nAfter that I will read the file and report back.",
+            workbench_request(),
+        ),
+        (
+            "```\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n\
+             </function>\n</tool_call>",
+            workbench_request(),
+        ),
+        (many_calls.as_str(), workbench_request()),
     ] {
         let server = MockServer::start().await;
         valid_profile(&server).await;
@@ -1294,6 +1317,35 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
         assert!(response.tool_calls.is_empty(), "{content}");
         assert_eq!(response.content, content);
     }
+}
+
+/// Only the markup that ends the answer is a call; a mention of the format
+/// before it stays prose.
+#[tokio::test]
+async fn only_the_call_markup_ending_the_answer_is_recovered() {
+    let prose = "I will use the <tool_call> format.\n\nHere is the plan in detail.\n\n";
+    let content = format!(
+        "{prose}<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n\
+         </tool_call>"
+    );
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(&content, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let response = provider.chat(workbench_request()).await.unwrap();
+    assert_eq!(response.finish_reason, FinishReason::ToolUse);
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].name, "glob");
+    assert_eq!(response.content, prose);
 }
 
 #[tokio::test]
@@ -1393,6 +1445,16 @@ fn text_values_are_typed_only_as_their_schema_declares() {
         arguments,
         json!({"limit":100, "ratio":1.5, "all":true, "count":7, "path":"100", "loose":"true",
             "other":"false"})
+    );
+    let schema_json = json!({"type":"object","properties":{
+        "paths":{"type":"array"}, "env":{"type":"object"}, "count":{"type":["integer","null"]},
+        "name":{"type":"string"}}});
+    let mut json_values = json!({"paths":"[\"a\",\"b\"]", "env":"{\"K\":\"v\"}",
+        "count":"null", "name":"null"});
+    coerce_text_arguments(&mut json_values, &schema_json);
+    assert_eq!(
+        json_values,
+        json!({"paths":["a","b"], "env":{"K":"v"}, "count":null, "name":"null"})
     );
     let mut unparsed = json!({"limit":"lots", "ratio":"NaN", "all":"yes"});
     coerce_text_arguments(&mut unparsed, &schema);
