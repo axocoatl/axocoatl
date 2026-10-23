@@ -230,14 +230,17 @@ async fn wait_healthy(url: &str, wait: Duration) -> bool {
 
 /// What the Axocoatl daemon answering at `url` says of itself on `/health`.
 struct DaemonHealth {
-    version: String,
+    /// Its version; `None` for a daemon before 1.5.0, whose `/health` is
+    /// only `{"status": "healthy", "agents": N}`.
+    version: Option<String>,
     /// When it started (Unix milliseconds); `None` for a daemon before
     /// 1.5.0, which does not say.
     started_at_ms: Option<u64>,
 }
 
 /// The `/health` of the Axocoatl daemon answering at `url`: `None` when no
-/// Axocoatl answers there (another program's does not name a version).
+/// Axocoatl answers there. Another program's names no version and is not
+/// the `{"status": "healthy", "agents": N}` every release answers with.
 async fn daemon_health(url: &str) -> Option<DaemonHealth> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
@@ -248,8 +251,20 @@ async fn daemon_health(url: &str) -> Option<DaemonHealth> {
         return None;
     }
     let health: serde_json::Value = response.json().await.ok()?;
-    Some(DaemonHealth {
-        version: health.get("version")?.as_str()?.to_string(),
+    daemon_health_from(&health)
+}
+
+/// [`daemon_health`] of the `/health` body `health`.
+fn daemon_health_from(health: &serde_json::Value) -> Option<DaemonHealth> {
+    let version = health
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let axocoatl = version.is_some()
+        || (health.get("status").and_then(serde_json::Value::as_str) == Some("healthy")
+            && health.get("agents").is_some_and(serde_json::Value::is_u64));
+    axocoatl.then(|| DaemonHealth {
+        version,
         started_at_ms: health
             .get("started_at_ms")
             .and_then(serde_json::Value::as_u64),
@@ -282,12 +297,20 @@ fn changed_since(config: &Path, started: u64) -> bool {
 /// older configuration. `None` when it may be used, or no Axocoatl answers.
 async fn stale_reason(url: &str, config: &Path) -> Option<String> {
     let health = daemon_health(url).await?;
-    if health.version != VERSION {
-        return Some(format!(
-            "runs Axocoatl {}, not this axocoatl ({VERSION}), so the first run would not use this \
-             version",
-            health.version
-        ));
+    match health.version.as_deref() {
+        Some(VERSION) => {}
+        Some(version) => {
+            return Some(format!(
+                "runs Axocoatl {version}, not this axocoatl ({VERSION}), so the first run would \
+                 not use this version"
+            ))
+        }
+        None => {
+            return Some(format!(
+                "runs an Axocoatl release before 1.5.0, not this axocoatl ({VERSION}), so the \
+                 first run would not use this version"
+            ))
+        }
     }
     match health.started_at_ms {
         Some(started) if !changed_since(config, started) => None,
@@ -825,6 +848,98 @@ pub(crate) fn checked_in_copy() -> std::path::PathBuf {
 mod tests {
     use super::super::config::{ModelRef, Provider};
     use super::*;
+
+    /// Every release before 1.5.0 answers `/health` with only `{"status":
+    /// "healthy", "agents": N}` (1.1.2 to 1.4.0, measured): that is an
+    /// older Axocoatl, never this one. It was taken for another program and
+    /// used as it was, so the first run went to the old daemon. Another
+    /// program's `/health` is no Axocoatl.
+    #[test]
+    fn a_daemon_before_1_5_0_is_recognised_by_its_health() {
+        let old = daemon_health_from(&serde_json::json!({"status": "healthy", "agents": 1}))
+            .expect("a release before 1.5.0");
+        assert_eq!((old.version, old.started_at_ms), (None, None));
+        let current = daemon_health_from(&serde_json::json!({
+            "status": "healthy", "agents": 0, "version": VERSION, "started_at_ms": 7
+        }))
+        .unwrap();
+        assert_eq!(
+            (current.version.as_deref(), current.started_at_ms),
+            (Some(VERSION), Some(7))
+        );
+        for other in [
+            serde_json::json!({"status": "ok"}),
+            serde_json::json!({"status": "healthy"}),
+            serde_json::json!({"status": "healthy", "agents": "1"}),
+            serde_json::json!([]),
+        ] {
+            assert!(daemon_health_from(&other).is_none(), "{other}");
+        }
+    }
+
+    /// Why the first run must not use a daemon: another version (newer or
+    /// older), a release before 1.5.0, or one that started before the
+    /// configuration changed; this version started since is used.
+    #[tokio::test]
+    async fn the_first_run_uses_only_this_version_started_after_the_configuration() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("config.yaml");
+        std::fs::write(&config, "agents: []\n").unwrap();
+        let later = u64::try_from(
+            (std::time::SystemTime::now() + Duration::from_secs(3600))
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        for (health, reason) in [
+            (
+                serde_json::json!({"status": "healthy", "agents": 1}),
+                Some("runs an Axocoatl release before 1.5.0, not this axocoatl"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": "9.9.9",
+                    "started_at_ms": later}),
+                Some("runs Axocoatl 9.9.9, not this axocoatl"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": VERSION,
+                    "started_at_ms": 1}),
+                Some("started before"),
+            ),
+            (
+                serde_json::json!({"status": "healthy", "agents": 1, "version": VERSION,
+                    "started_at_ms": later}),
+                None,
+            ),
+            (serde_json::json!({"status": "ok"}), None),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/health"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&health))
+                .mount(&server)
+                .await;
+            let url = format!("{}/health", server.uri());
+            let stale = stale_reason(&url, &config).await;
+            match reason {
+                Some(reason) => assert!(
+                    stale
+                        .as_deref()
+                        .is_some_and(|stale| stale.starts_with(reason)),
+                    "{health}: {stale:?}"
+                ),
+                None => assert_eq!(stale, None, "{health}"),
+            }
+            assert_eq!(
+                restarted_current(&url, &config).await,
+                reason.is_none() && health.get("version").is_some(),
+                "{health}"
+            );
+        }
+    }
 
     /// The embedded sample is the checked-in fixture, file for file.
     #[test]

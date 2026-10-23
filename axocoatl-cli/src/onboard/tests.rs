@@ -4008,7 +4008,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     installed_service(&o, Path::new("/usr/local/bin/axocoatl"));
     health_changing(
         &health,
-        json!({"status": "ok", "version": "1.4.2"}),
+        json!({"status": "healthy", "agents": 1}),
         json!({"status": "ok", "version": VERSION, "started_at_ms": later}),
     )
     .await;
@@ -4031,8 +4031,9 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         .position(|call| call == "axocoatl service restart");
     assert!(install.is_some() && install < restart, "{after:?}");
     assert!(o.ui.output().contains(&format!(
-        "The Always-On Service runs Axocoatl 1.4.2, not this axocoatl ({VERSION}), so the first \
-         run would not use this version: it runs /usr/local/bin/axocoatl, not this axocoatl ({})",
+        "The Always-On Service runs an Axocoatl release before 1.5.0, not this axocoatl \
+         ({VERSION}), so the first run would not use this version: it runs \
+         /usr/local/bin/axocoatl, not this axocoatl ({})",
         o.host.exe.display()
     )));
 
@@ -4040,8 +4041,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     // is not taken as this one: nothing runs against it.
     health_changing(
         &health,
-        json!({"status": "ok", "version": "1.4.2"}),
-        json!({"status": "ok", "version": "1.4.2"}),
+        json!({"status": "healthy", "agents": 1}),
+        json!({"status": "healthy", "agents": 1}),
     )
     .await;
     let before = shims.calls().len();
@@ -4049,8 +4050,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(|step| step.starts_with(&format!(
-            "The Always-On Service answers at http://127.0.0.1:{}/health but runs Axocoatl \
-             1.4.2, not this axocoatl",
+            "The Always-On Service answers at http://127.0.0.1:{}/health but runs an Axocoatl \
+             release before 1.5.0, not this axocoatl",
             health.address().port()
         ))),
         "{:?}",
@@ -4075,7 +4076,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     Mock::given(method("GET"))
         .and(path("/health"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "version": "1.4.2"})),
+            ResponseTemplate::new(200).set_body_json(json!({"status": "healthy", "agents": 1})),
         )
         .mount(&health)
         .await;
@@ -4085,7 +4086,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(|step| step.starts_with(&format!(
-            "The daemon on port {} runs Axocoatl 1.4.2, not this axocoatl ({VERSION})",
+            "The daemon on port {} runs an Axocoatl release before 1.5.0, not this axocoatl \
+             ({VERSION})",
             health.address().port()
         ))),
         "{:?}",
