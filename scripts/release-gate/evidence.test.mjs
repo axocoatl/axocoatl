@@ -3,10 +3,10 @@
 // The release decision against throwaway git repositories, bundles signed
 // with throwaway Ed25519 keys, and one bundle signed by the real CLI
 // (tests/fixtures/release-evidence/cli-signed). To regenerate that one: in a
-// fresh HOME, write a bundle with `evidence.mjs add-step`/`path-file`/
-// `manifest`, run `axocoatl receipt key > gate-keys` and
-// `axocoatl receipt sign-evidence manifest.json`, then replace the key
-// line's comment.
+// fresh HOME, write a bundle with `evidence.mjs add-step`/`path-file`, its
+// Tier A path's `ci-run.json` and `evidence.mjs manifest`, run
+// `axocoatl receipt key > gate-keys` and `axocoatl receipt sign-evidence
+// manifest.json`, then replace the key line's comment.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
@@ -19,7 +19,7 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, bundleDecision,
+  CI_RUN_SCHEMA, ENVELOPE_FILE, MANIFEST_FILE, PATH_SCHEMA, PAYLOAD_TYPE, buildManifest, bundleDecision,
   commitMatches, compareTotals, decideRelease, overridePhrase, pae, parseActors, parseKeys,
   parseRequiredPaths, sixteenGbMentions, stepsPass, verifyBundle,
 } from './evidence.mjs';
@@ -83,14 +83,29 @@ function signManifest(dir, key) {
   writeFileSync(path.join(dir, ENVELOPE_FILE), `${JSON.stringify(envelope)}\n`);
 }
 
-/** Write (and sign with `key`) a bundle for `commit` with `paths`. */
-function writeBundle(root, commit, paths, key, { version = VERSION, extra = {} } = {}) {
+/** The run record collect-evidence.sh writes for a path it took from CI. */
+function ciRun(commit, overrides = {}) {
+  return {
+    schema: CI_RUN_SCHEMA, id: 111, run_attempt: 1, html_url: 'https://github.com/axocoatl/axocoatl/actions/runs/111',
+    repository: 'axocoatl/axocoatl', head_repository: 'axocoatl/axocoatl', workflow_path: '.github/workflows/ci.yml',
+    event: 'push', head_branch: 'main', head_sha: commit, status: 'completed', conclusion: 'success', ...overrides,
+  };
+}
+
+/**
+ * Write (and sign with `key`) a bundle for `commit` with `paths`. Each Tier A
+ * path gets the record of a green CI run unless `runs` gives another (or
+ * null for none).
+ */
+function writeBundle(root, commit, paths, key, { version = VERSION, extra = {}, runs = {} } = {}) {
   const dir = path.join(root, 'release-evidence', version, commit);
   mkdirSync(dir, { recursive: true });
   for (const [name, evidence] of Object.entries(paths)) {
     writeFileSync(path.join(dir, `${name}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
     mkdirSync(path.join(dir, name), { recursive: true });
     writeFileSync(path.join(dir, name, 'transcript.txt'), `${name} transcript\n`);
+    const run = name in runs ? runs[name] : evidence.tier === 'A' ? ciRun(commit) : null;
+    if (run) writeFileSync(path.join(dir, name, 'ci-run.json'), `${JSON.stringify(run, null, 2)}\n`);
   }
   for (const [file, content] of Object.entries(extra)) writeFileSync(path.join(dir, file), content);
   const manifest = buildManifest(dir, { version, commit });
@@ -274,6 +289,34 @@ test('a failed, skipped or self-contradicting path is refused by name', () => {
   }
 });
 
+test('a Tier A path counts only with the record of a green ci.yml push run of the commit', () => {
+  const key = makeKey();
+  const cases = [
+    [null, /A-x86: Tier A evidence comes only from a CI run, and A-x86\/ci-run\.json is missing/],
+    [{ conclusion: 'failure' }, /A-x86: CI run 111 concluded "failure", not success/],
+    [{ status: 'in_progress', conclusion: null }, /concluded "in_progress", not success/],
+    [{ head_sha: 'f'.repeat(40) }, /ran commit "f{40}"/],
+    [{ event: 'pull_request' }, /is a "pull_request" run, not a push run/],
+    [{ workflow_path: '.github/workflows/release.yml' }, /not \.github\/workflows\/ci\.yml/],
+    [{ head_repository: 'someone/axocoatl' }, /ran "someone\/axocoatl"'s code in "axocoatl\/axocoatl"/],
+    [{ schema: 'something/1' }, /A-x86\/ci-run\.json: schema is not/],
+  ];
+  for (const [change, expected] of cases) {
+    const { root, commit } = makeRepo();
+    trust(root, key);
+    writeBundle(root, commit, passingPaths(commit), key, { runs: { 'A-x86': change && ciRun(commit, change) } });
+    const result = decide(root, commitAll(root));
+    assert.equal(result.ok, false, JSON.stringify(change));
+    assert.match(result.lines.join('\n'), expected);
+  }
+  // The same bundle with the green run passes; a Tier C path needs no run.
+  const { root, commit } = makeRepo();
+  trust(root, key);
+  const dir = writeBundle(root, commit, passingPaths(commit), key);
+  assert.equal(decide(root, commitAll(root)).ok, true);
+  assert.deepEqual(verifyBundle(dir, { keys: parseKeys(key.line), commit }).paths.get('C1-local').problems, []);
+});
+
 test('optional steps may fail without failing the path', () => {
   assert.equal(stepsPass([{ name: 'a', status: 'pass' }, { name: 'timing', status: 'fail', required: false }]), true);
   assert.equal(stepsPass([{ name: 'a', status: 'skip' }]), false);
@@ -405,7 +448,7 @@ test('a bundle signed by the real `axocoatl receipt sign-evidence` verifies here
   const result = verifyBundle(path.join(fixture, 'bundle'), { keys, version: VERSION, commit: '0123456789abcdef0123456789abcdef01234567' });
   assert.deepEqual(result.problems, []);
   assert.equal(result.paths.get('A-x86').pass, true);
-  assert.equal(result.key.shortId, '4625eb31a212abb0');
+  assert.equal(result.key.shortId, 'f9b090a441fbe4d5');
   // Another key does not verify it.
   const other = verifyBundle(path.join(fixture, 'bundle'), { keys: parseKeys(makeKey().line) });
   assert.ok(other.problems[0].includes('no signature'));

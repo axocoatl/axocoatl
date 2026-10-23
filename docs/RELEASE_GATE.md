@@ -75,6 +75,14 @@ not a refusal.
 - The manifest is for this version and commit, and every required path above
   has a file whose `pass` is `true`, whose required steps all passed (a
   skipped required step fails the path) and whose version and commit match.
+- Every path CI records (Tier A and Tier B) carries `<path>/ci-run.json`,
+  which `collect-evidence.sh --ci-run` writes from the GitHub run it
+  downloaded the path from: a push run of `.github/workflows/ci.yml` on the
+  bundle's commit, in the repository whose code it ran, that completed with
+  the conclusion `success`. A path from a red run, or one collected with
+  `--from` instead of from its run, fails: CI is green on the commit before a
+  tag. `collect-evidence.sh` refuses a run that has not succeeded before it
+  downloads anything.
 
 When it refuses, it names every missing or failing path and why, and the job
 fails.
@@ -440,7 +448,9 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
 ```
 
 `RUN_ID` is the CI run of that commit on `main` (a push run), whose
-"New user (Linux)" legs uploaded the Tier A evidence.
+"New user (Linux)" legs uploaded the Tier A evidence. It must have
+succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
+`success`.
 
 - `reset-mac-account.sh`:
   - It runs only as the gate account (`GATE_ACCOUNT`, default `axo-newuser`).

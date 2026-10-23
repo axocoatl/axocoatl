@@ -849,17 +849,19 @@ done
   # A path the release does not require may fail: a warning, not a refusal.
   make_path "$from" C1-real-repo fail
 
-  # A stand-in gh: run 111 is CI's push run of this commit; 222 is a fork's
-  # pull request; 333 ran another commit; 444 is the release workflow.
+  # A stand-in gh: run 111 is CI's green push run of this commit; 222 is a
+  # fork's pull request; 333 ran another commit; 444 is the release
+  # workflow; 555 is CI's push run of this commit with a failed job.
   mkdir -p "$work/gh-bin"
   cat >"$work/gh-bin/gh" <<GH
 #!/bin/sh
-run() { printf '{"head_sha":"%s","event":"%s","path":"%s","status":"completed","head_branch":"main","head_repository":{"full_name":"%s"},"repository":{"full_name":"axocoatl/axocoatl"}}\n' "\$1" "\$2" "\$3" "\$4"; }
+run() { printf '{"id":%s,"head_sha":"%s","event":"%s","path":"%s","status":"completed","conclusion":"%s","head_branch":"main","head_repository":{"full_name":"%s"},"repository":{"full_name":"axocoatl/axocoatl"}}\n' "\$5" "\$1" "\$2" "\$3" "\${6:-success}" "\$4"; }
 case "\$1 \$2" in
-  "api repos/axocoatl/axocoatl/actions/runs/111") run $commit push .github/workflows/ci.yml axocoatl/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/222") run $commit pull_request .github/workflows/ci.yml someone/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/333") run $(printf 'f%.0s' $(seq 1 40)) push .github/workflows/ci.yml axocoatl/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/444") run $commit push .github/workflows/release.yml axocoatl/axocoatl ;;
+  "api repos/axocoatl/axocoatl/actions/runs/111") run $commit push .github/workflows/ci.yml axocoatl/axocoatl 111 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/222") run $commit pull_request .github/workflows/ci.yml someone/axocoatl 222 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/333") run $(printf 'f%.0s' $(seq 1 40)) push .github/workflows/ci.yml axocoatl/axocoatl 333 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/444") run $commit push .github/workflows/release.yml axocoatl/axocoatl 444 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/555") run $commit push .github/workflows/ci.yml axocoatl/axocoatl 555 failure ;;
   "run download")
     [ "\$3" = 111 ] || { echo "gh stand-in: downloaded run \$3" >>"$work/gh-downloads"; }
     shift 2; dir=''
@@ -877,7 +879,7 @@ GH
   for name in A-x86 A-arm; do
     make_path "$work/ci-evidence/1.5.0/$commit" "$name" pass
   done
-  for bad in 222:'pull_request run' 333:'not '"$commit" 444:'not .github/workflows/ci.yml'; do
+  for bad in 222:'pull_request run' 333:'not '"$commit" 444:'not .github/workflows/ci.yml' 555:'concluded failure, not success'; do
     if PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
       --ci-run "${bad%%:*}" --no-sign >"$work/bad-run.log" 2>&1; then
       echo "run ${bad%%:*} was collected" >&2
@@ -953,6 +955,19 @@ GH
       cat "$work/collect-fail.log" >&2
       exit 1
     fi
+    # The run each Tier A path came from is in the signed bundle, and a Tier
+    # A path taken from a directory instead of its CI run does not count.
+    grep -q '"conclusion": "success"' "$repo/release-evidence/1.5.0/$commit/A-x86/ci-run.json"
+    grep -q '"id": 111' "$repo/release-evidence/1.5.0/$commit/A-arm/ci-run.json"
+    set +e
+    HOME="$sign_home" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --from "$work/ci-evidence" --replace --axocoatl "$bin" >"$work/collect-from.log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" != 1 ] || ! grep -q 'A-x86: Tier A evidence comes only from a CI run' "$work/collect-from.log"; then
+      cat "$work/collect-from.log" >&2
+      exit 1
+    fi
   else
     PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
       --from "$from" --ci-run 111 --no-sign >"$work/collect.log" 2>&1
@@ -972,7 +987,7 @@ else
   signed="an unsigned bundle fails check-evidence (no axocoatl built)"
 fi
 if [ "$collect_status" = 0 ]; then
-  pass "collect-evidence.sh: takes Tier A only from the canonical repository's ci.yml push run of the commit; refuses credential-looking files and secret file names; $signed"
+  pass "collect-evidence.sh: takes Tier A only from the canonical repository's green ci.yml push run of the commit and records that run; refuses credential-looking files and secret file names; $signed"
 else
   fail "collect-evidence.sh"
 fi

@@ -14,7 +14,9 @@
 #   --ci-run ID     download the Tier A artifacts (newuser-*) of that GitHub
 #                   Actions run with gh. The run must be a push run of
 #                   .github/workflows/ci.yml in --github-repo (default
-#                   axocoatl/axocoatl) whose head commit is --commit.
+#                   axocoatl/axocoatl) whose head commit is --commit, and it
+#                   must have succeeded; each path gets <path>/ci-run.json
+#                   naming the run.
 #   --axocoatl BIN  the axocoatl that signs (default: the one on PATH)
 #   --keys FILE     the trusted gate keys (default .axocoatl/gate-keys)
 #   --signer DIR    the gate's signing data root (default
@@ -104,7 +106,8 @@ trap 'rm -rf -- "$work"' EXIT
 
 # Tier A evidence comes only from CI's own push runs of the candidate commit
 # in the canonical repository: a fork's pull request controls its run and
-# could write evidence that claims any commit.
+# could write evidence that claims any commit. The run must also be green: a
+# leg's evidence from a run whose other jobs failed is not a release's.
 for run_id in "${ci_runs[@]+"${ci_runs[@]}"}"; do
   [[ "$run_id" =~ ^[0-9]+$ ]] || fail "--ci-run takes a run ID (digits), not $run_id"
   command -v gh >/dev/null 2>&1 || fail "gh is required for --ci-run"
@@ -120,14 +123,38 @@ for run_id in "${ci_runs[@]+"${ci_runs[@]}"}"; do
     if (run.path !== ".github/workflows/ci.yml") problems.push(`it is a run of ${run.path}, not .github/workflows/ci.yml`);
     if (run.head_sha !== commit) problems.push(`it ran commit ${run.head_sha}, not ${commit}`);
     if (run.status !== "completed") problems.push(`it is ${run.status}, not completed`);
+    else if (run.conclusion !== "success") problems.push(`it concluded ${run.conclusion}, not success: CI must be green on the commit`);
     if (problems.length) {
       console.error(`collect-evidence: refusing run ${id}: ${problems.join("; ")}`);
       process.exit(1);
     }
-    console.log(`run ${id}: ci.yml, push to ${run.head_branch} at ${commit.slice(0, 12)} in ${repo}`);
+    console.log(`run ${id}: ci.yml, push to ${run.head_branch} at ${commit.slice(0, 12)} in ${repo}, ${run.conclusion}`);
   ' "$work/run-$run_id.json" "$github_repo" "$commit" "$run_id" || exit 1
   gh run download "$run_id" --repo "$github_repo" --pattern 'newuser-*' --dir "$work/ci-$run_id"
-  for artifact in "$work/ci-$run_id"/*/; do sources+=("$artifact"); done
+  for artifact in "$work/ci-$run_id"/*/; do
+    # Each path records the run it came from (<path>/ci-run.json), which
+    # the signed manifest covers and check-evidence.mjs checks.
+    dir=$artifact
+    [ -d "$artifact/$version/$commit" ] && dir="$artifact/$version/$commit"
+    for file in "$dir"/*.json; do
+      [ -f "$file" ] || continue
+      name=$(basename "$file" .json)
+      case "$name" in manifest | manifest.dsse) continue ;; esac
+      mkdir -p "$dir/$name"
+      node -e '
+        const run = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+        const record = {
+          schema: "axocoatl.release-evidence.ci-run/1",
+          id: run.id, run_attempt: run.run_attempt, html_url: run.html_url,
+          repository: run.repository?.full_name, head_repository: run.head_repository?.full_name,
+          workflow_path: run.path, event: run.event, head_branch: run.head_branch, head_sha: run.head_sha,
+          status: run.status, conclusion: run.conclusion, run_started_at: run.run_started_at, updated_at: run.updated_at,
+        };
+        require("fs").writeFileSync(process.argv[2], `${JSON.stringify(record, null, 2)}\n`);
+      ' "$work/run-$run_id.json" "$dir/$name/ci-run.json"
+    done
+    sources+=("$artifact")
+  done
 done
 
 # Copy each source's path evidence (and its folder) into the bundle.
