@@ -36,9 +36,10 @@ metadata, but the repository remains the authority.
    left with its exact command (Podman's machine, the Ollama version and cloud
    mode, a model to pull), and the status pill in the rail reads **N setup steps
    left** until it reads **ready**; select it to see the checklist again. Without
-   Podman or its machine, **Create session** stays blocked with the fix. `axocoatl
-   dev` also logs a warning at start when native Sessions will refuse the
-   configured Ollama server.
+   Podman or its machine, **Create session** stays blocked with the fix. The New
+   Session dialog checks Podman again when it opens, and **Create session** waits
+   for that check, at most ten seconds. `axocoatl dev` also logs a warning at
+   start when native Sessions will refuse the configured Ollama server.
 2. From the Workspace switcher, choose **Open workspace…** and navigate to the
    repository. Folders that are Git repositories carry a **git** mark. The
    dialog starts in your home folder, but Axocoatl does not open the home

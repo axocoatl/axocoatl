@@ -105,6 +105,16 @@ and the daemon serves it as WebKit on Linux. Whether the browser keeps a
 `Domain=localhost` cookie is the engine's own: WebKit on macOS keeps it,
 WebKit on Linux refuses it, and the journeys assert each.
 
+WebKit browsers on Linux (GNOME Web, WebKitGTK, WPE) send WebKit's own
+`X11; Linux <machine>` user agent, which neither the daemon nor the
+workbench takes for Safari. So in WebKit on Linux `preview-cookies.test.mjs`
+runs its journeys a second time in contexts with that user agent (named
+"WebKit on Linux (X11 user agent): …"): Open full preview and the Preview's
+own `window.open` open the Preview in a tab, a top-level Preview runs through
+the real proxy with its cookies and its WebSocket upgrade, and the app
+receives the X11 user agent, on the engine those browsers use. They do not
+run on macOS, where WebKit's cookie jar is Safari's.
+
 On Linux, Playwright's WebKit loads everything through one network process
 that uses the system's libsoup, and that process sometimes crashes when a
 reload or a navigation cancels requests that are still in flight: libsoup
@@ -122,6 +132,16 @@ and libsoup 3.6.6 fixes a heap use-after-free in its session. These tests
 pin Playwright 1.64.1 (WebKit 27.2, libsoup 3.6.6). Under the same stress in
 an Ubuntu 24.04 VM (aarch64), 1.60's WebKit crashed 26 times in 1,212
 iterations, with 20 failures, and 1.64.1's crashed 0 times in 1,000.
+
+On CI's x86_64 WebKit leg with 1.64.1, the 11 runs that finished between
+2026-10-21 and 2026-10-23 (270 to 296 tests each, about 3,200 journey runs)
+printed no `# browser crash:` line. Two of them failed, on journeys that do
+not crash the browser: the Preview journeys under Safari's user agent on
+Linux and a rewind count at 59028c4a (fixed since), and an xterm.js page
+error after a cross-tab Close at 05e930f9. Three more runs were cancelled
+at the job's 45-minute limit while `playwright install --with-deps webkit`
+downloaded WebKit's system packages for 25 to 39 minutes (about 20 seconds
+in the other runs), not by a crash.
 
 Measured with Playwright 1.60's WebKit on Ubuntu 24.04, the journeys of
 `local-api-token.test.mjs` hit this when they reloaded or left a
@@ -156,6 +176,16 @@ none. `trackRequests` and `waitForNoRequestsInFlight` in
 `support/daemon.mjs` do the waiting, for `local-api-token.test.mjs`'s
 `waitForSettledWorkbench` too. Closing a context (200 times) or reloading
 the page (220 times) while the workbench loaded did not crash it in the VM.
+
+Every other journey settles too: in WebKit on Linux, every page the harness
+watches (`support/browser-crash.mjs`) waits, before `reload`, `goto`,
+`goBack` or `goForward` from a fixture daemon's page, until it has had no
+request in flight for half a second (`support/settle-navigation.mjs`). A
+request still in flight after five seconds, as when a journey holds one on
+purpose, is cancelled by the navigation as before; this wait never fails a
+journey, while `waitForNoRequestsInFlight` fails after 30 seconds.
+`tests/settle-navigation.test.mjs` checks the waiting with a fake page and
+clock, and that only WebKit's pages on Linux get it.
 
 So the harness says when a context lost its sign-in, under the test, as a
 `# browser crash:` line with the time and the request that was refused, and
@@ -281,7 +311,14 @@ and product regression file are present in the checkout, preventing an omitted
 untracked suite from producing a green build.
 
 The default suite needs no running Podman service, Ollama model, provider
-credential, or external application server. The optional compatibility reference
+credential, or external application server. It does need a Podman the daemon
+can find (on its `PATH`, and on macOS a machine, running or not, under the
+daemon's `HOME`): the New Session picker blocks Create session while readiness
+reports that no Session can run (`readiness.test.mjs` asserts it with a Podman
+that has no machine), so the journeys that create a Session through it
+(`skill-automation.test.mjs` and several in `workbench.test.mjs`) cannot
+otherwise. `skill-automation.test.mjs` then fails with readiness's reason
+instead of waiting on a disabled button. The optional compatibility reference
 journey requires a real Podman runtime image selected with
 `AXOCOATL_REFERENCE_RUNTIME_IMAGE`. The first-turn journey
 (`native-turn-git.test.mjs`) runs one native turn on Podman against a stub
@@ -327,7 +364,11 @@ the Preview and failure paths called out below.
   Monaco has loaded.
 - Open workspace marks Git repositories, refuses the home folder until its
   name is typed, and Remove from list forgets a Workspace without touching its
-  folder, refusing one with open Sessions.
+  folder, refusing one with open Sessions. New session for a Workspace the
+  Session browser has not read yet (the rail reads the Workspaces itself, so
+  it can offer one right after the workbench opens, or one opened elsewhere
+  since) reads the list and opens the picker; only a Workspace that is not
+  there gets "Open a Workspace first".
 - Source Control names the person a commit is by, disables Commit with the
   reason when no Git identity is set, shows a refused commit as Not committed
   with Git's message, offers Initialize Git here in a folder that is not a
@@ -341,9 +382,21 @@ the Preview and failure paths called out below.
   nothing of Axocoatl's written to the repository's configuration.
 - The first screen lists what the first Session still needs, with each fix's
   commands, the rail pill opens the same checklist, and Create session stays
-  blocked while Podman has no machine.
+  blocked while Podman has no machine. Create session waits for the New
+  Session picker's own readiness read (a read that fails blocks nothing; the
+  daemon refuses a Session it cannot prepare), and typing a Session name
+  never enables a Create session that readiness or anything else holds.
 - Quick Open terminates directory-only and cyclic traversal at explicit entry,
   directory, and depth limits, and abandons a build when its Session changes.
+- Source Control opens a changed file in Monaco's diff editor: both sides
+  read back, side by side and inline, and a hover whose Markdown asks for
+  HTML keeps its bold text and a plain span while the image's `onerror` and
+  the script are removed and nothing runs (Monaco sanitizes it with its
+  DOMPurify). WebKit reports one "ResizeObserver loop completed with
+  undelivered notifications" as the diff editor opens (Chromium none): two
+  of Monaco's own observers resize in the same frame, and the second one's
+  notification arrives a frame later. The journey allows that one line in
+  WebKit and fails on any other.
 - Source Control attributes a normal turn's absolute-path tool write to **Last
   turn** after normalizing it to the repository-relative changed path.
 - Failed setup evidence renders the failed command, exit code, and bounded
@@ -439,7 +492,12 @@ the Preview and failure paths called out below.
   loop. Its third journey shows the real Preview in the workbench: in WebKit
   Open full preview has no address, the frame has no
   `allow-popups`, and the Preview's `window.open` of its address returns null
-  and opens nothing. A real Command-click (Control-click on Linux) on a link
+  and opens nothing; elsewhere Open full preview opens the Preview's address
+  in a tab with no opener, and the Preview's own `window.open`, on a real
+  click in its frame, opens one too, both served by the app through the
+  proxy. In WebKit on Linux every journey of this file runs again with
+  WebKit's own `X11; Linux` user agent ("WebKit (Safari)" above), which takes
+  that path. A real Command-click (Control-click on Linux) on a link
   inside the Preview's frame, and inside the Files view's frame for an HTML
   file, opens a tab: in WebKit on macOS the daemon's refusal page (403, no
   script, a link to the workbench), with no request to the app and no cookie
@@ -452,7 +510,8 @@ the Preview and failure paths called out below.
   engine the app received no token cookie and the workbench stays signed in.
   Its last journey opens a Preview address typed into a tab and one reached
   by a redirect from another site: in WebKit both get the refusal
-  page and the app none of the requests; in Chromium the app. In every engine a
+  page and the app none of the requests; elsewhere (Chromium, and WebKit
+  with the X11 user agent) the app. In every engine a
   page on the legacy `/api/sessions/<id>/proxy/<port>` path, signed in, gets
   403 and a line of text and the app is not asked, while `fetch()` from the
   workbench and a program with the token still reach it and its

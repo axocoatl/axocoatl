@@ -1502,6 +1502,161 @@ test('Source Control exposes a normal turn absolute write in Last turn', async (
   }
 });
 
+// Source Control opens a changed file in Monaco's diff editor, the part of the
+// vendored Monaco that renders its own DOM most and that ships the DOMPurify
+// it sanitizes Markdown with. The journey reads both sides, switches between
+// side by side and inline, and shows a hover whose Markdown asks for HTML:
+// the bold text and a plain span stay, an image's onerror and a script are
+// removed, and nothing runs.
+test('Source Control opens a change in Monaco\'s diff editor, side by side and inline, and its Markdown hover is sanitized', async () => {
+  const session = runtime.fixtures.alpha.sessions[0];
+  const ready = structuredClone(session);
+  ready.status = 'active';
+  ready.environment = { ...ready.environment, state: 'ready', error: null, setup_results: [] };
+  const original = 'export function total(orders) {\n  let sum = 0;\n  for (const order of orders) sum += order.amount;\n  return sum;\n}\n';
+  const changed = 'export function total(orders) {\n  return orders.reduce((sum, order) => sum + order.amount, 0);\n}\n\nexport const EMPTY = 0;\n';
+  const diffReads = [];
+  const { context, page, browserErrors } = await openSession(
+    session,
+    { width: 1600, height: 900 },
+    runtime,
+    async ({ page: target }) => {
+      for (const url of [`**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`, '**/api/sessions']) {
+        await target.route(url, (route) => route.fulfill({ json: [ready] }));
+      }
+      await target.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({ json: [] }));
+      await target.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
+        json: route.request().method() === 'GET'
+          ? [{ id: 'diff-editor-shell', kind: 'terminal', command: 'sh', status: 'running' }]
+          : { id: 'unexpected-diff-editor-shell' },
+      }));
+      await target.route(`**/api/sessions/${session.id}/git/**`, (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname.endsWith('/git/diff')) {
+          diffReads.push(url.searchParams.get('path'));
+          return route.fulfill({ json: { path: url.searchParams.get('path'), old: original, new: changed } });
+        }
+        const body = url.pathname.endsWith('/git/status')
+          ? {
+            branch: 'main', clean: false,
+            files: [{ path: 'lib/orders.js', state: 'modified', added: 3, removed: 3, staged: false, unstaged: true, last_turn: true }],
+          }
+          : url.pathname.endsWith('/git/branches') ? { current: 'main', branches: ['main'] } : {};
+        return route.fulfill({ json: body });
+      });
+    },
+  );
+  try {
+    await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+    await page.locator('[data-session-view="files"]').click();
+    await page.locator('[data-etab="git"]').click();
+    const sourceControl = page.locator('#source-control');
+    await sourceControl.locator('.file[data-path="lib/orders.js"] .file-main').click();
+    await page.waitForFunction(() => S.session.gitDiff?.editor
+      && document.querySelector('#file-viewer .monaco-diff-editor'));
+    assert.deepEqual(diffReads, ['lib/orders.js']);
+
+    const diffState = () => page.evaluate(() => {
+      const diff = S.session.gitDiff.editor;
+      const root = document.querySelector('#file-viewer .monaco-diff-editor');
+      return {
+        original: diff.getOriginalEditor().getModel().getValue(),
+        modified: diff.getModifiedEditor().getModel().getValue(),
+        language: diff.getModifiedEditor().getModel().getLanguageId(),
+        readOnly: diff.getModifiedEditor().getOption(window.axMonacoIfLoaded().editor.EditorOption.readOnly),
+        sideBySide: root.classList.contains('side-by-side'),
+        changes: (diff.getLineChanges() || []).length,
+        inserted: root.querySelectorAll('.line-insert, .char-insert').length,
+        deleted: root.querySelectorAll('.line-delete, .char-delete').length,
+        mode: document.querySelector('#git-diff-mode')?.textContent,
+      };
+    });
+    // The diff is computed in a worker; wait for its decorations.
+    await page.waitForFunction(() => (S.session.gitDiff.editor.getLineChanges() || []).length > 0
+      && document.querySelector('#file-viewer .monaco-diff-editor .line-insert, #file-viewer .monaco-diff-editor .char-insert'));
+    const sideBySide = await diffState();
+    assert.equal(sideBySide.original, original);
+    assert.equal(sideBySide.modified, changed);
+    assert.equal(sideBySide.language, 'javascript');
+    assert.equal(sideBySide.readOnly, true);
+    assert.equal(sideBySide.sideBySide, true);
+    assert.equal(sideBySide.mode, 'Side by side');
+    assert.ok(sideBySide.changes >= 1, JSON.stringify(sideBySide));
+    assert.ok(sideBySide.inserted >= 1 && sideBySide.deleted >= 1, JSON.stringify(sideBySide));
+    // Monaco renders spaces as no-break spaces.
+    const originalLines = (await page.locator('#file-viewer .monaco-diff-editor .editor.original .view-line')
+      .allTextContents()).map((line) => line.replaceAll('\u00a0', ' '));
+    assert.ok(originalLines.some((line) => line.includes('for (const order of orders)')), originalLines.join('\n'));
+
+    await page.locator('#git-diff-mode').click();
+    await page.waitForFunction(() => !document.querySelector('#file-viewer .monaco-diff-editor')?.classList.contains('side-by-side'));
+    const inline = await diffState();
+    assert.equal(inline.sideBySide, false);
+    assert.equal(inline.mode, 'Inline');
+    assert.equal(inline.modified, changed);
+
+    // A hover with Markdown that asks for HTML, through Monaco's own renderer
+    // and sanitizer, in the diff's modified editor.
+    const hover = await page.evaluate(async () => {
+      const monaco = window.axMonacoIfLoaded();
+      const editor = S.session.gitDiff.editor.getModifiedEditor();
+      globalThis.__diffHoverRan = false;
+      const provider = monaco.languages.registerHoverProvider(editor.getModel().getLanguageId(), {
+        provideHover: (model, position) => (position.lineNumber === 2 ? {
+          range: new monaco.Range(2, 3, 2, 9),
+          contents: [{
+            value: '**diff-hover-bold** <img src="data:," onerror="globalThis.__diffHoverRan = true">'
+              + ' <span title="kept">diff-hover-span</span> <script>globalThis.__diffHoverRan = true</script>',
+            supportHtml: true,
+            isTrusted: false,
+          }],
+        } : null),
+      });
+      try {
+        editor.setPosition({ lineNumber: 2, column: 4 });
+        editor.focus();
+        editor.trigger('browser-test', 'editor.action.showHover', {});
+        const node = await new Promise((resolve, reject) => {
+          const started = Date.now();
+          const look = () => {
+            const found = [...document.querySelectorAll('.monaco-hover')]
+              .find((candidate) => candidate.textContent.includes('diff-hover-bold'));
+            if (found) return resolve(found);
+            if (Date.now() - started > 15_000) return reject(new Error('the Markdown hover never rendered'));
+            return setTimeout(look, 50);
+          };
+          look();
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return {
+          bold: [...node.querySelectorAll('strong, b')].some((element) => element.textContent === 'diff-hover-bold'),
+          span: [...node.querySelectorAll('span')].some((element) => element.textContent === 'diff-hover-span'),
+          onerror: node.querySelectorAll('[onerror]').length,
+          scripts: node.querySelectorAll('script').length,
+          ran: globalThis.__diffHoverRan,
+        };
+      } finally {
+        provider.dispose();
+      }
+    });
+    assert.deepEqual(hover, { bold: true, span: true, onerror: 0, scripts: 0, ran: false });
+
+    await page.locator('#files-detail-close').click();
+    await page.waitForFunction(() => !S.session.gitDiff && !document.querySelector('#file-viewer .monaco-diff-editor'));
+    // WebKit reports this once as the diff editor opens (measured; Chromium
+    // reports nothing): Monaco's observer of the diff editor lays it out,
+    // which resizes the gutter that another of Monaco's observers watches,
+    // in the same frame, so that notification arrives a frame later. It is
+    // the only error allowed here.
+    const deferredResize = 'pageerror: ResizeObserver loop completed with undelivered notifications.';
+    const webkit = browser.browserType().name() === 'webkit';
+    assert.deepEqual(browserErrors.filter((error) => !(webkit && error === deferredResize)), [],
+      browserErrors.join('\n'));
+  } finally {
+    await context.close();
+  }
+});
+
 test('a failed Session renders bounded, text-only durable setup evidence in the banner and review', async () => {
   const evidenceSession = runtime.fixtures.alpha.sessions[1];
   const lazySession = runtime.fixtures.beta.sessions[0];

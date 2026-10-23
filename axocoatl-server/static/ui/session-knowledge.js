@@ -46,13 +46,14 @@ export class SessionKnowledge extends HTMLElement {
     importFile.onchange = () => {const file=importFile.files?.[0];importFile.value='';if(file)void this.importMarkdown(file);};
     this.q('.search').addEventListener('input', () => { clearTimeout(this.searchTimer); this.searchTimer = setTimeout(() => void this.load(), 220); });
     for (const button of this.shadowRoot.querySelectorAll('[data-tab]')) button.onclick = () => { this.tab = button.dataset.tab; this.render(); };
+    this.controls();
   }
   q(selector) { return this.shadowRoot.querySelector(selector); }
   get session() { return this.getAttribute('session') || ''; }
   attributeChangedCallback(name, old, value) {
     if (old === value) return;
     this.epoch++; this.read?.abort(); clearTimeout(this.searchTimer); this.close(); this.view = null; this.selected = null; this.draft = null; this.busy = false;
-    this.q('.search').value = ''; this.q('.body').replaceChildren(); this.status(''); this.q('.open').disabled = !value;
+    this.q('.search').value = ''; this.q('.body').replaceChildren(); this.status(''); this.q('.open').disabled = !value; this.controls();
     this.q('.download').href = this.base() + '/export';
   }
   disconnectedCallback() { this.read?.abort(); clearTimeout(this.searchTimer); }
@@ -84,9 +85,11 @@ export class SessionKnowledge extends HTMLElement {
     } catch (error) { if (epoch === this.epoch) this.status(`${error.message}${error.status === 409 ? '\nThe recorded revision changed. Refresh and review the current note before saving again.' : '\nYour draft is retained. Refresh to check whether the request was recorded before retrying.'}`, true); }
     finally { if (epoch === this.epoch) {this.busy = false; this.controls();} }
   }
-  controls() { for (const button of this.shadowRoot.querySelectorAll('.tools button,.detail button,.wide button,.list button,.form input,.form textarea,.form select')) button.disabled = this.busy; this.q('.new').disabled = this.q('.import').disabled = this.busy || Boolean(this.draft); }
+  // A note is written into the view it was read with: New note and Import
+  // Markdown wait until the first read is in.
+  controls() { for (const button of this.shadowRoot.querySelectorAll('.tools button,.detail button,.wide button,.list button,.form input,.form textarea,.form select')) button.disabled = this.busy; this.q('.new').disabled = this.q('.import').disabled = this.busy || Boolean(this.draft) || !this.view; }
   async importMarkdown(file) {
-    if(this.busy||this.draft||!this.session)return;
+    if(this.busy||this.draft||!this.session||!this.view)return;
     if(file.size>256*1024){this.status('Choose a Markdown note smaller than 256 KiB.',true);return;}
     const session=this.session;
     try{
@@ -159,7 +162,7 @@ export class SessionKnowledge extends HTMLElement {
     });
   }
   edit(note) {
-    if (this.busy) return;
+    if (this.busy || !this.view) return;
     this.tab = 'notes'; this.draft = note ? copy(note) : {id:`note-${crypto.randomUUID()}`,revision:0,title:'',body:'',kind:'note',links:[],sources:[]}; this.render(); this.q('.note-title').focus();
   }
   renderEditor(host) {

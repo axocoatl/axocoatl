@@ -25,6 +25,13 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // sends Safari's Mac user agent on Linux too, so there it is refused like
 // Safari (safariRefusesTopLevelPreviews) while its cookie jar still refuses
 // Domain=localhost cookies (safariSharesLocalhostCookies is macOS only).
+// WebKit browsers on Linux (GNOME Web, WebKitGTK, WPE) send WebKit's own
+// `X11; Linux` user agent instead, which neither the daemon nor the
+// workbench takes for Safari. So in WebKit on Linux every journey runs a
+// second time with that user agent ("WebKit on Linux (X11 user agent): ..."):
+// Open full preview and the Preview frame's popups open the Preview in a tab,
+// and a top-level Preview runs through the proxy with its cookies and its
+// WebSocket upgrade, as in Chromium, on the engine of those browsers.
 //
 // The first journeys set, from a top-level page on a *.localhost address, a
 // cookie that is not ASCII, a forged axocoatl-token-<port> and -signed-in
@@ -135,9 +142,19 @@ let safariSharesLocalhostCookies = false;
 // In WebKit, which says it is Safari on a Mac on either system, the
 // workbench keeps Previews embedded (static/ui/preview-embedding.js) and the
 // daemon refuses a Preview page that would run top-level
-// (src/preview_document.rs).
+// (src/preview_document.rs). These two are the running journey's
+// (`journey` below): false when it runs with the X11 user agent.
 let safariKeepsPreviewsEmbedded = false;
 let safariRefusesTopLevelPreviews = false;
+// The user agents every journey runs with: the browser's own, which in
+// WebKit is Safari's (`safari`, set before the journeys), and in WebKit on
+// Linux also WebKit's own Linux one (`linux`).
+const webkitOnLinux = chromium.name() === 'webkit' && process.platform === 'linux';
+const profiles = [{ name: '', contextOptions: {}, safari: false, linux: false }];
+if (webkitOnLinux) {
+  profiles.push({ name: 'WebKit on Linux (X11 user agent): ', contextOptions: {}, safari: false, linux: true });
+}
+const X11_WEBKIT_USER_AGENT = /^Mozilla\/5\.0 \(X11; Linux [^)]+\) AppleWebKit\//;
 // Except for a tab WebKit opens on its own, on a Command-click (Control on
 // Linux): Playwright gives Safari's Mac user agent only to the pages it
 // opens or that a page opens, and on Linux the first request of such a tab
@@ -235,11 +252,36 @@ before(async () => {
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   const webkit = browser.browserType().name() === 'webkit';
   safariSharesLocalhostCookies = process.platform === 'darwin' && webkit;
-  safariKeepsPreviewsEmbedded = webkit;
-  safariRefusesTopLevelPreviews = webkit;
+  profiles[0].safari = webkit;
   browserOpenedTabsSaySafari = safariSharesLocalhostCookies;
+  if (webkitOnLinux) {
+    // The user agent of a WebKit browser on this machine, as GNOME Web
+    // sends it: its platform and WebKit's version.
+    const context = await browser.newContext();
+    const platform = await (await context.newPage()).evaluate(() => navigator.platform);
+    await context.close();
+    assert.match(platform, /^Linux /);
+    const [major, minor = '0'] = browser.version().split('.');
+    profiles[1].contextOptions = {
+      userAgent: `Mozilla/5.0 (X11; ${platform}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/${major}.${minor} Safari/605.1.15`,
+    };
+  }
   echo = await startCookieEcho();
 });
+
+/**
+ * Register the journey `name` once for each profile, with that profile's
+ * Safari flags while it runs.
+ */
+function journey(name, options, run) {
+  for (const profile of profiles) {
+    test(`${profile.name}${name}`, options, async () => {
+      safariKeepsPreviewsEmbedded = profile.safari;
+      safariRefusesTopLevelPreviews = profile.safari;
+      await run(profile);
+    });
+  }
+}
 
 after(async () => {
   await browser?.close();
@@ -333,9 +375,11 @@ async function cookiesFromTopLevelApps(context) {
     .sort();
 }
 
-test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
-  const context = await browser.newContext();
+journey('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async (profile) => {
+  const context = await browser.newContext(profile.contextOptions);
   try {
+    // What the app received before this journey (an earlier profile's).
+    const earlier = (await appSeen()).length;
     // Sign in with the real link, so the product sets its own cookies.
     const workbench = await context.newPage();
     const signedIn = await workbench.goto(runtime.signInUrl);
@@ -396,7 +440,7 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
       for (const [port, pathname] of [[5000, '/check'], [3000, '/check'], [5000, '/check-page'], [3000, '/check-page']]) {
         await visitRefused(context, `${previewOrigin(port)}${pathname}`);
       }
-      const seen = await appSeen();
+      const seen = (await appSeen()).slice(earlier);
       assert.deepEqual(seen.map(({ port, path: at }) => `${port}${at}`), []);
     } else {
       // What the Session app receives through the real proxy: top-level, from
@@ -418,13 +462,17 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
           await page.close();
         }
       }
-      const seen = await appSeen();
+      const seen = (await appSeen()).slice(earlier);
       assert.ok(seen.filter((request) => request.upgrade).length === 2,
         JSON.stringify(seen.map(({ port, path: at }) => `${port}${at}`)));
       assert.ok(seen.length >= 10, JSON.stringify(seen.map(({ port, path: at }) => `${port}${at}`)));
       for (const request of seen) {
         assert.equal(/axocoatl-token-/i.test(request.cookie), false,
           `${request.port}${request.path}: ${cookieNames(request.cookie)}`);
+        // The app served WebKit on Linux, by its own user agent.
+        if (profile.linux && !request.upgrade) {
+          assert.match(request.userAgent, X11_WEBKIT_USER_AGENT, `${request.port}${request.path}`);
+        }
       }
       // Where the browser sends the forged non-token cookies (it does not
       // here), the proxy passes them on; a WebSocket upgrade forwards only
@@ -479,9 +527,9 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
   }
 });
 
-test('a forged signed-in cookie sends a signed-out browser through the retry page at most once per navigation', { timeout: 300_000, skip: imageMissing }, async () => {
+journey('a forged signed-in cookie sends a signed-out browser through the retry page at most once per navigation', { timeout: 300_000, skip: imageMissing }, async (profile) => {
   // A browser that never signed in.
-  const context = await browser.newContext();
+  const context = await browser.newContext(profile.contextOptions);
   try {
     await forgeFromTopLevelPage(context, forgeUrl('/forge-signed-out'));
     const page = await context.newPage();
@@ -512,9 +560,10 @@ test('a forged signed-in cookie sends a signed-out browser through the retry pag
   }
 });
 
-test('the workbench shows the real Preview embedded; in Safari it offers no full page, the Preview cannot open itself in a window, and a real Command-click in the Preview or Files frame gets the refusal page', { timeout: 300_000, skip: imageMissing }, async () => {
-  const context = await browser.newContext();
+journey('the workbench shows the real Preview embedded; in Safari it offers no full page, the Preview cannot open itself in a window, and a real Command-click in the Preview or Files frame gets the refusal page; elsewhere Open full preview and the Preview\'s own window.open open it in a tab', { timeout: 300_000, skip: imageMissing }, async (profile) => {
+  const context = await browser.newContext(profile.contextOptions);
   try {
+    const earlier = (await appSeen()).length;
     const workbench = await context.newPage();
     const signedIn = await workbench.goto(runtime.signInUrl);
     assert.equal(signedIn?.status(), 200);
@@ -558,6 +607,39 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
         'allow-scripts allow-same-origin allow-forms allow-popups allow-modals');
       assert.equal(await openFull.getAttribute('href'), `${previewOrigin(3000)}/embedded`);
       assert.equal(await openFull.getAttribute('aria-disabled'), 'false');
+      // Open full preview opens the Preview's address in a tab of its own,
+      // with no opener, served by the app through the proxy.
+      const full = context.waitForEvent('page', { timeout: 15_000 });
+      await openFull.click();
+      const fullTab = await full;
+      await fullTab.waitForLoadState('load');
+      assert.equal(fullTab.url(), `${previewOrigin(3000)}/embedded`);
+      assert.equal(await fullTab.title(), 'preview 3000/embedded');
+      assert.equal(await fullTab.evaluate(() => window.opener), null);
+      await fullTab.close();
+      // The frame may open windows: the Preview's own window.open of its
+      // address, on a real click in its frame, opens a tab.
+      await frame.evaluate(() => {
+        document.body.insertAdjacentHTML('beforeend', '<button id="open-self" type="button">Open myself</button>');
+        document.querySelector('#open-self').addEventListener('click', () => {
+          globalThis.__opened = window.open(`${location.href}?opened`, '_blank') === null ? 'null' : 'a window';
+        });
+      });
+      const popup = context.waitForEvent('page', { timeout: 15_000 });
+      await frame.locator('#open-self').click();
+      const popupTab = await popup;
+      await popupTab.waitForLoadState('load');
+      assert.equal(popupTab.url(), `${previewOrigin(3000)}/embedded?opened`);
+      assert.equal(await popupTab.title(), 'preview 3000/embedded');
+      assert.equal(await frame.evaluate(() => globalThis.__opened), 'a window');
+      await popupTab.close();
+      // The frame's load, Open full preview's tab and the popup.
+      const opens = (await appSeen()).slice(earlier)
+        .filter((request) => request.port === 3000 && request.path === '/embedded');
+      assert.ok(opens.length >= 3, JSON.stringify(opens.map(({ userAgent }) => userAgent)));
+      if (profile.linux) {
+        for (const request of opens) assert.match(request.userAgent, X11_WEBKIT_USER_AGENT);
+      }
     }
     // A real Command-click (Control on Linux) on a link inside the Preview
     // frame opens a new tab in every engine, whatever the frame's sandbox
@@ -576,7 +658,7 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     const tab = await opened;
     await tab.waitForLoadState('load');
     assert.equal(tab.url(), cmdClicked);
-    const cmdClickAtApp = (await appSeen())
+    const cmdClickAtApp = (await appSeen()).slice(earlier)
       .find((request) => request.port === 3000 && request.path === '/top-cmd-clicked');
     if (browserOpenedTabsSaySafari) {
       await assertRefusalPage(tab);
@@ -585,9 +667,7 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     } else {
       assert.equal(await tab.title(), 'preview 3000/top-cmd-clicked');
       assert.ok(cmdClickAtApp, 'the Command-click did not reach the app');
-      if (safariRefusesTopLevelPreviews) {
-        assert.match(cmdClickAtApp.userAgent, /^Mozilla\/5\.0 \(X11; Linux [^)]+\) AppleWebKit\//);
-      }
+      if (webkitOnLinux) assert.match(cmdClickAtApp.userAgent, X11_WEBKIT_USER_AGENT);
       assert.deepEqual(await cookiesFromTopLevelApps(context), [`ran-top-level-host@${previewHost(3000)}`]);
     }
     await tab.close();
@@ -636,8 +716,8 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
   }
 });
 
-test('in Safari no Preview page runs top-level, typed, redirected or through the legacy path, which refuses every browser page in every engine', { timeout: 300_000, skip: imageMissing }, async () => {
-  const context = await browser.newContext();
+journey('in Safari no Preview page runs top-level, typed, redirected or through the legacy path, which refuses every browser page in every engine', { timeout: 300_000, skip: imageMissing }, async (profile) => {
+  const context = await browser.newContext(profile.contextOptions);
   // A page Axocoatl does not serve that redirects (302) to the address its
   // query names, as any other site could.
   const redirector = createServer((request, response) => {
@@ -648,9 +728,11 @@ test('in Safari no Preview page runs top-level, typed, redirected or through the
     redirector.once('error', reject);
     redirector.listen(0, '127.0.0.1', resolve);
   });
-  const reached = async (port, pathname) => (await appSeen())
+  let earlier = 0;
+  const reached = async (port, pathname) => (await appSeen()).slice(earlier)
     .some((request) => request.port === port && request.path === pathname);
   try {
+    earlier = (await appSeen()).length;
     const workbench = await context.newPage();
     const signedIn = await workbench.goto(runtime.signInUrl);
     assert.equal(signedIn?.status(), 200);

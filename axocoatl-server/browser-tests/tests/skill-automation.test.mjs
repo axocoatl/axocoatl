@@ -101,14 +101,27 @@ async function openSession(session) {
     if (!isWebKitLoadDiagnostic(error)) browserErrors.push(`pageerror: ${error.message}`);
   });
   await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(session.id)}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction((sessionId) => {
-    const rail = document.querySelector('ax-rail');
-    return Boolean(customElements.get('ax-settings')
+  // A person acts on a workbench that has loaded: the shell has wired Settings
+  // and the Session browser, restored the Session, and read readiness.
+  const loadState = (sessionId) => ({
+    components: Boolean(customElements.get('ax-settings')
       && customElements.get('ax-automation-settings')
-      && customElements.get('ax-settings-skills')
-      && rail?.shadowRoot
-      && rail.current === sessionId);
-  }, session.id);
+      && customElements.get('ax-settings-skills')),
+    settingsWired: Boolean(document.querySelector('ax-settings')?._wired),
+    sessionBrowserWired: Boolean(document.querySelector('ax-session-home')?._wired),
+    readiness: Boolean(document.querySelector('#readiness')?.report),
+    railCurrent: Boolean(document.querySelector('ax-rail')?.shadowRoot)
+      && document.querySelector('ax-rail').current === sessionId,
+  });
+  const state = `(${loadState})(${JSON.stringify(session.id)})`;
+  try {
+    await page.waitForFunction(`Object.values(${state}).every(Boolean)`);
+  } catch (error) {
+    const seen = await page.evaluate(state).catch((stateError) => String(stateError));
+    await context.close();
+    throw new Error(`the workbench did not load: ${JSON.stringify(seen)}\n`
+      + `${browserErrors.join('\n')}\n${runtime.logs()}`, { cause: error });
+  }
   return { context, page, browserErrors };
 }
 
@@ -123,17 +136,39 @@ async function openSettingsSection(page, name) {
 test('a Session-authorized Skill triggers a UI-created Automation whose result survives restart', { timeout: 90_000 }, async () => {
   const { context, page, browserErrors } = await openSession(runtime.fixtures.alpha.sessions[0]);
   try {
+    // Create session waits for the picker's own readiness read, and stays
+    // disabled when the daemon reports that no Session can run (Podman
+    // missing, or on macOS without a machine, where it looks: HOME,
+    // XDG_CONFIG_HOME, PATH). This journey creates one, so say that rather
+    // than time out on a disabled button.
+    const blocked = await page.evaluate(() => document.querySelector('#readiness').report.sessions_blocked);
+    assert.equal(blocked ?? null, null, `this journey creates a Session, which this daemon's readiness blocks: ${blocked}`);
+    const alphaWorkspace = runtime.fixtures.alpha.workspace;
+    // The picker renders again as each of its reads arrives (Skills,
+    // readiness, the project probe), and a render replaces its controls and
+    // can move them; act once all three are in.
+    const pickerReads = Promise.all(['/api/skills', '/api/readiness', '/api/fs/project'].map((pathname) =>
+      page.waitForResponse((response) => new URL(response.url()).pathname === pathname)));
     await page.getByRole('button', { name: 'New session in Alpha Workspace' }).click();
     const sessionDialog = page.getByRole('dialog', { name: 'New session in Alpha Workspace' });
+    await sessionDialog.waitFor({ state: 'visible' });
+    await pickerReads;
     await sessionDialog.locator('[data-field="session-name"]').fill('Skill-authorized launch');
     await sessionDialog.locator('[data-field="skill"][value="launch_ready"]').check();
     await sessionDialog.locator('[data-field="ports"]').fill('');
+    // A hidden dialog alone does not prove a Session was created (a click
+    // that lands outside the dialog closes it too): wait for the create.
+    const sessionCreated = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/workspaces/${alphaWorkspace.id}/sessions`);
     await sessionDialog.getByRole('button', { name: 'Create session' }).click();
+    const created = await sessionCreated;
+    assert.equal(created.status(), 200, `Session create returned ${created.status()}: ${await created.text()}`);
+    const createdId = (await created.json()).id;
     await sessionDialog.waitFor({ state: 'hidden' });
 
-    const createdSession = (await runtime.listSessions())
-      .find((session) => session.name === 'Skill-authorized launch');
+    const createdSession = (await runtime.listSessions()).find((session) => session.id === createdId);
     assert.ok(createdSession, 'the Session created through the UI must persist');
+    assert.equal(createdSession.name, 'Skill-authorized launch');
     assert.deepEqual(createdSession.enabled_skills, ['launch_ready']);
     assert.equal(createdSession.environment.state, 'awaiting_approval');
     await page.waitForFunction((sessionId) => {
