@@ -15,7 +15,7 @@ use super::host::Cmd;
 use super::{Choice, Onboarding, WriterChoice};
 
 /// The task of the first run.
-pub(crate) const TASK: &str = "Paging skips the last item";
+pub(crate) const TASK: &str = "Fix the bug: paging skips the last item";
 
 /// The sample repository's files.
 pub(crate) const FILES: &[(&str, &str)] = &[
@@ -888,10 +888,10 @@ mod tests {
             ..Choice::default()
         };
         let args = run_args(WriterChoice::Ollama, &local, repo, receipt, record, config);
-        assert!(shown(&args).starts_with("run fix --task 'Paging skips the last item' --repo"));
+        assert!(shown(&args).starts_with("run fix --task 'Fix the bug: paging skips the last item' --repo"));
         assert_eq!(
             args.join(" "),
-            "run fix --task Paging skips the last item --repo /tmp/f/repo --receipt \
+            "run fix --task Fix the bug: paging skips the last item --repo /tmp/f/repo --receipt \
              /tmp/f/receipt.json --record /tmp/f/record.jsonl --config /c/config.yaml --model \
              writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b"
         );

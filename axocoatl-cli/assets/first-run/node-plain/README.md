@@ -8,5 +8,5 @@ the item count is not a multiple of the page size. `npm test` (or
 first fix on it:
 
 ```sh
-axocoatl run fix --task "Paging skips the last item"
+axocoatl run fix --task "Fix the bug: paging skips the last item"
 ```
