@@ -1408,9 +1408,11 @@ agent:**
   once it has) or one that mounts a volume plugin's volume keeps every candidate, logged
   at `info` once per mount point and reason: with the container and its mount when a
   container is the reason, and with Podman's error when Podman did not answer. A container
-  run `--privileged` or with `CAP_SYS_ADMIN` keeps a candidate below any host directory it
-  takes, since its processes can mount on it themselves, and a `--rootfs` is a host
-  directory it takes. Nothing is removed at all while a container Axocoatl cannot list
+  run `--privileged` or with `CAP_SYS_ADMIN`, or one whose mounts neither SELinux
+  (`container_t`, enforcing) nor AppArmor (Podman's `containers-default` profile) stops
+  (its processes can then mount in a user namespace of their own), keeps a candidate below
+  any host directory it takes, since its processes can mount on it themselves, and a
+  `--rootfs` is a host directory it takes. Nothing is removed at all while a container Axocoatl cannot list
   could hold the directory (`held_elsewhere`): Docker is installed, Podman lists another
   connection (a Podman machine's rootful one on macOS), rootful Podman's API is enabled on
   Linux (`/run/podman`, as Ubuntu's package does), or Podman lists a container only with

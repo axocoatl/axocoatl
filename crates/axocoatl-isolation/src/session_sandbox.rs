@@ -9885,6 +9885,43 @@ mod tests {
         .await;
     }
 
+    /// End-to-end: needs Podman. A container that SELinux does not label
+    /// (`--security-opt label=disable`, as on a host without SELinux or
+    /// AppArmor) and that binds the repository: a process in it makes a user
+    /// namespace of its own and mounts a tmpfs on `node_modules` there,
+    /// which no inspect reports. Nothing confines its mounts, so the bind
+    /// keeps the mount point. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_mount_made_in_a_containers_own_user_namespace_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_mount_made_in_a_containers_own_user_namespace_keeps_it() {
+        assert_an_own_containers_mount_keeps_the_mount_point(
+            |repository, _, _| OwnMount {
+                before: Vec::new(),
+                options: vec![
+                    "--security-opt".into(),
+                    "label=disable".into(),
+                    "-v".into(),
+                    format!("{}:/w", repository.display()),
+                ],
+                at: "/w/node_modules",
+            },
+            "setsid unshare -Urm sh -c 'mount -t tmpfs nested /w/node_modules && \
+             echo nested > /w/node_modules/marker && exec sleep 601' >/dev/null 2>&1 & sleep 1",
+            "for p in /proc/[0-9]*; do if tr '\\0' ' ' < $p/cmdline 2>/dev/null | \
+             grep -q '^sleep 601'; then awk '$5 == \"/w/node_modules\" { found = 1 } END \
+             { exit !found }' $p/mountinfo && exit 0; fi; done; echo 'no mount at \
+             /w/node_modules in its own namespace' >&2; exit 1",
+        )
+        .await;
+    }
+
     /// End-to-end cancellation: needs Podman and package-network access.
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]

@@ -119,11 +119,16 @@
 //! point and reason, naming the container and its mount when a container is
 //! the reason, or Podman's error when Podman did not answer ([`log_kept`]).
 //!
-//! A container run `--privileged` or with `CAP_SYS_ADMIN` added can mount on
-//! the directory itself (a tmpfs over `node_modules` in a bind of the
-//! repository), which no inspect reports, so a host directory it takes that
-//! is above the directory keeps it whatever is mounted below. A container's
-//! `--rootfs` is a host directory it takes, at `/`.
+//! A container's processes can mount on the directory themselves (a tmpfs
+//! over `node_modules` in a bind of the repository), which no inspect
+//! reports: one run `--privileged` or with `CAP_SYS_ADMIN` added, and any
+//! other whose mounts neither SELinux (`container_t`, enforcing) nor AppArmor
+//! (Podman's `containers-default` profile) stops, in a user namespace of its
+//! own (`unshare -Urm`; measured in Podman 6.1.4 with `--security-opt
+//! label=disable`, refused with its default `container_t` label). Such a
+//! container keeps the directory when a host directory it takes is above it,
+//! whatever is mounted below. A container's `--rootfs` is a host directory
+//! it takes, at `/`.
 //!
 //! Nothing is removed while a container this Podman does not list could
 //! have a mount on it ([`held_elsewhere`]): when Docker is installed, Podman
@@ -188,12 +193,13 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 /// discards them, 4.9.3 to 6.1.4), and the containers it takes mounts from
 /// with `--volumes-from`, whose bind mounts `Mounts` leaves out too; its
 /// root filesystem when given with `--rootfs`; whether it may mount
-/// filesystems itself (`--privileged`, or `CAP_SYS_ADMIN` added); and when it
-/// started (`0001-01-01T00:00:00Z` for never: Podman reports an overlay
-/// volume only once its container has started). The id's field is `ID`
-/// (Podman cannot evaluate `.Id`, its JSON name, inside `json`). Every field
-/// is there in Podman 4.9.3 and 6.1.4.
-const INSPECT_FORMAT: &str = r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}},"VolumesFrom":{{json .HostConfig.VolumesFrom}},"Rootfs":{{json .Rootfs}},"Privileged":{{json .HostConfig.Privileged}},"CapAdd":{{json .HostConfig.CapAdd}},"StartedAt":{{json .State.StartedAt}}}"#;
+/// filesystems itself (`--privileged`, or `CAP_SYS_ADMIN` added, or neither
+/// SELinux nor AppArmor confining it: its SELinux process label and its
+/// AppArmor profile); and when it started (`0001-01-01T00:00:00Z` for never:
+/// Podman reports an overlay volume only once its container has started).
+/// The id's field is `ID` (Podman cannot evaluate `.Id`, its JSON name,
+/// inside `json`). Every field is there in Podman 4.9.3 and 6.1.4.
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}},"VolumesFrom":{{json .HostConfig.VolumesFrom}},"Rootfs":{{json .Rootfs}},"Privileged":{{json .HostConfig.Privileged}},"CapAdd":{{json .HostConfig.CapAdd}},"ProcessLabel":{{json .ProcessLabel}},"AppArmorProfile":{{json .AppArmorProfile}},"StartedAt":{{json .State.StartedAt}}}"#;
 /// What `podman container inspect` says for a container that never started.
 const NEVER_STARTED: &str = "0001-01-01T00:00:00Z";
 /// What `podman volume inspect` prints of each volume, one JSON object a
@@ -910,6 +916,15 @@ struct Inspected {
     /// Capabilities added (`CAP_SYS_ADMIN`, or `SYS_ADMIN` as given).
     #[serde(rename = "CapAdd", default)]
     cap_add: Option<Vec<String>>,
+    /// Its SELinux process label (`system_u:system_r:container_t:s0:c7,c27`),
+    /// empty when SELinux does not label it (`--security-opt
+    /// label=disable`, or a host without SELinux).
+    #[serde(rename = "ProcessLabel", default)]
+    process_label: Option<String>,
+    /// Its AppArmor profile (`containers-default-0.57.4` on Ubuntu), empty
+    /// on a host without AppArmor.
+    #[serde(rename = "AppArmorProfile", default)]
+    apparmor_profile: Option<String>,
     /// When it last started; [`NEVER_STARTED`] when it never has.
     #[serde(rename = "StartedAt", default)]
     started_at: Option<String>,
@@ -918,16 +933,47 @@ struct Inspected {
 impl Inspected {
     /// Whether its processes may mount filesystems themselves (a tmpfs
     /// over a directory of a bind mount), which no inspect reports: it runs
-    /// `--privileged` or with `CAP_SYS_ADMIN` (or every capability) added.
-    fn may_mount(&self) -> bool {
-        self.privileged == Some(true)
-            || self.cap_add.iter().flatten().any(|cap| {
-                matches!(
-                    cap.trim_start_matches("CAP_").to_ascii_uppercase().as_str(),
-                    "SYS_ADMIN" | "ALL"
-                )
-            })
+    /// `--privileged` or with `CAP_SYS_ADMIN` (or every capability) added,
+    /// or nothing confines its mounts. A process in a container without
+    /// `CAP_SYS_ADMIN` can still make a user namespace of its own and mount
+    /// there, on a directory of a bind of the host's (`unshare -Urm`, then
+    /// `mount -t tmpfs`: Podman 6.1.4's default seccomp profile allows it),
+    /// unless SELinux (`container_t`, enforcing) or AppArmor (Podman's
+    /// `containers-default` profile, which denies every mount) stops it.
+    /// With `--security-opt label=disable`, `label=type:spc_t`, on a host
+    /// with neither (Arch Linux) or with SELinux permissive, it may.
+    /// `selinux_enforcing`: SELinux enforces its policy where the container
+    /// runs ([`selinux_enforcing`]).
+    fn may_mount(&self, selinux_enforcing: bool) -> bool {
+        let added = self.cap_add.iter().flatten().any(|cap| {
+            matches!(
+                cap.trim_start_matches("CAP_").to_ascii_uppercase().as_str(),
+                "SYS_ADMIN" | "ALL"
+            )
+        });
+        let apparmor = self
+            .apparmor_profile
+            .as_deref()
+            .is_some_and(|profile| profile.starts_with("containers-default"));
+        let selinux = selinux_enforcing
+            && self
+                .process_label
+                .as_deref()
+                .and_then(|label| label.split(':').nth(2))
+                .is_some_and(|kind| matches!(kind, "container_t" | "container_init_t"));
+        self.privileged == Some(true) || added || !(apparmor || selinux)
     }
+}
+
+/// Whether SELinux enforces its policy where Podman runs containers, now
+/// (`setenforce` changes it): on Linux, `/sys/fs/selinux/enforce` reads `1`;
+/// elsewhere Podman runs them in a machine, whose Fedora CoreOS enforces it
+/// (Podman 6.1.4's machine reads `1`), and nothing is removed there anyway
+/// ([`held_elsewhere`]: every machine has a rootful connection).
+fn selinux_enforcing() -> bool {
+    !cfg!(target_os = "linux")
+        || std::fs::read_to_string("/sys/fs/selinux/enforce")
+            .is_ok_and(|enforce| enforce.trim() == "1")
 }
 
 #[derive(Debug, Default, Clone, serde::Deserialize)]
@@ -1158,7 +1204,7 @@ impl Mounts {
     ) -> Result<Self, String> {
         let mut mounts = Self {
             id: container.id.clone().unwrap_or_default(),
-            may_mount: container.may_mount(),
+            may_mount: container.may_mount(selinux_enforcing()),
             ..Self::default()
         };
         if container.started_at.as_deref() == Some(NEVER_STARTED) {
@@ -1839,15 +1885,23 @@ where
 }
 
 /// The `names` Podman's `error` says do not exist: one line `no such <what>
-/// <name>` each, the last after `Error: `, the name quoted from Podman 5 on.
+/// <name>` each, the last after `Error: `, the name quoted from Podman 5 on;
+/// or, for one removed while `inspect` ran (Podman 6.1.4), `no container
+/// with ID <id> found in database: no such container`.
 fn gone<'a>(error: &str, what: &str, names: &'a [String]) -> HashSet<&'a str> {
     let prefix = format!("no such {what} ");
+    let with_id = format!("no {what} with ID ");
+    let in_database = format!(" found in database: no such {what}");
     error
         .lines()
         .filter_map(|line| {
             let line = line.trim();
             let line = line.strip_prefix("Error: ").unwrap_or(line);
-            let name = line.strip_prefix(&prefix)?.trim().trim_matches('"');
+            let name = line
+                .strip_prefix(&prefix)
+                .or_else(|| line.strip_prefix(&with_id)?.strip_suffix(&in_database))?
+                .trim()
+                .trim_matches('"');
             names
                 .iter()
                 .find(|wanted| wanted.as_str() == name)
@@ -3354,7 +3408,7 @@ mod tests {
         let privileged = inspect(&format!(
             r#""Rootfs":"","Privileged":true,"CapAdd":[],{started}"#
         ));
-        assert!(privileged.may_mount());
+        assert!(privileged.may_mount(true));
         let mounts = Mounts::of(&privileged, &[], &HashMap::new()).unwrap();
         assert_eq!(
             decided(&node_modules, &[mounts]).await,
@@ -3365,18 +3419,38 @@ mod tests {
             assert!(inspect(&format!(
                 r#""Rootfs":"","Privileged":false,"CapAdd":{caps},{started}"#
             ))
-            .may_mount());
+            .may_mount(true));
         }
-        // Without it, a bind of the repository alone keeps nothing.
-        let plain = inspect(&format!(
-            r#""Rootfs":"","Privileged":false,"CapAdd":["CAP_NET_RAW"],{started}"#
-        ));
-        assert!(!plain.may_mount());
-        let mounts = Mounts::of(&plain, &[], &HashMap::new()).unwrap();
+        // Without it, a container confined by AppArmor (Ubuntu's Podman) or
+        // by SELinux enforcing (Fedora's) cannot mount, so a bind of the
+        // repository alone keeps nothing.
+        let confined = |label: &str, profile: &str| {
+            inspect(&format!(
+                r#""Rootfs":"","Privileged":false,"CapAdd":["CAP_NET_RAW"],"ProcessLabel":"{label}","AppArmorProfile":"{profile}",{started}"#
+            ))
+        };
+        let apparmor = confined("", "containers-default-0.57.4");
+        assert!(!apparmor.may_mount(false));
+        let mounts = Mounts::of(&apparmor, &[], &HashMap::new()).unwrap();
         assert_eq!(decided(&node_modules, &[mounts]).await, None);
+        let container_t = confined("system_u:system_r:container_t:s0:c7,c27", "");
+        assert!(!container_t.may_mount(true));
+        // SELinux permissive does not stop it, nor does spc_t, and with
+        // labelling off (`label=disable`, or a host with neither, as Arch
+        // Linux) nothing does: it may mount in a user namespace of its own,
+        // so a bind of the repository keeps the mount point.
+        assert!(container_t.may_mount(false));
+        assert!(confined("system_u:system_r:spc_t:s0:c117,c607", "").may_mount(true));
+        let unconfined = confined("", "");
+        assert!(unconfined.may_mount(true));
+        let mounts = Mounts::of(&unconfined, &[], &HashMap::new()).unwrap();
+        assert_eq!(
+            decided(&node_modules, &[mounts]).await,
+            mounted_by(&"c".repeat(64), &repo, "/w/node_modules")
+        );
         // Never started: its overlay volumes are not reported yet.
         let created = inspect(
-            r#""Rootfs":"","Privileged":false,"CapAdd":[],"StartedAt":"0001-01-01T00:00:00Z""#,
+            r#""Rootfs":"","Privileged":false,"CapAdd":[],"AppArmorProfile":"containers-default-0.57.4","StartedAt":"0001-01-01T00:00:00Z""#,
         );
         let mounts = Mounts::of(&created, &[], &HashMap::new()).unwrap();
         assert!(matches!(
@@ -3518,6 +3592,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn mounts_taken_with_volumes_from_count_and_a_gone_source_keeps_it() {
+        const APPARMOR: &str = "containers-default-0.57.4";
         let repo = tempfile::tempdir().unwrap();
         let repo_path = std::fs::canonicalize(repo.path()).unwrap();
         let path = repo_path.join(NODE_MODULES);
@@ -3539,19 +3614,20 @@ mod tests {
         .unwrap();
         // `a` mounts `a_mount` at /w; `b` takes from `from` and has a tmpfs
         // where node_modules is under /w. Only `inspect` of them were
-        // inspected.
+        // inspected. AppArmor confines both, as Ubuntu's Podman runs them, so
+        // neither may mount in a user namespace of its own.
         let mounts_of = |a_mount: &serde_json::Value, from: &[&str], inspect: &[&str]| {
             let lines = [
                 (
                     a.as_str(),
                     serde_json::json!({"Id": a, "Mounts": [a_mount], "Tmpfs": {},
-                        "VolumesFrom": null}),
+                        "VolumesFrom": null, "AppArmorProfile": APPARMOR}),
                 ),
                 (
                     b.as_str(),
                     serde_json::json!({"Id": b, "Mounts": [],
                         "Tmpfs": {"/w/node_modules": "rw,rprivate,nosuid,nodev,tmpcopyup"},
-                        "VolumesFrom": from}),
+                        "VolumesFrom": from, "AppArmorProfile": APPARMOR}),
                 ),
             ];
             let output: String = lines
@@ -3612,9 +3688,10 @@ mod tests {
         let inspected: Vec<Inspected> = parse_json_lines(
             format!(
                 "{}\n{}\n",
-                serde_json::json!({"Id": a, "Mounts": [bind], "Tmpfs": {}, "VolumesFrom": null}),
+                serde_json::json!({"Id": a, "Mounts": [bind], "Tmpfs": {}, "VolumesFrom": null,
+                    "AppArmorProfile": APPARMOR}),
                 serde_json::json!({"Id": b, "Mounts": [], "Tmpfs": {"/w/node_modules": "rw"},
-                    "VolumesFrom": ["z"]})
+                    "VolumesFrom": ["z"], "AppArmorProfile": APPARMOR})
             )
             .as_bytes(),
         )
@@ -3979,10 +4056,20 @@ mod tests {
             ),
             ["r4iso-nosuchvol"].into()
         );
+        // A container removed while `inspect` ran (Podman 6.1.4).
+        assert_eq!(
+            gone(
+                &format!("Error: no container with ID {a} found in database: no such container"),
+                "container",
+                &names
+            ),
+            [a.as_str()].into()
+        );
         for error in [
             format!("Error: no such volume {b}"),
             format!("Error: no such container {}", "d".repeat(64)),
             format!("Error: inspecting {b}: no such container"),
+            format!("Error: no container with ID {b} found in database: no such volume"),
             format!("WARN[0000] no such container {b}x"),
             "Error: timed out".to_string(),
         ] {

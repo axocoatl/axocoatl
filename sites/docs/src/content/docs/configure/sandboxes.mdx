@@ -88,8 +88,10 @@ API is enabled on Linux (`/run/podman`; Ubuntu's podman package enables it), or 
 Podman lists a container only with `--external` (Buildah's, a `podman build`'s), the
 directory stays, empty and yours, and the daemon logs why once. On a Mac, and on Ubuntu
 24.04 as its package sets Podman up, it therefore stays. A container that may mount
-filesystems itself (`--privileged`, or `CAP_SYS_ADMIN` added) keeps the directory when
-it takes a directory above it; one that has never started (Podman reports its overlay
+filesystems itself keeps the directory when it takes a directory above it: one run
+`--privileged` or with `CAP_SYS_ADMIN` added, and one that neither SELinux (enforcing)
+nor AppArmor confines, as with `--security-opt label=disable` or on a Linux computer with
+neither (Arch Linux), whose processes can mount in a user namespace of their own; one that has never started (Podman reports its overlay
 volumes only once it has), or that mounts a volume plugin's volume (Podman does not say
 which host directory it uses), keeps every such directory until it starts or is removed;
 and the root filesystem of a container run with `--rootfs` counts as a directory it
