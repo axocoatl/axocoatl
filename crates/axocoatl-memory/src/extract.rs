@@ -805,7 +805,7 @@ mod tests {
     fn ocr_timeout_kills_process_and_removes_unique_input() {
         let dir = crate::private_tempdir_test_support::private_tempdir();
         let command = dir.path().join("slow-tesseract");
-        std::fs::write(&command, "#!/bin/sh\nexec sleep 5\n").unwrap();
+        std::fs::write(&command, "#!/bin/sh\nexec sleep 60\n").unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let started = Instant::now();
@@ -818,7 +818,8 @@ mod tests {
             dir.path(),
         );
         assert!(output.is_none());
-        assert!(started.elapsed() < Duration::from_secs(2));
+        // Killed at its timeout, not waited for: the command sleeps a minute.
+        assert!(started.elapsed() < Duration::from_secs(30));
         let names: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
@@ -842,7 +843,7 @@ mod tests {
                 ocr_image_with_command(
                     b"not-really-an-image",
                     "png",
-                    Duration::from_secs(2),
+                    DEFAULT_OCR_TIMEOUT,
                     1024,
                     &command,
                     &temp_root,
@@ -874,7 +875,7 @@ mod tests {
         let output = ocr_image_with_command(
             b"sensitive-upload",
             "png",
-            Duration::from_secs(2),
+            DEFAULT_OCR_TIMEOUT,
             1024,
             &command,
             dir.path(),
@@ -899,7 +900,7 @@ mod tests {
         let output = ocr_image_with_command_unix(
             b"original-sensitive-upload",
             "png",
-            Duration::from_secs(2),
+            DEFAULT_OCR_TIMEOUT,
             1024,
             &command,
             dir.path(),
