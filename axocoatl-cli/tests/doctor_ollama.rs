@@ -341,6 +341,19 @@ async fn doctor_refuses_ollama_0_20_6_and_says_why() {
         "{stdout}"
     );
     assert!(stdout.contains("0.20.6 is no longer supported"), "{stdout}");
+    // A refused server's models are not checked: no model line says OK,
+    // and none is loaded or probed.
+    assert!(!stdout.contains("qwen3-coder:30b: GGUF"), "{stdout}");
+    assert!(!stdout.contains("contract probes"), "{stdout}");
+    assert!(!stdout.contains("[ OK ] Model"), "{stdout}");
+    let loads = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| ["/api/generate", "/api/chat", "/api/show"].contains(&request.url.path()))
+        .count();
+    assert_eq!(loads, 0, "{stdout}");
     // No ollama CLI here: upgrade, the way this platform installs it.
     if cfg!(target_os = "macos") {
         assert!(stdout.contains("brew upgrade ollama"), "{stdout}");

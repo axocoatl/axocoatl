@@ -2451,6 +2451,32 @@ fn the_opener_gets_the_address_as_its_one_argument_without_a_shell() {
     assert!(browser::Opener::find(None).is_none());
 }
 
+/// In WSL the opener is `wslview` (Windows' browser) when it is on PATH,
+/// else the usual one; outside WSL `wslview` is never used.
+#[test]
+fn in_wsl_the_page_opens_in_windows_browser_with_wslview() {
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(directory.path(), 0);
+    let usual = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(usual.open(DEVICE_PAGE)));
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+    let wslview_log = directory.path().join("wslview-opened");
+    install_script(
+        &bin.join("wslview"),
+        &format!(
+            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\nprintf 'arg=%s\\n' \"$1\" >> '{}'\n",
+            wslview_log.display()
+        ),
+    );
+    let wsl = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(wsl.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log), format!("arg={DEVICE_PAGE}\n"));
+    let elsewhere = browser::Opener::find_for(Some(bin.as_os_str()), false).unwrap();
+    assert!(opener_answer(elsewhere.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log).lines().count(), 1);
+    assert_eq!(opened(&log).lines().count(), 4);
+}
+
 /// A private directory for one login-container test: `bin/podman` (the
 /// fake, with its `mode`, the `auth` it prints and the `calls` it records)
 /// and `data/` (the data root).

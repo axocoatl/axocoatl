@@ -331,6 +331,9 @@ async fn facts(
         service_program: None,
         xdg_config_home: None,
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        proxy_variables: Vec::new(),
     }
 }
 
@@ -4504,6 +4507,11 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         id_root: shims.root.path().to_path_buf(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        git: Some("2.39.5".to_string()),
+        proxy_variables: Vec::new(),
+        on_load: None,
         // Not the configuration a test checks (`home/config.yaml`), which
         // doctor then treats as one given with --config; a test of the
         // default one says so.
@@ -4562,3 +4570,4 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
 
 mod interactive;
 mod openrouter_sign_in;
+mod platform;

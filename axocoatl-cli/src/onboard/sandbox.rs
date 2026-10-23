@@ -638,10 +638,8 @@ fn version(o: &mut Onboarding) -> bool {
         ));
         return false;
     }
-    if !o.facts.os.is_macos() && (major, minor) < TESTED_LINUX_PODMAN {
-        o.ui.warn(format!(
-            "Podman {version} has not been tested with Axocoatl (4.9 is)"
-        ));
+    if !o.facts.os.is_macos() && (major, minor) != TESTED_LINUX_PODMAN {
+        o.ui.warn(podman_report::linux_untested(&version));
     }
     true
 }
@@ -949,16 +947,6 @@ fn landlock(o: &mut Onboarding) -> bool {
         o.ui.warn(
             "This WSL distribution runs without systemd: the Always-On Service is not \
              available, and `axocoatl dev` works",
-        );
-    }
-    if o.facts
-        .podman
-        .runtime
-        .as_ref()
-        .is_some_and(|runtime| runtime.selinux == Some(true))
-    {
-        o.ui.warn(
-            "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet",
         );
     }
     let item = crate::doctor::landlock_item(o.facts.landlock_abi, Some(&release), wsl.is_some());

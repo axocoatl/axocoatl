@@ -826,6 +826,12 @@ pub(crate) struct Facts {
     pub(crate) xdg_config_home: Option<PathBuf>,
     /// The kernel's Landlock ABI (Linux; `None` elsewhere or without it).
     pub(crate) landlock_abi: Option<i64>,
+    /// This user's systemd manager, on a Linux with systemd ([`user_systemd`]).
+    pub(crate) user_systemd: Option<UserSystemd>,
+    /// SELinux is enforcing (`/sys/fs/selinux/enforce` says 1).
+    pub(crate) selinux_enforcing: bool,
+    /// The proxy variables set in this environment, by name.
+    pub(crate) proxy_variables: Vec<String>,
 }
 
 impl Facts {
@@ -873,6 +879,105 @@ fn same_file_system(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// Whether this user's systemd manager answers, on a Linux with systemd:
+/// the Always-On Service is a `systemctl --user` unit, and rootless Podman
+/// keeps its runtime directory in the user's session. A user reached with
+/// `su -`, `sudo -iu` or an SSH login on a system that starts no user
+/// session has no user bus (`XDG_RUNTIME_DIR` unset), so neither works.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UserSystemd {
+    /// `systemctl --user is-system-running` reached the user's manager.
+    pub(crate) reachable: bool,
+    /// What it said: its state, or why it did not answer.
+    pub(crate) state: String,
+    /// `loginctl show-user USER --property=Linger --value`: the manager
+    /// keeps running after the user logs out (`None`: not known).
+    pub(crate) linger: Option<bool>,
+}
+
+/// The states `systemctl --user is-system-running` prints for a manager it
+/// reached.
+const USER_MANAGER_STATES: [&str; 6] = [
+    "running",
+    "degraded",
+    "starting",
+    "initializing",
+    "maintenance",
+    "stopping",
+];
+
+/// [`UserSystemd`] for `user`, read with `systemctl --user` and `loginctl`.
+pub(crate) async fn user_systemd(host: &Host, user: &str) -> UserSystemd {
+    let probe = host
+        .probe("systemctl", &["--user", "is-system-running"])
+        .await;
+    let (reachable, state) = match &probe {
+        None => (false, "systemctl did not answer".to_string()),
+        Some(probe) => {
+            let said = probe.stdout.lines().next().unwrap_or_default().trim();
+            if USER_MANAGER_STATES.contains(&said) {
+                (true, said.to_string())
+            } else {
+                // Without a user bus it prints `offline` and says why on
+                // stderr ("Failed to connect to bus: No medium found").
+                let why = probe
+                    .stderr
+                    .lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .or(Some(said).filter(|said| !said.is_empty()))
+                    .unwrap_or("no answer");
+                (false, why.to_string())
+            }
+        }
+    };
+    let linger = host
+        .probe(
+            "loginctl",
+            &["show-user", user, "--property=Linger", "--value"],
+        )
+        .await
+        .filter(|probe| probe.success)
+        .and_then(|probe| match probe.stdout.trim() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        });
+    UserSystemd {
+        reachable,
+        state,
+        linger,
+    }
+}
+
+/// SELinux is enforcing on this computer (under [`Host::root`]).
+pub(crate) fn selinux_enforcing(host: &Host) -> bool {
+    std::fs::read_to_string(host.at("/sys/fs/selinux/enforce")).is_ok_and(|text| text.trim() == "1")
+}
+
+/// `git --version`'s version, or `None` when git is missing. On macOS,
+/// `/usr/bin/git` is a stand-in for the Command Line Tools' git: without
+/// the tools it opens Apple's installer instead of answering, so it is run
+/// only when `xcode-select -p` finds them.
+pub(crate) async fn git_version(host: &Host) -> Option<String> {
+    let found = host.find("git")?;
+    if host.macos && found == host.at("/usr/bin/git") && !command_line_tools(host).await {
+        return None;
+    }
+    match host.probe(&found.to_string_lossy(), &["--version"]).await {
+        Some(probe) if probe.success => first_word_version(&probe.stdout),
+        _ => None,
+    }
+}
+
+/// `xcode-select -p` finds the Command Line Tools (or Xcode).
+pub(crate) async fn command_line_tools(host: &Host) -> bool {
+    host.probe("xcode-select", &["-p"])
+        .await
+        .is_some_and(|probe| probe.success && !probe.stdout.trim().is_empty())
+}
+
 /// Read this computer. `ollama_url` is the server native Sessions will use;
 /// `check_port_8080`: whether to see if port 8080 is free (not when
 /// `--port` names the port).
@@ -910,8 +1015,9 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
             systemd: host.at("/run/systemd/system").is_dir(),
         }
     };
-    let git = match host.probe("git", &["--version"]).await {
-        Some(probe) if probe.success => first_word_version(&probe.stdout),
+    let git = git_version(host).await;
+    let user_systemd = match &os {
+        Os::Linux { systemd: true, .. } => Some(user_systemd(host, &current_user()).await),
         _ => None,
     };
     let brew = homebrew_version(host).await;
@@ -993,6 +1099,9 @@ pub(crate) async fn detect(host: &Host, ollama_url: &str, check_port_8080: bool)
         service_program: crate::doctor::installed_service_program(&host.home, host.macos),
         xdg_config_home,
         landlock_abi: landlock_abi(),
+        user_systemd,
+        selinux_enforcing: !host.macos && selinux_enforcing(host),
+        proxy_variables: crate::doctor::proxy_variables(|name| std::env::var(name).ok()),
         os,
     }
 }
@@ -1720,5 +1829,88 @@ mod tests {
         } else {
             assert_eq!(landlock_abi(), None);
         }
+    }
+
+    /// `systemctl --user` reaches the user's manager in a login session,
+    /// and not after `su -` (no user bus); linger is read with loginctl.
+    #[tokio::test]
+    async fn the_user_systemd_session_and_linger_are_read() {
+        let shims = Shims::new();
+        shims.add(
+            "systemctl",
+            r#"[ -f "$(dirname "$0")/no-bus" ] && { echo offline; echo "Failed to connect to bus: No medium found" >&2; exit 1; }; echo degraded; exit 1"#,
+        );
+        shims.add("loginctl", "echo no");
+        let host = shims.host(false);
+        assert_eq!(
+            user_systemd(&host, "alex").await,
+            UserSystemd {
+                reachable: true,
+                state: "degraded".into(),
+                linger: Some(false),
+            }
+        );
+        assert!(shims
+            .calls()
+            .contains(&"loginctl show-user alex --property=Linger --value".to_string()));
+        std::fs::write(shims.dir.path().join("no-bus"), "").unwrap();
+        let none = user_systemd(&host, "alex").await;
+        assert!(!none.reachable);
+        assert_eq!(none.state, "Failed to connect to bus: No medium found");
+        // No systemctl at all.
+        let empty = Shims::new();
+        assert!(!user_systemd(&empty.host(false), "alex").await.reachable);
+    }
+
+    /// On macOS the git in /usr/bin runs only when `xcode-select -p` finds
+    /// the Command Line Tools: without them it would open Apple's
+    /// installer. Another git (Homebrew's) runs as it is.
+    #[tokio::test]
+    async fn macos_git_is_run_only_with_the_command_line_tools() {
+        let shims = Shims::new();
+        let usr_bin = shims.root.path().join("usr/bin");
+        std::fs::create_dir_all(&usr_bin).unwrap();
+        let calls = shims.dir.path().join("calls.log");
+        std::fs::write(
+            usr_bin.join("git"),
+            format!(
+                "#!/bin/sh\nprintf 'apple-git %s\\n' \"$*\" >> \"{}\"\necho 'git version 2.39.5 (Apple Git-154)'\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(usr_bin.join("git"), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        shims.add("xcode-select", "exit 2");
+        let mut host = shims.host(true);
+        host.path = std::env::join_paths([shims.dir.path(), usr_bin.as_path()]).unwrap();
+        assert_eq!(git_version(&host).await, None);
+        assert!(!shims
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("apple-git")));
+        shims.add("xcode-select", "echo /Library/Developer/CommandLineTools");
+        assert_eq!(git_version(&host).await.as_deref(), Some("2.39.5"));
+        // Homebrew's git, first on PATH, needs no tools.
+        shims.add("git", "echo 'git version 2.51.0'");
+        shims.add("xcode-select", "exit 2");
+        assert_eq!(git_version(&host).await.as_deref(), Some("2.51.0"));
+    }
+
+    #[test]
+    fn selinux_enforcing_is_read_from_its_file() {
+        let shims = Shims::new();
+        let host = shims.host(false);
+        assert!(!selinux_enforcing(&host));
+        let selinux = shims.root.path().join("sys/fs/selinux");
+        std::fs::create_dir_all(&selinux).unwrap();
+        std::fs::write(selinux.join("enforce"), "0").unwrap();
+        assert!(!selinux_enforcing(&host));
+        std::fs::write(selinux.join("enforce"), "1").unwrap();
+        assert!(selinux_enforcing(&host));
     }
 }

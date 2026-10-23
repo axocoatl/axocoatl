@@ -583,6 +583,24 @@ impl Onboarding {
             id_root: self.host.root.clone(),
             data_dir: self.data_dir_override.clone(),
             landlock_abi: self.facts.landlock_abi,
+            user_systemd: self.facts.user_systemd.clone(),
+            selinux_enforcing: self.facts.selinux_enforcing,
+            git: self.facts.git.clone(),
+            proxy_variables: self.facts.proxy_variables.clone(),
+            // Said as Step 3 says it, and logged.
+            on_load: Some({
+                let log = self.ui.log.clone();
+                std::sync::Arc::new(move |model: &str| {
+                    let line = format!(
+                        "  Loading {model} once to read its context (your configuration runs \
+                         it)…"
+                    );
+                    println!("{line}");
+                    if let Some(log) = &log {
+                        log.line(&line);
+                    }
+                })
+            }),
             // The configuration onboarding writes is the default one.
             default_config: self.paths.config_path.clone(),
         }
@@ -691,6 +709,12 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
     for line in detect::summary(&facts) {
         ui.say(line);
     }
+    for item in step_0_notes(&facts) {
+        ui.warn(item.line());
+        if let Some(fix) = &item.fix {
+            ui.say(format!("    {fix}"));
+        }
+    }
     let mut onboarding = Onboarding {
         ui,
         host,
@@ -707,6 +731,20 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
     };
     run(&mut onboarding).await
 }
+
+/// What Step 0 says beyond what it found: a platform not verified yet, and
+/// a proxy that a Session's network does not use (Step 5's check names them
+/// again only as part of doctor's report, so it leaves them out).
+pub(crate) fn step_0_notes(facts: &Facts) -> Vec<crate::doctor::Item> {
+    crate::doctor::platform_items(&facts.os, facts.selinux_enforcing, None, false)
+        .into_iter()
+        .chain(crate::doctor::proxy_item(&facts.proxy_variables))
+        .filter(|item| item.status != crate::doctor::Status::Ok)
+        .collect()
+}
+
+/// Items of Step 5's check that Step 0 or Step 3 already said.
+const SAID_BEFORE: [&str; 2] = ["Platform", "Proxy"];
 
 /// Steps 0 to 7 after detection.
 pub(crate) async fn run(o: &mut Onboarding) -> i32 {
@@ -1356,6 +1394,7 @@ async fn check(o: &mut Onboarding, contexts: &std::collections::BTreeMap<String,
         for item in items {
             match item.status {
                 crate::doctor::Status::Ok => {}
+                crate::doctor::Status::Warn if SAID_BEFORE.contains(&item.name.as_str()) => {}
                 crate::doctor::Status::Warn => o.ui.warn(item.line()),
                 crate::doctor::Status::Fail => {
                     o.ui.fail(item.line());
@@ -1389,20 +1428,54 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
         return StartChoice::None;
     }
     o.ui.heading("Step 6 · Start Axocoatl");
-    let service = if matches!(o.facts.os, Os::Linux { systemd: false, .. }) {
-        "Always on, starting at login (not available: this Linux runs without systemd)"
-    } else {
-        "Always on, starting at login (a launchd or systemd service)"
+    let unavailable = service_unavailable(o);
+    let service = match &unavailable {
+        Some((why, _)) => format!("Always on, starting at login (not available: {why})"),
+        None => "Always on, starting at login (a launchd or systemd service)".to_string(),
     };
     let items = vec![
         "In this terminal now (axocoatl dev)".to_string(),
-        service.to_string(),
+        service,
         "I'll start it later".to_string(),
     ];
     match o.ui.select("How should Axocoatl run?", &items, 0) {
         0 => StartChoice::Dev,
-        1 if !service.contains("not available") => StartChoice::Service,
+        1 if unavailable.is_none() => StartChoice::Service,
+        1 => {
+            if let Some((_, fix)) = unavailable {
+                o.ui.say(format!("  {fix}"));
+            }
+            StartChoice::None
+        }
         _ => StartChoice::None,
+    }
+}
+
+/// Why the Always-On Service cannot run for this login, and what to do:
+/// a Linux without systemd, or a login without a systemd user session
+/// (`su -`, `sudo -iu`, or an SSH login that started none), where `systemctl
+/// --user` reaches no manager.
+fn service_unavailable(o: &Onboarding) -> Option<(String, String)> {
+    match &o.facts.os {
+        Os::Linux { systemd: false, .. } => Some((
+            "this Linux runs without systemd".to_string(),
+            "Start Axocoatl with `axocoatl dev` instead".to_string(),
+        )),
+        Os::Linux { .. } => {
+            let systemd = o.facts.user_systemd.as_ref()?;
+            if systemd.reachable {
+                return None;
+            }
+            let item = crate::doctor::user_systemd_item(systemd, &o.facts.user, false);
+            Some((
+                "this login has no systemd user session".to_string(),
+                format!(
+                    "{}. Until then, start Axocoatl with `axocoatl dev`",
+                    item.fix.unwrap_or_default()
+                ),
+            ))
+        }
+        Os::MacOs { .. } => None,
     }
 }
 
@@ -1410,6 +1483,12 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
 /// `Some(true)` when it was started, `Some(false)` when that was declined,
 /// `None` (with the step left) when it failed.
 async fn start_service(o: &mut Onboarding) -> Option<bool> {
+    if let Some((why, fix)) = service_unavailable(o) {
+        o.step_left(format!(
+            "The Always-On Service cannot run here: {why}. {fix}"
+        ));
+        return None;
+    }
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();
     if let Err(error) = crate::reject_uninherited_service_environment(&config) {
         o.step_left(format!("Cannot install the Always-On Service: {error}"));

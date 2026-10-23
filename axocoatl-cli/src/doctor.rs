@@ -161,10 +161,77 @@ pub(crate) struct Environment {
     pub(crate) data_dir: Option<PathBuf>,
     /// The kernel's Landlock ABI on Linux.
     pub(crate) landlock_abi: Option<i64>,
+    /// This user's systemd manager, on a Linux with systemd.
+    pub(crate) user_systemd: Option<detect::UserSystemd>,
+    /// SELinux is enforcing.
+    pub(crate) selinux_enforcing: bool,
+    /// `git --version`'s version; `None` when git is missing (on macOS,
+    /// also when the Command Line Tools are, [`detect::git_version`]).
+    pub(crate) git: Option<String>,
+    /// The proxy variables set here ([`proxy_variables`]), by name.
+    pub(crate) proxy_variables: Vec<String>,
+    /// Says that a model is being loaded to read its context: doctor
+    /// prints a line on stderr; onboarding says it as its own line.
+    pub(crate) on_load: Option<OnLoad>,
     /// The default configuration, the one `axocoatl onboard` writes (it
     /// has no `--config`): a fix for another one names it with `--config`,
     /// or says what to change in its file instead of an onboarding command.
     pub(crate) default_config: PathBuf,
+}
+
+/// What says a model is being loaded ([`Environment::on_load`]).
+pub(crate) type OnLoad = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+/// The variables that name a proxy for HTTP clients, in the case curl and
+/// most tools read.
+const PROXY_VARIABLES: [&str; 6] = [
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+/// The proxy variables `lookup` gives a value, by name (never the value,
+/// which may hold a password).
+pub(crate) fn proxy_variables(lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
+    PROXY_VARIABLES
+        .iter()
+        .filter(|name| lookup(name).is_some_and(|value| !value.trim().is_empty()))
+        .map(|name| name.to_string())
+        .collect()
+}
+
+/// The warning for a proxy set in the environment: Axocoatl 1.5.0 has no
+/// proxy support for Sessions and runs, whose network connects directly
+/// whatever it says (only the daemon's own requests to hosted model
+/// providers follow it, as its HTTP library reads the variables).
+pub(crate) fn proxy_item(variables: &[String]) -> Option<Item> {
+    if variables.is_empty() {
+        return None;
+    }
+    let (names, verb) = match variables {
+        [one] => (one.clone(), "is"),
+        [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), "are"),
+        [] => return None,
+    };
+    Some(Item::warn(
+        "Proxy",
+        format!(
+            "{names} {verb} set, but Axocoatl does not support a proxy for Sessions and runs: \
+             a Session's network (a run's dependency install, web tools, Claude Code's and \
+             Codex's model calls) connects directly, and its containers do not get the \
+             variables; only the daemon's own model calls to OpenRouter or another hosted \
+             provider follow them, untested behind a proxy"
+        ),
+        Some(
+            "On a network that reaches the internet only through a proxy, a run cannot install \
+             its dependencies or reach a model API from the sandbox: use a network with direct \
+             access (https://docs.axocoatl.ai/start/install/#proxies-vpns-and-rate-limits)"
+                .to_string(),
+        ),
+    ))
 }
 
 /// For tests of the `axocoatl` binary: a directory that stands in for `/`
@@ -211,9 +278,16 @@ impl Environment {
                 systemd: Path::new("/run/systemd/system").is_dir(),
             }
         };
+        let user = detect::current_user();
+        let user_systemd = match &os {
+            Os::Linux { systemd: true, .. } => Some(detect::user_systemd(&host, &user).await),
+            _ => None,
+        };
+        let git = detect::git_version(&host).await;
+        let selinux_enforcing = !host.macos && detect::selinux_enforcing(&host);
         Ok(Self {
             os,
-            user: detect::current_user(),
+            user,
             memory_bytes: axocoatl_isolation::host::memory_bytes(),
             cpus: axocoatl_isolation::host::cpu_count(),
             home: host.home.clone(),
@@ -229,6 +303,11 @@ impl Environment {
             id_root,
             data_dir: None,
             landlock_abi: detect::landlock_abi(),
+            user_systemd,
+            selinux_enforcing,
+            git,
+            proxy_variables: proxy_variables(|name| std::env::var(name).ok()),
+            on_load: None,
             default_config: crate::default_config_path_for_clap(),
         })
     }
@@ -652,12 +731,18 @@ pub(crate) fn landlock_item(
             "this kernel has no Landlock; the Session supervisor's filter needs it",
             kernel_fix,
         ),
-        Some(abi @ (1 | 2)) => Item::fail(
+        Some(1) => Item::fail(
             "Landlock",
-            format!(
-                "Landlock ABI {abi}: fix, fix-claude-code, fix-codex and audit need Linux 6.2 or \
-                 later (Landlock ABI 3) for their read-only reviewer"
-            ),
+            "Landlock ABI 1: fix, fix-claude-code, fix-codex and audit need Linux 6.2 or later \
+             (Landlock ABI 3) for their read-only reviewer, and on ABI 1 (Linux 5.13 to 5.18) the \
+             hardened sandbox also refuses every rename into another directory, so Rust builds \
+             (cargo, rustc) fail with \"Invalid cross-device link\"",
+            kernel_fix,
+        ),
+        Some(2) => Item::fail(
+            "Landlock",
+            "Landlock ABI 2: fix, fix-claude-code, fix-codex and audit need Linux 6.2 or later \
+             (Landlock ABI 3) for their read-only reviewer",
             kernel_fix,
         ),
         Some(3) => Item::warn(
@@ -668,6 +753,188 @@ pub(crate) fn landlock_item(
         ),
         Some(abi) => Item::ok("Landlock", format!("Landlock ABI {abi}")),
     }
+}
+
+/// What the release gate verifies: macOS on Apple silicon and Ubuntu
+/// 24.04. Anything else is said at run time to be not yet verified (an
+/// Intel Mac, another Linux release, WSL2, SELinux enforcing, local models
+/// on less than 48 GB of memory), with what is known to matter there.
+/// `local_models`: the configuration runs models on Ollama.
+pub(crate) fn platform_items(
+    os: &Os,
+    selinux_enforcing: bool,
+    memory_bytes: Option<u64>,
+    local_models: bool,
+) -> Vec<Item> {
+    let mut items = Vec::new();
+    match os {
+        Os::MacOs {
+            apple_silicon: true,
+            ..
+        } => items.push(Item::ok(
+            "Platform",
+            "macOS on Apple silicon, as the release gate verifies",
+        )),
+        Os::MacOs { .. } => items.push(Item::warn(
+            "Platform",
+            "an Intel Mac: Axocoatl has not been verified on Intel Macs yet (the release gate \
+             runs on Apple silicon)",
+            None,
+        )),
+        Os::Linux { release, wsl, .. } => {
+            if wsl.is_some() {
+                items.push(Item::warn(
+                    "Platform",
+                    format!(
+                        "{} in WSL2 on Windows: Axocoatl has not been verified in WSL2 yet",
+                        release.name()
+                    ),
+                    Some(
+                        "Keep your repositories in the Linux file system (such as ~/src), not \
+                         under /mnt/c: Windows' drives are slow there and do not keep Linux file \
+                         permissions"
+                            .to_string(),
+                    ),
+                ));
+            } else if release.id == "ubuntu" && release.version_id == "24.04" {
+                items.push(Item::ok(
+                    "Platform",
+                    format!("{}, as the release gate verifies", release.name()),
+                ));
+            } else {
+                items.push(Item::warn(
+                    "Platform",
+                    format!(
+                        "{}: Axocoatl has not been verified on it yet (Ubuntu 24.04 is)",
+                        release.name()
+                    ),
+                    None,
+                ));
+            }
+            if selinux_enforcing {
+                items.push(Item::warn(
+                    "Platform",
+                    "SELinux is enforcing: Sessions under SELinux enforcing have not been \
+                     verified yet",
+                    None,
+                ));
+            }
+        }
+    }
+    if let Some(memory) = memory_bytes
+        .filter(|memory| local_models && !axocoatl_isolation::host::at_least_gb(*memory, 48))
+    {
+        items.push(Item::warn(
+            "Platform",
+            format!(
+                "{} GB of memory: local models have not been verified below 48 GB",
+                axocoatl_isolation::host::memory_gb(memory)
+            ),
+            None,
+        ));
+    }
+    items
+}
+
+/// The line for this user's systemd manager (Linux with systemd): the
+/// Always-On Service is one of its units, and rootless Podman keeps its
+/// runtime directory in the user's session. `service_installed`: linger
+/// matters only for an installed service.
+pub(crate) fn user_systemd_item(
+    systemd: &detect::UserSystemd,
+    user: &str,
+    service_installed: bool,
+) -> Item {
+    let user_arg = crate::onboard::host::shell_quote(user);
+    if !systemd.reachable {
+        return Item::warn(
+            "systemd user session",
+            format!(
+                "no systemd user session for {user} (`systemctl --user` says: {}): after `su -`, \
+                 `sudo -iu` or a login that started none, the Always-On Service cannot run, and \
+                 rootless Podman cannot keep its runtime directory",
+                systemd.state
+            ),
+            Some(format!(
+                "Log in as {user} directly (a desktop session, or `ssh {user_arg}@localhost`) \
+                 instead of switching users with su or sudo; to keep the service running after you \
+                 log out, also run `sudo loginctl enable-linger {user_arg}`"
+            )),
+        );
+    }
+    match (systemd.linger, service_installed) {
+        (Some(false), true) => Item::warn(
+            "systemd user session",
+            format!(
+                "{} (systemd --user); linger is off, so the Always-On Service stops when {user} \
+                 logs out",
+                systemd.state
+            ),
+            Some(format!(
+                "Keep it running: `loginctl enable-linger {user_arg}`"
+            )),
+        ),
+        (Some(true), _) => Item::ok(
+            "systemd user session",
+            format!(
+                "{} (systemd --user); linger is on, so the Always-On Service keeps running after \
+                 {user} logs out",
+                systemd.state
+            ),
+        ),
+        _ => Item::ok(
+            "systemd user session",
+            format!("{} (systemd --user)", systemd.state),
+        ),
+    }
+}
+
+/// The line for git, which the daemon runs on every repository (`None`:
+/// missing).
+pub(crate) fn git_item(git: Option<&str>, os: &Os) -> Item {
+    match (git, os) {
+        (Some(version), _) => Item::ok(
+            "git",
+            format!("git {version} (the daemon runs git on your repositories)"),
+        ),
+        (None, Os::MacOs { .. }) => Item::fail(
+            "git",
+            "git is missing: macOS's git needs the Command Line Tools, which are not installed \
+             (`xcode-select -p` finds none); `axocoatl run` and Sessions run git on your \
+             repositories",
+            "Install the Command Line Tools: `xcode-select --install` (it opens Apple's \
+             installer), then run `axocoatl doctor` again",
+        ),
+        (None, Os::Linux { release, .. }) => Item::fail(
+            "git",
+            "git is missing; `axocoatl run` and Sessions run git on your repositories",
+            match release.package_manager() {
+                Some(manager) => format!("Install it: `{}`", manager.install(&["git"]).display()),
+                None => "Install git with your distribution's package manager".to_string(),
+            },
+        ),
+    }
+}
+
+/// The line for a configuration's `hooks:`, which this version parses and
+/// checks but never runs (`None` without any).
+fn hooks_item(config: &axocoatl_config::AxocoatlConfig, config_path: &Path) -> Option<Item> {
+    let count = config.hooks.len();
+    (count > 0).then(|| {
+        Item::warn(
+            "Hooks",
+            format!(
+                "hooks: {count} entr{} configured, which Axocoatl {} checks but does not run",
+                if count == 1 { "y" } else { "ies" },
+                env!("CARGO_PKG_VERSION")
+            ),
+            Some(format!(
+                "Remove the hooks: section from {}, so nothing relies on it: Automations and \
+                 webhooks react to events, and the MCP approval gate is what stops a tool call",
+                config_path.display()
+            )),
+        )
+    })
 }
 
 fn level(level: Level) -> Status {
@@ -1069,12 +1336,28 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             wsl.is_some(),
         ));
     }
+    let local_models = config
+        .as_ref()
+        .is_some_and(|config| !ollama_models(config, &run).is_empty());
+    sections.sandbox.extend(platform_items(
+        &env.os,
+        env.selinux_enforcing,
+        env.memory_bytes,
+        local_models,
+    ));
     let sandbox_ok = podman_ok
         && !sections
             .sandbox
             .iter()
             .any(|item| item.status == Status::Fail);
     if let Some(config) = &config {
+        if e2b {
+            sections.sandbox.push(Item::ok(
+                "Sandbox backend",
+                "e2b: workbench Sessions run in E2B, and `axocoatl run` still runs in rootless \
+                 Podman on this computer",
+            ));
+        }
         sections.sandbox.push(Item::ok(
             "Sandbox network",
             crate::sandbox_network_doctor_line(&config.sandbox),
@@ -1123,6 +1406,12 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         Some(data_dir) => Some(data_dir.clone()),
         None => crate::configure_data_dir(config_path).ok(),
     };
+
+    // A running daemon may be running a model doctor would load: doctor
+    // then reads a loaded model's context without loading it again.
+    let daemon_client = axocoatl_daemon::ipc::IpcClient::connect(&env.socket_path)
+        .await
+        .ok();
 
     // ── Models ──
     if let Some(config) = &config {
@@ -1175,6 +1464,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 &wanted,
                 &fixes,
                 env,
+                daemon_client.is_some(),
                 &mut sections.models,
                 &mut model_states,
             )
@@ -1391,12 +1681,25 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             )),
         }
     }
+    sections.daemon.push(git_item(env.git.as_deref(), &env.os));
+    if let Some(config) = &config {
+        sections.daemon.extend(hooks_item(config, config_path));
+    }
+    sections.daemon.extend(proxy_item(&env.proxy_variables));
+    let service_program = installed_service_program(&env.home, env.os.is_macos());
+    if let Some(systemd) = &env.user_systemd {
+        sections.daemon.push(user_systemd_item(
+            systemd,
+            &env.user,
+            service_program.is_some(),
+        ));
+    }
     let (server_host, port) = config
         .as_ref()
         .map(|config| (config.server.host.clone(), config.server.port))
         .unwrap_or_else(|| ("127.0.0.1".to_string(), 8080));
-    match axocoatl_daemon::ipc::IpcClient::connect(&env.socket_path).await {
-        Ok(mut client) => {
+    match daemon_client {
+        Some(mut client) => {
             let version = daemon_version(&server_host, port).await;
             let cli = env!("CARGO_PKG_VERSION");
             sections.daemon.push(match &version {
@@ -1426,7 +1729,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                     Err((line, hint)) => Item::warn("Session volumes", line, Some(hint)),
                 });
         }
-        Err(_) => {
+        None => {
             sections.daemon.push(Item::warn(
                 "Daemon",
                 "no daemon running; `axocoatl run` and the workbench need one",
@@ -1464,7 +1767,7 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
             }
         }
     }
-    if let Some(program) = installed_service_program(&env.home, env.os.is_macos()) {
+    if let Some(program) = service_program {
         let current = std::env::current_exe()
             .and_then(|path| path.canonicalize())
             .ok();
@@ -1895,13 +2198,20 @@ fn writer_items(
 }
 
 /// The Ollama server and each model; returns whether the server is ready.
-/// `fixes`: each model's fixes for its role.
+/// `fixes`: each model's fixes for its role. With a daemon running
+/// (`daemon_running`), a model Ollama already holds is not loaded or probed
+/// again, since a run may be using it (a probe would wait for the run's
+/// request, and the run's next request for the probe): its context is read
+/// from `GET /api/ps` instead, and a run's admission probes it before the
+/// run uses it.
+#[allow(clippy::too_many_arguments)]
 async fn check_ollama(
     base_url: &str,
     host: &OllamaHost,
     wanted: &BTreeMap<String, bool>,
     fixes: &BTreeMap<String, ModelFixes>,
     env: &Environment,
+    daemon_running: bool,
     items: &mut Vec<Item>,
     states: &mut BTreeMap<String, ModelState>,
 ) -> bool {
@@ -2027,11 +2337,20 @@ async fn check_ollama(
         let mut model_ok = true;
         let mut why = String::new();
         let read = env.contexts_read.get(model).copied();
+        // Held by Ollama while a daemon runs: read, not loaded again.
+        let held = match (read, daemon_running && env.load_models) {
+            (None, true) => ollama_setup::loaded_context(base_url, model).await,
+            _ => None,
+        };
         if env.load_models {
-            let observed = match read {
-                Some(tokens) => Ok((tokens, String::new())),
-                None => {
-                    eprintln!("  (loading {model} once to read its context…)");
+            let observed = match (read, held) {
+                (Some(tokens), _) => Ok((tokens, String::new())),
+                (None, Some(tokens)) => Ok((tokens, String::new())),
+                (None, None) => {
+                    match &env.on_load {
+                        Some(say) => say(model),
+                        None => eprintln!("  (loading {model} once to read its context…)"),
+                    }
                     ollama_setup::observed_context(base_url, model).await
                 }
             };
@@ -2049,6 +2368,17 @@ async fn check_ollama(
                         ollama_setup::CONTEXT_FIX_TOKENS,
                         host.context()
                     ));
+                }
+                Ok((context, _)) if held.is_some() => {
+                    parts.push(format!(
+                        "{context}-token context, read from Ollama without loading or probing \
+                         it again (a daemon is running and may be using it; a run probes it \
+                         before it uses it)"
+                    ));
+                    if let Some((loaded, vram)) = ollama_setup::loaded_memory(base_url, model).await
+                    {
+                        parts.push(ollama_setup::loaded_memory_text(loaded, vram));
+                    }
                 }
                 Ok((context, _)) => {
                     parts.push(format!("{context}-token context, contract probes passed"));
@@ -2644,6 +2974,16 @@ mod tests {
         let wsl = landlock_item(Some(1), None, true);
         assert!(wsl.fix.unwrap().contains("wsl --update"));
         assert_eq!(landlock_item(None, None, false).status, Status::Fail);
+        // ABI 1 also refuses the cross-directory renames Rust builds make.
+        let one = landlock_item(Some(1), None, false);
+        assert_eq!(one.status, Status::Fail);
+        assert!(
+            one.detail
+                .contains("Rust builds (cargo, rustc) fail with \"Invalid cross-device link\""),
+            "{}",
+            one.detail
+        );
+        assert!(!old.detail.contains("cross-device"), "{}", old.detail);
         let three = landlock_item(Some(3), None, false);
         assert_eq!(three.status, Status::Warn);
         assert!(three.detail.contains("6.7"));
@@ -2851,5 +3191,373 @@ mod tests {
         assert_eq!(items[1].fix.as_deref(), Some("axocoatl connect codex"));
         let (_, items) = writer(true, &["codex-chatgpt"], true);
         assert!(items.iter().all(|item| item.status == Status::Ok));
+    }
+
+    fn linux(release: &str, wsl: Option<detect::Wsl>) -> Os {
+        Os::Linux {
+            release: detect::OsRelease::parse(release),
+            wsl,
+            systemd: true,
+        }
+    }
+
+    /// Doctor names a platform the release gate does not verify, with what
+    /// matters there; the verified ones are OK.
+    #[test]
+    fn an_unverified_platform_is_named_at_run_time() {
+        let lines =
+            |os: &Os, selinux: bool, memory_gb: u64, local: bool| -> Vec<(Status, String)> {
+                platform_items(os, selinux, Some(memory_gb << 30), local)
+                    .into_iter()
+                    .map(|item| (item.status, item.step()))
+                    .collect()
+            };
+        let apple = Os::MacOs {
+            version: Some("26.6".into()),
+            apple_silicon: true,
+            chip: None,
+        };
+        assert_eq!(
+            lines(&apple, false, 48, true),
+            [(
+                Status::Ok,
+                "Platform: macOS on Apple silicon, as the release gate verifies".to_string()
+            )]
+        );
+        let intel = Os::MacOs {
+            version: None,
+            apple_silicon: false,
+            chip: None,
+        };
+        assert_eq!(lines(&intel, false, 64, true)[0].0, Status::Warn);
+        assert!(lines(&intel, false, 64, true)[0]
+            .1
+            .contains("Intel Macs yet"));
+        // Local models below 48 GB, said only when the setup runs them.
+        let small = lines(&apple, false, 32, true);
+        assert_eq!(
+            small[1],
+            (
+                Status::Warn,
+                "Platform: 32 GB of memory: local models have not been verified below 48 GB"
+                    .to_string()
+            )
+        );
+        assert_eq!(lines(&apple, false, 32, false).len(), 1);
+        let ubuntu = linux(
+            "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\n",
+            None,
+        );
+        assert_eq!(lines(&ubuntu, false, 48, false)[0].0, Status::Ok);
+        let debian = linux(
+            "ID=debian\nVERSION_ID=\"12\"\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n",
+            None,
+        );
+        assert_eq!(
+            lines(&debian, false, 48, false),
+            [(
+                Status::Warn,
+                "Platform: Debian GNU/Linux 12 (bookworm): Axocoatl has not been verified on it \
+                 yet (Ubuntu 24.04 is)"
+                    .to_string()
+            )]
+        );
+        let fedora = linux(
+            "ID=fedora\nVERSION_ID=42\nPRETTY_NAME=\"Fedora Linux 42\"\n",
+            None,
+        );
+        let fedora = lines(&fedora, true, 48, false);
+        assert_eq!(fedora.len(), 2);
+        assert!(fedora[1].1.contains("SELinux is enforcing"), "{fedora:?}");
+        let wsl = linux("ID=ubuntu\nVERSION_ID=\"24.04\"\n", Some(detect::Wsl::Two));
+        let wsl = lines(&wsl, false, 32, false);
+        assert_eq!(wsl[0].0, Status::Warn);
+        assert!(wsl[0].1.contains("WSL2 on Windows"), "{wsl:?}");
+        assert!(wsl[0].1.contains("not under /mnt/c"), "{wsl:?}");
+    }
+
+    /// A login without a systemd user session (`su -`, `sudo -iu`) cannot run
+    /// the Always-On Service, and an installed service stops at logout
+    /// without linger: each says how to fix it, naming the user.
+    #[test]
+    fn the_systemd_user_session_and_linger_are_checked() {
+        let none = detect::UserSystemd {
+            reachable: false,
+            state: "Failed to connect to bus: No medium found".into(),
+            linger: None,
+        };
+        let item = user_systemd_item(&none, "alex", false);
+        assert_eq!(item.status, Status::Warn);
+        assert!(
+            item.detail.contains("no systemd user session for alex")
+                && item
+                    .detail
+                    .contains("Failed to connect to bus: No medium found"),
+            "{}",
+            item.detail
+        );
+        let fix = item.fix.unwrap();
+        assert!(fix.contains("`ssh alex@localhost`"), "{fix}");
+        assert!(fix.contains("`sudo loginctl enable-linger alex`"), "{fix}");
+        crate::paste_safe::assert_paste_safe(&fix);
+        let session = |linger| detect::UserSystemd {
+            reachable: true,
+            state: "running".into(),
+            linger,
+        };
+        let off = user_systemd_item(&session(Some(false)), "alex", true);
+        assert_eq!(off.status, Status::Warn);
+        assert_eq!(
+            off.fix.as_deref(),
+            Some("Keep it running: `loginctl enable-linger alex`")
+        );
+        assert_eq!(
+            user_systemd_item(&session(Some(false)), "alex", false).status,
+            Status::Ok
+        );
+        assert!(user_systemd_item(&session(Some(true)), "alex", true)
+            .detail
+            .contains("linger is on"));
+        // A user name a shell would split is quoted.
+        let odd = user_systemd_item(&none, "a b", false).fix.unwrap();
+        assert!(odd.contains("enable-linger 'a b'"), "{odd}");
+    }
+
+    /// git is checked: missing on a Mac, it is the Command Line Tools.
+    #[test]
+    fn git_and_the_command_line_tools_are_checked() {
+        let mac = Os::MacOs {
+            version: None,
+            apple_silicon: true,
+            chip: None,
+        };
+        assert_eq!(git_item(Some("2.39.5"), &mac).status, Status::Ok);
+        let missing = git_item(None, &mac);
+        assert_eq!(missing.status, Status::Fail);
+        assert!(missing
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("`xcode-select --install`"));
+        let ubuntu = linux("ID=ubuntu\nVERSION_ID=\"24.04\"\n", None);
+        assert_eq!(
+            git_item(None, &ubuntu).fix.as_deref(),
+            Some("Install it: `sudo apt-get install -y git`")
+        );
+        let nixos = linux("ID=nixos\n", None);
+        assert!(git_item(None, &nixos)
+            .fix
+            .unwrap()
+            .contains("your distribution's package manager"));
+    }
+
+    /// `hooks:` is parsed and checked but never run: doctor says so.
+    #[test]
+    fn configured_hooks_are_said_to_not_run() {
+        let text = "agents: []\nhooks:\n  - name: audit\n    type: http\n    url: \
+                    \"https://example.test/hook\"\n    phase: [pre_tool]\n";
+        let config = axocoatl_config::parse_config(text, Path::new("c.yaml")).unwrap();
+        let item = hooks_item(&config, Path::new("/home/alex/c.yaml")).unwrap();
+        assert_eq!(item.status, Status::Warn);
+        assert_eq!(
+            item.detail,
+            format!(
+                "hooks: 1 entry configured, which Axocoatl {} checks but does not run",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+        assert!(item
+            .fix
+            .unwrap()
+            .starts_with("Remove the hooks: section from /home/alex/c.yaml"));
+        let none = axocoatl_config::parse_config("agents: []\n", Path::new("c.yaml")).unwrap();
+        assert!(hooks_item(&none, Path::new("c.yaml")).is_none());
+    }
+
+    /// A proxy variable is named, never its value (it may hold a password),
+    /// and doctor says a Session's network does not use it.
+    #[test]
+    fn a_proxy_in_the_environment_is_said_to_be_unused() {
+        let set = |name: &str| {
+            matches!(name, "HTTPS_PROXY" | "http_proxy")
+                .then(|| "http://user:secret@proxy.example:3128".to_string())
+        };
+        let names = proxy_variables(set);
+        assert_eq!(names, ["HTTPS_PROXY", "http_proxy"]);
+        let item = proxy_item(&names).unwrap();
+        assert_eq!(item.status, Status::Warn);
+        assert!(item.detail.starts_with(
+            "HTTPS_PROXY and http_proxy are set, but Axocoatl does not support a proxy for \
+             Sessions and runs: a Session's network"
+        ));
+        assert!(!item.step().contains("secret"), "{}", item.step());
+        assert!(proxy_item(&proxy_variables(|_| Some("  ".to_string()))).is_none());
+        assert!(proxy_item(&[]).is_none());
+    }
+
+    /// An Ollama 0.40.6 whose `qwen3-coder:30b` is `loaded` (in `/api/ps`)
+    /// or not; loading or probing it answers, and is counted.
+    async fn ollama_holding(loaded: bool) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let model = "qwen3-coder:30b";
+        let digest = "0".repeat(64);
+        let ps = if loaded {
+            serde_json::json!({"models": [{"name": model, "model": model, "digest": digest,
+                "details": {"format": "gguf"}, "context_length": 32768, "runner": "llamacpp",
+                "size": 20_000_000_000u64, "size_vram": 20_000_000_000u64}]})
+        } else {
+            serde_json::json!({"models": []})
+        };
+        for (route, body) in [
+            ("/api/version", serde_json::json!({"version": "0.40.6"})),
+            (
+                "/api/status",
+                serde_json::json!({"cloud": {"disabled": true, "source": "env"}}),
+            ),
+            (
+                "/api/tags",
+                serde_json::json!({"models": [{"name": model, "model": model,
+                    "size": 18_556_700_761u64, "digest": digest,
+                    "details": {"format": "gguf", "parameter_size": "30.5B"}}]}),
+            ),
+            ("/api/ps", ps),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("POST"))
+            .and(path("/api/show"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "details": {"format": "gguf"}, "capabilities": ["completion", "tools"]})))
+            .mount(&server)
+            .await;
+        // Loading and probing: an answer that fails the observation, so a
+        // test sees the load was tried.
+        for route in ["/api/generate", "/api/chat"] {
+            Mock::given(method("POST"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(500))
+                .named(route)
+                .mount(&server)
+                .await;
+        }
+        server
+    }
+
+    fn test_env(shims: &crate::onboard::host::testing::Shims) -> Environment {
+        let home = shims.home.path();
+        Environment {
+            os: Os::MacOs {
+                version: None,
+                apple_silicon: true,
+                chip: None,
+            },
+            user: "alex".into(),
+            memory_bytes: Some(48 << 30),
+            cpus: 18,
+            home: home.to_path_buf(),
+            xdg_config_home: None,
+            host: shims.host(true),
+            load_models: true,
+            contexts_read: BTreeMap::new(),
+            socket_path: home.join("no-daemon.sock"),
+            podman: "podman".into(),
+            podman_connection: ConnectionOverride::None,
+            id_root: shims.root.path().to_path_buf(),
+            data_dir: Some(home.join("data")),
+            landlock_abi: None,
+            user_systemd: None,
+            selinux_enforcing: false,
+            git: Some("2.39.5".into()),
+            proxy_variables: Vec::new(),
+            on_load: None,
+            default_config: home.join("config.yaml"),
+        }
+    }
+
+    async fn model_lines(
+        server: &wiremock::MockServer,
+        env: &Environment,
+        daemon_running: bool,
+    ) -> Vec<Item> {
+        let wanted = BTreeMap::from([("qwen3-coder:30b".to_string(), true)]);
+        let host = OllamaHost {
+            service: detect::OllamaService::Manual,
+            macos: true,
+            brew_env_file: None,
+            cli_version: None,
+        };
+        let mut items = Vec::new();
+        let mut states = BTreeMap::new();
+        assert!(
+            check_ollama(
+                &server.uri(),
+                &host,
+                &wanted,
+                &BTreeMap::new(),
+                env,
+                daemon_running,
+                &mut items,
+                &mut states,
+            )
+            .await
+        );
+        items
+    }
+
+    fn loads(server_requests: &[wiremock::Request]) -> usize {
+        server_requests
+            .iter()
+            .filter(|request| ["/api/generate", "/api/chat"].contains(&request.url.path()))
+            .count()
+    }
+
+    /// While a daemon runs, a model Ollama already holds may be serving a
+    /// run: doctor reads its context from `/api/ps` and neither loads nor
+    /// probes it. Without a daemon, or for a model not loaded, it loads it
+    /// to read its context, saying so as the caller asks (onboarding says
+    /// it as its own line).
+    #[tokio::test]
+    async fn a_model_held_while_a_daemon_runs_is_not_loaded_again() {
+        let shims = crate::onboard::host::testing::Shims::new();
+        let env = test_env(&shims);
+        let held = ollama_holding(true).await;
+        let items = model_lines(&held, &env, true).await;
+        let line = items.last().unwrap();
+        assert_eq!(line.status, Status::Ok, "{line:?}");
+        assert!(
+            line.detail.contains(
+                "32768-token context, read from Ollama without loading or probing it again (a \
+                 daemon is running and may be using it"
+            ),
+            "{}",
+            line.detail
+        );
+        assert_eq!(loads(&held.received_requests().await.unwrap()), 0);
+
+        // No daemon: loaded and probed (this server's load fails, so the
+        // line fails), and the caller is told before the load.
+        let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let env = Environment {
+            on_load: Some({
+                let said = said.clone();
+                std::sync::Arc::new(move |model: &str| said.lock().unwrap().push(model.into()))
+            }),
+            ..test_env(&shims)
+        };
+        let items = model_lines(&held, &env, false).await;
+        assert_eq!(items.last().unwrap().status, Status::Fail);
+        assert!(loads(&held.received_requests().await.unwrap()) > 0);
+        assert_eq!(*said.lock().unwrap(), ["qwen3-coder:30b"]);
+
+        // A daemon runs, but the model is not loaded: it is loaded.
+        let idle = ollama_holding(false).await;
+        model_lines(&idle, &env, true).await;
+        assert!(loads(&idle.received_requests().await.unwrap()) > 0);
     }
 }

@@ -366,8 +366,9 @@ installs, runs in a throwaway container.
   publishes no port.
 - **Opening the sign-in page.** Codex cannot open a browser on your computer from the
   container, so Axocoatl opens the address Codex prints, once: with `open` on macOS or
-  `xdg-open` elsewhere (the first on `PATH`), the address as its only argument, without
-  a shell. It then prints `Opened the sign-in page in your browser.` It opens only an
+  `xdg-open` elsewhere (the first on `PATH`; in WSL `wslview` first, which opens
+  Windows' browser), the address as its only argument, without a shell. It then
+  prints `Opened the sign-in page in your browser.` It opens only an
   address shown on screen that is exactly `https://auth.openai.com/oauth/authorize?…`
   (with `--device-auth`, exactly the device page `https://auth.openai.com/codex/device`,
   where you enter the code Codex shows): no other host, look-alike, scheme, port or path,

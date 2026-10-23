@@ -810,6 +810,41 @@ pub async fn loaded_memory(base_url: &str, model: &str) -> Option<(u64, u64)> {
     loaded_memory_in(&ps, model)
 }
 
+/// The context Ollama holds `model` loaded with (`GET /api/ps`), without
+/// loading it; `None` when it is not loaded or `/api/ps` does not answer.
+pub async fn loaded_context(base_url: &str, model: &str) -> Option<usize> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let ps: Value = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    loaded_context_in(&ps, model)
+}
+
+/// [`loaded_context`] of an `/api/ps` answer.
+pub fn loaded_context_in(ps: &Value, model: &str) -> Option<usize> {
+    let entry = ps.get("models")?.as_array()?.iter().find(|entry| {
+        [entry.get("name"), entry.get("model")]
+            .into_iter()
+            .flatten()
+            .any(|name| name.as_str() == Some(model))
+    })?;
+    entry
+        .get("context_length")?
+        .as_u64()
+        .and_then(|context| usize::try_from(context).ok())
+        .filter(|context| *context > 0)
+}
+
 /// [`loaded_memory`] of an `/api/ps` answer.
 pub fn loaded_memory_in(ps: &Value, model: &str) -> Option<(u64, u64)> {
     let entry = ps.get("models")?.as_array()?.iter().find(|entry| {
