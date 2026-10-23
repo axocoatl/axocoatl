@@ -355,7 +355,12 @@ impl RepositoryInvocation {
                 Duration::from_secs(180),
             )
             .await
-            .map_err(error)?;
+            .map_err(|failure| match failure {
+                IsolationError::Timeout(limit) => {
+                    error(super::repository_snapshot::capture_timed_out(limit))
+                }
+                failure => error(failure),
+            })?;
         Ok(
             serde_json::json!({"stdout":result.stdout,"stderr":result.stderr,"exit_code":result.exit_code,"stdout_truncated":false}),
         )
@@ -890,6 +895,18 @@ fn process_identity(read_only: bool, host_observation: bool) -> ExecIdentity {
     }
 }
 
+/// The time limit a command whose output the host reads whole (a repository
+/// capture, a digest observation, an edit's source) ran past, so its failure
+/// can say so plainly; `None` for any other outcome or command.
+fn host_read_timed_out(
+    request: &ExecRequest,
+    outcome: &ProcessOutcome,
+    require_complete_capture: bool,
+) -> Option<Duration> {
+    (require_complete_capture && matches!(outcome, ProcessOutcome::TimedOut))
+        .then(|| Duration::from_millis(request.timeout_ms))
+}
+
 /// Whether a supervisor refused to launch a restricted process because its
 /// kernel cannot apply the whole restriction. The read-only Agent then has no
 /// shell on this runtime, and its file tools still work.
@@ -995,6 +1012,10 @@ fn observe_result(
             "This Agent is read-only and this runtime cannot enforce it, so bash is \
              unavailable; use read_file, grep, glob or list_dir instead.",
         ));
+    }
+    if let Some(limit) = host_read_timed_out(execution.request(), outcome, require_complete_capture)
+    {
+        return Err(IsolationError::Timeout(limit));
     }
     let ProcessOutcome::Exited { code } = outcome else {
         return Err(isolation_error(format!(
@@ -1221,6 +1242,48 @@ mod write_scope_tests {
             &restricted,
             &ProcessOutcome::Exited { code: 0 }
         ));
+    }
+
+    /// A command whose output the host reads whole (a repository capture)
+    /// that ran past its time limit fails with that limit, which a capture's
+    /// reason names plainly; an Agent's own command, or any other outcome,
+    /// fails as before.
+    #[test]
+    fn a_host_read_past_its_time_limit_names_the_limit() {
+        use super::host_read_timed_out;
+        use axocoatl_exec::protocol::{ExecRequest, ProcessOutcome, PROTOCOL_VERSION};
+        use std::time::Duration;
+        let request = ExecRequest {
+            protocol: PROTOCOL_VERSION,
+            invocation_id: "capture:1".into(),
+            argv: vec!["sh".into(), "-c".into(), "true".into()],
+            stdin: None,
+            timeout_ms: 180_000,
+            stdout_bytes: 16,
+            stderr_bytes: 16,
+            write_restriction: None,
+        };
+        assert_eq!(
+            host_read_timed_out(&request, &ProcessOutcome::TimedOut, true),
+            Some(Duration::from_secs(180))
+        );
+        assert_eq!(
+            host_read_timed_out(&request, &ProcessOutcome::TimedOut, false),
+            None
+        );
+        for outcome in [
+            ProcessOutcome::Exited { code: 0 },
+            ProcessOutcome::Signalled { signal: 9 },
+            ProcessOutcome::Cancelled,
+        ] {
+            assert_eq!(host_read_timed_out(&request, &outcome, true), None);
+        }
+        assert_eq!(
+            super::super::repository_snapshot::capture_timed_out(Duration::from_secs(180)),
+            "The repository capture did not finish within its 180 seconds: it reads every file \
+             in the repository, so a repository or change of many thousands of files, or a busy \
+             computer, can take longer"
+        );
     }
 
     /// A restricted shell runs with a fresh home directory under its
