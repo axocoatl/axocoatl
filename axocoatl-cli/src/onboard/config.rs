@@ -142,12 +142,19 @@ pub(crate) fn yaml_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string cannot fail")
 }
 
+/// The Lead's prompt. Its first sentence keeps Qwen3-Coder from writing a
+/// sentence before a call: after one, it sampled a plain `<` about as often
+/// as its `<tool_call>` token and so wrote the call as text. Replaying a
+/// workbench Lead's first request on Ollama 0.40.8, the numbered prompt this
+/// replaced led to a call written as text in 12 of 96 seeds; this one in
+/// none of 96, each starting with a structured call.
 pub(crate) const LEAD_PROMPT: &str =
-    "You own this change. 1. Look first: find the relevant files and \
-    tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the \
-    change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, \
-    and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to \
-    review it. Fix each defect found. Then summarize what you changed.";
+    "Answer only with tool calls until the change is made and checked; \
+    then write a short summary of what you changed. You own this change: find the relevant code \
+    and tests (if you have helpers, ask scout to find code you do not know), make the change, run \
+    the check command from the project instructions (AXOCOATL.md) or the tests and fix failures, \
+    then check your diff against the task (if you have helpers, ask reviewer to review it) and fix \
+    each defect found.";
 pub(crate) const SCOUT_PROMPT: &str =
     "Answer the lead's question with file paths, line numbers and short \
     evidence. Change nothing.";

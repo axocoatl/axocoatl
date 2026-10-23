@@ -69,9 +69,10 @@ starts with one Agent, the lead. The helpers (Scout and Reviewer) and a required
 are opt-in in Team & budget:
 
 - **Lead** (`lead`, autonomous) owns the change and is the only one of the three that
-  edits files. Its instructions say to look at the relevant code first, check its diff
-  against the task, and verify with the tests; if it has helpers, to ask Scout the
-  focused questions and Reviewer for a review before finishing.
+  edits files. Its instructions say to answer only with tool calls until the change is
+  made and checked, then summarize it; to look at the relevant code first, check its
+  diff against the task, and verify with the tests; and, if it has helpers, to ask Scout
+  the focused questions and Reviewer for a review before finishing.
 - **Scout** (`scout`, Worker, `writes: []`) answers the lead's question with file
   paths, line numbers and short evidence.
 - **Reviewer** (`reviewer`, Worker, `writes: []`) reviews the change it is given against
