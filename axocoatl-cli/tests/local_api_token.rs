@@ -126,17 +126,28 @@ async fn local_api_requires_the_per_daemon_token() {
     }
 
     // The dashboard without a cookie explains how to sign in.
-    let page = client
-        .get(format!("http://localhost:{port}/"))
-        .send()
-        .await
-        .unwrap();
+    let page = client.get(format!("{base}/")).send().await.unwrap();
     assert_eq!(page.status().as_u16(), 401);
     assert!(page.text().await.unwrap().contains("axocoatl url"));
 
+    // The workbench has one address, 127.0.0.1: `localhost`, where a page
+    // on a `*.localhost` address can set cookies for `Domain=localhost` in
+    // Safari, moves there with its query, sign-in links included.
+    let moved = client
+        .get(format!("http://localhost:{port}/?token={token}&session=s1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status().as_u16(), 307);
+    assert_eq!(
+        moved.headers()["location"].to_str().unwrap(),
+        format!("{base}/?token={token}&session=s1")
+    );
+    assert!(moved.headers().get("set-cookie").is_none());
+
     // Browser sign-in: 303 to the same page without the secret.
     let sign_in = client
-        .get(format!("http://localhost:{port}/?token={token}&session=s1"))
+        .get(format!("{base}/?token={token}&session=s1"))
         .send()
         .await
         .unwrap();
@@ -151,7 +162,7 @@ async fn local_api_requires_the_per_daemon_token() {
     assert!(set_cookie.contains("SameSite=Strict"));
     assert!(set_cookie.contains("Path=/"));
     let shell = client
-        .get(format!("http://localhost:{port}/?session=s1"))
+        .get(format!("{base}/?session=s1"))
         .header("cookie", format!("{cookie_name}={token}"))
         .send()
         .await
@@ -168,7 +179,7 @@ async fn local_api_requires_the_per_daemon_token() {
     assert!(url.status.success(), "{url:?}");
     assert_eq!(
         String::from_utf8(url.stdout).unwrap(),
-        format!("http://localhost:{port}/?token={token}\n")
+        format!("http://127.0.0.1:{port}/?token={token}\n")
     );
 
     // The token survives a restart and keeps working.

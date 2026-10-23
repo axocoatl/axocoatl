@@ -48,19 +48,19 @@ AXOCOATL_DATA_DIR="$AXOCOATL_TEST_DATA" \
 ```
 
 Expect the daemon to expose IPC and the browser app at
-`http://localhost:8080`, and to print a `Sign in:` link. The API requires the
+`http://127.0.0.1:8080`, and to print a `Sign in:` link. The API requires the
 per-daemon token from the data directory. In another terminal, set
 `AXOCOATL_TEST_DATA` to the path the `echo` printed, then run the checks there.
 Later steps use this second terminal too:
 
 ```bash
 export AXOCOATL_TEST_DATA='/path/printed/by/echo'
-curl -fsS http://localhost:8080/health
-curl -fsS http://localhost:8080/health/ready
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/health/ready
 # curl reads the Authorization header from stdin, keeping the token out of argv.
 axo_api() { printf 'Authorization: Bearer %s\n' "$(cat "$AXOCOATL_TEST_DATA/local-api-token")" | curl -fsS -H @- "$@"; }
-axo_api http://localhost:8080/api/agents
-axo_api http://localhost:8080/api/automations
+axo_api http://127.0.0.1:8080/api/agents
+axo_api http://127.0.0.1:8080/api/automations
 ```
 
 The starter config defines the default team (Lead, Scout, Reviewer) and two Ollama
@@ -133,7 +133,7 @@ Automations**, or use the compatibility route:
 
 ```bash
 axo_api -X POST \
-  http://localhost:8080/api/workflows/hello-world/execute \
+  http://127.0.0.1:8080/api/workflows/hello-world/execute \
   -H 'Content-Type: application/json' \
   -d '{"input":"Explain ownership in two stages."}'
 ```

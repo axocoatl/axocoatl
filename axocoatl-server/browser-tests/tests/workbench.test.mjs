@@ -2461,7 +2461,7 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
 // as the daemon does.
 const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
 const EMBEDDED_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-modals';
-const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for the workbench and for other Sessions, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
+const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for other Sessions and other apps on localhost, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
 const SAFARI_MAC_USER_AGENT = /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X [\d_]+\) AppleWebKit\/[\d.]+ \(KHTML, like Gecko\) Version\/[\d.]+ Safari\/[\d.]+$/;
 const keepsPreviewsEmbedded = () => browser.browserType().name() === 'webkit';
 
@@ -2653,7 +2653,7 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
     assert.equal(directResponse.headers()['content-type'], 'text/plain; charset=utf-8');
     assert.equal(directResponse.headers()['content-security-policy'], "sandbox; default-src 'none'");
     assert.match(await directPage.locator('body').textContent(),
-      /^The legacy Preview path serves a Session's app only to fetch\(\) and XMLHttpRequest/);
+      /^The legacy Preview path serves a Session's app only to data requests such as fetch\(\) and XMLHttpRequest/);
     await directPage.close();
     assertNoBrowserErrors();
   } finally {
@@ -2665,7 +2665,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   const session = runtime.fixtures.alpha.sessions[0];
   // Safari's WebKit on macOS lets a top-level page on <name>.localhost set a
   // Domain=localhost cookie, which it then sends to localhost and to every
-  // other <name>.localhost (measured in Playwright WebKit on macOS).
+  // other <name>.localhost (measured in Playwright WebKit on macOS), never to
+  // the workbench at 127.0.0.1.
   // Chromium refuses it, and so does WebKit on Linux (libsoup). So in Safari
   // the workbench never runs a Preview top-level, and Playwright's WebKit is
   // taken for Safari on Linux too (keepsPreviewsEmbedded): the full-page step
@@ -2679,9 +2680,10 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // requests. preview-cookies.test.mjs asserts the same against a real
   // Preview app behind the real proxy, and that in Safari the daemon refuses
   // a Preview page that would run top-level (typed, redirected, or opened by
-  // a real Command-click in the frame); signed-out.test.mjs, the 51 large and
-  // 9 filler Path=/api cookies that a page on another *.localhost address can
-  // set to sign Safari out of the API.
+  // a real Command-click in the frame); signed-out.test.mjs, that such
+  // cookies never reach the workbench, and the 51 large and 9 filler
+  // Path=/api cookies that a page on another 127.0.0.1 port can set to sign
+  // Safari out of the API.
   const safariKeepsPreviewsEmbedded = keepsPreviewsEmbedded();
   const {
     context, page, browserErrors, browserRequests, assertNoBrowserErrors,
@@ -2689,10 +2691,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   let cookieEcho = null;
   try {
     cookieEcho = await startCookieEcho();
-    assert.equal(new URL(page.url()).hostname, 'localhost');
-    assert.ok(browserRequests.some((request) =>
-      new URL(request.url).hostname === '127.0.0.1'
-      && new URL(request.url).pathname === '/'));
+    // The workbench's one address; nothing redirected it to another.
+    assert.equal(new URL(page.url()).hostname, '127.0.0.1');
+    assert.equal(browserRequests.some((request) => new URL(request.url).hostname === 'localhost'), false);
     const ready = structuredClone(session);
     ready.status = 'active';
     ready.environment = {
@@ -3102,7 +3103,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // The embedded Preview's script tried a host-only and a Domain=localhost
     // cookie. Third-party cookie policy refuses both in the workbench's
     // frame in every engine, so nothing reached the workbench's host.
-    const embeddedAtWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    const embeddedAtWorkbench = await cookieEcho.cookieAt(context, '127.0.0.1');
     assert.equal(/preview-(?:parent-attempt|host-only)=/.test(embeddedAtWorkbench), false);
 
     const fullPreviewButton = page.locator('ax-browser [data-act="open-full"]');
@@ -3122,7 +3123,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       const pagesBeforeClick = new Set(context.pages());
       await fullPreviewButton.click();
       assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeClick), []);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
 
       // Nor can the Preview's own code. A real click on its target=_blank
       // link opens nothing. On a real click in the frame its window.open of
@@ -3167,7 +3168,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
           browserErrors.splice(index, 1);
         }
       }
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
       assert.equal(new URL(previewFrame.url()).pathname, '/app');
       // A Command-click the Preview's script makes up stays in the frame: it
       // navigates the frame itself (the fixture answers /landed with 404),
@@ -3175,7 +3176,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       await previewFrame.locator('#meta-click').click({ noWaitAfter: true });
       await previewFrame.waitForURL(`${previewOrigin}/landed`);
       assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeFrameAttempts), []);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
       assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     } else {
       // Modern browsers block ordinary third-party cookies in the embedded
@@ -3223,7 +3224,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // other Preview port and to another Session's Preview, read from the
     // real Cookie headers before any proxy sees them.
     const otherSession = runtime.fixtures.alpha.sessions[1];
-    const atWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    const atWorkbench = await cookieEcho.cookieAt(context, '127.0.0.1');
     const atPreviews = [
       await cookieEcho.cookieAt(context, `${session.id}-p5000.localhost`),
       await cookieEcho.cookieAt(context, `${otherSession.id}-p3000.localhost`),
@@ -3233,7 +3234,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     const realToken = `axocoatl-token-${listenerPort}=${runtime.token}`;
     const forgedToken = `axocoatl-token-${listenerPort}=forged-by-a-preview`;
     const signedIn = `axocoatl-token-${listenerPort}-signed-in=1`;
-    // The workbench's own sign-in cookies are host-only on localhost: the
+    // The workbench's own sign-in cookies are host-only on 127.0.0.1: the
     // workbench gets them, and no request to a Preview origin carries them,
     // in every engine.
     assert.equal(pairs(atWorkbench).includes(realToken), true, cookieNames(atWorkbench));
@@ -3247,9 +3248,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // Its Domain=localhost cookies reach nothing: Chromium and WebKit on
     // Linux refuse them, and Safari on macOS never ran the Preview top-level
     // to set them. (From a Preview address someone opens in its own Safari
-    // tab they would reach the workbench and every other Preview, forged
-    // axocoatl-token-* cookies included; the Preview proxies strip those
-    // before an app sees them: preview-cookies.test.mjs.)
+    // tab they would reach every other Preview, forged axocoatl-token-*
+    // cookies included, but never the workbench at 127.0.0.1; the Preview
+    // proxies strip those before an app sees them: preview-cookies.test.mjs.)
     for (const cookie of [atWorkbench, ...atPreviews]) {
       const sent = pairs(cookie);
       for (const [label, present] of [
@@ -3276,7 +3277,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     const workbenchAgain = await context.newPage();
     try {
-      const response = await workbenchAgain.goto(`http://localhost:${listenerPort}/`);
+      const response = await workbenchAgain.goto(`http://127.0.0.1:${listenerPort}/`);
       assert.equal(response?.status(), 200);
       assert.notEqual(await workbenchAgain.title(), 'Sign in to Axocoatl');
       await workbenchAgain.waitForFunction(() =>
@@ -3430,7 +3431,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
       const refusalsBefore = await refusals();
       await citation.click(options);
       await expectOpened(before, `${what} on a link to a Preview`, refusalsBefore, mustOpen);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`, what);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`, what);
     }
     // Its context menu (Safari's own holds Open Link in New Tab) and
     // dragging it out are refused too.
@@ -3497,7 +3498,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
       assert.equal(await notices.count(), 0);
       assert.equal(await refusals(), 0);
     }
-    assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+    assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     assertNoBrowserErrors();
   } finally {

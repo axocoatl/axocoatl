@@ -6,7 +6,7 @@
 # Conflict if the id exists, in which case we PATCH it instead.
 #
 # Usage:
-#   AXOCOATL_DATA_DIR=<data dir> bash tools/seed_demo.sh   # localhost:8080
+#   AXOCOATL_DATA_DIR=<data dir> bash tools/seed_demo.sh   # 127.0.0.1:8080
 #   AXO_URL=http://1.2.3.4:8080 AXO_TOKEN=<key> bash tools/...    # remote
 #
 # The local API needs the daemon's token: AXO_TOKEN, or the local-api-token

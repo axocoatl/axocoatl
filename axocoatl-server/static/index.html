@@ -92,16 +92,20 @@
      cookie, or a rotated local API token), `/` serves the sign-in page
      instead of this shell, so one reload shows it. But `/` can go on serving
      this shell while the API answers 401. Safari on macOS sends at most about
-     200 KB of cookies with a request, longest path first, and skips each one
-     that no longer fits; so cookies set for localhost with Path=/api, 51 of
+     200 KB of cookies with a request, longest path first (then by name), and
+     skips each one that no longer fits; so cookies set for 127.0.0.1 with
+     Path=/api, 51 of
      4,000 bytes and then smaller ones that fill what is left, leave the token
      cookie off API requests alone (the large ones by themselves still leave
-     room for it). Script on any page of a *.localhost address that runs in a
-     tab of its own can set them (in Safari never a Preview's: the daemon
-     refuses that, src/preview_document.rs). So this page
-     reloads at most once a minute, and only when sessionStorage can record
-     when it did; otherwise it shows, over the page, that this browser is
-     signed out and how to sign in again. -->
+     room for it). A page on another 127.0.0.1 port can set them. (A page on a
+     *.localhost address cannot: its Domain=localhost cookies never reach
+     127.0.0.1, the workbench's one address.) So this page reloads at most
+     once a minute, and only when sessionStorage can record when it did;
+     otherwise it shows, over the page, that this browser is signed out and
+     how to sign in again. The same cookies with Path=/ws keep the live
+     connection from opening, and a WebSocket never sees the 401: after a few
+     failed attempts the shell asks /ws with fetch, which carries the same
+     cookies, and a 401 there counts as one from the API. -->
 <script>
   (() => {
     const send = window.fetch.bind(window);
@@ -121,11 +125,27 @@
         return false;
       }
     };
+    // A modal <dialog> sits in the top layer, above any other element
+    // however it is styled, so close every one, in shadow roots too; and
+    // since nothing on this page works until it reloads, keep the page from
+    // opening another over the message.
+    const closeModalDialogs = (root) => {
+      for (const dialog of root.querySelectorAll('dialog[open]')) {
+        let modal = true;
+        try { modal = dialog.matches(':modal'); } catch { /* no :modal: close it */ }
+        if (modal) dialog.close();
+      }
+      for (const element of root.querySelectorAll('*')) {
+        if (element.shadowRoot) closeModalDialogs(element.shadowRoot);
+      }
+    };
     const showSignedOut = () => {
       if (!document.body) {
         document.addEventListener('DOMContentLoaded', showSignedOut, { once: true });
         return;
       }
+      closeModalDialogs(document);
+      if (window.HTMLDialogElement) HTMLDialogElement.prototype.showModal = function () {};
       // A modal alertdialog over the whole page, which it makes inert. Not a
       // <dialog>: Escape would close that one in Chromium, and the page
       // behind it cannot work.
@@ -141,7 +161,7 @@
         <div id="signed-out-text">
           <p>Axocoatl's API answered 401 to this page: this browser did not send it a valid sign-in cookie.</p>
           <p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
-          <p>In Safari, if this comes back after you sign in, a page open in Safari (another app on a localhost address, for example) may have set so many cookies for localhost that Safari no longer sends the sign-in cookie with these requests. Remove localhost's data in Safari &gt; Settings &gt; Privacy &gt; Manage Website Data, then open the sign-in link again.</p>
+          <p>If this comes back after you sign in, another page open in this browser, on another <code>127.0.0.1</code> address, may have set so many cookies for <code>127.0.0.1</code> that the browser no longer sends the sign-in cookie with these requests. Close that page, remove this browser's website data for <code>127.0.0.1</code> (in Safari: Settings &gt; Privacy &gt; Manage Website Data), then open the sign-in link again.</p>
         </div>
         <button type="button" class="btn">Reload</button>
       </div>`;
@@ -160,7 +180,8 @@
       const response = await send(...args);
       if (response.status === 401 && !signedOut) {
         const url = new URL(response.url || '/', location.href);
-        if (url.origin === location.origin && url.pathname.startsWith('/api/')) {
+        if (url.origin === location.origin
+            && (url.pathname.startsWith('/api/') || url.pathname === '/ws')) {
           signedOut = true;
           if (mayReload()) location.replace('/');
           else showSignedOut();
@@ -9336,28 +9357,44 @@ document.addEventListener('keydown', e => {
 // and chat all flow over one reconnecting socket.
 let axoWs = null;
 let wsBackoff = 500;
+// Live connection attempts in a row that closed without opening.
+let wsFailures = 0;
+const WS_FAILURES_BEFORE_SIGN_IN_CHECK = 3;
 
 function connectWs() {
   const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
-  axoWs = new WebSocket(url);
-  axoWs.addEventListener('open', () => {
+  const socket = new WebSocket(url);
+  let opened = false;
+  axoWs = socket;
+  socket.addEventListener('open', () => {
+    opened = true;
+    wsFailures = 0;
     wsBackoff = 500;
     S.liveConnection = 'connected';
     renderStatusPearls();
     syncSessionLifecycleChrome();
   });
-  axoWs.addEventListener('message', (e) => {
+  socket.addEventListener('message', (e) => {
     let d; try { d = JSON.parse(e.data); } catch { return; }
     handleWsFrame(d);
   });
-  axoWs.addEventListener('close', () => {
+  socket.addEventListener('close', () => {
     S.liveConnection = 'reconnecting';
     renderStatusPearls();
     syncSessionLifecycleChrome();
+    // A WebSocket never sees the status of a refused handshake. Every few
+    // failed attempts in a row, ask /ws with an ordinary request, which
+    // carries the same cookies: a 401 there means this browser no longer
+    // sends the sign-in cookie to /ws, and the signed-out check in front of
+    // fetch says so and what to do. With the sign-in cookie, /ws answers
+    // that request 400: it is not a WebSocket handshake.
+    if (!opened && ++wsFailures % WS_FAILURES_BEFORE_SIGN_IN_CHECK === 0) {
+      fetch('/ws', { cache: 'no-store' }).catch(() => {});
+    }
     setTimeout(connectWs, wsBackoff);
     wsBackoff = Math.min(wsBackoff * 2, 10000); // exponential backoff, capped
   });
-  axoWs.addEventListener('error', () => { try { axoWs.close(); } catch {} });
+  socket.addEventListener('error', () => { try { socket.close(); } catch {} });
 }
 
 function wsSend(obj) {

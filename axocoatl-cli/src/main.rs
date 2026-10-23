@@ -3716,6 +3716,7 @@ mod tests {
         assert!(steps.contains("chat --config axocoatl.yaml"));
         assert!(steps.contains("axocoatl url --config\naxocoatl.yaml"));
         assert!(!steps.contains("http://localhost:8080"));
+        assert!(!steps.contains("http://127.0.0.1:8080"));
         assert!(!steps.contains("cp .env.example .env"));
     }
 
@@ -4157,7 +4158,7 @@ mod tests {
     #[test]
     fn sign_in_link_is_printed_only_to_a_terminal() {
         let config = std::path::Path::new("/tmp/project/axocoatl.yaml");
-        let link = "http://localhost:8080/?token=secret-token";
+        let link = "http://127.0.0.1:8080/?token=secret-token";
         assert_eq!(
             sign_in_lines(Some(link), true, config),
             vec![format!("  Sign in: {link}")]
@@ -4173,7 +4174,7 @@ mod tests {
     fn sign_in_hint_quotes_a_config_path_with_spaces() {
         let config =
             std::path::Path::new("/Users/alex/Library/Application Support/Axocoatl/config.yaml");
-        let captured = sign_in_lines(Some("http://localhost:8080/?token=t"), false, config);
+        let captured = sign_in_lines(Some("http://127.0.0.1:8080/?token=t"), false, config);
         assert!(captured[0].contains(
             "axocoatl url --config '/Users/alex/Library/Application Support/Axocoatl/config.yaml'"
         ));

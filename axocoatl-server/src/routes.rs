@@ -49,9 +49,18 @@ pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Res
         .into_response()
 }
 
-/// Keep the browser workbench and its `<session>-p<port>.localhost` Preview
-/// frames on the same browser site so ordinary app cookies keep working. Only
-/// the exact dashboard route calls this helper: API, health, asset, CLI, and
+/// The one address the browser workbench is served at.
+///
+/// A page on a `*.localhost` address can set a cookie for `Domain=localhost`
+/// in Safari on macOS, and Safari then sends it to `localhost` on every
+/// port. A cookie for `localhost` never matches an IP address, so at
+/// `127.0.0.1` the workbench never receives one, in any browser, while every
+/// Preview keeps its own `<session>-p<port>.localhost` origin.
+pub(crate) const WORKBENCH_HOST: &str = "127.0.0.1";
+
+/// Move a workbench opened at `localhost` or another loopback address to
+/// [`WORKBENCH_HOST`] on the same listener port, query included. Only the
+/// exact dashboard route calls this helper: API, health, asset, CLI, and
 /// non-loopback operator hosts never redirect. Local token auth calls it too,
 /// so sign-in always happens on the canonical host.
 pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
@@ -59,23 +68,29 @@ pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Op
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| Authority::from_str(value).ok())?;
-    let host = authority
-        .host()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    let ip = host.parse::<std::net::IpAddr>().ok()?;
-    if !ip.is_loopback() {
+    if !host_is_other_loopback_name(authority.host()) {
         return None;
     }
     let listener = authority
         .port_u16()
-        .map(|port| format!("localhost:{port}"))
-        .unwrap_or_else(|| "localhost".to_string());
+        .map(|port| format!("{WORKBENCH_HOST}:{port}"))
+        .unwrap_or_else(|| WORKBENCH_HOST.to_string());
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or("/");
     HeaderValue::from_str(&format!("http://{listener}{path_and_query}")).ok()
+}
+
+/// Whether a `Host` name is `localhost` or a loopback IP address other than
+/// [`WORKBENCH_HOST`]. A Preview's `*.localhost` name is not: the Preview
+/// Host boundary answers those before the workbench router.
+pub(crate) fn host_is_other_loopback_name(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() && host != WORKBENCH_HOST)
 }
 
 // --- @axocoatl/lattice — embedded graph-canvas ES modules ---
@@ -7321,8 +7336,9 @@ fn rewrite_preview_location(value: &HeaderValue) -> HeaderValue {
 /// An upstream `Set-Cookie` without its `Domain` attributes, so the browser
 /// stores the cookie host-only on the Preview origin that answered. Safari
 /// on macOS accepts `Domain=localhost` from a top-level `<name>.localhost`
-/// page and then sends that cookie to the workbench and to every other
-/// Session's Preview; Chromium refuses it. A `Domain` naming the Preview's
+/// page and then sends that cookie to every other Session's Preview and to
+/// every other app on a `localhost` address (never to the workbench, at
+/// [`WORKBENCH_HOST`]); Chromium refuses it. A `Domain` naming the Preview's
 /// own host only adds subdomains, which no Preview has. One naming another
 /// site (an app's production domain) was refused by every browser and is
 /// now stored host-only on the Preview origin instead. The name, the value
@@ -9243,22 +9259,32 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_canonicalizes_only_loopback_ip_literals_and_preserves_query() {
+    fn dashboard_canonicalizes_other_loopback_names_to_127_0_0_1_and_preserves_query() {
         let uri: Uri = "/?session=ses-123&review=preview".parse().unwrap();
         for (host, expected) in [
             (
-                "127.0.0.1:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                "localhost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "LocalHost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "localhost",
+                Some("http://127.0.0.1/?session=ses-123&review=preview"),
             ),
             (
                 "127.42.3.9:8080",
-                Some("http://localhost:8080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:8080/?session=ses-123&review=preview"),
             ),
             (
                 "[::1]:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
             ),
-            ("localhost:18080", None),
+            ("127.0.0.1:18080", None),
+            ("127.0.0.1", None),
+            ("ses-123-p5173.localhost:18080", None),
             ("operator.example:18080", None),
             ("192.0.2.10:18080", None),
             ("0.0.0.0:18080", None),
@@ -9278,7 +9304,7 @@ mod tests {
     #[tokio::test]
     async fn dashboard_canonical_redirect_sends_no_referrer() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "127.0.0.1:18080".parse().unwrap());
+        headers.insert(header::HOST, "localhost:18080".parse().unwrap());
         let response = dashboard(headers, OriginalUri("/?token=abc".parse().unwrap())).await;
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(

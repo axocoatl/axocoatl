@@ -11,8 +11,9 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 
 // What a Preview page can do with cookies, through the real Preview proxy to
 // a real Session app on local Podman. Safari on macOS lets a top-level page on
-// <name>.localhost set a Domain=localhost cookie and then sends it to the
-// workbench and to every other Preview origin; Chromium and WebKit on Linux
+// <name>.localhost set a Domain=localhost cookie and then sends it to every
+// other Preview origin and every other localhost address, but never to the
+// workbench, which is served at 127.0.0.1; Chromium and WebKit on Linux
 // refuse it (operate/security.mdx). So in Safari the daemon never serves a
 // Preview as a page of its own (src/preview_document.rs): a typed address, a
 // redirect, a real Command-click in the Preview frame or in the Files view's
@@ -33,8 +34,10 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // page Axocoatl does not serve (the cookie echo at forge.localhost), as any
 // other development server on a *.localhost address could be, because the
 // daemon refuses the Preview there. They assert, in every engine:
-// - with those cookies the workbench stays signed in, and a signed-out
-//   browser passes the retry page at most once per navigation;
+// - none of those cookies reaches the workbench, which stays signed in, and
+//   a signed-out browser gets the sign-in page; a page on another 127.0.0.1
+//   port, which can set the "signed in" cookie, sends it through the retry
+//   page at most once;
 // - the browser may send forged axocoatl-token-* cookies to a Preview origin
 //   (Safari does), but no Preview's app ever receives one, over HTTP or on a
 //   WebSocket upgrade. Outside Safari the proxy strips them and passes the
@@ -42,10 +45,11 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 //   Safari the app receives no top-level request at all;
 // - an app's Set-Cookie with Domain=localhost stays host-only on its own
 //   Preview origin, because the proxy removes Domain.
-// Other cookies such a page can set do harm in Safari (signed-out.test.mjs):
-// 51 large ones and smaller fillers with Path=/api sign it out of the API,
-// and with Path=/ws keep the live connection from opening. About 1,000 at once,
-// seconds after a sign-in with no workbench page open, sign it out
+// What cookies set for 127.0.0.1 by a page on another 127.0.0.1 port can do
+// in Safari is in signed-out.test.mjs: 51 large ones and smaller fillers
+// with Path=/api sign it out of the API, with Path=/ out of the workbench,
+// and with Path=/ws keep the live connection from opening. About 1,000 at
+// once, seconds after a sign-in with no workbench page open, sign it out
 // (operate/security.mdx).
 // It needs Podman and the curated node:20-slim image, and is skipped when
 // that image is not on the machine, rather than pulling it. CI pulls the
@@ -308,7 +312,7 @@ async function assertRefusalPage(page, response) {
   assert.equal(await page.locator('h1').textContent(), 'This Preview opens only in the workbench');
   assert.equal(await page.locator('script').count(), 0);
   assert.equal(await page.locator('a').getAttribute('href'),
-    `http://localhost:${listenerPort}/?session=${session.id}`);
+    `http://127.0.0.1:${listenerPort}/?session=${session.id}`);
 }
 
 /** In Safari, `url` (a Preview address) opened top-level gets the refusal page. */
@@ -324,7 +328,7 @@ async function visitRefused(context, url) {
 /**
  * The cookies of `context` that a page of a Preview's app set from script
  * (`ran-top-level*`) or that anything set for `Domain=localhost`, as
- * `name@domain`. The workbench's own cookies are host-only on localhost.
+ * `name@domain`. The workbench's own cookies are host-only on 127.0.0.1.
  */
 async function cookiesFromTopLevelApps(context) {
   return (await context.cookies())
@@ -333,7 +337,7 @@ async function cookiesFromTopLevelApps(context) {
     .sort();
 }
 
-test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leave the workbench signed in, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
+test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies never reach the workbench, and no Preview app receives an axocoatl-token cookie', { timeout: 300_000, skip: imageMissing }, async () => {
   const context = await browser.newContext();
   try {
     // Sign in with the real link, so the product sets its own cookies.
@@ -365,16 +369,19 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
       safariSharesLocalhostCookies, cookieNames(forged));
 
     // What the browser sends, before any proxy: the workbench's own
-    // host-only token cookie never leaves localhost; in Safari the forged
-    // Domain=localhost cookies go everywhere, axocoatl-token-* included.
+    // host-only token cookie never leaves 127.0.0.1, and no Domain=localhost
+    // cookie reaches 127.0.0.1; in Safari the forged Domain=localhost
+    // cookies go to every localhost address, axocoatl-token-* included.
     const pairs = (header) => header.split('; ');
     const realToken = `axocoatl-token-${listenerPort}=${runtime.token}`;
     const forgedToken = `axocoatl-token-${listenerPort}=forged-by-a-preview`;
-    const atWorkbench = await echo.cookieAt(context, 'localhost');
+    const atWorkbench = await echo.cookieAt(context, '127.0.0.1');
+    const atLocalhost = await echo.cookieAt(context, 'localhost');
     const atPreview5000 = await echo.cookieAt(context, previewHost(5000));
-    assert.equal(pairs(atWorkbench).includes(realToken), true, cookieNames(atWorkbench));
-    assert.equal(atPreview5000.includes(runtime.token), false, cookieNames(atPreview5000));
-    for (const header of [atWorkbench, atPreview5000]) {
+    assert.deepEqual(pairs(atWorkbench),
+      [realToken, `axocoatl-token-${listenerPort}-signed-in=1`], cookieNames(atWorkbench));
+    for (const header of [atLocalhost, atPreview5000]) {
+      assert.equal(header.includes(runtime.token), false, cookieNames(header));
       const sent = pairs(header);
       assert.equal(sent.includes(forgedToken), safariSharesLocalhostCookies, cookieNames(header));
       assert.equal(sent.some((pair) => /^junk=[^\x00-\x7f]/.test(pair)), safariSharesLocalhostCookies,
@@ -466,7 +473,7 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
     await workbench.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
     const again = await context.newPage();
     try {
-      const response = await again.goto(`http://localhost:${listenerPort}/`);
+      const response = await again.goto(`http://127.0.0.1:${listenerPort}/`);
       assert.equal(response?.status(), 200);
       assert.notEqual(await again.title(), 'Sign in to Axocoatl');
       await again.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
@@ -479,33 +486,55 @@ test('a top-level page\'s non-ASCII, forged and 40 x 1 KB localhost cookies leav
   }
 });
 
-test('a forged signed-in cookie sends a signed-out browser through the retry page at most once per navigation', { timeout: 300_000, skip: imageMissing }, async () => {
+// The "signed in" cookie holds no secret; with it, a navigation the person
+// starts passes the same-origin retry page (auth.rs). A Domain=localhost one
+// never reaches the workbench at 127.0.0.1, in any engine. A page on another
+// 127.0.0.1 port can set one, host-only, in every engine: then a signed-out
+// browser passes the retry page once, which clears it, and is never signed in.
+test('a forged signed-in cookie sends a signed-out browser through the retry page at most once', { timeout: 300_000, skip: imageMissing }, async () => {
   // A browser that never signed in.
   const context = await browser.newContext();
   try {
-    await forgeFromTopLevelPage(context, forgeUrl('/forge-signed-out'));
     const page = await context.newPage();
     const statuses = [];
     page.on('response', (response) => {
       const url = new URL(response.url());
-      if (url.host === `localhost:${listenerPort}` && url.pathname === '/') statuses.push(response.status());
+      if (url.host === `127.0.0.1:${listenerPort}` && url.pathname === '/') statuses.push(response.status());
     });
-    // Each navigation the person starts: in Safari the retry page (200),
-    // whose own navigation gets the sign-in page (401); elsewhere the
-    // sign-in page at once. Never a loop, never signed in.
-    for (let navigation = 0; navigation < 2; navigation += 1) {
+    const navigate = async () => {
       statuses.length = 0;
       const signInPage = page.waitForResponse((response) =>
         new URL(response.url()).pathname === '/' && response.status() === 401);
-      await page.goto(`http://localhost:${listenerPort}/`);
+      await page.goto(`http://127.0.0.1:${listenerPort}/`);
       await signInPage;
       await page.waitForLoadState('load');
       await page.waitForTimeout(1_000);
-      assert.deepEqual(statuses, safariSharesLocalhostCookies ? [200, 401] : [401]);
       assert.equal(await page.title(), 'Sign in to Axocoatl');
+      return [...statuses];
+    };
+
+    await forgeFromTopLevelPage(context, forgeUrl('/forge-signed-out'));
+    // Each navigation the person starts gets the sign-in page at once.
+    assert.deepEqual(await navigate(), [401]);
+    assert.deepEqual(await navigate(), [401]);
+
+    const forger = await context.newPage();
+    try {
+      await forger.goto(`http://127.0.0.1:${echo.port}/forge-signed-in`);
+      await forger.evaluate((listener) => {
+        document.cookie = `axocoatl-token-${listener}-signed-in=1; Path=/`;
+        document.cookie = `axocoatl-token-${listener}=forged-on-127; Path=/`;
+      }, listenerPort);
+    } finally {
+      await forger.close();
     }
+    // The retry page (200), whose own navigation gets the sign-in page
+    // (401); it cleared the forged cookie, so the next navigation gets the
+    // sign-in page at once. Never a loop, never signed in.
+    assert.deepEqual(await navigate(), [200, 401]);
+    assert.deepEqual(await navigate(), [401]);
     // The sign-in page's CSP allows no fetch; ask from a public page.
-    await page.goto(`http://localhost:${listenerPort}/health`);
+    await page.goto(`http://127.0.0.1:${listenerPort}/health`);
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 401);
   } finally {
     await context.close();
@@ -519,7 +548,7 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     const signedIn = await workbench.goto(runtime.signInUrl);
     assert.equal(signedIn?.status(), 200);
     await workbench.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
-    await workbench.goto(`http://localhost:${listenerPort}/?session=${encodeURIComponent(session.id)}`);
+    await workbench.goto(`http://127.0.0.1:${listenerPort}/?session=${encodeURIComponent(session.id)}`);
     await workbench.waitForFunction((sessionId) => typeof S !== 'undefined'
       && S.session?.id === sessionId && sessionRuntimeSurfaceReady(S.session), session.id,
     { timeout: 120_000 });
@@ -663,7 +692,7 @@ test('in Safari no Preview page runs top-level, typed, redirected or through the
       await assertRefusalPage(typed, typedResponse);
       assert.equal(await reached(5000, '/top-typed'), false);
       // Its one link opens the workbench's own origin.
-      await Promise.all([typed.waitForURL(`http://localhost:${listenerPort}/**`), typed.locator('a').click()]);
+      await Promise.all([typed.waitForURL(`http://127.0.0.1:${listenerPort}/**`), typed.locator('a').click()]);
     } else {
       assert.equal(typedResponse?.status(), 200);
       assert.equal(await typed.title(), 'preview 5000/top-typed');
@@ -692,7 +721,7 @@ test('in Safari no Preview page runs top-level, typed, redirected or through the
     // address) whose app would answer with a redirect to the Preview and a
     // cookie for the workbench's host. Every engine gets the refusal text,
     // and the app is never asked.
-    const legacy = `http://localhost:${listenerPort}/api/sessions/${session.id}/proxy/3000`;
+    const legacy = `http://127.0.0.1:${listenerPort}/api/sessions/${session.id}/proxy/3000`;
     const legacyTarget = `${previewOrigin(3000)}/top-legacy-landed`;
     const legacyPage = await context.newPage();
     const legacyResponse = await legacyPage.goto(`${legacy}/redirect-to?to=${encodeURIComponent(legacyTarget)}`);
@@ -700,7 +729,7 @@ test('in Safari no Preview page runs top-level, typed, redirected or through the
     assert.equal(legacyResponse.headers()['content-type'], 'text/plain; charset=utf-8');
     assert.equal(legacyResponse.headers()['content-security-policy'], "sandbox; default-src 'none'");
     assert.match(await legacyPage.locator('body').textContent(),
-      /^The legacy Preview path serves a Session's app only to fetch\(\) and XMLHttpRequest/);
+      /^The legacy Preview path serves a Session's app only to data requests such as fetch\(\) and XMLHttpRequest/);
     assert.equal(legacyPage.url(), `${legacy}/redirect-to?to=${encodeURIComponent(legacyTarget)}`);
     await legacyPage.close();
     assert.equal(await reached(3000, '/redirect-to'), false);
@@ -730,8 +759,10 @@ test('in Safari no Preview page runs top-level, typed, redirected or through the
       `ran-top-level-host@${previewHost(3000)}`,
       `ran-top-level-host@${previewHost(5000)}`,
     ]);
-    assert.equal((await context.cookies(`http://localhost:${listenerPort}/`))
-      .some((cookie) => cookie.name === 'app-redirect'), false);
+    for (const host of ['127.0.0.1', 'localhost']) {
+      assert.equal((await context.cookies(`http://${host}:${listenerPort}/`))
+        .some((cookie) => cookie.name === 'app-redirect'), false, host);
+    }
     assert.equal(await workbench.evaluate(async () => (await fetch('/api/agents')).status), 200);
   } finally {
     await new Promise((resolve) => redirector.close(resolve));

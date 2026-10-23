@@ -28,14 +28,15 @@ harness reads that file and registers the daemon for the test process:
 
 - seeding and the runtime's helpers send `Authorization: Bearer <token>`;
 - Node-side `fetch` calls to a registered daemon origin get the same header
-  unless the caller set a credential, and the `/` redirect from `127.0.0.1` to
-  `localhost` is followed with the header kept;
+  unless the caller set a credential, and the `/` redirect from `localhost` to
+  `127.0.0.1` is followed with the header kept;
 - `newAuthorizedContext(browser, options)` (or `authorizeContext(context)`)
   adds the `axocoatl-token-<port>` cookie and the secret-free
-  `axocoatl-token-<port>-signed-in` cookie for `localhost` and `127.0.0.1`,
-  exactly as the sign-in link would. In WebKit a journey that opens `/` at
-  `127.0.0.1` then passes the daemon's one same-origin retry page (Safari
-  leaves the Strict cookie off the redirect to `localhost`), so wait for the
+  `axocoatl-token-<port>-signed-in` cookie for `127.0.0.1`, the workbench's
+  one address, exactly as the sign-in link would. `runtime.baseUrl` and
+  `runtime.signInUrl` name `127.0.0.1` too. In WebKit a journey that opens
+  `/` at `localhost` passes the daemon's one same-origin retry page (Safari
+  leaves the Strict cookie off the redirect to `127.0.0.1`), so wait for the
   workbench (`waitForFunction`, a locator) rather than reading the page right
   after `goto`;
 - Node `WebSocket` clients pass the header explicitly with `runtime.token`.
@@ -373,8 +374,10 @@ the Preview and failure paths called out below.
   access. A legacy-proxy address pasted into a tab, signed in, gets the real
   daemon's 403 and a line of text in every engine, without the app being
   asked.
-- Opening the workbench at a loopback IP proves the product's canonical
-  `127.0.0.1` → `localhost` document redirect. Preview cookie coverage checks
+- The workbench opens at `127.0.0.1`, its one address, with no redirect
+  (`local-api-token.test.mjs` covers the `localhost` → `127.0.0.1` document
+  redirect and its removal of an old `localhost` sign-in cookie). Preview
+  cookie coverage checks
   that an ordinary embedded write is unavailable under modern third-party
   policy and reaches nothing. In Chromium, **Open full
   preview** opens the exact virtual URL with no opener, and host-only cookies
@@ -394,8 +397,8 @@ the Preview and failure paths called out below.
   navigation of the workbench's tab open nothing. A loopback cookie echo
   (`support/cookie-echo.mjs`) reads the Cookie headers the browser sends
   (cookies ignore ports): the workbench's own token cookie reaches the
-  workbench and never a Preview origin, and no `Domain=localhost` cookie
-  reaches anything, in every engine. In every engine the workbench page still
+  workbench at `127.0.0.1` and never a Preview origin, and no
+  `Domain=localhost` cookie reaches anything, in every engine. In every engine the workbench page still
   reads the API, and a new workbench page opens, connects and reads the API.
 - The journey after it tries every other route by which the workbench could
   put a Preview's address in a tab of its own: a Markdown link in the
@@ -426,17 +429,19 @@ the Preview and failure paths called out below.
   Safari on macOS and Linux) it
   sets them from a page on another `*.localhost` address (the cookie echo,
   which Axocoatl does not serve), because the daemon refuses the Preview. It
-  asserts that no request or WebSocket upgrade the app receives on either
+  asserts that none of them reaches the workbench at `127.0.0.1` (in WebKit
+  on macOS they reach `localhost` and the other Preview origin), that no
+  request or WebSocket upgrade the app receives on either
   Preview port carries an `axocoatl-token-*` cookie (outside Safari the app
   gets its other cookies, an upgrade only the visible-ASCII ones, and its
   WebSocket opens; in WebKit the app receives no top-level request at all,
   though WebKit on macOS sends the forged cookies to those origins); that the app's
   own `Set-Cookie` with `Domain=localhost` stays host-only on its Preview
   origin (the proxy removes `Domain`); that the workbench reloads, connects
-  and reads the API; and that a browser that never signed in, holding a
-  forged `-signed-in` cookie, gets the retry page then the sign-in page on
-  each navigation in WebKit on macOS (the sign-in page at once elsewhere), never a
-  loop. Its third journey shows the real Preview in the workbench: in WebKit
+  and reads the API; and that a browser that never signed in gets the
+  sign-in page at once with those cookies, in every engine, and, after a
+  page on another `127.0.0.1` port set a forged `-signed-in` cookie, the
+  retry page once (which clears it) then the sign-in page, never a loop. Its third journey shows the real Preview in the workbench: in WebKit
   Open full preview has no address, the frame has no
   `allow-popups`, and the Preview's `window.open` of its address returns null
   and opens nothing. A real Command-click (Control-click on Linux) on a link
@@ -460,23 +465,32 @@ the Preview and failure paths called out below.
 - `signed-out.test.mjs`, in every engine: when `/` serves the shell but every
   API request answers 401 (Playwright answers them), the shell reloads once
   and then shows the signed-out message (a modal `alertdialog` over an inert
-  page, which takes focus, stays after Escape, and names `axocoatl url`,
-  `axocoatl dev` and Safari's Manage Website Data), and its Reload button
-  reloads once more without another automatic
-  reload; when the sign-in cookie is gone, one reload reaches the sign-in
-  page; without `sessionStorage` it never reloads and shows the message.
-  Against the real daemon, a page on another `*.localhost` address opened
-  top-level (served by Playwright; in Safari the daemon never serves a Preview
-  that way) sets 51 cookies of 4,000 bytes and smaller ones for `localhost` with
-  `Path=/api`, which fill WebKit's Cookie header cap: in WebKit on macOS
-  (Safari) the token cookie is still stored but left off API requests, which
-  answer 401, and the workbench loads twice and then shows the message (a
-  shell that reloads on every 401 loaded 167 documents in 20 seconds here);
-  opening the sign-in link again shows it again without a reload; clearing
-  the cookies and signing in again restores the workbench. The same cookies
-  with `Path=/ws` keep the live connection from opening (the status bar says
-  it is reconnecting) while the API answers. Chromium and WebKit on Linux
-  refuse the cookies, and the journey asserts the workbench works.
+  page, which takes focus, stays after Escape, closes any open modal dialog
+  and keeps another from opening over it, and names `axocoatl url`,
+  `axocoatl dev`, `127.0.0.1` and Safari's Manage Website Data), and its
+  Reload button reloads once more without another automatic reload; with
+  Playwright's clock fixing `Date.now()`, a 401 59 seconds after the
+  automatic reload shows the message and one 61 seconds after it reloads
+  again, which pins the one-minute window; when the sign-in cookie is gone,
+  one reload reaches the sign-in page; without `sessionStorage` it never
+  reloads and shows the message. Against the real daemon, with real pages
+  from the cookie echo: 60 cookies a top-level page on another `*.localhost`
+  address sets for `Domain=localhost`, with `Path=/api`, `Path=/` and
+  `Path=/ws`, never reach the workbench at `127.0.0.1` (WebKit on macOS keeps
+  them for `localhost`; Chromium refuses them), which stays signed in and
+  connected. A page on another `127.0.0.1` port sets 51 cookies of 4,000
+  bytes and smaller ones, named to sort before `axocoatl-token-`, which fill
+  WebKit's Cookie header cap: in WebKit on macOS (Safari), with `Path=/api`
+  the token cookie is left off API requests, which answer 401, and the
+  workbench loads twice and then shows the message (a shell that reloads on
+  every 401 loaded 167 documents in 20 seconds here), opening the sign-in
+  link again shows it again without a reload, and clearing `127.0.0.1`'s
+  cookies and signing in again restores the workbench; with `Path=/` every
+  request gets the sign-in page, which names the same remedy; with
+  `Path=/ws` the live connection fails, the shell's check of `/ws` gets 401,
+  and it shows the message. Chromium sends all the cookies, and the journeys
+  assert the workbench works there (and that `/ws` answers an ordinary
+  request 400).
 - Manual E2B cleanup is high-friction for both retained identities: the dialog
   requires the exact runtime ID or `axocoatl_creation_token`, begins unchecked,
   sends no request before affirmation, posts the exact confirmation payload,

@@ -61,6 +61,9 @@ after(async () => {
 });
 
 const port = () => new URL(runtime.baseUrl).port;
+// The workbench's one address: a page on a `*.localhost` address can set
+// cookies for `Domain=localhost` in Safari, and those never reach it here.
+const workbenchUrl = () => `http://127.0.0.1:${port()}/`;
 const workbenchConnected = () => typeof S !== 'undefined' && S.liveConnection === 'connected';
 
 /**
@@ -86,7 +89,7 @@ async function waitForSettledWorkbench(page, requests) {
  */
 async function clickContinue(page, label) {
   assert.ok(await signInCookie(page.context()), `${label}: the browser still holds the sign-in cookie`);
-  const workbench = `http://localhost:${port()}/`;
+  const workbench = workbenchUrl();
   const [response] = await Promise.all([
     page.waitForResponse((candidate) => candidate.url() === workbench
       && candidate.request().isNavigationRequest()),
@@ -105,14 +108,14 @@ async function signedInCookie(context) {
 }
 
 /**
- * The page landed on the workbench at `/` on localhost without the token.
+ * The page landed on the workbench at `/` on 127.0.0.1 without the token.
  * The workbench may already have written the Session it restored into the
  * URL (`?session=`) when `page.goto` returns, so only that parameter may
  * follow.
  */
 function assertLandedWithoutToken(page) {
   const landed = new URL(page.url());
-  assert.equal(`${landed.origin}${landed.pathname}`, `http://localhost:${port()}/`);
+  assert.equal(`${landed.origin}${landed.pathname}`, workbenchUrl());
   assert.deepEqual([...landed.searchParams.keys()].filter((name) => name !== 'session'), []);
   assert.ok(!page.url().includes(runtime.token));
 }
@@ -121,14 +124,14 @@ test('a signed-out browser gets the sign-in page and the API refuses it', async 
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    const response = await page.goto(`http://localhost:${port()}/`);
+    const response = await page.goto(workbenchUrl());
     assert.equal(response.status(), 401);
     assert.equal(response.headers()['cache-control'], 'no-store');
     assert.match(await page.locator('body').innerText(), /axocoatl url/);
     assert.equal(await page.locator('a[href="/"]').count(), 1);
     assert.equal(await page.locator('ax-rail').count(), 0);
     assert.match(response.headers()['content-security-policy'], /default-src 'none'/);
-    const api = await context.request.get(`http://localhost:${port()}/api/sessions`);
+    const api = await context.request.get(`${workbenchUrl()}api/sessions`);
     assert.equal(api.status(), 401);
     assert.equal(await signInCookie(context), undefined);
   } finally {
@@ -154,7 +157,7 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
     const cookie = await signInCookie(context);
     assert.ok(cookie, 'the sign-in cookie is stored');
     assert.equal(cookie.value, runtime.token);
-    assert.equal(cookie.domain, 'localhost');
+    assert.equal(cookie.domain, '127.0.0.1');
     assert.equal(cookie.path, '/');
     assert.equal(cookie.httpOnly, true);
     assert.equal(cookie.sameSite, 'Strict');
@@ -162,7 +165,10 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
     const signedIn = await signedInCookie(context);
     assert.ok(signedIn, 'the signed-in cookie is stored');
     assert.equal(signedIn.value, '1');
-    assert.equal(signedIn.domain, 'localhost');
+    assert.equal(signedIn.domain, '127.0.0.1');
+    // Nothing is stored for localhost, where every web server on another
+    // localhost port would receive it.
+    assert.deepEqual(await context.cookies(`http://localhost:${port()}/`), []);
     assert.equal(signedIn.httpOnly, true);
     assert.equal(signedIn.sameSite, 'Lax');
     assert.equal(await page.evaluate(() => document.cookie.includes('axocoatl-token')), false);
@@ -176,17 +182,18 @@ test('the sign-in link sets an HttpOnly cookie, drops the token from the URL and
   }
 });
 
-// Safari (WebKit) leaves the SameSite=Strict cookie off a navigation that the
-// redirect from 127.0.0.1 carried to localhost, a different site, and off its
+// Sign-in links and bookmarks before 1.5.0 named localhost. The workbench
+// moves them to 127.0.0.1, a different site, and Safari (WebKit) leaves the
+// SameSite=Strict cookie off a navigation that redirect carried, and off its
 // reloads; the workbench then opens the address again from its own origin.
 // In every engine the person ends up in the workbench, and stays there on
 // reload.
-test('a loopback IP sign-in link and a loopback IP bookmark both reach the workbench', async () => {
+test('a localhost sign-in link and a localhost bookmark both reach the workbench at 127.0.0.1', async () => {
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
     const requests = trackRequests(page);
-    await page.goto(`http://127.0.0.1:${port()}/?token=${runtime.token}`);
+    await page.goto(`http://localhost:${port()}/?token=${runtime.token}`);
     assertLandedWithoutToken(page);
     assert.ok(await signInCookie(context));
     await waitForSettledWorkbench(page, requests);
@@ -194,12 +201,38 @@ test('a loopback IP sign-in link and a loopback IP bookmark both reach the workb
     await waitForSettledWorkbench(page, requests);
 
     const session = runtime.fixtures.alpha.sessions[0].id;
-    await page.goto(`${runtime.baseUrl}/?session=${encodeURIComponent(session)}`);
-    assert.equal(page.url(), `http://localhost:${port()}/?session=${encodeURIComponent(session)}`);
+    const bookmark = `?session=${encodeURIComponent(session)}`;
+    await page.goto(`http://localhost:${port()}/${bookmark}`);
+    assert.equal(page.url(), `${workbenchUrl()}${bookmark}`);
     await waitForSettledWorkbench(page, requests);
     await page.reload();
     await page.waitForFunction(workbenchConnected);
-    assert.equal(page.url(), `http://localhost:${port()}/?session=${encodeURIComponent(session)}`);
+    assert.equal(page.url(), `${workbenchUrl()}${bookmark}`);
+  } finally {
+    await context.close();
+  }
+});
+
+// A browser that signed in before 1.5.0 holds the token cookie on localhost,
+// where every web server on another localhost port receives it. The
+// redirect from localhost removes it there; the browser signs in again at
+// 127.0.0.1.
+test('opening the workbench at localhost removes an old localhost sign-in cookie', async () => {
+  const context = await browser.newContext();
+  try {
+    const old = `http://localhost:${port()}/`;
+    await context.addCookies([
+      { name: runtime.cookieName, value: runtime.token, url: old, httpOnly: true, sameSite: 'Strict' },
+      { name: `${runtime.cookieName}-signed-in`, value: '1', url: old, httpOnly: true, sameSite: 'Lax' },
+      { name: 'another-app', value: 'kept', url: old },
+    ]);
+    const page = await context.newPage();
+    const response = await page.goto(old);
+    assert.equal(new URL(page.url()).host, `127.0.0.1:${port()}`);
+    assert.equal(response.status(), 401);
+    assert.match(await page.locator('body').innerText(), /axocoatl url/);
+    assert.deepEqual((await context.cookies(old)).map((cookie) => cookie.name), ['another-app']);
+    assert.equal(await signInCookie(context), undefined);
   } finally {
     await context.close();
   }
@@ -220,7 +253,7 @@ test('once signed in, a link from another site to the loopback IP or localhost s
     );
     for (const link of ['#ip', '#name']) {
       await page.goto(elsewhere);
-      const workbench = `http://localhost:${port()}/`;
+      const workbench = workbenchUrl();
       const [response] = await Promise.all([
         page.waitForResponse((candidate) => candidate.url() === workbench
           && candidate.request().isNavigationRequest()),
@@ -244,7 +277,7 @@ test('a wrong sign-in link sets no cookie', async () => {
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    const response = await page.goto(`http://localhost:${port()}/?token=not-this-daemon`);
+    const response = await page.goto(`${workbenchUrl()}?token=not-this-daemon`);
     assert.equal(response.status(), 401);
     assert.match(await page.locator('body').innerText(), /not valid/);
     assert.equal(await signInCookie(context), undefined);
@@ -262,7 +295,7 @@ test('a sign-in link opened from another site needs one Continue click', async (
       `<!doctype html><a id="sign-in" href="${runtime.signInUrl}">Open Axocoatl</a>`,
     );
     await page.goto(elsewhere);
-    await Promise.all([page.waitForURL(`http://localhost:${port()}/`), page.click('#sign-in')]);
+    await Promise.all([page.waitForURL(workbenchUrl()), page.click('#sign-in')]);
     // The cookie is stored, but SameSite=Strict keeps it off the rest of this
     // cross-site navigation, so the sign-in page offers a same-origin link.
     assert.ok(await signInCookie(context));

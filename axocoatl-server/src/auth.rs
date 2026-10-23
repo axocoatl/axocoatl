@@ -9,12 +9,12 @@
 //! - **Local token** (loopback bind, no configured credentials and no
 //!   `allow_unauthenticated`): the daemon keeps one random secret in
 //!   `<data root>/local-api-token`. Scripts send it in either header. A browser
-//!   signs in once by opening `/?token=<secret>`, which sets an HttpOnly,
-//!   SameSite=Strict cookie, and a secret-free SameSite=Lax "signed in"
-//!   cookie that lets Safari reach the workbench from a `127.0.0.1` address
-//!   (see `same_origin_retry_page`). Health, static assets and the dashboard
-//!   shell's sign-in page are public; every route that reads or changes state
-//!   needs the secret.
+//!   signs in once by opening `/?token=<secret>` on `127.0.0.1`, which sets
+//!   an HttpOnly, SameSite=Strict cookie, and a secret-free SameSite=Lax
+//!   "signed in" cookie that lets Safari reach the workbench from a
+//!   `localhost` address (see `same_origin_retry_page`). Health, static
+//!   assets and the dashboard shell's sign-in page are public; every route
+//!   that reads or changes state needs the secret.
 
 use axocoatl_config::SecretString;
 use axocoatl_core::{SecureDir, SecureLeaf};
@@ -46,11 +46,10 @@ const LOCAL_TOKEN_COOKIE_MAX_AGE_SECS: u64 = 30 * 24 * 60 * 60;
 /// It holds no secret and authorizes nothing (see [`local_dashboard`]); its
 /// name keeps the token prefix so the Preview proxies strip it from forwarded
 /// requests and drop an upstream `Set-Cookie` that would set it, as they do
-/// for the token cookie. Safari on macOS lets a page on a Preview origin set
-/// a `Domain=localhost` cookie, so Session code can still set this one there;
-/// while that browser is signed out, the most that does is send each
-/// navigation the person starts through the same-origin retry page once
-/// before the sign-in page.
+/// for the token cookie. A page on another `127.0.0.1` port can still set
+/// one for `127.0.0.1`; while that browser is signed out, the most that does
+/// is send each navigation the person starts through the same-origin retry
+/// page once before the sign-in page.
 const SIGNED_IN_COOKIE_SUFFIX: &str = "-signed-in";
 
 /// The per-daemon local API secret and the cookie name a browser stores it
@@ -215,11 +214,14 @@ fn effective_uid() -> u32 {
 }
 
 /// The browser sign-in link for a loopback daemon. It always names
-/// `localhost`: the workbench redirects loopback IP literals there, and
-/// using it directly keeps the secret out of that redirect.
+/// `127.0.0.1`, the workbench's one address
+/// ([`crate::routes::WORKBENCH_HOST`]): the workbench redirects `localhost`
+/// and other loopback addresses there, and using it directly keeps the
+/// secret out of that redirect.
 pub fn sign_in_url(port: u16, secret: &SecretString) -> String {
     format!(
-        "http://localhost:{port}/?{SIGN_IN_QUERY_KEY}={}",
+        "http://{}:{port}/?{SIGN_IN_QUERY_KEY}={}",
+        crate::routes::WORKBENCH_HOST,
         secret.expose_secret()
     )
 }
@@ -267,8 +269,9 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 /// the byte 0xE9, and reading the whole header as text would then drop the
 /// token cookie beside it and sign that browser out. A pair without `=`, or
 /// with any other name, is skipped. Every value of `name` is returned, so a
-/// forged cookie of the same name (a `Domain=localhost` one Safari lets a
-/// Preview page set) sits beside the real one instead of replacing it.
+/// forged cookie of the same name (one a page on another `127.0.0.1` port
+/// set with a longer `Path`) sits beside the real one instead of replacing
+/// it.
 fn cookie_values<'a>(headers: &'a HeaderMap, name: &'a str) -> impl Iterator<Item = &'a [u8]> {
     headers
         .get_all(header::COOKIE)
@@ -309,7 +312,7 @@ fn any_secret_matches<'a>(
     })
 }
 
-/// A browser declared that another site (or another `localhost` port, which
+/// A browser declared that another site (or another `127.0.0.1` port, which
 /// is the same site) started this request.
 fn fetch_site_is_foreign(headers: &HeaderMap) -> bool {
     headers
@@ -336,7 +339,7 @@ fn is_authorized(config: &AuthConfig, headers: &HeaderMap) -> bool {
 
 /// Whether the request carries this daemon's token cookie with the right
 /// secret, on a request that may use it. A SameSite=Strict cookie still rides
-/// along on same-site requests, and every `localhost:<port>` page is
+/// along on same-site requests, and every `127.0.0.1:<port>` page is
 /// same-site with the workbench. Only the workbench itself (same-origin), a
 /// typed URL (`none`) or a request without Fetch Metadata (WebSocket
 /// upgrades, non-browser clients) may use it. The Origin guard covers
@@ -590,6 +593,7 @@ code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 const SIGN_IN_PAGE_BODY: &str = r#"<p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
 <p>Already opened the link? <a href="/">Continue</a></p>
+<p>If you open the link and this page comes back, another page open in this browser, on another <code>127.0.0.1</code> address, may have set so many cookies for <code>127.0.0.1</code> that the browser no longer sends the sign-in cookie. Close that page, remove this browser's website data for <code>127.0.0.1</code> (in Safari: Settings &gt; Privacy &gt; Manage Website Data), then open the sign-in link again.</p>
 </body>
 </html>
 "#;
@@ -668,10 +672,16 @@ async fn local_dashboard(
     request: Request,
     next: Next,
 ) -> Response {
-    // Loopback IP literals first move to `localhost` (query included), so the
-    // cookie is set for the same host the workbench and its Previews use.
+    // `localhost` and other loopback addresses first move to `127.0.0.1`
+    // (query included), so the cookie is set for the one host the workbench
+    // uses, which a `Domain=localhost` cookie never reaches.
     if crate::routes::canonical_workbench_location(request.headers(), request.uri()).is_some() {
-        return next.run(request).await;
+        let stale = stale_localhost_cookies(local, request.headers());
+        let mut response = next.run(request).await;
+        for clear in stale {
+            response.headers_mut().append(header::SET_COOKIE, clear);
+        }
+        return response;
     }
     if let Some(presented) = sign_in_token(request.uri()) {
         return if secret_matches(local.secret.expose_secret(), presented) {
@@ -701,16 +711,37 @@ async fn local_dashboard(
     sign_in_page(false)
 }
 
+/// `Set-Cookie` headers that remove this daemon's sign-in cookies from a
+/// `localhost` address, sent with the redirect to `127.0.0.1`. Sign-in links
+/// before 1.5.0 named `localhost`, so a browser may still hold the token
+/// cookie there, where every web server on another `localhost` port receives
+/// it. Both cookies were host-only with `Path=/`, which these match.
+fn stale_localhost_cookies(local: &LocalToken, headers: &HeaderMap) -> Vec<HeaderValue> {
+    let named_localhost = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| Authority::from_str(value).ok())
+        .is_some_and(|authority| authority.host().eq_ignore_ascii_case("localhost"));
+    if !named_localhost {
+        return Vec::new();
+    }
+    [&local.cookie_name, &local.signed_in_cookie_name]
+        .into_iter()
+        .filter(|name| cookie_values(headers, name).next().is_some())
+        .filter_map(|name| HeaderValue::from_str(&format!("{name}=; Path=/; Max-Age=0")).ok())
+        .collect()
+}
+
 /// Open the same address again from a page of the workbench's own origin.
 ///
 /// Safari (WebKit) leaves a SameSite=Strict cookie off every request of a
 /// navigation that was redirected from another site, and keeps doing so when
-/// that page is reloaded. `127.0.0.1` and `localhost` are different sites, so
-/// a person who opened a `127.0.0.1` bookmark or sign-in link reached
-/// `localhost` through the canonical-host redirect without the token cookie
-/// and saw "Sign in to Axocoatl", while Chromium sent the cookie. A
-/// navigation this page starts is same-origin, so every browser sends the
-/// cookie with it.
+/// that page is reloaded. `localhost` and `127.0.0.1` are different sites, so
+/// a person who opened a `localhost` bookmark (every sign-in link before
+/// 1.5.0 named `localhost`) reached `127.0.0.1` through the canonical-host
+/// redirect without the token cookie and saw "Sign in to Axocoatl", while
+/// Chromium sent the cookie. A navigation this page starts is same-origin,
+/// so every browser sends the cookie with it.
 ///
 /// It is served only when the person started the navigation themselves
 /// (`Sec-Fetch-Site: none`, see [`is_navigation_the_person_started`]) and
@@ -723,12 +754,11 @@ async fn local_dashboard(
 /// is never a credential. It sends a navigation back at most once: the
 /// request this page makes is `Sec-Fetch-Site: same-origin`, so if the token
 /// cookie is still missing there, that request gets the sign-in page,
-/// whatever cookies it carries. That holds for a `Domain=localhost` copy of
-/// the "signed in" cookie that a Preview page set in Safari, which this
-/// response cannot clear. The response clears the host-only one, so without
-/// such a copy the next navigation the person starts goes straight to the
-/// sign-in page; the next workbench load the token cookie opens sets it
-/// again.
+/// whatever cookies it carries. That holds for a copy of the "signed in"
+/// cookie that a page on another `127.0.0.1` port set, which this response
+/// clears but that page can set again. Without such a copy the next
+/// navigation the person starts goes straight to the sign-in page; the next
+/// workbench load the token cookie opens sets the cookie again.
 fn same_origin_retry_page(local: &LocalToken, uri: &Uri) -> Response {
     let target = html_attribute_url(&location_without_sign_in_token(uri));
     let mut response = (
@@ -1123,7 +1153,7 @@ mod tests {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("host"))
         {
-            builder = builder.header(header::HOST, format!("localhost:{PORT}"));
+            builder = builder.header(header::HOST, format!("127.0.0.1:{PORT}"));
         }
         for (name, value) in headers {
             builder = builder.header(*name, HeaderValue::from_bytes(value).unwrap());
@@ -1405,7 +1435,7 @@ mod tests {
     }
 
     /// Safari leaves the SameSite=Strict token cookie off a navigation that
-    /// the `127.0.0.1` -> `localhost` redirect carried across sites. With the
+    /// the `localhost` -> `127.0.0.1` redirect carried across sites. With the
     /// "signed in" cookie, `/` opens the same address again from its own
     /// origin, once.
     #[tokio::test]
@@ -1469,7 +1499,7 @@ mod tests {
     async fn signed_in_cookie_never_signs_in_a_request_another_site_or_a_script_made() {
         let config = token_config();
         let refused: [Vec<(&str, &str)>; 7] = [
-            // A link or form on another site, including another localhost port.
+            // A link or form on another site, including another 127.0.0.1 port.
             vec![
                 ("sec-fetch-site", "cross-site"),
                 ("sec-fetch-mode", "navigate"),
@@ -1524,8 +1554,8 @@ mod tests {
     }
 
     /// Cookie pairs that are not one visible-ASCII `name=value`: what Safari
-    /// sends for `document.cookie = 'junk=é; Domain=localhost'` (the byte
-    /// 0xE9), the same value in UTF-8, a non-ASCII name, quotes, a pair
+    /// sends for a cookie a page set with `document.cookie = 'junk=é'` (the
+    /// byte 0xE9), the same value in UTF-8, a non-ASCII name, quotes, a pair
     /// without a name or without `=`, and empty pairs.
     const MALFORMED_COOKIES: [&[u8]; 9] = [
         b"junk=\xe9",
@@ -1604,9 +1634,9 @@ mod tests {
         }
     }
 
-    /// Safari lets a Preview page set `axocoatl-token-<port>=…;
-    /// Domain=localhost`, and then sends it beside the workbench's own
-    /// host-only token cookie, before or after it. The real one still
+    /// A page on another `127.0.0.1` port can set `axocoatl-token-<port>=…`
+    /// with a longer `Path`, and the browser then sends it beside the
+    /// workbench's own token cookie, before or after it. The real one still
     /// signs the request in; the forged one never does on its own.
     #[tokio::test]
     async fn a_forged_token_cookie_authorizes_only_beside_the_real_one() {
@@ -1673,8 +1703,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
-    /// A `Domain=localhost` "signed in" cookie that a Preview page set in
-    /// Safari stays after the retry page clears the host-only one. While
+    /// A "signed in" cookie that a page on another `127.0.0.1` port sets
+    /// again after the retry page cleared it. While
     /// the browser is signed out, a navigation the person starts passes
     /// through the retry page once: the request that page makes is
     /// same-origin, so it gets the sign-in page with every cookie it
@@ -1792,25 +1822,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loopback_ip_sign_in_moves_to_localhost_first() {
+    async fn localhost_sign_in_moves_to_127_0_0_1_first() {
         let uri = format!("/?{SIGN_IN_QUERY_KEY}={TOKEN}");
+        for host in ["localhost:18080", "[::1]:18080"] {
+            let response = send(&token_config(), Method::GET, &uri, &[("host", host)]).await;
+            assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT, "{host}");
+            assert_eq!(
+                header_text(&response, header::LOCATION),
+                Some(format!("http://127.0.0.1:18080{uri}").as_str())
+            );
+            assert_eq!(
+                header_text(&response, header::REFERRER_POLICY),
+                Some("no-referrer")
+            );
+            assert!(response.headers().get(header::SET_COOKIE).is_none());
+        }
+    }
+
+    /// Sign-in links before 1.5.0 named `localhost`, where every web server
+    /// on another `localhost` port receives the token cookie. The redirect
+    /// to `127.0.0.1` removes this daemon's sign-in cookies from
+    /// `localhost`, and only from there; other cookies are left alone.
+    #[tokio::test]
+    async fn the_redirect_from_localhost_removes_this_daemons_sign_in_cookies_there() {
+        let both = format!("{}; {SIGNED_IN}; app=1", cookie(TOKEN));
         let response = send(
             &token_config(),
             Method::GET,
-            &uri,
-            &[("host", "127.0.0.1:18080")],
+            "/?session=s1",
+            &typed_navigation(&[("host", "localhost:18080"), ("cookie", both.as_str())]),
         )
         .await;
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(
             header_text(&response, header::LOCATION),
-            Some(format!("http://localhost:18080{uri}").as_str())
+            Some("http://127.0.0.1:18080/?session=s1")
         );
         assert_eq!(
-            header_text(&response, header::REFERRER_POLICY),
-            Some("no-referrer")
+            set_cookies(&response),
+            [
+                "axocoatl-token-18080=; Path=/; Max-Age=0",
+                "axocoatl-token-18080-signed-in=; Path=/; Max-Age=0",
+            ]
         );
-        assert!(response.headers().get(header::SET_COOKIE).is_none());
+
+        let other_daemon = "axocoatl-token-9090=x; axocoatl-token-9090-signed-in=1";
+        let response = send(
+            &token_config(),
+            Method::GET,
+            "/",
+            &[("host", "localhost:18080"), ("cookie", other_daemon)],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(set_cookies(&response).is_empty());
+
+        // `[::1]` never held them: sign-in links named `localhost`.
+        let response = send(
+            &token_config(),
+            Method::GET,
+            "/",
+            &[("host", "[::1]:18080"), ("cookie", both.as_str())],
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(set_cookies(&response).is_empty());
     }
 
     #[tokio::test]
@@ -1846,7 +1922,7 @@ mod tests {
             "/api/sessions/s1/rebuild",
             &[
                 ("cookie", valid_cookie.as_str()),
-                ("origin", "http://localhost:18080"),
+                ("origin", "http://127.0.0.1:18080"),
                 ("sec-fetch-site", "same-origin"),
             ],
         )
@@ -1954,10 +2030,10 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_url_names_localhost_and_the_port() {
+    fn sign_in_url_names_127_0_0_1_and_the_port() {
         assert_eq!(
             sign_in_url(8080, &SecretString::from("abc".to_string())),
-            "http://localhost:8080/?token=abc"
+            "http://127.0.0.1:8080/?token=abc"
         );
     }
 

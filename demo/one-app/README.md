@@ -98,7 +98,7 @@ ollama list
 ```
 
 Confirm that `qwen3:8b` appears in `ollama list`, the launcher prints a
-`Sign in: http://localhost:18080/?token=…` link, and `http://127.0.0.1:18080/health/ready` responds. In a second
+`Sign in: http://127.0.0.1:18080/?token=…` link, and `http://127.0.0.1:18080/health/ready` responds. In a second
 terminal, run `./demo/one-app/seed-automation.sh` after the daemon is healthy.
 
 Then complete one private warm-up through the first diagnosis. This catches model,

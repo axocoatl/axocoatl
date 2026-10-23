@@ -254,7 +254,7 @@ for versioned changes.
 axocoatl onboard   # configure Axocoatl for this OS user
 axocoatl doctor    # check your environment
 axocoatl dev       # start the daemon and the one app
-# Open the "Sign in:" link it prints (http://localhost:8080/?token=…).
+# Open the "Sign in:" link it prints (http://127.0.0.1:8080/?token=…).
 # `axocoatl url` prints it again.
 # Choose Open workspace… in the app to authorize a repository.
 ```
@@ -340,7 +340,7 @@ tokens, and one Agent is cheaper for small tasks. To change the team, see
 ### What else the workbench does
 
 - **One executable, one browser surface.** `axocoatl dev` starts the local daemon
-  and serves the embedded workbench at `http://localhost:8080`, behind a
+  and serves the embedded workbench at `http://127.0.0.1:8080`, behind a
   per-daemon sign-in token. Conversation stays
   central while Files, Source Control, Preview, Terminal, History, and focused review
   open around the active Session.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 
+import { startCookieEcho } from '../support/cookie-echo.mjs';
 import {
   browserEngines, launchTestDaemon, trackRequests, waitForNoRequestsInFlight,
 } from '../support/daemon.mjs';
@@ -11,45 +12,54 @@ import {
 // Usually `/` then serves the sign-in page as well (a cleared or expired
 // sign-in cookie, a rotated local API token), and one reload shows it. But
 // `/` can go on serving the shell while the API answers 401. Safari on macOS
-// does that when a page it has open set, for localhost with Path=/api, 51
-// cookies of 4,000 bytes and then smaller ones: WebKit caps the Cookie header
-// it sends at about 200 KB, puts the longest-path cookies first and skips
-// each one that no longer fits, so the smaller ones fill what the large ones
-// leave (the large ones alone still leave room for the token cookie), and
-// the token cookie is left off every API request and still sent to `/`.
-// Any page on a `*.localhost` address that runs top-level can set those
-// cookies, for `Domain=localhost`. In Safari that is never a Preview, which
-// the daemon serves only inside the workbench (src/preview_document.rs), but
-// it can be another development server on such an address
-// (operate/security.mdx).
+// does that when a page it has open set, for the workbench's host with
+// Path=/api, 51 cookies of 4,000 bytes and then smaller ones: WebKit caps the
+// Cookie header it sends at about 200 KB, puts the longest-path cookies first
+// and skips each one that no longer fits, so the smaller ones fill what the
+// large ones leave (the large ones alone still leave room for the token
+// cookie), and the token cookie is left off every API request and still sent
+// to `/`. The workbench is served at 127.0.0.1, so only a page on another
+// 127.0.0.1 port can set those cookies. A page on a `*.localhost` address
+// sets them for `Domain=localhost` in Safari, and they never reach 127.0.0.1;
+// the first journey after the 401 ones shows that, in every engine.
 // The shell used to reload itself without end there. Its code now reloads
 // at most once a minute, and otherwise says this browser is signed out and
 // how to sign in again. These journeys pin one automatic reload, then the
 // message, and no further automatic reload in the seconds each one waits
-// after it; they do not pin the one-minute window itself.
+// after it; a journey with a fake clock pins the one-minute window itself.
 //
 // The first and third journeys make the API answer 401 with Playwright, and
-// the second clears the browser's cookies. The last two set the cookies from
-// a top-level page on another `*.localhost` address that Playwright serves,
-// against the real daemon: with Path=/api and with Path=/ws. In WebKit on
-// macOS, which keeps them, they assert what the
-// person then sees; in Chromium and WebKit on Linux, that the cookies are
-// refused and the workbench works.
+// the second clears the browser's cookies. The cookie journeys set the
+// cookies from real pages: a top-level page on another `*.localhost`
+// address, and one on another 127.0.0.1 port, with Path=/api, Path=/ and
+// Path=/ws, against the real daemon. In WebKit on macOS, which caps the
+// Cookie header, the 127.0.0.1 ones assert what the person then sees; in
+// Chromium, that the workbench keeps working.
 const engines = await browserEngines();
 let runtime;
+let pages;
 
 before(async () => {
   runtime = await launchTestDaemon();
+  // Real pages on other addresses: `http://<name>.localhost:<port>/` and
+  // `http://127.0.0.1:<port>/` on a port that is not the daemon's.
+  pages = await startCookieEcho();
 });
 
 after(async () => {
+  await pages?.close();
   await runtime?.stop();
 });
 
 const port = () => new URL(runtime.baseUrl).port;
-const workbench = () => `http://localhost:${port()}/`;
+// The workbench's one address.
+const workbenchHost = () => `127.0.0.1:${port()}`;
+const workbench = () => `http://${workbenchHost()}/`;
 const connected = () => typeof S !== 'undefined' && S.liveConnection === 'connected';
 const SIGNED_OUT = 'This browser is signed out';
+const RELOADED_AT = 'axocoatl:signed-out-reload';
+// What the message and the sign-in page say to do about a cookie flood.
+const REMEDY = /another 127\.0\.0\.1 address[\s\S]*Settings > Privacy > Manage Website Data/;
 
 /** The statuses of the documents `page` loads at `/` on the workbench. */
 function documentLoads(page) {
@@ -58,7 +68,7 @@ function documentLoads(page) {
     const request = response.request();
     const url = new URL(response.url());
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()
-        && url.host === `localhost:${port()}` && url.pathname === '/') {
+        && url.host === workbenchHost() && url.pathname === '/') {
       loads.push(response.status());
     }
   });
@@ -68,10 +78,11 @@ function documentLoads(page) {
 const signedOutMessage = (page) => page.getByRole('alertdialog', { name: SIGNED_OUT });
 
 /**
- * The signed-out message is shown, modal (the rest of the page is inert),
- * focused, says what to do, and stays after Escape. `loads` (from
- * documentLoads) is reported if it never appears, so a reload loop shows how
- * many documents it loaded.
+ * The signed-out message is shown, modal (the rest of the page is inert,
+ * and no modal dialog, which would sit above it, is open), focused, says
+ * what to do, and stays after Escape.
+ * `loads` (from documentLoads) is reported if it never appears, so a reload
+ * loop shows how many documents it loaded.
  */
 async function assertSignedOutMessage(page, loads) {
   const message = signedOutMessage(page);
@@ -83,17 +94,24 @@ async function assertSignedOutMessage(page, loads) {
   const text = await message.innerText();
   assert.match(text, /axocoatl url/);
   assert.match(text, /axocoatl dev/);
-  assert.match(text, /Safari > Settings > Privacy > Manage Website Data/);
+  assert.match(text, REMEDY);
   assert.deepEqual(await page.evaluate(() => {
     const message = document.getElementById('signed-out');
+    const roots = [document];
+    for (let index = 0; index < roots.length; index += 1) {
+      for (const element of roots[index].querySelectorAll('*')) {
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+      }
+    }
     return {
       modal: message.getAttribute('aria-modal'),
       othersInert: [...document.body.children].every((element) => element === message || element.inert),
       focused: message.contains(document.activeElement),
+      noModalDialog: roots.every((root) => !root.querySelector('dialog[open]:modal')),
       description: document.getElementById(message.getAttribute('aria-describedby'))?.textContent.includes('axocoatl url'),
       count: document.querySelectorAll('#signed-out').length,
     };
-  }), { modal: 'true', othersInert: true, focused: true, description: true, count: 1 });
+  }), { modal: 'true', othersInert: true, focused: true, noModalDialog: true, description: true, count: 1 });
   await page.getByRole('button', { name: 'Reload' }).waitFor({ state: 'visible' });
   for (let press = 0; press < 2; press += 1) await page.keyboard.press('Escape');
   assert.equal(await message.isVisible(), true, 'Escape hid the signed-out message');
@@ -109,38 +127,51 @@ async function signedInContext(browser) {
   return context;
 }
 
-/**
- * Open a page on another `*.localhost` address top-level (a development
- * server Axocoatl does not serve; in Safari the daemon never serves a
- * Preview as a page of its own), served here by Playwright, and set from its
- * script, for localhost with `cookiePath`, 51 cookies of 4,000 bytes and then
- * smaller ones down to 8 bytes. WebKit skips a cookie that no longer fits
- * under its cap and goes on with the next, so the smaller ones fill what is
- * left and no room remains for the token cookie, whatever its length.
- */
-async function fillCookieHeaderFromLocalhostPage(context, cookiePath) {
-  const otherOrigin = `http://another-app.localhost:${port()}`;
-  const fromOther = (url) => url.origin === otherOrigin;
-  await context.route(fromOther, (route) => route.fulfill({
-    status: 200, contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Another app</title>',
-  }));
-  const preview = await context.newPage();
-  try {
-    await preview.goto(`${otherOrigin}/`);
-    await preview.evaluate((cookiePath) => {
-      const attributes = `; Domain=localhost; Path=${cookiePath}; Max-Age=3600`;
-      for (let i = 0; i < 51; i += 1) document.cookie = `fill-${i}=${'x'.repeat(4000)}${attributes}`;
-      [2048, 1024, 512, 256, 128, 64, 32, 16, 8].forEach((size, i) => {
-        document.cookie = `fit-${i}=${'y'.repeat(size)}${attributes}`;
-      });
-    }, cookiePath);
-  } finally {
-    await preview.close();
-    await context.unroute(fromOther);
-  }
-  const stored = await context.cookies(`http://localhost:${port()}${cookiePath}/`);
-  return stored.filter((cookie) => cookie.name.startsWith('fill-') || cookie.name.startsWith('fit-')).length;
+/** Make every API request of `context` to the workbench answer 401. */
+async function refuseTheApi(context) {
+  await context.route((url) => url.host === workbenchHost() && url.pathname.startsWith('/api/'),
+    (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }));
 }
+
+/**
+ * Open `origin` top-level, a real page Axocoatl does not serve, and set from
+ * its script, with `cookiePath` (and `attributes`), 51 cookies of 4,000
+ * bytes and then smaller ones down to 8 bytes. WebKit puts cookies with a
+ * longer path first and, among cookies of one path, sorts them by name
+ * (measured with Playwright 1.64's WebKit on macOS); it skips a cookie that
+ * no longer fits under its cap and goes on with the next, so the smaller
+ * ones fill what is left and no room remains for the token cookie, whatever
+ * its length. Their names start with `a-`, before `axocoatl-token-`, so with
+ * Path=/ they come first too. Returns how many the browser stored for
+ * `storedFor`.
+ */
+async function fillCookieHeader(context, origin, cookiePath, attributes, storedFor) {
+  const page = await context.newPage();
+  try {
+    await page.goto(`${origin}/fill`);
+    await page.evaluate(({ cookiePath, attributes }) => {
+      const suffix = `${attributes}; Path=${cookiePath}; Max-Age=3600`;
+      for (let i = 0; i < 51; i += 1) document.cookie = `a-fill-${i}=${'x'.repeat(4000)}${suffix}`;
+      [2048, 1024, 512, 256, 128, 64, 32, 16, 8].forEach((size, i) => {
+        document.cookie = `a-fit-${i}=${'y'.repeat(size)}${suffix}`;
+      });
+    }, { cookiePath, attributes });
+  } finally {
+    await page.close();
+  }
+  const stored = await context.cookies(`http://${storedFor}${cookiePath === '/' ? '' : cookiePath}/`);
+  return stored.filter((cookie) => cookie.path === cookiePath && /^a-fi(ll|t)-/.test(cookie.name)).length;
+}
+
+/** The flood from a page on a `*.localhost` address, for `Domain=localhost`. */
+const fillFromLocalhostPage = (context, cookiePath) => fillCookieHeader(
+  context, `http://another-app.localhost:${pages.port}`, cookiePath, '; Domain=localhost', `localhost:${port()}`,
+);
+
+/** The flood from a page on another 127.0.0.1 port, host-only for 127.0.0.1. */
+const fillFrom127Page = (context, cookiePath) => fillCookieHeader(
+  context, `http://127.0.0.1:${pages.port}`, cookiePath, '', workbenchHost(),
+);
 
 /** Whether `context` still holds this daemon's real token cookie (compared, never printed). */
 async function holdsTheToken(context) {
@@ -148,13 +179,45 @@ async function holdsTheToken(context) {
     .some((cookie) => cookie.name === runtime.cookieName && cookie.value === runtime.token);
 }
 
+/** The status of a top-level navigation to `path` on the workbench. */
+async function navigationStatus(context, path) {
+  const probe = await context.newPage();
+  try {
+    return (await probe.goto(`http://${workbenchHost()}${path}`))?.status();
+  } finally {
+    await probe.close();
+  }
+}
+
+/**
+ * WebKit on macOS caps the Cookie header (about 200 KB), so a flood of
+ * cookies for the workbench's host leaves the token cookie off; Chromium
+ * sends them all (both measured). WebKit on Linux (libsoup) was not
+ * measured here: `null`, and the journeys then read what the engine did.
+ */
+const capsTheCookieHeader = (browser) => {
+  if (browser.browserType().name() === 'chromium') return false;
+  return process.platform === 'darwin' ? true : null;
+};
+
+/**
+ * Whether the flood left the token cookie off a top-level request to `path`
+ * (it answers 401 then), checked against what this engine is known to do.
+ */
+async function tokenLeftOff(context, browser, path) {
+  const status = await navigationStatus(context, path);
+  const left = status === 401;
+  const known = capsTheCookieHeader(browser);
+  if (known !== null) assert.equal(left, known, `${path} answered ${status}`);
+  return left;
+}
+
 for (const engine of engines) {
   test(`${engine.name}: while / serves the shell and every API request answers 401, the shell reloads once and then says it is signed out`, { timeout: 120_000 }, async () => {
     const browser = await engine.launch();
     try {
       const context = await signedInContext(browser);
-      await context.route((url) => url.host === `localhost:${port()}` && url.pathname.startsWith('/api/'),
-        (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }));
+      await refuseTheApi(context);
       const page = await context.newPage();
       const loads = documentLoads(page);
       await page.goto(workbench(), { waitUntil: 'commit' });
@@ -174,6 +237,82 @@ for (const engine of engines) {
       await assertSignedOutMessage(page, loads);
       await page.waitForTimeout(3_000);
       assert.deepEqual(loads, [200, 200, 200]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // The automatic reload is kept for one minute from the last one: a 401
+  // 59 s after it shows the message, one 61 s after it reloads once more.
+  // Date.now() is fixed by Playwright's clock; the page's timers run as usual.
+  test(`${engine.name}: the shell reloads on a 401 at most once a minute`, { timeout: 120_000 }, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await signedInContext(browser);
+      const start = Date.parse('2026-10-01T12:00:00Z');
+      await context.clock.setFixedTime(start);
+      await refuseTheApi(context);
+      const page = await context.newPage();
+      const loads = documentLoads(page);
+      await page.goto(workbench(), { waitUntil: 'commit' });
+      await assertSignedOutMessage(page, loads);
+      assert.deepEqual(loads, [200, 200]);
+      assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), RELOADED_AT), String(start));
+
+      const reloadByHand = () => Promise.all([
+        page.waitForResponse((response) => response.request().isNavigationRequest()
+          && new URL(response.url()).pathname === '/'),
+        page.getByRole('button', { name: 'Reload' }).click(),
+      ]);
+      await context.clock.setFixedTime(start + 59_000);
+      await reloadByHand();
+      await assertSignedOutMessage(page, loads);
+      await page.waitForTimeout(2_000);
+      assert.deepEqual(loads, [200, 200, 200], '59 s after the automatic reload');
+
+      await context.clock.setFixedTime(start + 61_000);
+      await reloadByHand();
+      await assertSignedOutMessage(page, loads);
+      await page.waitForTimeout(2_000);
+      assert.deepEqual(loads, [200, 200, 200, 200, 200], '61 s after the automatic reload');
+      assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), RELOADED_AT), String(start + 61_000));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // A modal <dialog> sits in the top layer, above the message however that is
+  // styled; it used to hide the message until Escape.
+  test(`${engine.name}: the signed-out message closes an open modal dialog and stays on top`, { timeout: 120_000 }, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await signedInContext(browser);
+      const page = await context.newPage();
+      const loads = documentLoads(page);
+      await page.goto(workbench());
+      await page.waitForFunction(connected);
+      // The automatic reload was used a moment ago, so the next 401 shows
+      // the message on this page.
+      await page.evaluate((key) => sessionStorage.setItem(key, String(Date.now())), RELOADED_AT);
+      const sessionId = runtime.fixtures.alpha.sessions[0].id;
+      const modalOpen = () => page.evaluate(() => Boolean(
+        document.querySelector('#ways-history')?.shadowRoot?.querySelector('dialog')?.open));
+      // Ways decisions opens as a modal dialog, in a shadow root.
+      await page.evaluate((id) => { void document.querySelector('#ways-history').show({ sessionId: id }); }, sessionId);
+      await page.waitForFunction(() => document.querySelector('#ways-history')?.shadowRoot?.querySelector('dialog')?.open);
+      await refuseTheApi(context);
+      await page.evaluate(() => { void fetch('/api/agents'); });
+      await assertSignedOutMessage(page, loads);
+      assert.equal(await modalOpen(), false);
+      // Nothing on the page can open another one over the message.
+      await page.evaluate((id) => {
+        const dialog = document.querySelector('#ways-history').shadowRoot.querySelector('dialog');
+        dialog.showModal();
+        void document.querySelector('#ways-history').show({ sessionId: id });
+      }, sessionId);
+      assert.equal(await modalOpen(), false);
+      await assertSignedOutMessage(page, loads);
+      assert.deepEqual(loads, [200]);
     } finally {
       await browser.close();
     }
@@ -220,8 +359,7 @@ for (const engine of engines) {
           get() { throw new DOMException('The operation is insecure.', 'SecurityError'); },
         });
       });
-      await context.route((url) => url.host === `localhost:${port()}` && url.pathname.startsWith('/api/'),
-        (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' }));
+      await refuseTheApi(context);
       const page = await context.newPage();
       const loads = documentLoads(page);
       await page.goto(workbench(), { waitUntil: 'commit' });
@@ -233,28 +371,57 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: the large and filler cookies a top-level *.localhost page sets for localhost with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
+  // Safari on macOS keeps Domain=localhost cookies that a top-level page on
+  // another *.localhost address sets, and sends them to localhost on every
+  // port. They never reach 127.0.0.1, the workbench's address: with Path=/api,
+  // Path=/ and Path=/ws, the workbench, its API and its live connection keep
+  // working in every engine. (Before 1.5.0 the workbench was at localhost,
+  // and these cookies signed Safari out of it.)
+  test(`${engine.name}: cookies a top-level *.localhost page sets for Domain=localhost never reach the workbench`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
-    const safariSharesLocalhostCookies = process.platform === 'darwin'
+    const keepsDomainLocalhost = process.platform === 'darwin'
       && browser.browserType().name() === 'webkit';
     try {
       const context = await signedInContext(browser);
-      const stored = await fillCookieHeaderFromLocalhostPage(context, '/api');
-      // Safari on macOS keeps the 60 cookies for localhost; Chromium and
-      // WebKit on Linux refuse every one.
-      assert.equal(stored, safariSharesLocalhostCookies ? 60 : 0);
+      for (const cookiePath of ['/api', '/', '/ws']) {
+        // Safari on macOS keeps the 60 cookies for localhost; Chromium and
+        // WebKit on Linux refuse every one.
+        assert.equal(await fillFromLocalhostPage(context, cookiePath), keepsDomainLocalhost ? 60 : 0, cookiePath);
+      }
       assert.equal(await holdsTheToken(context), true);
-      // The token cookie is still stored and still sent to `/`, but not to
-      // the API: a navigation to an API path gets 401 in Safari.
-      const probe = await context.newPage();
-      const api = await probe.goto(`http://localhost:${port()}/api/agents`);
-      assert.equal(api?.status(), safariSharesLocalhostCookies ? 401 : 200);
-      await probe.close();
+      const atWorkbench = (await context.cookies(workbench()))
+        .filter((cookie) => /^a-fi(ll|t)-/.test(cookie.name));
+      assert.deepEqual(atWorkbench, []);
+      assert.equal(await navigationStatus(context, '/api/agents'), 200);
+
+      const page = await context.newPage();
+      const loads = documentLoads(page);
+      await page.goto(workbench());
+      await page.waitForFunction(connected);
+      assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
+      await page.waitForTimeout(2_000);
+      assert.deepEqual(loads, [200]);
+      assert.equal(await signedOutMessage(page).count(), 0);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/api sign Safari out of the API, and the shell says so instead of reloading without end`, { timeout: 180_000 }, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await signedInContext(browser);
+      assert.equal(await fillFrom127Page(context, '/api'), 60);
+      assert.equal(await holdsTheToken(context), true);
+      // The token cookie is still stored and still sent to `/`, but in Safari
+      // not to the API: a navigation to an API path gets 401 there.
+      const capped = await tokenLeftOff(context, browser, '/api/agents');
+      assert.equal(await navigationStatus(context, '/'), 200);
 
       const page = await context.newPage();
       const loads = documentLoads(page);
       await page.goto(workbench(), { waitUntil: 'commit' });
-      if (!safariSharesLocalhostCookies) {
+      if (!capped) {
         await page.waitForFunction(connected);
         assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
         await page.waitForTimeout(2_000);
@@ -279,9 +446,9 @@ for (const engine of engines) {
       await page.waitForTimeout(3_000);
       assert.deepEqual(loads, [303, 200]);
 
-      // What the message says to do: remove localhost's cookies (Manage
-      // Website Data removes them all), then open the sign-in link again.
-      await context.clearCookies();
+      // What the message says to do: remove this browser's data for
+      // 127.0.0.1, then open the sign-in link again.
+      await context.clearCookies({ domain: '127.0.0.1' });
       loads.length = 0;
       await page.goto(runtime.signInUrl);
       await page.waitForFunction(connected);
@@ -293,13 +460,61 @@ for (const engine of engines) {
     }
   });
 
-  test(`${engine.name}: the large and filler cookies a top-level *.localhost page sets for localhost with Path=/ws keep Safari's live connection from opening, while the API answers`, { timeout: 180_000 }, async () => {
+  // With Path=/ the token cookie stays off `/` too, so the browser only ever
+  // sees the daemon's sign-in page: that page says what to do.
+  test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/ sign Safari out entirely, and the sign-in page says what to do`, { timeout: 180_000 }, async () => {
     const browser = await engine.launch();
-    const safariSharesLocalhostCookies = process.platform === 'darwin'
-      && browser.browserType().name() === 'webkit';
     try {
       const context = await signedInContext(browser);
-      assert.equal(await fillCookieHeaderFromLocalhostPage(context, '/ws'), safariSharesLocalhostCookies ? 60 : 0);
+      assert.equal(await fillFrom127Page(context, '/'), 60);
+      assert.equal(await holdsTheToken(context), true);
+      // In Safari every request then goes without the token cookie, `/` too.
+      const capped = await tokenLeftOff(context, browser, '/api/agents');
+      const page = await context.newPage();
+      const loads = documentLoads(page);
+      await page.goto(workbench(), { waitUntil: 'commit' });
+      if (!capped) {
+        await page.waitForFunction(connected);
+        assert.deepEqual(loads, [200]);
+        return;
+      }
+      await page.waitForLoadState('load');
+      assert.deepEqual(loads, [401]);
+      assert.equal(await page.title(), 'Sign in to Axocoatl');
+      assert.match(await page.locator('body').innerText(), REMEDY);
+      // Opening the sign-in link again stores the cookie, and the browser
+      // still leaves it off.
+      loads.length = 0;
+      await page.goto(runtime.signInUrl);
+      assert.deepEqual(loads, [303, 401]);
+      assert.match(await page.locator('body').innerText(), REMEDY);
+
+      // What it says to do restores the workbench.
+      await context.clearCookies({ domain: '127.0.0.1' });
+      loads.length = 0;
+      await page.goto(runtime.signInUrl);
+      await page.waitForFunction(connected);
+      assert.deepEqual(loads, [303, 200]);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // A WebSocket never sees the 401 of a refused handshake. After a few
+  // failed attempts the shell asks /ws with fetch, which carries the same
+  // cookies, and a 401 there shows the signed-out message as one from the
+  // API does. It used to say only that the live connection was reconnecting,
+  // forever.
+  test(`${engine.name}: the cookies a page on another 127.0.0.1 port sets with Path=/ws keep Safari's live connection from opening, and the shell says it is signed out`, { timeout: 180_000 }, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await signedInContext(browser);
+      assert.equal(await fillFrom127Page(context, '/ws'), 60);
+      // An ordinary request to /ws carries the same cookies as the live
+      // connection's handshake: without the token cookie it gets 401, with
+      // it 400 (it is not a handshake).
+      const capped = await tokenLeftOff(context, browser, '/ws');
+      assert.equal(await navigationStatus(context, '/api/agents'), 200);
       const page = await context.newPage();
       const loads = documentLoads(page);
       const sockets = [];
@@ -309,25 +524,25 @@ for (const engine of engines) {
       await page.goto(workbench());
       await page.waitForFunction(() => typeof S !== 'undefined');
       assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
-      if (!safariSharesLocalhostCookies) {
+      if (!capped) {
         await page.waitForFunction(connected);
+        // With the sign-in cookie, /ws answers an ordinary request 400.
+        assert.equal(await page.evaluate(async () => (await fetch('/ws')).status), 400);
         assert.deepEqual(loads, [200]);
         return;
       }
-      // The live connection's handshake gets 401 and the shell keeps
-      // retrying; the page itself and its API are unaffected, and no
-      // signed-out message is shown (a WebSocket cannot see the 401).
-      await page.waitForTimeout(10_000);
+      // Three failed attempts, then the check, one reload, three more, then
+      // the message.
+      await assertSignedOutMessage(page, loads);
+      assert.deepEqual(loads, [200, 200]);
+      assert.ok(sockets.length >= 3, `live connection attempts: ${sockets.length}`);
       assert.equal(await page.evaluate(() => S.liveConnection), 'reconnecting');
-      assert.match(await page.locator('#status-pearls').innerText(), /live connection reconnecting/);
-      assert.ok(sockets.length >= 2, `live connection attempts: ${sockets.length}`);
-      assert.deepEqual(loads, [200]);
-      assert.equal(await signedOutMessage(page).count(), 0);
 
-      // Removing localhost's cookies and signing in again restores it.
-      await context.clearCookies();
+      // Removing 127.0.0.1's cookies and signing in again restores it.
+      await context.clearCookies({ domain: '127.0.0.1' });
       await page.goto(runtime.signInUrl);
       await page.waitForFunction(connected);
+      assert.equal(await signedOutMessage(page).count(), 0);
     } finally {
       await browser.close();
     }

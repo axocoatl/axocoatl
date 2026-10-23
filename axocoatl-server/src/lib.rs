@@ -607,11 +607,32 @@ fn bind_loopback_peer(
     }
 }
 
+/// The error for a loopback listener whose IPv4 peer, `127.0.0.1`, does not
+/// exist on this computer: the workbench is served only at that address
+/// ([`routes::WORKBENCH_HOST`]), and the sign-in link names it. `None` when
+/// the missing address is IPv6, which the workbench does not need.
+fn missing_workbench_address(peer_address: std::net::SocketAddr) -> Option<std::io::Error> {
+    peer_address.is_ipv4().then(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!(
+                "this computer has no IPv4 loopback address, so Axocoatl cannot listen on \
+                 {peer_address}. The workbench is served only at {}:{}, which keeps cookies \
+                 that pages on `localhost` addresses set away from it.",
+                routes::WORKBENCH_HOST,
+                peer_address.port()
+            ),
+        )
+    })
+}
+
 /// Bind the HTTP listeners for `host:port`. A loopback host also holds the
 /// same port on the other loopback address family: browsers, curl and Node
 /// try `[::1]` before `127.0.0.1` for `localhost`, so a process that listened
-/// there would receive the sign-in link and the workbench's cookies. Startup
-/// fails when another process already holds it.
+/// there would receive what was meant for Axocoatl at `localhost`: a sign-in
+/// link from before 1.5.0, a browser's old sign-in cookie, a script's token.
+/// Startup fails when another process already holds it, and when the
+/// workbench's own address, `127.0.0.1`, does not exist.
 async fn bind_listeners(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let Some((primary, peer)) = loopback_bind_addresses(host) else {
         return Ok(vec![
@@ -629,6 +650,9 @@ async fn bind_listeners(host: &str, port: u16) -> std::io::Result<Vec<tokio::net
         match bind_loopback_peer(peer_address) {
             Ok(Some(peer_listener)) => return Ok(vec![listener, peer_listener]),
             Ok(None) => {
+                if let Some(error) = missing_workbench_address(peer_address) {
+                    return Err(error);
+                }
                 tracing::debug!(addr = %peer_address, "no loopback address in this family; serving one listener");
                 return Ok(vec![listener]);
             }
@@ -1159,6 +1183,18 @@ mod tests {
             ..ServerAuthYaml::default()
         };
         assert!(!local_token_mode("127.0.0.1", &open));
+    }
+
+    /// A loopback listener on `[::1]` serves the workbench through its
+    /// `127.0.0.1` peer; without one, it does not start.
+    #[test]
+    fn a_loopback_listener_needs_the_workbench_address() {
+        let ipv4: std::net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let error = super::missing_workbench_address(ipv4).expect("127.0.0.1 is required");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrNotAvailable);
+        assert!(error.to_string().contains("127.0.0.1:8080"), "{error}");
+        let ipv6: std::net::SocketAddr = "[::1]:8080".parse().unwrap();
+        assert!(super::missing_workbench_address(ipv6).is_none());
     }
 
     #[test]
