@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, sync::Arc};
 
 mod native;
 mod text_calls;
@@ -13,7 +13,7 @@ pub use native::{
 };
 
 use reqwest::header::CONTENT_TYPE;
-use tokio_stream::Stream;
+use tokio_stream::{Stream, StreamExt};
 
 use text_calls::{TextCalls, TextHold};
 
@@ -295,6 +295,39 @@ fn parse_structured_tool_calls(
         });
     }
     Ok(calls)
+}
+
+/// The answer text a compatible stream received and how much of it is shown.
+#[derive(Default)]
+struct StreamedText {
+    content: String,
+    hold: TextHold,
+}
+
+impl StreamedText {
+    fn lock(text: &std::sync::Mutex<Self>) -> std::sync::MutexGuard<'_, Self> {
+        text.lock().unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Add `delta` and return the text that can be shown now: all of it
+    /// when `free` (no text is read as calls).
+    fn push(&mut self, delta: &str, free: bool) -> Option<String> {
+        self.content.push_str(delta);
+        if free {
+            self.rest()
+        } else {
+            self.hold.release(&self.content)
+        }
+    }
+
+    fn release_to(&mut self, end: usize) -> Option<String> {
+        self.hold.release_to(&self.content, end)
+    }
+
+    /// Everything not shown yet.
+    fn rest(&mut self) -> Option<String> {
+        self.release_to(self.content.len())
+    }
 }
 
 /// Ollama provider using its OpenAI-compatible chat completions endpoint.
@@ -596,14 +629,15 @@ impl LlmProvider for OllamaProvider {
         // Calls written as text are read from the finished answer, as the
         // native provider reads them.
         let reads_text_calls = text_calls::reads_text_calls(&request);
+        // Accumulated assistant text and how much of it is shown: a call the
+        // model writes as text is held off-screen until the answer ends and
+        // shows whether it is one ([`TextHold`]). Shared with the error path
+        // below, which shows what was held when the response fails.
+        let streamed = Arc::new(std::sync::Mutex::new(StreamedText::default()));
+        let text = streamed.clone();
 
         let stream = async_stream::try_stream! {
             let mut decoder = SseDecoder::provider_default();
-            // Accumulated assistant text and how much of it is shown: a call
-            // the model writes as text is held off-screen until the answer
-            // ends and shows whether it is one ([`TextHold`]).
-            let mut content_acc = String::new();
-            let mut hold = TextHold::default();
             let mut free = !reads_text_calls;
             let mut saw_struct_tool_call = false;
             let mut saw_reasoning = false;
@@ -683,12 +717,7 @@ impl LlmProvider for OllamaProvider {
                             // finished answer is read for calls written as text.
                             if let Some(content) = choice["delta"]["content"].as_str() {
                                 if !content.is_empty() {
-                                    content_acc.push_str(content);
-                                    let delta = if free {
-                                        hold.release_to(&content_acc, content_acc.len())
-                                    } else {
-                                        hold.release(&content_acc)
-                                    };
+                                    let delta = StreamedText::lock(&text).push(content, free);
                                     if let Some(delta) = delta {
                                         yield StreamEvent::TextDelta { delta };
                                     }
@@ -704,7 +733,8 @@ impl LlmProvider for OllamaProvider {
                                 // call: what was held is shown before it.
                                 if !free {
                                     free = true;
-                                    if let Some(delta) = hold.release_to(&content_acc, content_acc.len()) {
+                                    let delta = StreamedText::lock(&text).rest();
+                                    if let Some(delta) = delta {
                                         yield StreamEvent::TextDelta { delta };
                                     }
                                 }
@@ -772,16 +802,21 @@ impl LlmProvider for OllamaProvider {
                 let terminal = if saw_sentinel { "terminal sentinel" } else { "connection close" };
                 ProviderError::Stream(format!("Ollama stream reached {terminal} without a finish reason"))
             })?;
-            let read = if free {
-                TextCalls::Answer
-            } else {
-                compat_text_calls(&content_acc, &request, Some(native_reason.as_str()))
+            let (read, delta, blank) = {
+                let mut streamed = StreamedText::lock(&text);
+                let read = if free {
+                    TextCalls::Answer
+                } else {
+                    compat_text_calls(&streamed.content, &request, Some(native_reason.as_str()))
+                };
+                let answer_end = match &read {
+                    TextCalls::Calls { answer_end, .. } => *answer_end,
+                    _ => streamed.content.len(),
+                };
+                let delta = streamed.release_to(answer_end);
+                (read, delta, streamed.content.trim().is_empty())
             };
-            let answer_end = match &read {
-                TextCalls::Calls { answer_end, .. } => *answer_end,
-                _ => content_acc.len(),
-            };
-            if let Some(delta) = hold.release_to(&content_acc, answer_end) {
+            if let Some(delta) = delta {
                 yield StreamEvent::TextDelta { delta };
             }
             match read {
@@ -821,7 +856,7 @@ impl LlmProvider for OllamaProvider {
                 validate_stream_terminal("Ollama", &finish_reason, tool_call_count)?;
             }
             if saw_reasoning
-                && content_acc.trim().is_empty()
+                && blank
                 && !saw_struct_tool_call
                 && recovered_tool_call_count == 0
             {
@@ -832,6 +867,22 @@ impl LlmProvider for OllamaProvider {
             yield StreamEvent::Done { finish_reason };
         };
 
+        // A response that fails shows the text held so far first, so the
+        // abandoned output is not lost; nothing in it runs.
+        let stream = async_stream::stream! {
+            let mut stream = Box::pin(stream);
+            while let Some(item) = stream.next().await {
+                if item.is_err() {
+                    let held = StreamedText::lock(&streamed).rest();
+                    if let Some(delta) = held {
+                        yield Ok(StreamEvent::TextDelta { delta });
+                    }
+                    yield item;
+                    return;
+                }
+                yield item;
+            }
+        };
         Ok(Box::pin(stream))
     }
 }
@@ -1594,6 +1645,43 @@ mod tests {
             Some(Ok(StreamEvent::Done {
                 finish_reason: FinishReason::ToolUse
             }))
+        ));
+    }
+
+    /// Text held as a possible call is shown when the response fails, so
+    /// the abandoned output is not lost; nothing in it runs.
+    #[tokio::test]
+    async fn held_text_is_shown_when_the_stream_fails() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let frame = serde_json::json!({"choices":[{"index":0,"delta":{
+            "content":"Plan.\n<function=bash>\n"},"finish_reason":null}]});
+        Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("data: {frame}\n\ndata: {{not json\n\n")),
+            )
+            .mount(&server)
+            .await;
+        let events = OllamaProvider::with_base_url(server.uri(), "local-model")
+            .chat_stream(coder_request())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(StreamEvent::TextDelta { delta }) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Plan.\n<function=bash>\n");
+        assert!(matches!(
+            events.last(),
+            Some(Err(ProviderError::Stream(message))) if message.contains("invalid Ollama SSE JSON")
         ));
     }
 
