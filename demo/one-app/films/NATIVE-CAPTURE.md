@@ -79,7 +79,8 @@ release pass the film gate on the manifest alone and say so, and a source-bound 
 proof fails. The marketing gate still builds and validates the site, without films:
 each film placement becomes a static note naming what the film will show (or is
 removed when the element has `pending="omit"`), no film media or portfolio ships,
-and that site is what CI checks and the release and `marketing-deploy` deploy.
+the showcase page, which holds nothing but films, is left out of the site, and that
+site is what CI checks and the release and `marketing-deploy` deploy.
 Delete the file in the same commit that adds the recordings; the gate refuses new
 captures while it still declares the version.
 
