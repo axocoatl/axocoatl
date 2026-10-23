@@ -741,7 +741,7 @@ startup_expect adds_to_path no "the unmarked line after an early return" "$(prin
 startup_expect adds_to_path no "the unmarked line after an exec with a command" "$(printf 'exec 2>/dev/null zsh\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the unmarked line after an exec that only redirects" "$(printf 'exec 2>>"$HOME/.shell.log" 3<&-\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the unmarked line after an exec that opens a named descriptor" "$(printf 'exec {fd}>>"$HOME/.shell.log"\n%s' "$unguarded")"
-startup_expect adds_to_path yes "the unmarked line after assignments" "$(printf 'FOO=1; export FOO\nX=1 Y=2 true\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after assignments" "$(printf 'FOO=1; export FOO\nX=1 Y=2 true\nZ=1 2>/dev/null; export Z\n%s' "$unguarded")"
 startup_expect adds_to_path no "the unmarked line after an exec after an assignment" "$(printf 'SHELL=/bin/zsh exec zsh\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the marked line in a block for another OS (taken at the user's word)" \
   "$(os_block "$(printf '  # Added by the Axocoatl installer\n  %s' "$unguarded")")"
