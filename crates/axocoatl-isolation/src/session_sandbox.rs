@@ -8995,8 +8995,8 @@ mod tests {
     /// Releases in this test run as if no other container engine, Podman
     /// connection or rootful Podman could have a mount on a mount point
     /// (`dependency_mountpoint::held_elsewhere`), which on a Mac (every
-    /// machine has a rootful connection) or Ubuntu (its podman package
-    /// enables rootful Podman's API) would keep every one.
+    /// machine has a rootful connection) or on Fedora or Ubuntu with its
+    /// podman package (`/run/podman`) would keep every one.
     fn nothing_elsewhere() {
         crate::dependency_mountpoint::ASSUME_NOTHING_ELSEWHERE
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -9304,6 +9304,19 @@ mod tests {
         at: &'static str,
     }
 
+    /// How the person's container holds the directory, as a release names
+    /// it.
+    #[cfg(unix)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Holds {
+        /// `podman container inspect` shows its mount on it
+        /// ([`Kept::Mounted`]).
+        Mounted,
+        /// Its processes may mount on it themselves, which no inspect shows
+        /// ([`Kept::MayMount`]).
+        MayMount,
+    }
+
     /// End-to-end, needs Podman; what the tests below share. A Session on a
     /// repository without `node_modules` makes the mount point. A container
     /// of the person's own, run as `own` says (given the repository and its
@@ -9323,6 +9336,21 @@ mod tests {
         own: impl Fn(&Path, &Path, &str) -> OwnMount,
         setup: &str,
         check: &str,
+    ) {
+        assert_an_own_container_holds_the_mount_point(own, setup, check, Holds::Mounted).await;
+    }
+
+    /// [`assert_an_own_containers_mount_keeps_the_mount_point`], where the
+    /// release names the person's container as `holds` says: for
+    /// [`Holds::MayMount`], its mount is one its own processes made, which
+    /// no inspect shows, and it keeps the directory because they may mount
+    /// below a host directory it takes.
+    #[cfg(unix)]
+    async fn assert_an_own_container_holds_the_mount_point(
+        own: impl Fn(&Path, &Path, &str) -> OwnMount,
+        setup: &str,
+        check: &str,
+        holds: Holds,
     ) {
         nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
@@ -9362,13 +9390,16 @@ mod tests {
 
         sandbox.stop_checked().await.unwrap();
         let decision = release_decision(&mountpoint).await;
+        let named = match (&decision, holds) {
+            (Some(Decision::Kept(Kept::Mounted { container, at, .. })), Holds::Mounted)
+            | (Some(Decision::Kept(Kept::MayMount { container, at, .. })), Holds::MayMount) => {
+                *container == own_id && at == Path::new(own.at)
+            }
+            _ => false,
+        };
         assert!(
-            matches!(
-                &decision,
-                Some(Decision::Kept(Kept::Mounted { container, at, .. }))
-                    if *container == own_id && at == Path::new(own.at)
-            ),
-            "inspect saw the person's container {own_id} mount it at {}: {decision:?}",
+            named,
+            "the release names the person's container {own_id} as {holds:?} at {}: {decision:?}",
             own.at
         );
         let checked = Command::new(PODMAN)
@@ -9618,10 +9649,17 @@ mod tests {
     /// `--volumes-from`: container A bind-mounts the repository at
     /// `/workspaces/x`, and container B takes A's mounts (`--volumes-from
     /// A`) and mounts a tmpfs on `/workspaces/x/node_modules`. B's own
-    /// inspect leaves out the bind it takes, so it is read from A's. Podman
-    /// lets A go while B runs, and then says nothing of B's bind: the
-    /// directory stays, saying why. Removing it would detach B's tmpfs on
-    /// Linux. Run with:
+    /// inspect leaves out the bind it takes, so it is read from A's. B,
+    /// which has a mount on the directory, is named, also where nothing
+    /// confines A's mounts (rootless Podman on Ubuntu applies no AppArmor
+    /// profile), so that A's processes could mount there too. Podman lets A
+    /// go while B runs, and then says nothing of B's bind: the directory
+    /// stays, saying why. Removing it would detach B's tmpfs on Linux. Last,
+    /// a container C that only binds the repository keeps the directory
+    /// exactly when a process of C can mount on it in a user namespace of
+    /// its own, which the test tries: refused under SELinux's `container_t`
+    /// (a Podman machine, Fedora), allowed under rootless Podman on Ubuntu.
+    /// Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9724,7 +9762,9 @@ mod tests {
                         && source == directory.path()
                         && at == Path::new("/workspaces/x/node_modules")
             ),
-            "inspect of {} gave the bind {taker_id} takes with --volumes-from: {decision:?}",
+            "inspect of {} gave the bind {taker_id} takes with --volumes-from, and {taker_id}, \
+             which has a mount on it, is named before {}, which at most could: {decision:?}",
+            from.0,
             from.0
         );
         still_mounted(&taker.0).await;
@@ -9749,14 +9789,76 @@ mod tests {
         still_mounted(&taker.0).await;
 
         podman_ok(&["rm", "-f", "-t", "0", &taker.0]).await;
-        let unrelated = unrelated_container().await;
-        assert_eq!(
-            release_decision(&mountpoint).await,
-            Some(Decision::Released(Released::Removed)),
-            "no container mounts it and it is empty: removed, with another container inspected"
+        // C binds the repository and has nothing mounted below it. Whether
+        // its processes can mount on the directory is tried, in a user
+        // namespace of a process of its own that ends at once.
+        let binder = OwnContainer(format!("axocoatl-test-binder-{}", uuid::Uuid::new_v4()));
+        let binder_id = podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &binder.0,
+            "--network=none",
+            "-v",
+            &format!("{}:/workspaces/x", directory.path().display()),
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+        let tried = Command::new(PODMAN)
+            .args([
+                "exec",
+                &binder.0,
+                "unshare",
+                "-Urm",
+                "sh",
+                "-c",
+                "mount -t tmpfs probe /workspaces/x/node_modules",
+            ])
+            .output()
+            .await
+            .unwrap();
+        println!(
+            "a process of {binder_id} could mount on the directory itself: {}",
+            tried.status.success()
         );
+        let decision = release_decision(&mountpoint).await;
+        if tried.status.success() {
+            assert!(
+                matches!(
+                    &decision,
+                    Some(Decision::Kept(Kept::MayMount { container, source, at, why }))
+                        if *container == binder_id
+                            && source == directory.path()
+                            && at == Path::new("/workspaces/x/node_modules")
+                            && why.starts_with("neither SELinux")
+                ),
+                "a process of {binder_id} mounted on it in a user namespace of its own, so it \
+                 may: {decision:?}"
+            );
+            assert!(mountpoint.is_dir());
+            assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+            podman_ok(&["rm", "-f", "-t", "0", &binder.0]).await;
+            let unrelated = unrelated_container().await;
+            assert_eq!(
+                release_decision(&mountpoint).await,
+                Some(Decision::Released(Released::Removed)),
+                "no container mounts it and it is empty: removed, with another container \
+                 inspected"
+            );
+            drop(unrelated);
+        } else {
+            assert_eq!(
+                decision,
+                Some(Decision::Released(Released::Removed)),
+                "{binder_id} could not mount on it ({}): nothing mounts it and it is empty, so \
+                 it is removed, with {binder_id} inspected",
+                String::from_utf8_lossy(&tried.stderr).trim()
+            );
+        }
         assert!(!mountpoint.exists());
-        drop(unrelated);
+        drop(binder);
         SessionSandbox::remove_named_with_dependencies(&id)
             .await
             .unwrap();
@@ -9890,7 +9992,8 @@ mod tests {
     /// AppArmor) and that binds the repository: a process in it makes a user
     /// namespace of its own and mounts a tmpfs on `node_modules` there,
     /// which no inspect reports. Nothing confines its mounts, so the bind
-    /// keeps the mount point. Run with:
+    /// keeps the mount point, and the release says that its processes may
+    /// mount there ([`Kept::MayMount`]). Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9901,7 +10004,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_mount_made_in_a_containers_own_user_namespace_keeps_it() {
-        assert_an_own_containers_mount_keeps_the_mount_point(
+        assert_an_own_container_holds_the_mount_point(
             |repository, _, _| OwnMount {
                 before: Vec::new(),
                 options: vec![
@@ -9918,6 +10021,7 @@ mod tests {
              grep -q '^sleep 601'; then awk '$5 == \"/w/node_modules\" { found = 1 } END \
              { exit !found }' $p/mountinfo && exit 0; fi; done; echo 'no mount at \
              /w/node_modules in its own namespace' >&2; exit 1",
+            Holds::MayMount,
         )
         .await;
     }

@@ -123,28 +123,34 @@
 //! over `node_modules` in a bind of the repository), which no inspect
 //! reports: one run `--privileged` or with `CAP_SYS_ADMIN` added, and any
 //! other whose mounts neither SELinux (`container_t`, enforcing) nor AppArmor
-//! (Podman's `containers-default` profile) stops, in a user namespace of its
-//! own (`unshare -Urm`; measured in Podman 6.1.4 with `--security-opt
-//! label=disable`, refused with its default `container_t` label). Such a
-//! container keeps the directory when a host directory it takes is above it,
-//! whatever is mounted below. A container's `--rootfs` is a host directory
-//! it takes, at `/`.
+//! (Podman's `containers-default` profile, which rootless Podman does not
+//! apply: none on Ubuntu 24.04, Podman 4.9.3) stops, in a user namespace of
+//! its own (`unshare -Urm`; measured in Podman 6.1.4 with `--security-opt
+//! label=disable`, refused with its default `container_t` label, and in
+//! rootless Podman 4.9.3 on Ubuntu 24.04, whose
+//! `kernel.apparmor_restrict_unprivileged_userns` is 1). Such a container
+//! keeps the directory when a host directory it takes is above it, whatever
+//! is mounted below ([`Kept::MayMount`]), and the daemon says which container
+//! once. A container that has a mount on the directory is named before one
+//! whose processes only may mount there, so that what is said is what holds
+//! it. A container's `--rootfs` is a host directory it takes, at `/`.
 //!
 //! Nothing is removed while a container this Podman does not list could
 //! have a mount on it ([`held_elsewhere`]): when Docker is installed, Podman
 //! lists another connection (every Podman machine on macOS has a rootful
-//! one), rootful Podman's API is enabled on Linux (`/run/podman`, which
-//! Ubuntu's podman package enables), or `podman ps -a --external` lists a
-//! container `podman ps -a` does not (Buildah's, a `podman build`'s, which
-//! cannot be inspected). Every mount point then stays, empty and the
-//! person's, and the daemon says why once. On a Mac and on Ubuntu 24.04 as
-//! packaged, that is always.
+//! one), rootful Podman is installed on Linux (`/run/podman` exists, which
+//! the podman packages of Fedora and Ubuntu make at every boot, whether or
+//! not rootful Podman's API is enabled), or `podman ps -a --external` lists
+//! a container `podman ps -a` does not (Buildah's, a `podman build`'s,
+//! which cannot be inspected). Every mount point then stays, empty and the
+//! person's, and the daemon says why once. On a Mac, and on Fedora and
+//! Ubuntu with their podman packages, that is always.
 //!
 //! What this does not see, so a mount on the directory that removing it
 //! breaks:
-//! - containers of rootful Podman (`sudo podman`) on a Linux computer whose
-//!   rootful API is not enabled, and of container engines other than Docker
-//!   and Podman (nerdctl, LXC);
+//! - containers of rootful Podman (`sudo podman`) on a Linux computer
+//!   without `/run/podman` (a Podman not installed from such a package), and
+//!   of container engines other than Docker and Podman (nerdctl, LXC);
 //! - the tmpfs Podman mounts for an image's `VOLUME` under
 //!   `--image-volume=tmpfs` (neither inspect nor `podman ps` reports it);
 //! - a bind through a link that has been removed or changed since the
@@ -489,6 +495,18 @@ pub(crate) enum Kept {
         container: String,
         source: PathBuf,
         at: PathBuf,
+    },
+    /// No container Podman lists has a mount on it, but the processes of the
+    /// container `container` may mount filesystems themselves (`why`: it runs
+    /// `--privileged`, has `CAP_SYS_ADMIN`, or nothing confines its mounts)
+    /// and it takes the host directory `source`, which is above it, so that
+    /// the directory is at `at` in that container: they could mount on it
+    /// there, which no inspect reports ([`Inspected::may_mount`]).
+    MayMount {
+        container: String,
+        source: PathBuf,
+        at: PathBuf,
+        why: &'static str,
     },
     /// Podman or the host could not say whether a container has a mount on
     /// it: why.
@@ -921,8 +939,9 @@ struct Inspected {
     /// label=disable`, or a host without SELinux).
     #[serde(rename = "ProcessLabel", default)]
     process_label: Option<String>,
-    /// Its AppArmor profile (`containers-default-0.57.4` on Ubuntu), empty
-    /// on a host without AppArmor.
+    /// Its AppArmor profile (`containers-default-0.57.4`), empty on a host
+    /// without AppArmor and under rootless Podman, which applies none
+    /// (Podman 4.9.3 on Ubuntu 24.04, AppArmor enabled).
     #[serde(rename = "AppArmorProfile", default)]
     apparmor_profile: Option<String>,
     /// When it last started; [`NEVER_STARTED`] when it never has.
@@ -941,10 +960,13 @@ impl Inspected {
     /// unless SELinux (`container_t`, enforcing) or AppArmor (Podman's
     /// `containers-default` profile, which denies every mount) stops it.
     /// With `--security-opt label=disable`, `label=type:spc_t`, on a host
-    /// with neither (Arch Linux) or with SELinux permissive, it may.
+    /// with neither (Arch Linux), under rootless Podman on a host without
+    /// SELinux (Ubuntu: rootless Podman applies no AppArmor profile) or with
+    /// SELinux permissive, it may.
     /// `selinux_enforcing`: SELinux enforces its policy where the container
-    /// runs ([`selinux_enforcing`]).
-    fn may_mount(&self, selinux_enforcing: bool) -> bool {
+    /// runs ([`selinux_enforcing`]). Why it may, as a person reads it, or
+    /// `None` when it may not.
+    fn may_mount(&self, selinux_enforcing: bool) -> Option<&'static str> {
         let added = self.cap_add.iter().flatten().any(|cap| {
             matches!(
                 cap.trim_start_matches("CAP_").to_ascii_uppercase().as_str(),
@@ -961,7 +983,18 @@ impl Inspected {
                 .as_deref()
                 .and_then(|label| label.split(':').nth(2))
                 .is_some_and(|kind| matches!(kind, "container_t" | "container_init_t"));
-        self.privileged == Some(true) || added || !(apparmor || selinux)
+        if self.privileged == Some(true) {
+            Some("it runs --privileged")
+        } else if added {
+            Some("it has CAP_SYS_ADMIN")
+        } else if apparmor || selinux {
+            None
+        } else {
+            Some(
+                "neither SELinux (container_t, enforcing) nor AppArmor (containers-default) \
+                 confines its mounts, so its processes can mount in a user namespace of their own",
+            )
+        }
     }
 }
 
@@ -1183,9 +1216,10 @@ struct Mounts {
     /// `HostConfig.Tmpfs`, what `podman ps` lists for it, and where the bind
     /// mounts it takes with `--volumes-from` are.
     destinations: HashSet<PathBuf>,
-    /// Its processes may mount filesystems themselves ([`Inspected::may_mount`]):
-    /// any place below a host directory it takes may have a mount on it.
-    may_mount: bool,
+    /// Why its processes may mount filesystems themselves
+    /// ([`Inspected::may_mount`]), when they may: any place below a host
+    /// directory it takes may have a mount on it.
+    may_mount: Option<&'static str>,
     /// Why what it mounts cannot be told, when it cannot.
     unknown: Option<String>,
 }
@@ -1289,31 +1323,52 @@ impl Mounts {
         Ok(mounts)
     }
 
-    /// Where in this container the directory spelled `path` on the host is,
-    /// when the host directory `host`, read as `real` (its spelling, or what
-    /// it resolves to), is it or a directory above it, mounted at
-    /// `destination`, and something is mounted at the place below that is
-    /// the directory.
-    fn place(&self, path: &Path, real: &Path, destination: &Path) -> Option<PathBuf> {
+    /// How this container holds the directory spelled `path` on the host
+    /// through its host directory `host`, read as `real` (its spelling, or
+    /// what it resolves to), when that is the directory or a directory above
+    /// it: [`Kept::Mounted`] when it is the directory or something is
+    /// mounted at the place below it that is the directory, else
+    /// [`Kept::MayMount`] when its processes may mount there themselves.
+    fn hold(&self, host: &Host, real: &Path, path: &Path) -> Option<Kept> {
         let below = path.strip_prefix(real).ok()?;
-        let at = destination.join(below);
-        (below.as_os_str().is_empty() || self.may_mount || self.destinations.contains(&at))
-            .then_some(at)
+        let at = host.at.join(below);
+        let (container, source) = (self.id.clone(), host.path.clone());
+        if below.as_os_str().is_empty() || self.destinations.contains(&at) {
+            return Some(Kept::Mounted {
+                container,
+                source,
+                at,
+            });
+        }
+        self.may_mount.map(|why| Kept::MayMount {
+            container,
+            source,
+            at,
+            why,
+        })
     }
 
-    /// The first of its host directories that, read with `read`, is one of
-    /// `spellings` or above it, as [`Kept::Mounted`].
+    /// How this container holds one of `spellings` through its host
+    /// directories, each read with `read`: by the first that has a mount on
+    /// it ([`Kept::Mounted`]), else by the first its processes may mount on
+    /// ([`Kept::MayMount`]).
     fn over(&self, spellings: &[PathBuf], read: impl Fn(&Path) -> Option<PathBuf>) -> Option<Kept> {
-        self.hosts.iter().find_map(|host| {
-            let real = read(&host.path)?;
-            spellings.iter().find_map(|path| {
-                self.place(path, &real, &host.at).map(|at| Kept::Mounted {
-                    container: self.id.clone(),
-                    source: host.path.clone(),
-                    at,
-                })
-            })
-        })
+        let mut may = None;
+        for host in &self.hosts {
+            let Some(real) = read(&host.path) else {
+                continue;
+            };
+            for path in spellings {
+                match self.hold(host, &real, path) {
+                    Some(mounted @ Kept::Mounted { .. }) => return Some(mounted),
+                    Some(kept) => {
+                        may.get_or_insert(kept);
+                    }
+                    None => {}
+                }
+            }
+        }
+        may
     }
 }
 
@@ -1553,11 +1608,37 @@ async fn resolve_all(
     resolved
 }
 
+/// What holds the directory spelled `spellings` among `containers`, each
+/// host directory read with `read`: the first container, in Podman's order,
+/// that has a mount on it ([`Kept::Mounted`]), else the first whose
+/// processes may mount on it ([`Kept::MayMount`]), so that what is said
+/// names a container that holds it rather than one that only could.
+fn held_by(
+    containers: &[Mounts],
+    spellings: &[PathBuf],
+    read: impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<Kept> {
+    let mut may = None;
+    for container in containers {
+        match container.over(spellings, &read) {
+            Some(mounted @ Kept::Mounted { .. }) => return Some(mounted),
+            Some(kept) => {
+                may.get_or_insert(kept);
+            }
+            None => {}
+        }
+    }
+    may
+}
+
 /// The mount points among `unmounted` that one of `containers` has a mount
-/// on, with why, or that the host cannot say about ([`Kept::Unknown`]).
+/// on, or may mount on, with why ([`held_by`]), or that the host cannot say
+/// about ([`Kept::Unknown`]).
 /// Each host directory is compared by its spelling with the mount point's
-/// path and the path that resolves to now first; only when that leaves one
-/// undecided are they resolved, with `resolve`, for at most `timeout`.
+/// path and the path that resolves to now first; only when that finds no
+/// container with a mount on one are they resolved, with `resolve`, for at
+/// most `timeout`: a container whose host directory is spelled through a
+/// link may have a mount on it where another only may mount.
 async fn decide(
     unmounted: Vec<PathBuf>,
     containers: &[Mounts],
@@ -1575,14 +1656,11 @@ async fn decide(
                 spellings.push(canonical);
             }
         }
-        match containers
-            .iter()
-            .find_map(|container| container.over(&spellings, |host| Some(host.to_path_buf())))
-        {
-            Some(why) => {
-                kept.insert(path, why);
+        match held_by(containers, &spellings, |host| Some(host.to_path_buf())) {
+            Some(mounted @ Kept::Mounted { .. }) => {
+                kept.insert(path, mounted);
             }
-            None => undecided.push((path, spellings)),
+            may => undecided.push((path, spellings, may)),
         }
     }
     if undecided.is_empty() {
@@ -1608,14 +1686,16 @@ async fn decide(
                 })
         })
     });
-    for (path, spellings) in undecided {
-        let mounted = containers.iter().find_map(|container| {
-            container.over(&spellings, |host| match resolved.get(host) {
-                Some(Resolved::To(real)) => Some(real.clone()),
-                _ => None,
-            })
+    for (path, spellings, may) in undecided {
+        let held = held_by(containers, &spellings, |host| match resolved.get(host) {
+            Some(Resolved::To(real)) => Some(real.clone()),
+            _ => None,
         });
-        if let Some(why) = mounted.or_else(|| unknown.clone().map(Kept::Unknown)) {
+        let why = match (held, may) {
+            (Some(mounted @ Kept::Mounted { .. }), _) => Some(mounted),
+            (held, may) => may.or(held).or_else(|| unknown.clone().map(Kept::Unknown)),
+        };
+        if let Some(why) = why {
             kept.insert(path, why);
         }
     }
@@ -1962,10 +2042,12 @@ pub(crate) async fn adopt_labelled_named(containers: &[String]) {
 }
 
 /// Say why a release kept the mount point at `path`. When Axocoatl cannot
-/// tell, or a container it cannot see could have a mount on it, at `info`,
-/// which the daemon shows by default: the directory stays, and nothing else
-/// tells the person why. Each such reason is said once for each mount point
-/// in a process, not at every container start and removal.
+/// tell, a container it cannot see could have a mount on it, or a
+/// container's processes could mount on it themselves, at `info`, which the
+/// daemon shows by default: the directory stays, and nothing else tells the
+/// person why. Each such reason is said once for each mount point in a
+/// process (for a container that could mount on it, once for each container
+/// and place), not at every container start and removal.
 fn log_kept(path: &Path, why: &Kept) {
     match why {
         Kept::Unknown(why) if first_said(path, why) => tracing::info!(
@@ -1981,7 +2063,24 @@ fn log_kept(path: &Path, why: &Kept) {
             "kept the empty Node dependency mount point Axocoatl made: a container it cannot see \
              could have a mount on it, so it stays, empty and yours"
         ),
-        Kept::Unknown(_) | Kept::Elsewhere(_) => {}
+        Kept::MayMount {
+            container,
+            source,
+            at,
+            why,
+        } if first_said(path, &format!("{container} may mount at {}", at.display())) => {
+            tracing::info!(
+                path = %path.display(),
+                container = %short_id(container),
+                source = %source.display(),
+                at = %at.display(),
+                %why,
+                "kept the empty Node dependency mount point Axocoatl made: a container that takes \
+                 a directory above it could mount on it itself, so it stays while that container \
+                 exists"
+            )
+        }
+        Kept::Unknown(_) | Kept::Elsewhere(_) | Kept::MayMount { .. } => {}
         Kept::Listed | Kept::Mounted { .. } => tracing::debug!(
             path = %path.display(),
             ?why,
@@ -2010,6 +2109,14 @@ fn first_said(path: &Path, why: &str) -> bool {
 pub(crate) static ASSUME_NOTHING_ELSEWHERE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(test)]
+thread_local! {
+    /// What [`held_elsewhere`] finds, on this thread, for a test that sets
+    /// it (a `#[tokio::test]` runs what it spawns on its own thread).
+    static HELD_ELSEWHERE_ON_THIS_THREAD: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Why a container the `podman` this process runs does not list could have
 /// a mount on a directory Axocoatl made, when one could; `None` when none
 /// could. Removing the directory breaks such a mount, and Axocoatl cannot ask
@@ -2022,10 +2129,14 @@ pub(crate) static ASSUME_NOTHING_ELSEWHERE: std::sync::atomic::AtomicBool =
 /// - another Podman connection than the one this process uses (`podman
 ///   system connection list`): another machine, or a machine's rootful
 ///   connection, as every Podman machine on macOS has;
-/// - rootful Podman's API on Linux (`/run/podman`, which Ubuntu's podman
-///   package enables), when this process is not root: `sudo podman`
-///   containers are not listed to the person.
+/// - rootful Podman on Linux (`/run/podman`, which the podman packages of
+///   Fedora and Ubuntu make at every boot), when this process is not root:
+///   `sudo podman` containers are not listed to the person.
 pub(crate) async fn held_elsewhere() -> Option<String> {
+    #[cfg(test)]
+    if let Some(found) = HELD_ELSEWHERE_ON_THIS_THREAD.with(|found| found.borrow().clone()) {
+        return Some(found);
+    }
     #[cfg(test)]
     if ASSUME_NOTHING_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
         return None;
@@ -2074,7 +2185,7 @@ pub(crate) async fn held_elsewhere_here() -> Option<String> {
         )),
         Err(error) => found.push(format!("Podman did not list its connections: {error}")),
     }
-    found.extend(rootful_api(
+    found.extend(rootful_podman(
         Path::new("/"),
         cfg!(target_os = "linux"),
         running_as_root(),
@@ -2175,12 +2286,17 @@ fn other_connections(
         .collect())
 }
 
-/// Rootful Podman's API, on Linux (`linux`) for a process that is not root:
-/// its socket's directory `/run/podman` (under `root`) exists.
-fn rootful_api(root: &Path, linux: bool, as_root: bool) -> Option<String> {
+/// Rootful Podman, on Linux (`linux`) for a process that is not root:
+/// `/run/podman` (under `root`) exists. It is the directory of rootful
+/// Podman's API socket, which the podman packages of Fedora and Ubuntu make
+/// at every boot (`D! /run/podman 0700 root root` in their tmpfiles.d, read
+/// in Fedora CoreOS 44 and Ubuntu 24.04) whether or not that socket is
+/// enabled: rootful Podman is installed, and `sudo podman` can run
+/// containers without the API.
+fn rootful_podman(root: &Path, linux: bool, as_root: bool) -> Option<String> {
     (linux && !as_root && root.join("run/podman").is_dir()).then(|| {
-        "rootful Podman's API is enabled (/run/podman), and the containers `sudo podman` runs \
-         are not listed to you"
+        "rootful Podman is installed (/run/podman exists), and the containers `sudo podman` \
+         runs are not listed to you"
             .to_string()
     })
 }
@@ -3060,7 +3176,7 @@ mod tests {
                 .map(|(_, at)| PathBuf::from(at))
                 .chain(others.iter().map(PathBuf::from))
                 .collect(),
-            may_mount: false,
+            may_mount: None,
             unknown: None,
         }
     }
@@ -3081,6 +3197,20 @@ mod tests {
             container: id.to_string(),
             source: source.to_path_buf(),
             at: PathBuf::from(at),
+        })
+    }
+
+    /// What [`Inspected::may_mount`] says of a container nothing confines.
+    const UNCONFINED: &str = "neither SELinux (container_t, enforcing) nor AppArmor \
+                              (containers-default) confines its mounts, so its processes can \
+                              mount in a user namespace of their own";
+
+    fn may_mount_by(id: &str, source: &Path, at: &str, why: &'static str) -> Option<Kept> {
+        Some(Kept::MayMount {
+            container: id.to_string(),
+            source: source.to_path_buf(),
+            at: PathBuf::from(at),
+            why,
         })
     }
 
@@ -3299,6 +3429,58 @@ mod tests {
         assert!(seen[0].1.contains("why=Docker is installed"), "{seen:?}");
     }
 
+    /// A release asks first whether a container Axocoatl cannot list could
+    /// hold a mount point ([`held_elsewhere`]): while one could, the mount
+    /// point a dropped lease leaves (after its container start) stays, the
+    /// release says so once at `info` with why, and Podman is not asked
+    /// (none runs here).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_mount_point_stays_while_a_container_elsewhere_could_hold_it() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(repo.path()).unwrap();
+        let path = repo.join(NODE_MODULES);
+        let why = "Docker is installed (/usr/local/bin/docker)";
+        HELD_ELSEWHERE_ON_THIS_THREAD.with(|found| *found.borrow_mut() = Some(why.into()));
+        let seen = Seen::default();
+        let said = tracing::subscriber::set_default(seen.clone());
+        let lease = MountpointLease::acquire(&repo);
+        assert!(path.is_dir());
+        drop(lease);
+        lease_releases::settled().await;
+        assert!(path.is_dir(), "kept by the release the lease ran");
+        let decided: Vec<(PathBuf, Decision)> = release_unused()
+            .await
+            .into_iter()
+            .filter(|(decided, _)| *decided == path)
+            .collect();
+        assert_eq!(
+            decided,
+            [(path.clone(), Decision::Kept(Kept::Elsewhere(why.into())))]
+        );
+        assert!(path.is_dir());
+        drop(said);
+        let seen: Vec<(tracing::Level, String)> = seen
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, fields)| fields.contains(&format!("path={};", path.display())))
+            .cloned()
+            .collect();
+        assert_eq!(seen.len(), 1, "said once for two releases: {seen:?}");
+        assert_eq!(seen[0].0, tracing::Level::INFO);
+        assert!(seen[0].1.contains(&format!("why={why};")), "{seen:?}");
+        assert!(
+            seen[0]
+                .1
+                .contains("a container it cannot see could have a mount on it"),
+            "{seen:?}"
+        );
+        registry().made.remove(&path);
+        HELD_ELSEWHERE_ON_THIS_THREAD.with(|found| found.borrow_mut().take());
+    }
+
     /// Docker counts when a `docker` on PATH is not Podman's own, when one
     /// of its sockets exists, or when DOCKER_HOST is set; Podman's `docker`
     /// (a link to podman, or podman-docker's script) does not.
@@ -3371,17 +3553,21 @@ mod tests {
         assert!(other_connections(b"not json", None, false).is_err());
     }
 
-    /// Rootful Podman's API on Linux, for a process that is not root.
+    /// Rootful Podman on Linux, for a process that is not root.
     #[test]
     fn rootful_podman_counts_on_linux_for_a_person() {
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(rootful_api(root.path(), true, false), None);
+        assert_eq!(rootful_podman(root.path(), true, false), None);
         std::fs::create_dir_all(root.path().join("run/podman")).unwrap();
-        assert!(rootful_api(root.path(), true, false)
-            .unwrap()
-            .contains("sudo podman"));
-        assert_eq!(rootful_api(root.path(), true, true), None);
-        assert_eq!(rootful_api(root.path(), false, false), None);
+        assert_eq!(
+            rootful_podman(root.path(), true, false).as_deref(),
+            Some(
+                "rootful Podman is installed (/run/podman exists), and the containers `sudo \
+                 podman` runs are not listed to you"
+            )
+        );
+        assert_eq!(rootful_podman(root.path(), true, true), None);
+        assert_eq!(rootful_podman(root.path(), false, false), None);
     }
 
     /// A container that may mount filesystems itself keeps a mount point
@@ -3408,21 +3594,30 @@ mod tests {
         let privileged = inspect(&format!(
             r#""Rootfs":"","Privileged":true,"CapAdd":[],{started}"#
         ));
-        assert!(privileged.may_mount(true));
+        assert_eq!(privileged.may_mount(true), Some("it runs --privileged"));
         let mounts = Mounts::of(&privileged, &[], &HashMap::new()).unwrap();
         assert_eq!(
             decided(&node_modules, &[mounts]).await,
-            mounted_by(&"c".repeat(64), &repo, "/w/node_modules")
+            may_mount_by(
+                &"c".repeat(64),
+                &repo,
+                "/w/node_modules",
+                "it runs --privileged"
+            )
         );
         // CAP_SYS_ADMIN, as Podman 6.1.4 lists it, or as given.
         for caps in [r#"["CAP_SYS_ADMIN"]"#, r#"["SYS_ADMIN"]"#, r#"["ALL"]"#] {
-            assert!(inspect(&format!(
-                r#""Rootfs":"","Privileged":false,"CapAdd":{caps},{started}"#
-            ))
-            .may_mount(true));
+            assert_eq!(
+                inspect(&format!(
+                    r#""Rootfs":"","Privileged":false,"CapAdd":{caps},{started}"#
+                ))
+                .may_mount(true),
+                Some("it has CAP_SYS_ADMIN")
+            );
         }
-        // Without it, a container confined by AppArmor (Ubuntu's Podman) or
-        // by SELinux enforcing (Fedora's) cannot mount, so a bind of the
+        // Without it, a container confined by AppArmor (Podman's
+        // containers-default profile, where Podman applies it) or by SELinux
+        // enforcing (Fedora's Podman) cannot mount, so a bind of the
         // repository alone keeps nothing.
         let confined = |label: &str, profile: &str| {
             inspect(&format!(
@@ -3430,23 +3625,27 @@ mod tests {
             ))
         };
         let apparmor = confined("", "containers-default-0.57.4");
-        assert!(!apparmor.may_mount(false));
+        assert_eq!(apparmor.may_mount(false), None);
         let mounts = Mounts::of(&apparmor, &[], &HashMap::new()).unwrap();
         assert_eq!(decided(&node_modules, &[mounts]).await, None);
         let container_t = confined("system_u:system_r:container_t:s0:c7,c27", "");
-        assert!(!container_t.may_mount(true));
+        assert_eq!(container_t.may_mount(true), None);
         // SELinux permissive does not stop it, nor does spc_t, and with
         // labelling off (`label=disable`, or a host with neither, as Arch
-        // Linux) nothing does: it may mount in a user namespace of its own,
-        // so a bind of the repository keeps the mount point.
-        assert!(container_t.may_mount(false));
-        assert!(confined("system_u:system_r:spc_t:s0:c117,c607", "").may_mount(true));
+        // Linux, or rootless Podman on Ubuntu, which applies no AppArmor
+        // profile) nothing does: it may mount in a user namespace of its
+        // own, so a bind of the repository keeps the mount point.
+        assert_eq!(container_t.may_mount(false), Some(UNCONFINED));
+        assert_eq!(
+            confined("system_u:system_r:spc_t:s0:c117,c607", "").may_mount(true),
+            Some(UNCONFINED)
+        );
         let unconfined = confined("", "");
-        assert!(unconfined.may_mount(true));
+        assert_eq!(unconfined.may_mount(true), Some(UNCONFINED));
         let mounts = Mounts::of(&unconfined, &[], &HashMap::new()).unwrap();
         assert_eq!(
             decided(&node_modules, &[mounts]).await,
-            mounted_by(&"c".repeat(64), &repo, "/w/node_modules")
+            may_mount_by(&"c".repeat(64), &repo, "/w/node_modules", UNCONFINED)
         );
         // Never started: its overlay volumes are not reported yet.
         let created = inspect(
@@ -3488,10 +3687,99 @@ mod tests {
         ));
     }
 
+    /// A container that has a mount on the directory is named before one
+    /// whose processes only may mount there, whatever Podman's order, also
+    /// when only resolving its host directory shows it (the `--volumes-from`
+    /// case on a host that does not confine containers: the container it
+    /// takes the bind from may mount, the one that takes it has a tmpfs
+    /// there). With none that has a mount on it, the first that may mount
+    /// is named, before what the host cannot say.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_container_with_a_mount_on_it_is_named_before_one_that_only_may_mount() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(repo.path()).unwrap();
+        let path = repo.join(NODE_MODULES);
+        std::fs::create_dir(&path).unwrap();
+        let links = tempfile::tempdir().unwrap();
+        let link = links.path().join("repo-link");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let may = Mounts {
+            may_mount: Some(UNCONFINED),
+            ..container("from", &[(&repo, "/workspaces/x")], &[])
+        };
+        let taker = container(
+            "taker",
+            &[(&repo, "/workspaces/x")],
+            &["/workspaces/x/node_modules"],
+        );
+        let mounted = mounted_by("taker", &repo, "/workspaces/x/node_modules");
+        assert_eq!(decided(&path, &[may.clone(), taker.clone()]).await, mounted);
+        assert_eq!(decided(&path, &[taker, may.clone()]).await, mounted);
+        // The taker's bind is spelled through a link: only resolving it
+        // shows its tmpfs is on the directory.
+        let linked = container("linked", &[(&link, "/w")], &["/w/node_modules"]);
+        assert_eq!(
+            decided(&path, &[may.clone(), linked]).await,
+            mounted_by("linked", &link, "/w/node_modules")
+        );
+        // Only one that may mount there: it is named, with why.
+        let nothing_below = container("plain", &[(&repo, "/w")], &[]);
+        assert_eq!(
+            decided(&path, &[nothing_below.clone(), may.clone()]).await,
+            may_mount_by("from", &repo, "/workspaces/x/node_modules", UNCONFINED)
+        );
+        // Before a container whose mounts cannot be told.
+        let unknown = Mounts {
+            unknown: Some("container unknown has never started".into()),
+            ..container("unknown", &[], &[])
+        };
+        assert_eq!(
+            decided(&path, &[unknown.clone(), may]).await,
+            may_mount_by("from", &repo, "/workspaces/x/node_modules", UNCONFINED)
+        );
+        assert!(matches!(
+            decided(&path, &[unknown, nothing_below]).await,
+            Some(Kept::Unknown(why)) if why.contains("has never started")
+        ));
+    }
+
+    /// A container that could mount on the directory is said at `info`,
+    /// naming it, where its mount would be and why it could, once for each
+    /// mount point, container and place.
+    #[test]
+    fn a_container_that_could_mount_on_it_is_said_once_at_info() {
+        let seen = Seen::default();
+        let path = Path::new("/may-mount/node_modules");
+        let may = Kept::MayMount {
+            container: "f".repeat(64),
+            source: PathBuf::from("/may-mount"),
+            at: PathBuf::from("/w/node_modules"),
+            why: "it runs --privileged",
+        };
+        tracing::subscriber::with_default(seen.clone(), || {
+            log_kept(path, &may);
+            log_kept(path, &may);
+        });
+        let seen = seen.0.lock().unwrap();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, tracing::Level::INFO);
+        for said in [
+            "path=/may-mount/node_modules;",
+            "container=ffffffffffff;",
+            "source=/may-mount;",
+            "at=/w/node_modules;",
+            "why=it runs --privileged;",
+            "could mount on it itself",
+        ] {
+            assert!(seen[0].1.contains(said), "{said:?} in {:?}", seen[0].1);
+        }
+    }
+
     /// End-to-end: needs Podman. What `held_elsewhere` finds on this
     /// computer: every connection Podman lists besides the one in use (on a
-    /// Mac, the machine's rootful connection), and on Linux rootful
-    /// Podman's API when it is enabled. Run with:
+    /// Mac, the machine's rootful connection), and on Linux rootful Podman
+    /// when `/run/podman` exists. Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -3614,8 +3902,8 @@ mod tests {
         .unwrap();
         // `a` mounts `a_mount` at /w; `b` takes from `from` and has a tmpfs
         // where node_modules is under /w. Only `inspect` of them were
-        // inspected. AppArmor confines both, as Ubuntu's Podman runs them, so
-        // neither may mount in a user namespace of its own.
+        // inspected. AppArmor confines both (Podman's containers-default
+        // profile), so neither may mount in a user namespace of its own.
         let mounts_of = |a_mount: &serde_json::Value, from: &[&str], inspect: &[&str]| {
             let lines = [
                 (

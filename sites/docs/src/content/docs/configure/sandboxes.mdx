@@ -83,21 +83,26 @@ Axocoatl removes the directory only when no container it cannot list could have 
 on it. When Docker is installed (a `docker` program that is not Podman's own `docker`,
 a `DOCKER_HOST` that does not name your own rootless Podman's socket, or a Docker
 socket), when Podman lists another connection than the one
-Axocoatl uses (every Podman machine on macOS has a rootful one), when rootful Podman's
-API is enabled on Linux (`/run/podman`; Ubuntu's podman package enables it), or when
-Podman lists a container only with `--external` (Buildah's, a `podman build`'s), the
-directory stays, empty and yours, and the daemon logs why once. On a Mac, and on Ubuntu
-24.04 as its package sets Podman up, it therefore stays. A container that may mount
-filesystems itself keeps the directory when it takes a directory above it: one run
-`--privileged` or with `CAP_SYS_ADMIN` added, and one that neither SELinux (enforcing)
-nor AppArmor confines, as with `--security-opt label=disable` or on a Linux computer with
-neither (Arch Linux), whose processes can mount in a user namespace of their own; one that has never started (Podman reports its overlay
+Axocoatl uses (every Podman machine on macOS has a rootful one), when rootful Podman is
+installed on Linux (`/run/podman` exists, which the podman packages of Fedora and Ubuntu
+make at every boot, whether or not rootful Podman's API is enabled), or when Podman lists
+a container only with `--external` (Buildah's, a `podman build`'s), the directory stays,
+empty and yours, and the daemon logs why once. On a Mac, and on Fedora and Ubuntu with
+their podman packages, it therefore stays. A container that may mount filesystems itself
+keeps the directory when it takes a directory above it, and the daemon logs which one
+once: one run `--privileged` or with `CAP_SYS_ADMIN` added, and one that neither SELinux
+(enforcing) nor AppArmor confines, as with `--security-opt label=disable`, on a Linux
+computer with neither (Arch Linux), or under rootless Podman on Ubuntu (rootless Podman
+applies no AppArmor profile), whose processes can mount in a user namespace of their own
+(measured with Podman 6.1.4 and `label=disable`, and with rootless Podman 4.9.3 on Ubuntu
+24.04). When one container has a mount on the directory and another only could, the
+first is the one named. A container that has never started (Podman reports its overlay
 volumes only once it has), or that mounts a volume plugin's volume (Podman does not say
 which host directory it uses), keeps every such directory until it starts or is removed;
 and the root filesystem of a container run with `--rootfs` counts as a directory it
 takes. Some mounts on the directory Axocoatl still does not see: those of rootful Podman
-on a computer whose rootful API is not enabled (`sudo podman` without `/run/podman`) and
-of container engines other than Docker and Podman (nerdctl, LXC); a bind through a link
+on a Linux computer without `/run/podman` (a Podman not installed from such a package)
+and of container engines other than Docker and Podman (nerdctl, LXC); a bind through a link
 you have since removed or changed; a mount whose host path reaches the directory through
 another mount of it (a bind mount on the host of a directory above it, or on macOS a path
 spelled through `/System/Volumes/Data`); and the tmpfs Podman mounts for an image's
