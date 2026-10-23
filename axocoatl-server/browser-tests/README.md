@@ -388,6 +388,15 @@ the Preview and failure paths called out below.
   never enables a Create session that readiness or anything else holds.
 - Quick Open terminates directory-only and cyclic traversal at explicit entry,
   directory, and depth limits, and abandons a build when its Session changes.
+- Source Control opens a changed file in Monaco's diff editor: both sides
+  read back, side by side and inline, and a hover whose Markdown asks for
+  HTML keeps its bold text and a plain span while the image's `onerror` and
+  the script are removed and nothing runs (Monaco sanitizes it with its
+  DOMPurify). WebKit reports one "ResizeObserver loop completed with
+  undelivered notifications" as the diff editor opens (Chromium none): two
+  of Monaco's own observers resize in the same frame, and the second one's
+  notification arrives a frame later. The journey allows that one line in
+  WebKit and fails on any other.
 - Source Control attributes a normal turn's absolute-path tool write to **Last
   turn** after normalizing it to the repository-relative changed path.
 - Failed setup evidence renders the failed command, exit code, and bounded
