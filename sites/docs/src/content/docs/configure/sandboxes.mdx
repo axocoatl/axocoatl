@@ -104,7 +104,10 @@ There is no YAML switch to weaken this boundary.
 **Open workspace…** applies the same roots earlier. It refuses a folder equal to or
 below one of them (`workspace_protected`), and it refuses the file system root, your
 home folder, the folders above it, and any folder that contains a protected root
-(`workspace_too_broad`) until you type the folder's name to confirm.
+(`workspace_too_broad`) until you type the folder's name to confirm. The Workspace
+keeps that confirmation, and only a confirmed Workspace on such a folder gets new
+Sessions or `axocoatl run` runs; one that Axocoatl 1.4 registered without asking is
+refused until you open it again with Open workspace… and confirm it.
 
 Session startup never invokes a host package manager and never creates a Podman
 VM. If Podman is absent or its VM has not been initialized, Axocoatl fails with

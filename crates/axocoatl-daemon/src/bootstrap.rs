@@ -6512,33 +6512,56 @@ impl AxocoatlDaemon {
     /// folder and the folders above it, a folder that contains one of
     /// Axocoatl's own directories) is refused with the code
     /// [`WORKSPACE_TOO_BROAD_CODE`] unless the person confirmed it
-    /// (`confirm_broad`); one of Axocoatl's own directories, or a folder
-    /// inside one, is refused with [`WORKSPACE_PROTECTED_CODE`] always.
+    /// (`confirm_broad`), and the Workspace records that confirmation
+    /// (`broad_confirmed_at`), which Session creation and runs then accept;
+    /// one of Axocoatl's own directories, or a folder inside one, is refused
+    /// with [`WORKSPACE_PROTECTED_CODE`] always.
     pub async fn open_workspace(
         &self,
         path: &str,
         name: Option<&str>,
         confirm_broad: bool,
     ) -> Result<Workspace, DaemonError> {
-        self.check_workspace_scope(path, confirm_broad)?;
-        self.register_workspace(path, name).await
+        let broad = self.check_workspace_scope(path, confirm_broad)?;
+        let workspace = self.register_workspace(path, name).await?;
+        if !broad {
+            return Ok(workspace);
+        }
+        self.workspace_store
+            .lock()
+            .await
+            .confirm_broad(&workspace.id)
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    /// Whether the person confirmed the Workspace registered at `path`, a
+    /// folder too broad to be one, with Open workspace…. A broad folder
+    /// registered without that confirmation (by 1.4, which did not ask, or
+    /// for a 1.0-format Session) is not.
+    pub(crate) async fn broad_workspace_confirmed(&self, path: &std::path::Path) -> bool {
+        self.workspace_store
+            .lock()
+            .await
+            .get_by_path(path)
+            .is_some_and(|workspace| workspace.broad_confirmed_at.is_some())
     }
 
     /// Refuse `path` as a Workspace when [`Self::workspace_scope`] does; a
-    /// broad folder passes once the person confirmed it. A path that does
-    /// not resolve is left to registration, which names it.
-    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<(), DaemonError> {
+    /// broad folder passes once the person confirmed it, and is then said
+    /// to be broad (`true`). A path that does not resolve is left to
+    /// registration, which names it.
+    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<bool, DaemonError> {
         let Ok(canonical) = std::fs::canonicalize(path) else {
-            return Ok(());
+            return Ok(false);
         };
         match self.workspace_scope().check(&canonical) {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(false),
             Err(WorkspaceScopeRefusal::Broad(_)) if confirm_broad => {
                 tracing::warn!(
                     path = %canonical.display(),
                     "a broad folder was opened as a Workspace after the person confirmed it"
                 );
-                Ok(())
+                Ok(true)
             }
             Err(WorkspaceScopeRefusal::Broad(message)) => Err(DaemonError::WorkspaceRefused {
                 code: WORKSPACE_TOO_BROAD_CODE,
@@ -6749,19 +6772,15 @@ impl AxocoatlDaemon {
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
         validate_session_mode(&self.config, &mode)?;
-        // This path names its folder directly. A folder already opened as a
-        // Workspace was accepted then, after confirmation when it is broad;
-        // any other broad folder must be opened with Open workspace… first.
-        let registered = match std::fs::canonicalize(working_dir) {
-            Ok(canonical) => self
-                .workspace_store
-                .lock()
-                .await
-                .get_by_path(&canonical)
-                .is_some(),
+        // This path names its folder directly. A broad folder is accepted
+        // only once the person confirmed its Workspace with Open workspace…;
+        // being registered is not enough (1.4 registered broad folders
+        // without asking).
+        let confirmed = match std::fs::canonicalize(working_dir) {
+            Ok(canonical) => self.broad_workspace_confirmed(&canonical).await,
             Err(_) => false,
         };
-        self.check_workspace_scope(working_dir, registered)?;
+        self.check_workspace_scope(working_dir, confirmed)?;
         let workspace = self.register_workspace(working_dir, None).await?;
         // A lifecycle action never waits for the Workspace: a busy one
         // refuses at once, naming who holds it.

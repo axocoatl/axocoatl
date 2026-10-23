@@ -2083,8 +2083,9 @@ impl AxocoatlDaemon {
     /// own directories, or a folder inside one, never; a folder too broad to
     /// be a Workspace (the file system root, the home folder and the folders
     /// above it, a folder that contains one of Axocoatl's own directories)
-    /// only once it was opened as a Workspace, which asks the person to
-    /// confirm it. A refusal is the problem's code and message.
+    /// only once the person confirmed it with Open workspace…, which its
+    /// Workspace records; a broad Workspace registered without asking, as
+    /// 1.4 did, is not enough. A refusal is the problem's code and message.
     async fn run_workspace_scope(
         &self,
         repo: &std::path::Path,
@@ -2095,13 +2096,7 @@ impl AxocoatlDaemon {
                 Err((WORKSPACE_PROTECTED_CODE, message))
             }
             Err(WorkspaceScopeRefusal::Broad(message)) => {
-                let confirmed = self
-                    .workspace_store
-                    .lock()
-                    .await
-                    .get_by_path(repo)
-                    .is_some();
-                if confirmed {
+                if self.broad_workspace_confirmed(repo).await {
                     return Ok(());
                 }
                 Err((

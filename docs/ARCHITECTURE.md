@@ -692,8 +692,10 @@ no execution path for loadouts.
 **Admission.** `POST /api/runs` (from `axocoatl run`) resolves parameters (unknown names
 refused, missing required ones a usage error), canonicalizes the repository and checks it
 against `WorkspaceScope` as Session creation does (one of Axocoatl's own directories is
-`workspace_protected`; a broad folder is `workspace_too_broad` unless it is already a
-Workspace, which Open workspace… registers only after the person confirms it), finds or
+`workspace_protected`; a broad folder is `workspace_too_broad` unless its Workspace
+records the person's confirmation, `Workspace::broad_confirmed_at`, which only Open
+workspace… with `confirm_broad` sets; a broad Workspace registered without asking, as 1.4
+did, is refused until it is confirmed), finds or
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
