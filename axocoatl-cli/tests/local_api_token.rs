@@ -4,8 +4,9 @@
 //! not know, and its export, with `404`.
 //!
 //! The daemon starts with no agents, so it needs no model download. It still
-//! probes the configured Podman connection at startup; on a Mac, set
-//! CONTAINER_CONNECTION to a running machine.
+//! probes Podman at startup, through the default connection whatever
+//! CONTAINER_HOST or CONTAINER_CONNECTION the shell sets, and starts whether
+//! or not Podman answers there.
 #![cfg(unix)]
 
 mod support;
@@ -42,7 +43,7 @@ async fn local_api_requires_the_per_daemon_token() {
     let root = directory.path().canonicalize().unwrap();
     let port = free_port();
     let config = write_config(&root, port, "");
-    let mut daemon = Daemon::start(&root, &config, port, 0).await;
+    let mut daemon = Daemon::start_without_podman(&root, &config, port, 0).await;
 
     let token_path = root.join("data").join("local-api-token");
     let metadata = std::fs::metadata(&token_path).unwrap();
@@ -180,7 +181,7 @@ async fn local_api_requires_the_per_daemon_token() {
     assert!(!logs.contains(&token), "the token reached the logs");
     drop(daemon);
 
-    let mut daemon = Daemon::start(&root, &config, port, 1).await;
+    let mut daemon = Daemon::start_without_podman(&root, &config, port, 1).await;
     assert_eq!(std::fs::read_to_string(&token_path).unwrap(), token);
     assert_eq!(
         status(client.get(format!("{base}/api/agents")).bearer_auth(&token)).await,

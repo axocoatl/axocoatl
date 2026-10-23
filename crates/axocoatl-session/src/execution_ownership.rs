@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn owned_legacy_history_accessor_is_existing_only_and_refuses_redirected_source() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let installed = LegacyFormatOwnership::acquire(root.path())
             .unwrap()
             .upgrade()
@@ -955,7 +955,7 @@ mod tests {
             source.read_limited("turns.v1.jsonl", 100).unwrap(),
             b"owned history bytes"
         );
-        let outside = tempfile::tempdir().unwrap();
+        let outside = crate::private_tempdir_test_support::private_tempdir();
         fs::rename(
             root.path().join("session-history"),
             root.path().join("moved-history"),

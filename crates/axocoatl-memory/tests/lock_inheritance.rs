@@ -3,6 +3,8 @@
 //! of the store that was just dropped (see the Session crate's test of the
 //! same name for the mechanism).
 
+mod support;
+
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -80,9 +82,9 @@ fn session() -> SessionId {
 
 #[test]
 fn memory_stores_reopen_while_a_starting_child_holds_their_locks() {
-    let state = tempfile::tempdir().unwrap();
-    let knowledge = tempfile::tempdir().unwrap();
-    let root = tempfile::tempdir().unwrap();
+    let state = support::private_tempdir();
+    let knowledge = support::private_tempdir();
+    let root = support::private_tempdir();
     let canonical = SessionExecutionStore::open(
         Arc::new(
             LegacyFormatOwnership::acquire(root.path())

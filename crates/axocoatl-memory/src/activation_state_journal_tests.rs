@@ -240,7 +240,7 @@ fn assert_reads(store: &ActivationStateStore, synthetic: &Synthetic, turns: &[Sy
 /// segment and that every kind of old record is read back, before and after
 /// reopening.
 fn long_session(turns: usize, spec: SegmentSpec) {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let synthetic = Synthetic::new();
     let mut store = synthetic.open(root.path(), spec);
     let recorded = synthetic.turns(&mut store, 0..turns);
@@ -309,7 +309,7 @@ fn a_session_records_more_inputs_candidates_and_promotions_than_the_former_caps(
 
 #[test]
 fn a_torn_tail_is_removed_and_an_interrupted_seal_is_completed_through_the_store() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let synthetic = Synthetic::new();
     let mut store = synthetic.open(root.path(), SMALL);
     // Four turns are twenty records: five full segments, none active.
@@ -356,7 +356,7 @@ fn a_torn_tail_is_removed_and_an_interrupted_seal_is_completed_through_the_store
 
 #[test]
 fn an_unsealed_record_that_repeats_a_sealed_identity_is_refused_on_open() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let synthetic = Synthetic::new();
     let mut store = synthetic.open(root.path(), SMALL);
     synthetic.turns(&mut store, 0..3);
@@ -404,7 +404,7 @@ struct Owned {
 
 impl Owned {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         // An empty single-file history, sealed before the first turn, as a
         // migrated Session has; rewind reads History through its seal.
         drop(
@@ -703,7 +703,7 @@ fn copy_private(from: &Path, to: &Path) {
 fn legacy_fixture() -> (tempfile::TempDir, LegacyState) {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/activation_state/legacy_store");
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     copy_private(&fixture, root.path());
     let state = serde_json::from_slice(&fs::read(root.path().join(STATE_FILE)).unwrap()).unwrap();
     (root, state)

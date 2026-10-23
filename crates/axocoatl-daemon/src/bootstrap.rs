@@ -31804,7 +31804,7 @@ esac
         let (api_url, mut requests, server) =
             start_fake_e2b_control_plane(vec![test_http_response("204 No Content", "")]).await;
         let config = e2b_test_config(&api_url);
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let work = tempfile::tempdir().unwrap();
         let mut sessions = SessionStore::new(data.path().join("sessions")).unwrap();
         let session = sessions
@@ -31872,7 +31872,7 @@ esac
         ])
         .await;
         let config = e2b_test_config(&api_url);
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let work = tempfile::tempdir().unwrap();
         let mut sessions = SessionStore::new(data.path().join("sessions")).unwrap();
         let session = sessions
@@ -32071,7 +32071,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn equivalent_root_spellings_contend_on_the_same_external_lease() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let first_root = SecureDir::open_or_create_all(data.path()).unwrap();
         let equivalent_root = SecureDir::open_or_create_all(data.path().join(".")).unwrap();
         let _owner = DataDirLease::acquire(&first_root).unwrap();
@@ -32082,7 +32082,7 @@ esac
     #[cfg(unix)]
     #[test]
     fn opened_root_inode_lock_survives_both_lock_file_replacements() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let first_root = SecureDir::open_or_create_all(data.path()).unwrap();
         let owner = DataDirLease::acquire(&first_root).unwrap();
 
@@ -32119,7 +32119,7 @@ esac
         const LOCK_EX: std::os::raw::c_int = 2;
         const LOCK_NB: std::os::raw::c_int = 4;
 
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let root = SecureDir::open(data.path()).unwrap();
         let legacy = root.open_lock_file(".axocoatl-daemon.lock").unwrap();
         // SAFETY: `legacy` owns a live descriptor retained through the check.

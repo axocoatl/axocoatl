@@ -5,6 +5,8 @@
 //! lock of the store that was just dropped, instead of failing with
 //! `WouldBlock` (os error 35) or reporting its owner busy.
 
+mod support;
+
 use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
@@ -116,7 +118,7 @@ fn upgraded(root: &Path) -> Arc<UpgradedFormatOwnership> {
 
 #[test]
 fn every_owned_session_store_reopens_while_a_starting_child_holds_its_lock() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = upgraded(root.path());
     let canonical = SessionExecutionStore::open(ownership.clone(), owner()).unwrap();
     let mut failures = Vec::new();
@@ -195,10 +197,10 @@ fn every_owned_session_store_reopens_while_a_starting_child_holds_its_lock() {
 
 #[test]
 fn every_standalone_session_store_reopens_while_a_starting_child_holds_its_lock() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let canonical = SessionExecutionStore::open(upgraded(root.path()), owner()).unwrap();
     let identity = canonical.identity().unwrap();
-    let dirs: Vec<_> = (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let dirs: Vec<_> = (0..4).map(|_| support::private_tempdir()).collect();
     let content = || ExecutionContentStore::open(dirs[0].path(), identity.clone());
     let audit = || {
         InvocationAudit::open(
@@ -255,7 +257,7 @@ fn every_standalone_session_store_reopens_while_a_starting_child_holds_its_lock(
 
 #[test]
 fn a_store_still_held_by_its_owner_is_reported_busy_after_the_grace() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = upgraded(root.path());
     let canonical = SessionExecutionStore::open(ownership.clone(), owner()).unwrap();
     let started = Instant::now();

@@ -14,7 +14,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -651,7 +651,7 @@ fn initial_graph_requires_explicit_savepoint_for_every_exact_slot() {
 fn copied_identity_on_standalone_content_cannot_authorize_session_configuration() {
     let mut fixture = Fixture::new();
     let request = fixture.request("first");
-    let external = tempfile::tempdir().unwrap();
+    let external = crate::private_tempdir_test_support::private_tempdir();
     let mut copied =
         ExecutionContentStore::open(external.path(), fixture.canonical.identity().unwrap())
             .unwrap();

@@ -4,6 +4,8 @@
 //! timing taken beside them measures their syncs, not these appends.
 #![cfg(unix)]
 
+mod support;
+
 use std::sync::Arc;
 
 use axocoatl_session::execution_namespace::ExecutionComponent;
@@ -42,7 +44,7 @@ fn open_event(id: u64) -> NetworkEvent {
 
 #[test]
 fn ten_thousand_appends_finish_quickly() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()

@@ -187,7 +187,7 @@ fn factory_fixture(
 ) -> NativeFixture {
     let limits = limits(8192);
     let input = "Use exactly this retained prompt";
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()
@@ -966,7 +966,7 @@ async fn missing_before_begin_binding_and_retargeted_endpoint_are_refused_withou
 #[test]
 fn identity_looking_standalone_content_cannot_capture_native_definition_or_profile() {
     let fixture = factory_fixture(config(), None);
-    let path = tempfile::tempdir().unwrap();
+    let path = crate::private_tempdir_test_support::private_tempdir();
     let state = fixture.controller.lock().unwrap();
     let mut copied =
         ExecutionContentStore::open(path.path(), state.canonical.identity().unwrap()).unwrap();

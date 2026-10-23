@@ -803,7 +803,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ocr_timeout_kills_process_and_removes_unique_input() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let command = dir.path().join("slow-tesseract");
         std::fs::write(&command, "#!/bin/sh\nexec sleep 5\n").unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -829,7 +829,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn concurrent_ocr_calls_use_distinct_inputs_and_clean_them() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let command = dir.path().join("fake-tesseract");
         std::fs::write(&command, "#!/bin/sh\nsleep 0.05\nprintf extracted\n").unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -862,7 +862,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ocr_input_is_owner_only_while_external_process_reads_it() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let command = dir.path().join("mode-tesseract");
         std::fs::write(
             &command,
@@ -891,7 +891,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ocr_does_not_consume_path_replacement_after_create() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let command = dir.path().join("read-tesseract-input");
         std::fs::write(&command, "#!/bin/sh\ncat \"$1\"\n").unwrap();
         std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();

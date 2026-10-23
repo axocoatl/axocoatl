@@ -23,9 +23,9 @@ fn observation(snapshot: &DurableTurnSnapshot, sequence: u64) -> ActivationStrea
 
 #[test]
 fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_acceptance() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let identity = canonical.identity().unwrap();
     let mut content = store(dir.path(), identity.clone());
     let snapshot = streaming_fixture(&mut canonical, &mut content);
@@ -96,9 +96,9 @@ fn stream_identity_sequence_and_reopen_preserve_exact_observations_without_accep
 
 #[test]
 fn long_streams_cross_segments_and_terminal_prevents_later_streams() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut content = store(dir.path(), canonical.identity().unwrap());
     let snapshot = streaming_fixture(&mut canonical, &mut content);
     let mut event = observation(&snapshot, 0);
@@ -192,9 +192,9 @@ fn long_streams_cross_segments_and_terminal_prevents_later_streams() {
 
 #[test]
 fn uncertain_stream_acknowledgement_requires_reopen_and_keeps_immutable_event_identity() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let identity = canonical.identity().unwrap();
     let mut content = store(dir.path(), identity.clone());
     let snapshot = streaming_fixture(&mut canonical, &mut content);

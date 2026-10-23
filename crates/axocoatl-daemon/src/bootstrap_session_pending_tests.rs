@@ -89,7 +89,7 @@ fn first_spec(registry: &SessionDispatchRegistry, session_id: &str) -> Successor
 
 #[tokio::test]
 async fn native_empty_session_close_reopen_preserves_explicit_origin_and_rejects_stale_token() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let workspace = tempfile::tempdir().unwrap();
     let data = SecureDir::open(root.path()).unwrap();
     let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();
@@ -368,7 +368,7 @@ async fn unclassified_empty_existing_session_is_retained_but_never_inferred_nati
 #[tokio::test]
 async fn actual_empty_migration_returned_stores_join_registry_without_reopening_children() {
     use crate::bootstrap::session_migration::{migrate_held_session_state, LegacySessionMigration};
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let legacy =
         axocoatl_session::SessionTurnStore::open_in_secure(&data, "session-history").unwrap();
@@ -439,7 +439,7 @@ async fn actual_empty_migration_returned_stores_join_registry_without_reopening_
 
 #[tokio::test]
 async fn partial_native_initialization_retains_canonical_until_explicit_cleanup() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let workspace = tempfile::tempdir().unwrap();
     let data = SecureDir::open(root.path()).unwrap();
     let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();

@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
@@ -84,7 +86,7 @@ fn inventory(root: &Path) -> BTreeMap<PathBuf, (u32, Vec<u8>)> {
 
 #[test]
 fn installed_fence_preserves_original_inode_and_reopens_with_same_identity() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let legacy = LegacyFormatOwnership::acquire(root.path()).unwrap();
     let old_inode = fs::metadata(root.path().join(LEGACY_LOCK_NAME))
         .unwrap()
@@ -117,7 +119,7 @@ fn installed_fence_preserves_original_inode_and_reopens_with_same_identity() {
 
 #[test]
 fn format_aware_owner_consumes_the_held_legacy_lease_and_reopens_installed_identity() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let opened = SecureDir::open_existing_all(root.path()).unwrap();
     let owner = DataRootFormatOwnership::acquire_for_root(&opened).unwrap();
     assert!(matches!(&owner, DataRootFormatOwnership::Legacy(_)));
@@ -155,7 +157,7 @@ fn format_aware_owner_consumes_the_held_legacy_lease_and_reopens_installed_ident
 
 #[test]
 fn format_dispatcher_accepts_a_directly_opened_dot_spelling_of_the_same_root() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let supplied = SecureDir::open(root.path().join(".")).unwrap();
     let normalized = SecureDir::open_existing_all(root.path()).unwrap();
     let owner = DataRootFormatOwnership::acquire_for_root(&supplied).unwrap();
@@ -170,7 +172,7 @@ fn format_dispatcher_accepts_a_directly_opened_dot_spelling_of_the_same_root() {
 #[cfg(target_os = "macos")]
 #[test]
 fn format_dispatcher_accepts_var_alias_but_refuses_its_replaced_root() {
-    let root = tempfile::tempdir_in("/var/tmp").unwrap();
+    let root = support::private_tempdir_in("/var/tmp");
     let supplied = SecureDir::open(root.path()).unwrap();
     let normalized = SecureDir::open_existing_all(root.path()).unwrap();
     assert!(supplied.path().starts_with("/var/tmp"));
@@ -218,7 +220,7 @@ fn format_dispatcher_accepts_var_alias_but_refuses_its_replaced_root() {
 #[test]
 fn format_dispatcher_resumes_both_existing_process_crash_shapes_under_one_owner() {
     for phase in ["prepared", "exchanged"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "ownership_crash_child", "--ignored"])
             .env("AXO_OWNERSHIP_CRASH_ROOT", root.path())
@@ -244,7 +246,7 @@ fn format_dispatcher_resumes_both_existing_process_crash_shapes_under_one_owner(
 
 #[test]
 fn format_dispatcher_rejects_incomplete_preparation_before_returning_legacy_authority() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let opened = SecureDir::open_existing_all(root.path()).unwrap();
     drop(opened.open_lock_file(LEGACY_LOCK_NAME).unwrap());
     opened.create_child(RETIRED_LOCK_NAME).unwrap();
@@ -255,7 +257,7 @@ fn format_dispatcher_rejects_incomplete_preparation_before_returning_legacy_auth
 
 #[test]
 fn format_dispatcher_refuses_replaced_supplied_root_before_creating_any_lock_there() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let path = parent.path().join("data");
     fs::create_dir(&path).unwrap();
     let opened = SecureDir::open_existing_all(&path).unwrap();
@@ -267,7 +269,7 @@ fn format_dispatcher_refuses_replaced_supplied_root_before_creating_any_lock_the
 
 #[test]
 fn exact_external_lease_excludes_conversion_before_any_candidate_write() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let external = external_path(root.path());
     let parent = SecureDir::open_or_create_all(external.parent().unwrap()).unwrap();
     let file = parent
@@ -283,7 +285,7 @@ fn exact_external_lease_excludes_conversion_before_any_candidate_write() {
 
 #[test]
 fn active_legacy_lock_owner_cannot_be_overridden_by_a_migration_request() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let owner = legacy_lock(root.path());
     let before = inventory(root.path());
     assert!(matches!(
@@ -300,7 +302,7 @@ fn active_legacy_lock_owner_cannot_be_overridden_by_a_migration_request() {
 
 #[test]
 fn independently_opened_root_lock_excludes_even_replaced_lock_files() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let opened = SecureDir::open(root.path()).unwrap();
     opened.try_lock_exclusive().unwrap();
     // Equivalent to a daemon retaining its root inode after both children
@@ -315,7 +317,7 @@ fn independently_opened_root_lock_excludes_even_replaced_lock_files() {
 
 #[test]
 fn concurrent_converters_elect_one_owner_without_a_missing_legacy_name() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let start = Arc::new(Barrier::new(8));
     let hold = Arc::new(Barrier::new(8));
     let handles: Vec<_> = (0..8)
@@ -346,7 +348,7 @@ fn concurrent_converters_elect_one_owner_without_a_missing_legacy_name() {
 
 #[test]
 fn complete_preparation_survives_controller_death_before_exchange() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let prepared = LegacyFormatOwnership::acquire(root.path())
         .unwrap()
         .prepare()
@@ -365,7 +367,7 @@ fn complete_preparation_survives_controller_death_before_exchange() {
 
 #[test]
 fn complete_exchange_survives_controller_death_before_durability_acknowledgment() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let prepared = LegacyFormatOwnership::acquire(root.path())
         .unwrap()
         .prepare()
@@ -386,7 +388,7 @@ fn complete_exchange_survives_controller_death_before_durability_acknowledgment(
 #[test]
 fn actual_process_exit_releases_leases_at_both_conversion_crash_cuts() {
     for phase in ["prepared", "exchanged"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "ownership_crash_child", "--ignored"])
             .env("AXO_OWNERSHIP_CRASH_ROOT", root.path())
@@ -438,7 +440,7 @@ fn incomplete_or_ambiguous_conversion_is_refused_without_repair_by_guessing() {
         "two_files",
         "two_directories",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let data = SecureDir::open(root.path()).unwrap();
         match shape {
             "empty_preparation" => {
@@ -487,7 +489,7 @@ fn invalid_incomplete_or_future_installed_manifests_never_issue_authority() {
         "oversized",
         "extra_file",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let upgraded = LegacyFormatOwnership::acquire(root.path())
             .unwrap()
             .upgrade()
@@ -535,7 +537,7 @@ fn invalid_incomplete_or_future_installed_manifests_never_issue_authority() {
 
 #[test]
 fn filesystem_conflict_before_exchange_does_not_replace_the_legacy_boundary() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let prepared = LegacyFormatOwnership::acquire(root.path())
         .unwrap()
         .prepare()
@@ -549,7 +551,7 @@ fn filesystem_conflict_before_exchange_does_not_replace_the_legacy_boundary() {
 #[test]
 fn missing_or_replaced_retained_lock_refuses_installed_root() {
     for replace in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         drop(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -572,15 +574,15 @@ fn missing_or_replaced_retained_lock_refuses_installed_root() {
 
 #[test]
 fn linked_paths_or_replaced_root_cannot_redirect_conversion() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let root = parent.path().join("root");
-    fs::create_dir(&root).unwrap();
+    support::create_private_dir_all(&root);
     let prepared = LegacyFormatOwnership::acquire(&root)
         .unwrap()
         .prepare()
         .unwrap();
     fs::rename(&root, parent.path().join("original")).unwrap();
-    fs::create_dir(&root).unwrap();
+    support::create_private_dir_all(&root);
     assert!(prepared.install().is_err());
     assert!(inventory(&root).is_empty());
     let linked = parent.path().join("linked");
@@ -593,7 +595,7 @@ fn linked_paths_or_replaced_root_cannot_redirect_conversion() {
 
 #[test]
 fn equivalent_root_spellings_contend_and_missing_roots_are_not_created() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let _owner = LegacyFormatOwnership::acquire(root.path()).unwrap();
     assert!(matches!(
         LegacyFormatOwnership::acquire(root.path().join(".")),

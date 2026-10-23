@@ -57,7 +57,7 @@ fn sealed_path(dir: &tempfile::TempDir, index: u64) -> std::path::PathBuf {
 
 #[test]
 fn records_rotate_into_sealed_segments_and_read_back_in_order() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, seen) = open(&dir, true).unwrap();
     assert!(seen.is_empty());
     for n in 1..=10 {
@@ -86,7 +86,7 @@ fn records_rotate_into_sealed_segments_and_read_back_in_order() {
 
 #[test]
 fn a_sealed_segment_cannot_change_disappear_or_move() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     for n in 1..=9 {
         append(&mut log, &item(n));
@@ -141,7 +141,7 @@ fn a_sealed_segment_cannot_change_disappear_or_move() {
 
 #[test]
 fn a_torn_last_line_is_removed_and_writing_continues() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     for n in 1..=3 {
         append(&mut log, &item(n));
@@ -175,7 +175,7 @@ fn a_torn_last_line_is_removed_and_writing_continues() {
 
 #[test]
 fn an_interrupted_seal_is_completed_on_open() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     for n in 1..=3 {
         append(&mut log, &item(n));
@@ -212,7 +212,7 @@ fn an_interrupted_seal_is_completed_on_open() {
 
 #[test]
 fn a_missing_log_is_created_only_when_asked_and_identity_must_match() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     assert!(matches!(
         open(&dir, false),
         Err(SegmentError::Invalid("active segment is missing"))
@@ -246,7 +246,7 @@ fn a_missing_log_is_created_only_when_asked_and_identity_must_match() {
 
 #[test]
 fn a_failed_append_requires_reopening_before_more_writes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     append(&mut log, &item(1));
     let line = log.encode_record(&item(2)).unwrap();
@@ -276,7 +276,7 @@ fn read_all(dir: &tempfile::TempDir) -> Result<Vec<(u64, Item)>, SegmentError> {
 
 #[test]
 fn a_reader_sees_every_acknowledged_record_and_never_writes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     for n in 1..=6 {
         append(&mut log, &item(n));
@@ -338,7 +338,7 @@ fn a_key_filter_never_misses_a_key_it_holds() {
 
 #[test]
 fn the_segment_cache_holds_a_fixed_number_of_segments() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let (mut log, _) = open(&dir, true).unwrap();
     for n in 1..=16 {
         append(&mut log, &item(n));
@@ -361,7 +361,7 @@ fn the_segment_cache_holds_a_fixed_number_of_segments() {
 
 #[test]
 fn removing_a_log_leaves_nothing_behind() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let handle = SecureDir::open(dir.path()).unwrap();
     assert!(!SegmentLog::exists(&handle, &SPEC).unwrap());
     let (mut log, _) = open(&dir, true).unwrap();

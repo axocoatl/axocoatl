@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::{fs, sync::Arc};
 
 use axocoatl_session::{
@@ -75,7 +77,7 @@ fn content(turn: &str, text: &str) -> ExecutionRequestContent {
 
 #[test]
 fn request_and_begin_are_one_canonical_binding_across_recovery() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = guard(&root);
     let mut journal = SessionExecutionStore::open(ownership.clone(), owner()).unwrap();
     let mut contents = ExecutionContentStore::open_owned(
@@ -130,8 +132,8 @@ fn request_and_begin_are_one_canonical_binding_across_recovery() {
 
 #[test]
 fn foreign_requests_and_retroactive_binding_cannot_change_canonical_begin() {
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
+    let first = support::private_tempdir();
+    let second = support::private_tempdir();
     let a = SessionExecutionStore::open(guard(&first), owner()).unwrap();
     let mut b = SessionExecutionStore::open(guard(&second), owner()).unwrap();
     let mut contents = ExecutionContentStore::open_owned(
@@ -190,7 +192,7 @@ fn legacy_turn(store: &mut SessionTurnStore, id: &str) {
 
 #[test]
 fn legacy_seal_preserves_bytes_and_links_only_the_first_v2_successor() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     let ownership = guard(&root);
     legacy_turn(&mut legacy, "old-turn");
@@ -255,7 +257,7 @@ fn legacy_seal_preserves_bytes_and_links_only_the_first_v2_successor() {
 
 #[test]
 fn owned_audit_authority_and_commands_retain_writer_and_reject_unowned_reopen() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = guard(&root);
     let journal = SessionExecutionStore::open(ownership.clone(), owner()).unwrap();
     let turn = LogicalTurnId::new("turn").unwrap();
@@ -318,7 +320,7 @@ fn owned_audit_authority_and_commands_retain_writer_and_reject_unowned_reopen() 
 
 #[test]
 fn duplicate_request_owner_in_journal_fails_without_overwriting_evidence() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let ownership = guard(&root);
     let mut journal = SessionExecutionStore::open(ownership.clone(), owner()).unwrap();
     let mut contents = ExecutionContentStore::open_owned(
@@ -352,7 +354,7 @@ fn duplicate_request_owner_in_journal_fails_without_overwriting_evidence() {
 
 #[test]
 fn owned_component_journals_cannot_reset_after_the_primary_file_disappears() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let journal = SessionExecutionStore::open(guard(&root), owner()).unwrap();
     let turn = LogicalTurnId::new("turn").unwrap();
     let audit = InvocationAudit::open_owned(

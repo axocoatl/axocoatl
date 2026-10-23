@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::cell::RefCell;
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
@@ -71,10 +73,10 @@ impl History {
         Self::with_workspace("workspace-a")
     }
     fn with_workspace(workspace: &str) -> Self {
-        Self::with_root(workspace, tempfile::tempdir().unwrap())
+        Self::with_root(workspace, support::private_tempdir())
     }
     fn from_legacy(legacy: &axocoatl_session::turn_ledger::SessionTurnStore) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let path = root.path().join("session-history");
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -377,7 +379,7 @@ fn accepted_turn(
 
 #[test]
 fn exact_accepted_checkpoint_wins_over_a_newer_unselected_file_and_reopens() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let mut turn = Turn::new(&history, "turn-a", &[("a", None)]);
@@ -413,7 +415,7 @@ fn exact_accepted_checkpoint_wins_over_a_newer_unselected_file_and_reopens() {
 
 #[test]
 fn shared_template_nodes_have_distinct_cache_owners_and_failed_branch_keeps_prior_head() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let first = accepted_turn(
@@ -498,7 +500,7 @@ fn shared_template_nodes_have_distinct_cache_owners_and_failed_branch_keeps_prio
 
 #[test]
 fn superseded_generation_retains_artifact_but_never_becomes_current_promotion() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let mut turn = Turn::new(&history, "turn-revise", &[("a", None)]);
@@ -548,7 +550,7 @@ fn superseded_generation_retains_artifact_but_never_becomes_current_promotion() 
 
 #[test]
 fn partial_multi_node_promotion_blocks_restore_and_reopen_finishes_exact_manifest() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let turn = accepted_turn(
@@ -600,7 +602,7 @@ fn partial_multi_node_promotion_blocks_restore_and_reopen_finishes_exact_manifes
 
 #[test]
 fn recovery_refuses_missing_selected_artifact_until_exact_bytes_are_restored() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let turn = accepted_turn(
@@ -636,7 +638,7 @@ fn recovery_refuses_missing_selected_artifact_until_exact_bytes_are_restored() {
 
 #[test]
 fn ownership_aliases_digest_corruption_and_template_cache_are_refused() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let mut turn = Turn::new(&history, "turn-owners", &[("a", None), ("b", None)]);
@@ -671,7 +673,7 @@ fn ownership_aliases_digest_corruption_and_template_cache_are_refused() {
 
 #[test]
 fn immutable_input_cannot_be_rebound_by_another_canonical_journal() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let mut first = Turn::new(&history, "turn-input", &[("a", None)]);
@@ -691,7 +693,7 @@ fn immutable_input_cannot_be_rebound_by_another_canonical_journal() {
 
 #[test]
 fn cancelled_generation_and_replayed_older_turns_do_not_replace_current_committed_state() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let first = accepted_turn(&history, &mut store, "turn-first", &[("a", None)]);
@@ -739,7 +741,7 @@ fn cancelled_generation_and_replayed_older_turns_do_not_replace_current_committe
 
 #[test]
 fn stale_starting_state_cannot_overwrite_a_conversation_that_advanced() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let first = accepted_turn(&history, &mut store, "turn-first", &[("a", None)]);
@@ -763,7 +765,7 @@ fn stale_starting_state_cannot_overwrite_a_conversation_that_advanced() {
 
 #[test]
 fn failure_before_durable_promotion_intent_leaves_all_conversation_heads_untouched() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let turn = accepted_turn(
@@ -795,7 +797,7 @@ fn failure_before_durable_promotion_intent_leaves_all_conversation_heads_untouch
 #[test]
 fn corrupt_future_or_misbound_store_and_linked_paths_fail_closed() {
     for corruption in ["future", "foreign_session", "candidate_owner", "heads"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let history = History::new();
         let mut store = open(root.path());
         let turn = accepted_turn(&history, &mut store, "turn-corrupt", &[("a", None)]);
@@ -843,8 +845,8 @@ fn corrupt_future_or_misbound_store_and_linked_paths_fail_closed() {
         );
         assert_eq!(journal_bytes(root.path()), bytes, "{corruption}");
     }
-    let parent = tempfile::tempdir().unwrap();
-    let target = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
+    let target = support::private_tempdir();
     symlink(target.path(), parent.path().join("linked")).unwrap();
     assert!(ActivationStateStore::open(parent.path().join("linked"), session()).is_err());
     assert!(fs::read_dir(target.path()).unwrap().next().is_none());
@@ -852,7 +854,7 @@ fn corrupt_future_or_misbound_store_and_linked_paths_fail_closed() {
 
 #[test]
 fn exclusive_store_and_current_pointer_validation_prevent_parallel_or_stale_restore() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     assert!(ActivationStateStore::open(root.path(), session()).is_err());
@@ -872,7 +874,7 @@ fn exclusive_store_and_current_pointer_validation_prevent_parallel_or_stale_rest
 
 #[test]
 fn successor_turn_can_change_node_identity_while_retaining_slot_conversation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let first = accepted_turn(&history, &mut store, "first", &[("a", None)]);
@@ -917,7 +919,7 @@ fn successor_turn_can_change_node_identity_while_retaining_slot_conversation() {
 
 #[test]
 fn different_slot_cannot_claim_a_retained_conversation_in_a_successor() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let history = History::new();
     let mut store = open(root.path());
     let first = accepted_turn(&history, &mut store, "first", &[("a", None)]);
@@ -946,13 +948,13 @@ fn different_slot_cannot_claim_a_retained_conversation_in_a_successor() {
 #[test]
 fn foreign_canonical_journals_cannot_stage_promote_or_alias_artifact_identity() {
     for workspace in ["workspace-a", "other-workspace"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let history = History::new();
         let mut store = open(root.path());
         let mut first = Turn::new(&history, "same-turn", &[("a", None)]);
         let activation = first.start(&mut store, "a");
         let reference = first.candidate(&mut store, &activation, "accepted");
-        let foreign_root = tempfile::tempdir().unwrap();
+        let foreign_root = support::private_tempdir();
         let foreign_history = History::with_workspace(workspace);
         let mut foreign_store = open(foreign_root.path());
         let mut other = Turn::new(&foreign_history, "same-turn", &[("a", None)]);
@@ -1193,7 +1195,7 @@ fn baseline_projection(
 
 #[test]
 fn real_legacy_ingress_becomes_immutable_baseline_then_exact_v2_starting_state() {
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let mut legacy =
         axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     let fixtures = legacy_fixture();
@@ -1305,7 +1307,7 @@ fn real_legacy_ingress_becomes_immutable_baseline_then_exact_v2_starting_state()
 
 #[test]
 fn rewind_excludes_superseded_conversation_but_keeps_dispatched_usage_and_unknown_subtotals() {
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let mut legacy =
         axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     let mut fixtures = legacy_fixture();
@@ -1344,7 +1346,7 @@ fn rewind_excludes_superseded_conversation_but_keeps_dispatched_usage_and_unknow
 fn legacy_context_tools_private_state_and_mixed_agents_are_explicitly_unsupported() {
     use axocoatl_memory::activation_state::LegacyBaselineProjection;
     for case in ["context", "tool", "private", "mixed", "failed", "empty"] {
-        let legacy_root = tempfile::tempdir().unwrap();
+        let legacy_root = support::private_tempdir();
         let mut legacy =
             axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
         let mut fixtures = legacy_fixture();
@@ -1389,7 +1391,7 @@ fn legacy_context_tools_private_state_and_mixed_agents_are_explicitly_unsupporte
 #[test]
 fn legacy_baseline_rejects_foreign_journal_and_changed_slot_conversation_binding() {
     use axocoatl_memory::activation_state::LegacyBaselineProjection;
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let mut legacy =
         axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     append_legacy(&mut legacy, &legacy_fixture()[0]);
@@ -1433,7 +1435,7 @@ fn legacy_baseline_rejects_foreign_journal_and_changed_slot_conversation_binding
 #[test]
 fn corrupt_or_missing_committed_baseline_bytes_are_never_replaced_by_idempotent_import() {
     for missing in [false, true] {
-        let legacy_root = tempfile::tempdir().unwrap();
+        let legacy_root = support::private_tempdir();
         let mut legacy =
             axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
         append_legacy(&mut legacy, &legacy_fixture()[0]);
@@ -1486,7 +1488,7 @@ fn corrupt_or_missing_committed_baseline_bytes_are_never_replaced_by_idempotent_
 
 #[test]
 fn interrupted_baseline_import_reuses_exact_orphan_bytes_only_after_reopen() {
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let mut legacy =
         axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     append_legacy(&mut legacy, &legacy_fixture()[0]);
@@ -1556,7 +1558,7 @@ fn ordinary_baseline_preserves_inline_context_native_groups_and_exact_provider_a
     use axocoatl_memory::legacy_conversation::{
         checkpoint_visible_matches, project_history, ToolReplayPolicy,
     };
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = axocoatl_session::turn_ledger::SessionTurnStore::open(root.path()).unwrap();
     let fixture = tool_context_fixture();
     append_legacy(&mut legacy, &fixture);
@@ -1671,7 +1673,7 @@ fn ordinary_baseline_omits_whole_unreplayable_groups_and_records_selected_policy
         "duplicate-index",
         "missing-provider-metadata",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let mut legacy =
             axocoatl_session::turn_ledger::SessionTurnStore::open(root.path()).unwrap();
         let mut fixture = tool_context_fixture();
@@ -1768,7 +1770,7 @@ fn ordinary_baseline_preserves_failed_interrupted_context_and_all_recorded_incur
     use axocoatl_memory::activation_state::LegacyTurnOmission;
     use axocoatl_memory::legacy_conversation::ToolReplayPolicy;
     use axocoatl_session::turn_ledger::SessionTurnLifecycle as Status;
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = axocoatl_session::turn_ledger::SessionTurnStore::open(root.path()).unwrap();
     for (id, status) in [
         ("completed", Status::Completed),
@@ -1834,7 +1836,7 @@ fn ordinary_empty_conversation_is_explicitly_committed_only_when_supported_sourc
     use axocoatl_memory::legacy_conversation::{ToolReplayPolicy, SESSION_CHECKPOINT_MESSAGE_CAP};
     use axocoatl_session::turn_ledger::SessionTurnLifecycle;
     for bounded in [false, true] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let mut legacy =
             axocoatl_session::turn_ledger::SessionTurnStore::open(root.path()).unwrap();
         if bounded {
@@ -1904,7 +1906,7 @@ fn richer_ordinary_policy_refuses_coordinated_private_and_unresolved_blob_contex
         "attempt",
         "empty",
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let mut legacy =
             axocoatl_session::turn_ledger::SessionTurnStore::open(root.path()).unwrap();
         let mut fixture = tool_context_fixture();
@@ -2307,7 +2309,7 @@ fn owned_cancelled_turn_promotes_exact_accepted_parent_and_preserves_stopped_chi
 fn native_rewind_keeps_raw_promotions_and_restarts_from_exact_selected_checkpoint() {
     use axocoatl_memory::legacy_conversation::ToolReplayPolicy;
     use axocoatl_session::session_history::{HistoryVisibility, SessionHistory};
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let legacy = axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     let history = History::from_legacy(&legacy);
     let (content, _) = seal_legacy(&history);
@@ -2429,7 +2431,7 @@ fn native_rewind_keeps_raw_promotions_and_restarts_from_exact_selected_checkpoin
 #[test]
 fn migrated_rewind_projects_only_kept_prefix_without_rewriting_sealed_history_or_usage() {
     use axocoatl_memory::legacy_conversation::ToolReplayPolicy;
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let mut legacy =
         axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     let fixtures = legacy_fixture();
@@ -2494,7 +2496,7 @@ fn migrated_rewind_projects_only_kept_prefix_without_rewriting_sealed_history_or
 
 #[test]
 fn successor_reset_keeps_previous_slot_conversation_artifacts_and_new_head_after_restart() {
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = support::private_tempdir();
     let legacy = axocoatl_session::turn_ledger::SessionTurnStore::open(legacy_root.path()).unwrap();
     let history = History::from_legacy(&legacy);
     let (_content, _) = seal_legacy(&history);

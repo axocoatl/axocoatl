@@ -13,7 +13,7 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let secure = SecureDir::open(root.path()).unwrap();
     let mut old = SessionTurnStore::open(secure.child("session-history").unwrap().path()).unwrap();
     for (id, status) in [
@@ -322,7 +322,7 @@ async fn missing_retained_private_source_archive_prevents_reopening_a_baseline()
 }
 
 async fn ordinary_fixture(metadata: serde_json::Map<String, serde_json::Value>) -> Fixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let secure = SecureDir::open(root.path()).unwrap();
     let mut old = SessionTurnStore::open_in_secure(&secure, "session-history").unwrap();
     old.begin(BeginSessionTurn {

@@ -1979,7 +1979,7 @@ mod tests {
 
     #[test]
     fn isolated_store_binds_its_journal_with_the_first_input_and_refuses_oversized_checkpoints() {
-        let history_root = tempfile::tempdir().unwrap();
+        let history_root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(history_root.path())
                 .unwrap()
@@ -2004,7 +2004,7 @@ mod tests {
         let turn_id = envelopes[0].turn_id.clone();
         let snapshot = history.snapshot(&turn_id).unwrap();
         let activation = snapshot.contract().activations()[0].activation.clone();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut store =
             ActivationStateStore::open(root.path(), activation.session_id.clone()).unwrap();
         let head = |root: &Path| -> serde_json::Value {
@@ -2095,7 +2095,7 @@ mod reservation_tests {
         ActivationStateStore,
         Vec<ActivationRef>,
     ) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -2305,7 +2305,7 @@ mod empty_promotion_tests {
 
     #[test]
     fn empty_turn_reserves_its_promotion_before_close_and_promotes_an_empty_selection() {
-        let history_root = tempfile::tempdir().unwrap();
+        let history_root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(history_root.path())
                 .unwrap()
@@ -2328,7 +2328,7 @@ mod empty_promotion_tests {
         canonical.append(begin.clone()).unwrap();
         let snapshot = canonical.snapshot(&begin.turn_id).unwrap();
         assert!(snapshot.contract().activations().is_empty());
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut memory = ActivationStateStore::open(root.path(), begin.session_id.clone()).unwrap();
         assert!(!memory.turn_reserved(&begin.turn_id).unwrap());
         let saved = block_active_segment(root.path());

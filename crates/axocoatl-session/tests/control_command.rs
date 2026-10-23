@@ -1,3 +1,5 @@
+mod support;
+
 use axocoatl_session::control_authority::*;
 use axocoatl_session::control_command::*;
 use axocoatl_session::turn_contract::*;
@@ -92,7 +94,7 @@ fn serialized_lifecycle_reopens_at_every_boundary_without_inventing_settlement()
     ];
     assert_eq!(states.len(), fixture.updates.len() + 1);
     for (cut, expected_state) in states.iter().enumerate() {
-        let root = TempDir::new().unwrap();
+        let root = support::private_tempdir();
         let mut journal = store(&root);
         let first = journal
             .record_requested(fixture.request.clone(), human())
@@ -142,7 +144,7 @@ fn serialized_lifecycle_reopens_at_every_boundary_without_inventing_settlement()
 #[test]
 fn exact_replay_precedes_stale_revision_but_changed_payloads_never_alias() {
     let fixture = scenario();
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let mut journal = store(&root);
     journal
         .record_requested(fixture.request.clone(), human())
@@ -193,7 +195,7 @@ fn exact_replay_precedes_stale_revision_but_changed_payloads_never_alias() {
 fn terminal_results_are_immutable_and_every_legal_failure_path_is_retained() {
     let fixture = scenario();
     for accepted_updates in 0..=2 {
-        let root = TempDir::new().unwrap();
+        let root = support::private_tempdir();
         let mut journal = store(&root);
         journal
             .record_requested(fixture.request.clone(), human())
@@ -356,7 +358,7 @@ fn every_parameter_variant_roundtrips_with_exact_targets_and_rejects_cross_epoch
 
 #[test]
 fn source_target_and_transition_owners_must_match_without_mutation() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let mut journal = store(&root);
     let fixture = scenario();
     let wrong_human = TrustedCommandSource::human(
@@ -468,7 +470,7 @@ fn grant() -> AuthorityGrant {
 
 #[test]
 fn agent_attribution_requires_a_live_lease_and_cannot_change_recorded_origin() {
-    let authority_root = TempDir::new().unwrap();
+    let authority_root = support::private_tempdir();
     let gate =
         ControlAuthority::open(authority_root.path(), owner().session_id, owner().turn_id).unwrap();
     gate.install_grant(grant(), gate.revision().unwrap())
@@ -483,7 +485,7 @@ fn agent_attribution_requires_a_live_lease_and_cannot_change_recorded_origin() {
         )
         .unwrap();
     let attestation = gate.attest_control_source(&lease, 100).unwrap();
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let mut journal = store(&root);
     let request = scenario().request;
     let receipt = journal
@@ -497,7 +499,7 @@ fn agent_attribution_requires_a_live_lease_and_cannot_change_recorded_origin() {
         Err(ControlCommandError::CommandConflict)
     ));
     assert!(gate.attest_control_source(&lease, 1000).is_err());
-    let foreign_root = TempDir::new().unwrap();
+    let foreign_root = support::private_tempdir();
     let foreign_gate =
         ControlAuthority::open(foreign_root.path(), owner().session_id, owner().turn_id).unwrap();
     assert!(foreign_gate.attest_control_source(&lease, 100).is_err());
@@ -552,7 +554,7 @@ fn agent_attribution_requires_a_live_lease_and_cannot_change_recorded_origin() {
 fn malformed_future_or_cross_owner_stores_are_not_rewritten() {
     let fixture = scenario();
     for mutation in ["version", "sequence", "revision", "duplicate", "owner"] {
-        let root = TempDir::new().unwrap();
+        let root = support::private_tempdir();
         let mut journal = store(&root);
         journal
             .record_requested(fixture.request.clone(), human())
@@ -580,7 +582,7 @@ fn malformed_future_or_cross_owner_stores_are_not_rewritten() {
 
 #[test]
 fn failed_storage_requires_reopen_and_missing_roots_are_never_created() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let missing = root.path().join("missing");
     assert!(ControlCommandStore::open(&missing, owner()).is_err());
     assert!(!missing.exists());

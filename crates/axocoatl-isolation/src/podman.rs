@@ -997,7 +997,10 @@ esac"#,
         } else {
             PodmanReadiness::Unavailable(String::new())
         };
-        match (preflight_with(&podman).await, expected) {
+        // Through the default connection, whatever CONTAINER_HOST or
+        // CONTAINER_CONNECTION the developer's shell has.
+        let default = ConnectionOverride::None;
+        match (preflight_through(&podman, &default).await, expected) {
             (PodmanReadiness::Unavailable(error), PodmanReadiness::Unavailable(_)) => {
                 assert!(error.contains("Cannot connect to Podman"), "{error}")
             }
@@ -1006,7 +1009,7 @@ esac"#,
         assert_eq!(calls(directory.path())[0], "info --format json");
         let missing = directory.path().join("absent").display().to_string();
         assert_eq!(
-            preflight_with(&missing).await,
+            preflight_through(&missing, &default).await,
             PodmanReadiness::NotInstalled
         );
     }

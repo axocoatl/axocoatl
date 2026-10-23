@@ -36,12 +36,40 @@ pub struct Daemon {
 
 impl Daemon {
     pub async fn start(root: &Path, config: &Path, port: u16, launches: usize) -> Self {
+        Self::start_command(axocoatl(root), root, config, port, launches).await
+    }
+
+    /// [`Daemon::start`] for a test that needs no Podman: the daemon probes
+    /// Podman's default connection, whatever CONTAINER_HOST or
+    /// CONTAINER_CONNECTION the developer's shell sets. It starts whether or
+    /// not Podman answers there, but refuses to start when a connection
+    /// named in those variables does not answer.
+    pub async fn start_without_podman(
+        root: &Path,
+        config: &Path,
+        port: u16,
+        launches: usize,
+    ) -> Self {
+        let mut command = axocoatl(root);
+        command
+            .env_remove("CONTAINER_HOST")
+            .env_remove("CONTAINER_CONNECTION");
+        Self::start_command(command, root, config, port, launches).await
+    }
+
+    async fn start_command(
+        mut command: Command,
+        root: &Path,
+        config: &Path,
+        port: u16,
+        launches: usize,
+    ) -> Self {
         let ipc = root.join("ipc");
         std::fs::create_dir_all(&ipc).unwrap();
         std::fs::set_permissions(&ipc, std::fs::Permissions::from_mode(0o700)).unwrap();
         let stdout = File::create(root.join(format!("stdout-{launches}.log"))).unwrap();
         let stderr = File::create(root.join(format!("stderr-{launches}.log"))).unwrap();
-        let child = axocoatl(root)
+        let child = command
             .args(["serve", "--config"])
             .arg(config)
             .env("RUST_LOG", "info")

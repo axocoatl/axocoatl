@@ -478,7 +478,7 @@ mod tests {
             }
         })).unwrap();
         policy.profiles = cases.iter().map(|(profile, _)| profile.clone()).collect();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let gate = ControlAuthority::open(root.path(), session, turn).unwrap();
         {
             let mut state = gate.lock().unwrap();

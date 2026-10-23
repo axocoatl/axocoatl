@@ -640,6 +640,16 @@ case "$1" in
 esac
 PODMAN
   chmod 0755 "$sim/fakebin/podman"
+  # A stand-in npm: the copy-paste lint's `npm ci` would install into this
+  # checkout's sites/docs from the registry (the lint's own case above
+  # covers that step). It installs nothing, so the lint fails here; the
+  # simulated path fails anyway.
+  cat >"$sim/fakebin/npm" <<NPM
+#!/bin/sh
+printf '%s|%s\n' "\$(pwd -P)" "\$*" >>"$sim/npm.log"
+NPM
+  chmod 0755 "$sim/fakebin/npm"
+  docs_modules_before=$([ -e "$repo_root/sites/docs/node_modules" ] && echo yes || echo no)
   commit=$(printf 'b%.0s' $(seq 1 40))
   set +e
   env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" PATH="$sim/fakebin:$PATH" \
@@ -777,6 +787,11 @@ PODMAN
   fi
   [ ! -e "$sim/evidence/$version/$commit/D1-again.json" ] || { echo "the refused live run wrote evidence" >&2; exit 1; }
   [ -d "$live_home" ] || { echo "the live run removed the account's HOME" >&2; exit 1; }
+  # Nothing was installed into this checkout.
+  if [ "$docs_modules_before" = no ] && [ -e "$repo_root/sites/docs/node_modules" ]; then
+    echo "the simulation installed sites/docs/node_modules into this checkout" >&2
+    exit 1
+  fi
 )
 sim_status=$?
 if [ "$sim_status" = 0 ]; then

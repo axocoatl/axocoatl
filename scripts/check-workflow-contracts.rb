@@ -230,6 +230,8 @@ contracts = {
     "cargo clippy --locked --workspace --all-targets --all-features --jobs 1",
     "cargo test --locked --workspace --jobs 1",
     "cargo test --locked --doc --workspace --jobs 1",
+    # The tests pass under Ubuntu's login umask, not only under 022.
+    "(umask 002 && cargo test --locked --workspace --jobs 1",
     "cargo build --locked --release -p axocoatl-cli --jobs 1",
     './scripts/check-no-live-verify.sh "$release_target_dir/release/axocoatl"',
   ],

@@ -71,7 +71,7 @@ fn turns(store: &mut SessionExecutionStore, count: usize) {
 
 #[test]
 fn old_turns_are_folded_and_found_again_from_sealed_segments() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let guard = ownership(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     turns(&mut store, 30);
@@ -143,7 +143,7 @@ fn old_turns_are_folded_and_found_again_from_sealed_segments() {
 /// a conversion cut short is redone.
 #[test]
 fn a_single_file_journal_is_migrated_into_segments() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let guard = ownership(&root);
     let store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     let dir = store.dir.clone();
@@ -208,7 +208,7 @@ fn a_single_file_journal_is_migrated_into_segments() {
 /// it, and the journal continues from the last whole record.
 #[test]
 fn a_torn_record_is_dropped_on_reopen() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let guard = ownership(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     turns(&mut store, 3);
@@ -313,7 +313,7 @@ fn legacy_session(guard: &Arc<UpgradedFormatOwnership>) -> Vec<TurnContractEnvel
 #[test]
 fn a_session_is_backed_up_once_before_its_first_conversion_and_restores_byte_for_byte() {
     use crate::segment_backup::{session_key, SegmentBackupManifest};
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let guard = ownership(&root);
     let records = legacy_session(&guard);
     let key = session_key("session-a");
@@ -385,7 +385,7 @@ fn a_session_is_backed_up_once_before_its_first_conversion_and_restores_byte_for
 #[test]
 fn a_backup_that_cannot_be_made_stops_the_conversion_and_a_partial_one_is_taken_again() {
     use crate::segment_backup::session_key;
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let guard = ownership(&root);
     let fresh = ExecutionStoreOwner {
         workspace_id: "workspace".into(),
@@ -399,13 +399,15 @@ fn a_backup_that_cannot_be_made_stops_the_conversion_and_a_partial_one_is_taken_
     let backups = root.path().join("backups/before-segments");
     let before = tree(&live);
 
-    std::fs::create_dir_all(&backups).unwrap();
+    crate::private_tempdir_test_support::create_private_dir_all(&backups);
     std::fs::write(backups.join(&key), b"not a directory").unwrap();
     assert!(SessionExecutionStore::open(guard.clone(), owner()).is_err());
     assert_eq!(tree(&live), before, "nothing was converted");
 
     std::fs::remove_file(backups.join(&key)).unwrap();
-    std::fs::create_dir_all(backups.join(&key).join("session")).unwrap();
+    crate::private_tempdir_test_support::create_private_dir_all(
+        &backups.join(&key).join("session"),
+    );
     std::fs::write(backups.join(&key).join("session/partial"), b"cut short").unwrap();
     let store = SessionExecutionStore::open(guard, owner()).unwrap();
     assert_eq!(store.records().unwrap(), records);

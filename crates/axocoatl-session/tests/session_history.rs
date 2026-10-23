@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::sync::Arc;
 
 use axocoatl_core::TokenUsageStats;
@@ -61,7 +63,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(ids: &[&str], rewind: Option<&str>) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
         for id in ids {
             legacy_turn(&mut legacy, id);
@@ -157,7 +159,7 @@ fn append(canonical: &mut SessionExecutionStore, id: &str, name: &str, event: Tu
 
 #[test]
 fn legacy_compatibility_preserves_exact_search_transcript_and_hidden_rows() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path()).unwrap();
     legacy_turn(&mut legacy, "first");
     legacy_turn(&mut legacy, "hidden");
@@ -193,7 +195,7 @@ fn legacy_compatibility_preserves_exact_search_transcript_and_hidden_rows() {
 
 #[test]
 fn legacy_catalog_preserves_interleaved_global_order_and_search_exactly() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path()).unwrap();
     for (session, id) in [
         ("session-b", "b-first"),

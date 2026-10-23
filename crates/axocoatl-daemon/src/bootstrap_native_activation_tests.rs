@@ -155,7 +155,7 @@ fn team_profile(
         .unwrap()
 }
 fn pending_fixture() -> PendingFixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let workspace = tempfile::tempdir().unwrap();
     let data = SecureDir::open(root.path()).unwrap();
     let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();

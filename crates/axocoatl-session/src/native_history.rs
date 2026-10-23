@@ -154,8 +154,8 @@ mod tests {
 
     #[test]
     fn actual_creation_origin_is_durable_and_foreign_receipt_never_reclassifies_history() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         let data = SecureDir::open(root.path()).unwrap();
         let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();
         let owner = Arc::new(
@@ -234,7 +234,7 @@ mod tests {
         assert!(canonical.native_origin().unwrap().is_some());
         assert!(canonical.legacy_seal().unwrap().is_none());
         assert!(!root.path().join("session-history").exists());
-        let foreign_root = tempfile::tempdir().unwrap();
+        let foreign_root = crate::private_tempdir_test_support::private_tempdir();
         let foreign_data = SecureDir::open(foreign_root.path()).unwrap();
         let mut foreign_sessions = SessionStore::new_in_secure(&foreign_data, "sessions").unwrap();
         assert!(foreign_sessions
@@ -263,8 +263,8 @@ mod tests {
     /// another data root made.
     #[test]
     fn a_created_session_keeps_its_history_after_deletion() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         let data = SecureDir::open(root.path()).unwrap();
         let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();
         let ownership = Arc::new(
@@ -309,8 +309,8 @@ mod tests {
 
     #[test]
     fn changed_new_session_bytes_refuse_origin_before_any_native_work() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         let data = SecureDir::open(root.path()).unwrap();
         let mut sessions = SessionStore::new_in_secure(&data, "sessions").unwrap();
         let ownership = Arc::new(

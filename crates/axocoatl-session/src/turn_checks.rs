@@ -637,7 +637,7 @@ mod tests {
     /// closed and a graph without the group gets the current form.
     #[test]
     fn admitted_checks_keep_the_capture_they_were_admitted_with() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut content = content_store(root.path());
         let checks = vec![vec!["cargo".to_string(), "test".to_string()]];
         let group = CheckGroup::required();
@@ -702,7 +702,7 @@ mod tests {
     /// minutes fails closed.
     #[test]
     fn check_options_carry_each_timeout_into_the_admitted_definitions() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut content = content_store(root.path());
         let checks = vec![
             vec!["npm".to_string(), "test".to_string()],
@@ -775,7 +775,7 @@ mod tests {
     /// it, and a definition without it serializes exactly as before 1.3.
     #[test]
     fn check_egress_reaches_only_its_own_admitted_definition() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut content = content_store(root.path());
         let checks = vec![
             vec!["npm".to_string(), "test".to_string()],
@@ -817,7 +817,7 @@ mod tests {
 
     #[test]
     fn check_definitions_fit_the_actual_condition_store_bound() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut content = content_store(root.path());
         let commands = vec![vec!["cargo".into(), "test".into(), "--quiet".into()]];
         let definitions = check_definitions(&commands).unwrap();

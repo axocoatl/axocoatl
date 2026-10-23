@@ -12,6 +12,8 @@ pub mod legacy_conversation;
 #[cfg(feature = "neural-embeddings")]
 pub mod neural;
 pub mod perms;
+#[cfg(test)]
+pub(crate) mod private_tempdir_test_support;
 pub mod semantic;
 pub mod session;
 pub mod storage;

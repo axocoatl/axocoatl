@@ -181,7 +181,7 @@ fn fixture_with_captured_input_and_history(
     capture: impl FnOnce(&mut ExecutionContentStore, &mut ExecutionRequestContent) -> Vec<EvidenceRef>,
     history: bool,
 ) -> Fixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     if history {
         axocoatl_session::SessionTurnStore::open(root.path().join("session-history")).unwrap();
     }
@@ -724,7 +724,7 @@ fn generic_begin_without_canonical_request_cannot_open_dispatch_adapter() {
         .graph()
         .unwrap()
         .clone();
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()

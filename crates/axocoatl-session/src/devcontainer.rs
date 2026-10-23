@@ -318,7 +318,7 @@ mod tests {
     fn symlinked_devcontainer_candidate_fails_without_following_its_target() {
         use std::os::unix::fs::symlink;
 
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         let outside = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(outside.path(), r#"{"image":"attacker"}"#).unwrap();
         symlink(outside.path(), workspace.path().join(".devcontainer.json")).unwrap();
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn oversized_devcontainer_is_rejected_before_json_allocation() {
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         std::fs::write(
             workspace.path().join(".devcontainer.json"),
             vec![b' '; MAX_DEVCONTAINER_BYTES + 1],
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn two_conventional_devcontainer_files_are_actionably_ambiguous() {
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace = crate::private_tempdir_test_support::private_tempdir();
         std::fs::create_dir(workspace.path().join(".devcontainer")).unwrap();
         std::fs::write(
             workspace.path().join(".devcontainer/devcontainer.json"),

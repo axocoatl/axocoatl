@@ -8414,8 +8414,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_shared_proxy_needs_egress_and_no_ports() {
+        use std::os::unix::fs::PermissionsExt;
         let workspace = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
+        // 0700 whatever the umask: a group-writable root is refused first.
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let error = SessionSandbox::start(
             "attempt-s-x-0",
             workspace.path(),
@@ -9053,6 +9058,11 @@ mod tests {
             .join("node_modules");
         let first_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
         let second_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
+        // A failed assertion leaves no container or volume behind.
+        let _leftovers = [
+            SessionLeftovers(first_id.clone()),
+            SessionLeftovers(second_id.clone()),
+        ];
         let start = |id: String| {
             let path = directory.path().to_path_buf();
             async move {

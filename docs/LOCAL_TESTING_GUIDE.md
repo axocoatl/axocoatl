@@ -215,6 +215,14 @@ a local port; if an execution sandbox blocks that bind, rerun the same test in
 an environment that permits it rather than treating the denial as a product
 failure.
 
+The tests pass under any umask (the native gate runs them under 002,
+Ubuntu's login default) and whatever `CONTAINER_HOST` or `CONTAINER_CONNECTION`
+your shell sets, with one exception:
+`bootstrap::tests::installed_format_admits_checked_cleanup_without_mutating_legacy_history`
+runs the daemon's startup check in the test process, and, as the daemon does,
+it refuses a connection one of those variables names when Podman does not
+answer through it. Unset them, or start that connection.
+
 For focused runtime work, useful package gates include:
 
 ```bash

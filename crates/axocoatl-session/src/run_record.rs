@@ -618,7 +618,7 @@ mod tests {
     }
 
     fn store() -> (tempfile::TempDir, SecureDir, RunRecordStore) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let root = SecureDir::open(dir.path()).unwrap();
         let store = RunRecordStore::open(&root).unwrap();
         (dir, root, store)
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn symlinks_are_refused() {
         let (dir, _root, store) = store();
-        let outside = tempfile::tempdir().unwrap();
+        let outside = crate::private_tempdir_test_support::private_tempdir();
         let id = run_id();
         std::os::unix::fs::symlink(outside.path(), dir.path().join(RUN_RECORD_DIR).join(&id))
             .unwrap();

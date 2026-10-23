@@ -1700,7 +1700,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn files_are_hashed_as_captures_hash_them_and_checked() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let root = dir.path();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.rs"), b"fn main() {}\n").unwrap();

@@ -369,6 +369,18 @@ fn onboarding(shims: &Shims, ui: Ui, facts: Facts, mut args: OnboardArgs) -> Onb
     }
 }
 
+/// `dir` and its missing parents, 0700, as onboarding makes the
+/// configuration directory: under a umask of 002 `create_dir_all` makes them
+/// group-writable, which Axocoatl refuses as a managed root.
+fn create_private_dir(dir: &std::path::Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .unwrap();
+}
+
 fn config_text(o: &Onboarding) -> String {
     std::fs::read_to_string(&o.paths.config_path).unwrap()
 }
@@ -3093,7 +3105,7 @@ async fn an_existing_configuration_is_backed_up_and_updated() {
             ..yes(WriterChoice::Ollama)
         },
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     let old = format!(
         "# my own notes\nagents:\n  - id: lead\n    name: \"Lead\"\n    provider: ollama\n    model: \"qwen3-coder:30b\"\n    tools: [read_file]\n\nproviders:\n  ollama:\n    base_url: \"{}\"\n",
         ollama.url()
@@ -3202,7 +3214,7 @@ async fn an_existing_configuration_can_be_left_unchanged() {
         facts,
         OnboardArgs::default(),
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
     assert_eq!(run(&mut o).await, exit::NOT_READY);
     assert_eq!(config_text(&o), "agents: []\n");
@@ -3336,7 +3348,7 @@ async fn plan_over_an_existing_configuration_changes_nothing() {
             ..OnboardArgs::default()
         },
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
     let before = tree(shims.home.path());
     assert_eq!(run(&mut o).await, exit::READY, "{}", o.ui.output());
@@ -3632,7 +3644,7 @@ async fn update_keeps_the_writer_and_the_models_the_setup_has() {
         writer: "ollama",
         codex_credential: None,
     });
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, &old).unwrap();
     let code = run(&mut o).await;
     let output = o.ui.output();
@@ -3747,7 +3759,7 @@ async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
             },
         );
         o.openrouter_api = openrouter.uri();
-        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        create_private_dir(&o.paths.config_dir);
         std::fs::write(&o.paths.config_path, &old).unwrap();
         let code = run(&mut o).await;
         let output = o.ui.output();
@@ -3814,7 +3826,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         OnboardArgs::default(),
     );
     let write = |o: &Onboarding, port: u16| {
-        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        create_private_dir(&o.paths.config_dir);
         std::fs::write(
             &o.paths.config_path,
             format!("agents: []\nserver:\n  port: {port}\n  host: \"127.0.0.1\"\n"),
@@ -3923,7 +3935,7 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         facts,
         OnboardArgs::default(),
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(
         &o.paths.config_path,
         format!(
@@ -4078,7 +4090,7 @@ async fn replace_shows_the_new_file_and_none_of_the_old_secrets() {
         OnboardArgs::default(),
     );
     let old = "webhooks:\n  - name: ci\n    url: \"https://example.test/hook\"\n    secret: \"whsec-old\"\n    headers:\n      Authorization: \"Bearer tok-old\"\nserver:\n  auth:\n    api_keys:\n      - \"key-old\"\n    bearer_tokens: [\"tok-two\"]\n";
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, old).unwrap();
     let plan = config::ConfigPlan {
         ollama_base_url: Some("http://localhost:11434".into()),

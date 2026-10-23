@@ -105,7 +105,7 @@ fn begin(ledger: &mut SessionTurnStore, session: &str, turn: &str, ordinary: boo
 
 #[tokio::test]
 async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_exact_baselines() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
     let source =
@@ -245,7 +245,7 @@ async fn real_host_conversion_reconciles_staged_roles_seals_history_and_reopens_
 /// every Agent keeps its own completed answer and the request it received.
 #[tokio::test]
 async fn multi_agent_legacy_session_upgrades_each_agent_output() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
     let source =
@@ -374,7 +374,7 @@ impl AgentBehavior for NoopBehavior {
 
 #[tokio::test]
 async fn a_real_actor_must_be_joined_and_unregistered_before_explicit_upgrade() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
     let actors = AgentRegistry::new();
@@ -416,7 +416,7 @@ async fn a_real_actor_must_be_joined_and_unregistered_before_explicit_upgrade() 
 
 #[tokio::test]
 async fn foreign_checkpoint_root_is_refused_before_transaction_reconciliation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
     let foreign = tempfile::tempdir().unwrap();
@@ -443,7 +443,7 @@ async fn foreign_checkpoint_root_is_refused_before_transaction_reconciliation() 
 
 #[tokio::test]
 async fn actual_running_canonical_work_is_not_migrated_as_completed() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
     let source =
@@ -481,7 +481,7 @@ struct StartupFixture {
 }
 
 async fn source_proven_startup_fixture() -> StartupFixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let workspace = tempfile::tempdir().unwrap();
     let data = SecureDir::open(root.path()).unwrap();
     let lease = DataDirLease::acquire(&data).unwrap();
@@ -714,7 +714,7 @@ async fn started_migration_never_recreates_missing_previously_initialized_v2_his
 #[tokio::test]
 async fn unknown_role_upgrade_keeps_history_archive_and_usage_without_replaying_private_state() {
     for private_state in [None, Some("unproved private orchestration".to_owned())] {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let data = SecureDir::open(root.path()).unwrap();
         let lease = DataDirLease::acquire(&data).unwrap();

@@ -1565,7 +1565,7 @@ mod tests {
     use super::*;
 
     fn repo(files: &[(&str, &str)]) -> (tempfile::TempDir, SecureDir, RootFiles) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         for (name, contents) in files {
             let path = dir.path().join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

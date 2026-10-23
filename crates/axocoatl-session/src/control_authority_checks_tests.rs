@@ -50,7 +50,7 @@ fn fixture_with_definitions(
         serde_json::from_value(source["steps"][0]["envelope"].clone()).unwrap();
     let start: TurnContractEnvelope =
         serde_json::from_value(source["steps"][1]["envelope"].clone()).unwrap();
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = SessionExecutionStore::open(
         Arc::new(
             LegacyFormatOwnership::acquire(root.path())

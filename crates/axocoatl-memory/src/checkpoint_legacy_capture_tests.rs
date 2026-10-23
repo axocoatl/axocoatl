@@ -29,7 +29,7 @@ fn source_file(root: &Path, id: &str, version: u64) -> PathBuf {
 
 #[tokio::test]
 async fn exact_session_capture_preserves_coordinator_workers_private_state_and_unknown_usage() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let store = CheckpointStore::new(root.path(), CheckpointPolicy::Manual);
     for id in [
         "session:coordinator",
@@ -70,7 +70,7 @@ async fn exact_session_capture_preserves_coordinator_workers_private_state_and_u
 
 #[tokio::test]
 async fn recapture_detects_new_identity_changed_bytes_and_identical_replaced_inode() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let store = CheckpointStore::new(root.path(), CheckpointPolicy::Manual);
     store.save(&checkpoint("session:agent", 1)).await.unwrap();
     let first = store.capture_legacy_session_checkpoints("session").unwrap();
@@ -95,7 +95,7 @@ async fn recapture_detects_new_identity_changed_bytes_and_identical_replaced_ino
 
 #[tokio::test]
 async fn unresolved_or_scoped_transactions_are_refused_without_repairing_source() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let store = CheckpointStore::new(root.path(), CheckpointPolicy::Manual);
     store.save(&checkpoint("session:agent", 1)).await.unwrap();
     store.begin_session_turn("session", "turn").await.unwrap();
@@ -116,7 +116,7 @@ async fn unresolved_or_scoped_transactions_are_refused_without_repairing_source(
 
 #[tokio::test]
 async fn corrupt_newest_source_never_falls_back_to_smaller_accounting() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let store = CheckpointStore::new(root.path(), CheckpointPolicy::Manual);
     store.save(&checkpoint("session:agent", 1)).await.unwrap();
     let corrupt = source_file(root.path(), "session:agent", 2);
@@ -137,7 +137,7 @@ async fn corrupt_newest_source_never_falls_back_to_smaller_accounting() {
 
 #[tokio::test]
 async fn unknown_hashed_owner_and_unexpected_private_files_are_not_treated_as_absent() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let store = CheckpointStore::new(root.path(), CheckpointPolicy::Manual);
     store.save(&checkpoint("session:agent", 1)).await.unwrap();
     let path = source_file(root.path(), "unattributed", 1);
@@ -153,7 +153,7 @@ async fn unknown_hashed_owner_and_unexpected_private_files_are_not_treated_as_ab
 
 #[test]
 fn capture_does_not_provision_a_missing_source_directory() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let absent = root.path().join("absent-source");
     let store = CheckpointStore::new(&absent, CheckpointPolicy::Manual);
     assert!(store.capture_legacy_session_checkpoints("session").is_err());

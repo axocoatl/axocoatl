@@ -274,7 +274,7 @@ mod tests {
     fn predictable_part_symlink_is_not_followed() {
         use std::os::unix::fs::symlink;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let cache = SecureDir::open(root.path()).unwrap();
         let outside = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(outside.path(), b"safe").unwrap();
@@ -287,7 +287,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn verified_model_read_stays_bound_to_opened_root_after_path_swap() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = crate::private_tempdir_test_support::private_tempdir();
         let configured = parent.path().join("cache");
         let opened = parent.path().join("opened-cache");
         std::fs::create_dir(&configured).unwrap();
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn verified_model_read_rejects_modified_bytes() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         std::fs::write(root.path().join("fixture"), b"modified").unwrap();
         let cache = SecureDir::open(root.path()).unwrap();
         let expected = format!("{:x}", Sha256::digest(b"trusted"));

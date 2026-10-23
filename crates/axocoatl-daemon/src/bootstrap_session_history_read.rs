@@ -335,7 +335,7 @@ mod tests {
             (OutputKind::Partial, "exported-prefix with omitted tail", 15),
             (OutputKind::Final, "", 1),
         ] {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let _legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
             let guard = Arc::new(
                 LegacyFormatOwnership::acquire(root.path())

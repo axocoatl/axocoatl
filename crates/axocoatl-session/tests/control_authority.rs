@@ -1,3 +1,5 @@
+mod support;
+
 use axocoatl_session::control_authority::*;
 use axocoatl_session::invocation_audit::*;
 use axocoatl_session::turn_contract::*;
@@ -209,8 +211,8 @@ fn record_outcome(audit: &mut InvocationAudit, command: &InvocationIntentCommand
 
 #[test]
 fn durable_intent_is_necessary_but_stop_and_revocation_still_win() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -264,8 +266,8 @@ fn durable_intent_is_necessary_but_stop_and_revocation_still_win() {
 
 #[test]
 fn charges_survive_restart_and_unknown_claim_blocks_new_epoch() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -342,8 +344,8 @@ fn charges_survive_restart_and_unknown_claim_blocks_new_epoch() {
 
 #[test]
 fn an_acknowledgement_and_claim_are_never_replay_authority() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -359,8 +361,8 @@ fn an_acknowledgement_and_claim_are_never_replay_authority() {
 
 #[test]
 fn reloaded_unclaimed_intent_does_not_fit_a_new_live_scope() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -393,9 +395,9 @@ fn reloaded_unclaimed_intent_does_not_fit_a_new_live_scope() {
 
 #[test]
 fn foreign_resolved_and_retargeted_receipts_are_rejected_without_charge() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
-    let other_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
+    let other_root = support::private_tempdir();
     let gate = authority(&root);
     let mut journal = audit(&audit_root);
     let other = audit(&other_root);
@@ -432,8 +434,8 @@ fn foreign_resolved_and_retargeted_receipts_are_rejected_without_charge() {
 #[cfg(unix)]
 #[test]
 fn owned_dispatch_requires_the_same_canonical_journal_even_when_all_logical_ids_match() {
-    let root = TempDir::new().unwrap();
-    let foreign_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let foreign_root = support::private_tempdir();
     let session = owned_session(&root);
     let foreign_session = owned_session(&foreign_root);
     assert_eq!(session.owner(), foreign_session.owner());
@@ -487,8 +489,8 @@ fn owned_dispatch_requires_the_same_canonical_journal_even_when_all_logical_ids_
 #[test]
 fn owned_and_isolated_authority_audit_pairs_cannot_authorize_dispatch() {
     for owned_gate in [true, false] {
-        let root = TempDir::new().unwrap();
-        let isolated = TempDir::new().unwrap();
+        let root = support::private_tempdir();
+        let isolated = support::private_tempdir();
         let session = owned_session(&root);
         let gate = if owned_gate {
             owned_authority(&session)
@@ -519,7 +521,7 @@ fn owned_and_isolated_authority_audit_pairs_cannot_authorize_dispatch() {
 
 #[test]
 fn only_the_granted_supervisor_can_stop_exact_descendants() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let supervisor = ready(&gate, "supervisor");
     let worker = ready(&gate, "tester");
@@ -565,9 +567,9 @@ fn only_the_granted_supervisor_can_stop_exact_descendants() {
 
 #[test]
 fn a_different_audit_cannot_settle_an_unknown_claim_with_reused_identities() {
-    let root = TempDir::new().unwrap();
-    let first_root = TempDir::new().unwrap();
-    let second_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let first_root = support::private_tempdir();
+    let second_root = support::private_tempdir();
     let gate = authority(&root);
     let mut first = audit(&first_root);
     let mut second = audit(&second_root);
@@ -606,8 +608,8 @@ fn a_different_audit_cannot_settle_an_unknown_claim_with_reused_identities() {
 
 #[test]
 fn narrowing_preserves_history_usage_and_invalidates_prepared_dispatch() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -647,8 +649,8 @@ fn narrowing_preserves_history_usage_and_invalidates_prepared_dispatch() {
 
 #[test]
 fn current_expiry_profile_and_budget_are_rechecked_at_dispatch() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -700,8 +702,8 @@ fn current_expiry_profile_and_budget_are_rechecked_at_dispatch() {
 
 #[test]
 fn stop_and_claim_have_a_single_order_under_concurrency() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = Arc::new(authority(&root));
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -750,8 +752,8 @@ fn stop_and_claim_have_a_single_order_under_concurrency() {
 
 #[test]
 fn late_failed_outcome_settles_after_closure_without_reopening_or_refund() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready(&gate, "tester");
@@ -782,7 +784,7 @@ fn late_failed_outcome_settles_after_closure_without_reopening_or_refund() {
 
 #[test]
 fn owner_mismatch_unknown_schema_and_counter_tampering_fail_closed() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     ready(&gate, "tester");
     drop(gate);
@@ -818,7 +820,7 @@ fn owner_mismatch_unknown_schema_and_counter_tampering_fail_closed() {
 #[cfg(unix)]
 fn competing_writer_and_failed_stop_persistence_cannot_leave_dispatch_enabled() {
     use std::os::unix::fs::symlink;
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let lease = ready(&gate, "tester");
     assert!(ControlAuthority::open(
@@ -870,7 +872,7 @@ fn competing_writer_and_failed_stop_persistence_cannot_leave_dispatch_enabled() 
 
 #[test]
 fn counter_consistent_but_impossible_generation_history_is_rejected() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     ready(&gate, "tester");
     drop(gate);
@@ -935,7 +937,7 @@ fn provider_outcome() -> ProviderCallOutcome {
 
 #[test]
 fn provider_coverage_requires_explicit_gated_registration_and_exact_current_profile_bounds() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let old = ready(&gate, "tester");
     assert!(gate
@@ -992,7 +994,7 @@ fn provider_coverage_requires_explicit_gated_registration_and_exact_current_prof
 
 #[test]
 fn lost_provider_claim_ack_is_unknown_after_reopen_and_never_reauthorizes_dispatch() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let lease = ready_provider(&gate, "tester");
     // Intentionally discard the successful acknowledgement, as a controller
@@ -1081,7 +1083,7 @@ fn known_usage(input: usize, output: usize) -> ProviderCallOutcome {
 /// charged and the rest of the reservation is available again.
 #[test]
 fn completed_provider_call_charges_its_reported_usage_and_returns_the_rest() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let mut budget = grant();
     budget.limits = GrantLimits {
@@ -1149,7 +1151,7 @@ fn completed_provider_call_charges_its_reported_usage_and_returns_the_rest() {
 /// bound, an unknown cost and a lost claim keep what they reserved.
 #[test]
 fn provider_call_with_unknown_usage_or_outcome_stays_fully_charged() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let lease = ready_provider(&gate, "tester");
     let charged = |gate: &ControlAuthority| {
@@ -1216,7 +1218,7 @@ fn provider_call_with_unknown_usage_or_outcome_stays_fully_charged() {
 /// with exactly the bytes and totals it was written with.
 #[test]
 fn settled_calls_recorded_before_returns_reload_fully_charged() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let lease = ready_provider(&gate, "tester");
     let claim = gate
@@ -1284,8 +1286,8 @@ fn settled_calls_recorded_before_returns_reload_fully_charged() {
 
 #[test]
 fn provider_and_tool_claims_charge_the_same_grant_and_only_provider_calls_settle() {
-    let root = TempDir::new().unwrap();
-    let audit_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let audit_root = support::private_tempdir();
     let gate = authority(&root);
     let mut audit = audit(&audit_root);
     let lease = ready_provider(&gate, "tester");
@@ -1359,7 +1361,7 @@ fn provider_and_tool_claims_charge_the_same_grant_and_only_provider_calls_settle
 #[test]
 fn provider_stop_race_has_one_durable_order_and_all_late_observations_are_retained() {
     for _ in 0..8 {
-        let root = TempDir::new().unwrap();
+        let root = support::private_tempdir();
         let gate = Arc::new(authority(&root));
         let lease = ready_provider(&gate, "tester");
         let barrier = Arc::new(Barrier::new(2));
@@ -1406,7 +1408,7 @@ fn provider_stop_race_has_one_durable_order_and_all_late_observations_are_retain
 
 #[test]
 fn observed_provider_overruns_are_retained_and_prevent_additional_dispatch() {
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let gate = authority(&root);
     let lease = ready_provider(&gate, "tester");
     let claim = gate
@@ -1456,8 +1458,8 @@ fn observed_provider_overruns_are_retained_and_prevent_additional_dispatch() {
 #[test]
 #[cfg(unix)]
 fn provider_settlement_cannot_cross_owned_journals_and_reopen_validates_counters_and_coverage() {
-    let root = TempDir::new().unwrap();
-    let foreign_root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
+    let foreign_root = support::private_tempdir();
     let session = owned_session(&root);
     let foreign_session = owned_session(&foreign_root);
     let gate = owned_authority(&session);
@@ -1481,7 +1483,7 @@ fn provider_settlement_cannot_cross_owned_journals_and_reopen_validates_counters
         .is_none());
     drop(gate);
     for case in ["count", "provider", "gated", "grant", "unknown-field"] {
-        let root = TempDir::new().unwrap();
+        let root = support::private_tempdir();
         let gate = authority(&root);
         let lease = ready_provider(&gate, "tester");
         gate.claim_provider_call(&lease, provider_intent("corrupt"), 100)
@@ -1517,7 +1519,7 @@ fn provider_settlement_cannot_cross_owned_journals_and_reopen_validates_counters
 #[test]
 fn historical_provider_usage_requires_existing_closed_gates_and_preserves_journal() {
     use axocoatl_session::execution_namespace::ExecutionComponent;
-    let root = TempDir::new().unwrap();
+    let root = support::private_tempdir();
     let session = owned_session(&root);
     let turn = LogicalTurnId::new("turn-build-184").unwrap();
     let namespace = || {

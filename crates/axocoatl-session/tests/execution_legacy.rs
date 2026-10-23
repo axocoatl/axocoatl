@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 use std::sync::Arc;
 
@@ -63,7 +65,7 @@ fn content(store: &SessionExecutionStore) -> ExecutionContentStore {
 
 #[test]
 fn missing_source_is_distinct_from_an_observed_empty_ledger() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut store = canonical(&root);
     assert!(store.legacy_history_snapshot().is_err());
     assert!(!root.path().join("session-history").exists());
@@ -79,7 +81,7 @@ fn missing_source_is_distinct_from_an_observed_empty_ledger() {
 
 #[test]
 fn snapshot_reloads_the_owned_file_instead_of_a_stale_or_foreign_fold() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let path = root.path().join("session-history");
     let mut stale = SessionTurnStore::open(&path).unwrap();
     stale
@@ -111,7 +113,7 @@ fn snapshot_reloads_the_owned_file_instead_of_a_stale_or_foreign_fold() {
             },
         )
         .unwrap();
-    let other = tempfile::tempdir().unwrap();
+    let other = support::private_tempdir();
     let mut foreign = SessionTurnStore::open(other.path()).unwrap();
     foreign
         .import_terminal_turns("session", "foreign", vec![row("session", "forged")])
@@ -132,7 +134,7 @@ fn snapshot_reloads_the_owned_file_instead_of_a_stale_or_foreign_fold() {
 #[test]
 fn incomplete_and_unsupported_sources_are_refused_without_repair() {
     for fault in ["partial", "zero-schema", "future-schema", "malformed"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
         legacy
             .import_terminal_turns("session", "first", vec![row("session", "first")])
@@ -161,7 +163,7 @@ fn incomplete_and_unsupported_sources_are_refused_without_repair() {
 
 #[test]
 fn stale_snapshot_cannot_be_retained() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     let store = canonical(&root);
     let snapshot = store.legacy_history_snapshot().unwrap();
@@ -173,7 +175,7 @@ fn stale_snapshot_cannot_be_retained() {
 
 #[test]
 fn source_changed_after_retention_cannot_be_sealed() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     let mut store = canonical(&root);
     let mut content = content(&store);
@@ -196,7 +198,7 @@ fn source_changed_after_retention_cannot_be_sealed() {
 
 #[test]
 fn exact_seal_retry_keeps_immutable_history_after_later_legacy_mutation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     let mut store = canonical(&root);
     let mut content = content(&store);
@@ -213,11 +215,11 @@ fn exact_seal_retry_keeps_immutable_history_after_later_legacy_mutation() {
 
 #[test]
 fn foreign_snapshot_and_same_bytes_replacement_do_not_prove_ownership() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     let store = canonical(&root);
     let mut content = content(&store);
-    let foreign_root = tempfile::tempdir().unwrap();
+    let foreign_root = support::private_tempdir();
     SessionTurnStore::open(foreign_root.path().join("session-history")).unwrap();
     let foreign = canonical(&foreign_root);
     assert!(matches!(
@@ -233,7 +235,7 @@ fn foreign_snapshot_and_same_bytes_replacement_do_not_prove_ownership() {
 
 #[test]
 fn history_limit_applies_to_the_selected_session() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     legacy
         .import_terminal_turns(
@@ -252,7 +254,7 @@ fn history_limit_applies_to_the_selected_session() {
     assert_eq!(snapshot.turns().len(), 1);
     assert_eq!(snapshot.turns()[0].id, "selected");
     content(&store).retain_legacy_history(&snapshot).unwrap();
-    let oversized_root = tempfile::tempdir().unwrap();
+    let oversized_root = support::private_tempdir();
     let mut oversized =
         SessionTurnStore::open(oversized_root.path().join("session-history")).unwrap();
     oversized

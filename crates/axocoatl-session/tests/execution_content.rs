@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::sync::Arc;
 
@@ -105,9 +107,9 @@ fn output(snapshot: &DurableTurnSnapshot, kind: OutputKind) -> ActivationOutputC
 
 #[test]
 fn reserved_output_retains_utf8_truncation_usage_and_exact_slot_idempotency() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     let activation = snapshot.contract().activations()[0].activation.clone();
@@ -186,9 +188,9 @@ fn reserved_output_retains_utf8_truncation_usage_and_exact_slot_idempotency() {
 
 #[test]
 fn reserved_complete_final_resolves_only_after_canonical_acceptance() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     let activation = snapshot.contract().activations()[0].activation.clone();
@@ -243,9 +245,9 @@ fn reserved_complete_final_resolves_only_after_canonical_acceptance() {
 
 #[test]
 fn reservation_reopens_for_late_terminal_partial_without_new_admission_or_closure_change() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (guard, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let identity = store.identity().unwrap();
     let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
@@ -302,7 +304,7 @@ fn reservation_reopens_for_late_terminal_partial_without_new_admission_or_closur
         Some(settled)
     );
 
-    let other_dir = tempfile::tempdir().unwrap();
+    let other_dir = support::private_tempdir();
     let mut no_reservation =
         ExecutionContentStore::open(other_dir.path(), store.identity().unwrap()).unwrap();
     assert!(matches!(
@@ -317,9 +319,9 @@ fn reservation_reopens_for_late_terminal_partial_without_new_admission_or_closur
 
 #[test]
 fn foreign_output_reservation_and_truncated_acceptance_fail_closed() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     let activation = snapshot.contract().activations()[0].activation.clone();
@@ -334,9 +336,9 @@ fn foreign_output_reservation_and_truncated_acceptance_fail_closed() {
             },
         )
         .unwrap();
-    let foreign_root = tempfile::tempdir().unwrap();
+    let foreign_root = support::private_tempdir();
     let (_, foreign_store) = canonical(&foreign_root);
-    let foreign_dir = tempfile::tempdir().unwrap();
+    let foreign_dir = support::private_tempdir();
     let mut foreign =
         ExecutionContentStore::open(foreign_dir.path(), foreign_store.identity().unwrap()).unwrap();
     assert!(matches!(
@@ -373,9 +375,9 @@ fn foreign_output_reservation_and_truncated_acceptance_fail_closed() {
 
 #[test]
 fn retained_request_is_immutable_and_canonical_projection_survives_restart() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (guard, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let identity = store.identity().unwrap();
     let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
     let receipt = content.retain_request(request()).unwrap();
@@ -407,15 +409,15 @@ fn retained_request_is_immutable_and_canonical_projection_survives_restart() {
 
 #[test]
 fn foreign_journal_and_replacement_content_directory_are_rejected() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     assert!(ExecutionContentStore::open(dir.path(), store.identity().unwrap()).is_err());
-    let other_root = tempfile::tempdir().unwrap();
+    let other_root = support::private_tempdir();
     let (_, other) = canonical(&other_root);
-    let other_dir = tempfile::tempdir().unwrap();
+    let other_dir = support::private_tempdir();
     let foreign = ExecutionContentStore::open(other_dir.path(), other.identity().unwrap()).unwrap();
     assert!(matches!(
         foreign.project(&snapshot),
@@ -431,9 +433,9 @@ fn foreign_journal_and_replacement_content_directory_are_rejected() {
 #[test]
 fn protected_content_refuses_preexisting_shared_writable_directory() {
     use std::os::unix::fs::PermissionsExt;
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777)).unwrap();
     assert!(ExecutionContentStore::open(dir.path(), store.identity().unwrap()).is_err());
     assert!(fs::read_dir(dir.path()).unwrap().next().is_none());
@@ -441,9 +443,9 @@ fn protected_content_refuses_preexisting_shared_writable_directory() {
 
 #[test]
 fn request_retained_before_begin_is_recoverable_without_fabricating_new_timestamp() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let identity = store.identity().unwrap();
     let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
     let receipt = content.retain_request(request()).unwrap();
@@ -469,22 +471,22 @@ fn request_retained_before_begin_is_recoverable_without_fabricating_new_timestam
 
 #[test]
 fn missing_evidence_and_unbound_fixture_request_are_reported_without_invention() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
-    let another_dir = tempfile::tempdir().unwrap();
+    let another_dir = support::private_tempdir();
     let absent =
         ExecutionContentStore::open(another_dir.path(), store.identity().unwrap()).unwrap();
     assert!(matches!(
         absent.project(&snapshot).unwrap().request,
         ContentResolution::Missing { .. }
     ));
-    let other_root = tempfile::tempdir().unwrap();
+    let other_root = support::private_tempdir();
     let (_, mut fixture_store) = canonical(&other_root);
     fixture_store.append(initial_events()[0].clone()).unwrap();
-    let fixture_dir = tempfile::tempdir().unwrap();
+    let fixture_dir = support::private_tempdir();
     let fixture_content =
         ExecutionContentStore::open(fixture_dir.path(), fixture_store.identity().unwrap()).unwrap();
     assert!(matches!(
@@ -498,9 +500,9 @@ fn missing_evidence_and_unbound_fixture_request_are_reported_without_invention()
 
 #[test]
 fn accepted_output_resolves_exact_body_and_preserves_unknown_usage() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     let partial = output(&snapshot, OutputKind::Partial);
@@ -545,7 +547,7 @@ fn accepted_output_resolves_exact_body_and_preserves_unknown_usage() {
     assert!(
         matches!(&view.activations[0].output, ContentResolution::Available { content, .. } if *content == final_output)
     );
-    let missing_dir = tempfile::tempdir().unwrap();
+    let missing_dir = support::private_tempdir();
     let missing =
         ExecutionContentStore::open(missing_dir.path(), store.identity().unwrap()).unwrap();
     assert!(matches!(
@@ -560,9 +562,9 @@ fn accepted_output_resolves_exact_body_and_preserves_unknown_usage() {
 
 #[test]
 fn output_for_an_unretained_generation_is_rejected() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
     let mut body = output(&snapshot, OutputKind::Final);
@@ -575,9 +577,9 @@ fn output_for_an_unretained_generation_is_rejected() {
 
 #[test]
 fn protected_tool_bytes_reserve_settlement_and_late_truncated_result_is_explicit() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let identity = store.identity().unwrap();
     let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
     let snapshot = begin_running(&mut store, &mut content);
@@ -669,9 +671,9 @@ fn observed_success_and_error_survive_truncation_with_full_raw_digest_after_reop
             br#"{"Err":"backend failed after a possible external effect"}"#.as_slice(),
         ),
     ] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let (_, mut store) = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = support::private_tempdir();
         let identity = store.identity().unwrap();
         let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
         let snapshot = begin_running(&mut store, &mut content);
@@ -754,9 +756,9 @@ fn legacy_close(store: &mut SessionTurnStore, id: &str) {
 
 #[test]
 fn legacy_frontier_rejects_running_and_retains_superseded_rows_before_sealing() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     legacy_begin(&mut legacy, "old-a");
@@ -799,9 +801,9 @@ fn legacy_frontier_rejects_running_and_retains_superseded_rows_before_sealing() 
 #[test]
 fn unknown_schema_and_changed_body_digest_fail_closed_on_reopen() {
     for mutation in ["schema", "body"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let (_, store) = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = support::private_tempdir();
         let identity = store.identity().unwrap();
         let mut content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
         content.retain_request(request()).unwrap();
@@ -829,7 +831,7 @@ fn unknown_schema_and_changed_body_digest_fail_closed_on_reopen() {
 
 #[test]
 fn owned_content_requires_exact_component_and_retains_parent_locks() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (guard, store) = canonical(&root);
     let wrong = store
         .component_namespace(ExecutionComponent::ActivationState)
@@ -850,7 +852,7 @@ fn owned_content_requires_exact_component_and_retains_parent_locks() {
 
 #[test]
 fn missing_owned_primary_cannot_reset_retained_content_with_only_marker_remaining() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, store) = canonical(&root);
     let namespace = store
         .component_namespace(ExecutionComponent::ExecutionContent)
@@ -894,9 +896,9 @@ fn missing_owned_primary_cannot_reset_retained_content_with_only_marker_remainin
 #[test]
 fn previously_unmarked_content_acquires_marker_only_after_validating_primary() {
     for valid in [true, false] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let (_, store) = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = support::private_tempdir();
         let identity = store.identity().unwrap();
         let content = ExecutionContentStore::open(dir.path(), identity.clone()).unwrap();
         drop(content);
@@ -1002,9 +1004,9 @@ fn resolved_input_fixture(
 
 #[test]
 fn canonical_manifest_resolves_exact_typed_definition_grant_budget_and_request_guidance() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let (snapshot, grant) = resolved_input_fixture(&mut store, &mut content, false);
     let manifest = &snapshot.contract().activations()[0].input;
@@ -1035,9 +1037,9 @@ fn canonical_manifest_resolves_exact_typed_definition_grant_budget_and_request_g
 
 #[test]
 fn existing_evidence_with_wrong_semantic_role_cannot_satisfy_activation_input() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let (_, mut store) = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut content = ExecutionContentStore::open(dir.path(), store.identity().unwrap()).unwrap();
     let (snapshot, _) = resolved_input_fixture(&mut store, &mut content, true);
     assert!(matches!(

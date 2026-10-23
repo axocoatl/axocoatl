@@ -179,7 +179,7 @@ fn input_fixture_configured(
     configure: &dyn Fn(&mut AgentConfig),
     limits: GrantLimits,
 ) -> InputFixture {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()
