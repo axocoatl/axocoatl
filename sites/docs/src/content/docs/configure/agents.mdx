@@ -345,8 +345,15 @@ round: 12 invocations for one check and two rounds.
 After the required Agents finish and the required checks pass, Axocoatl, not the lead,
 starts the reviewer in a fresh conversation. It is shown the request, each required
 Agent's final answer (up to 16 KiB each) and the change the turn made: every file
-whose patch against HEAD differs from the one captured when the turn began, up to 48
-KiB, with a note when it was cut. It is asked to start its answer with `VERDICT: APPROVE`
+whose patch against HEAD differs from the one captured when the turn began. A binary
+file is named with its size, never shown as data. The rest is shown whole when it fits
+beside the rest of the reviewer's request: three quarters of what one request to its
+model may hold beside the output allowance (85% of the context), and at most 48 KiB.
+A larger change is shown source first, then generated and dense text, then binary
+files, each file whole when it fits and else cut at a hunk boundary; a note first says
+that not all of it is shown, and the files left out are listed with their bytes. The
+reviewer is told it has not seen that part and is asked to read those files before it
+judges them. It is asked to start its answer with `VERDICT: APPROVE`
 or `VERDICT: CHANGES`, followed by findings, each on its own line, numbered `F1`, `F2`, …
 and written as `path:line: what to change`. A verdict
 line anywhere in the answer counts, ignoring case and Markdown emphasis, and the rest of

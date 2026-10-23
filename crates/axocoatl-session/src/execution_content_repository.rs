@@ -55,6 +55,11 @@ pub const MAX_PATCH_PREFIX_BYTES: usize = 12 * 1024;
 /// one capture records ([`ActivationRepositorySnapshot::changed_manifest`]).
 pub const MAX_CHANGED_MANIFEST_BYTES: usize = 576 * 1024;
 
+/// Most paths that differ from `HEAD` whose lines one capture records
+/// ([`ActivationRepositorySnapshot::changed_manifest`]); with more, or when
+/// their lines do not fit its output, it records none.
+pub const MAX_CHANGED_PATHS: usize = 10_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepositorySnapshotPhase {
@@ -443,6 +448,15 @@ fn validate_observation(
 mod tests {
     use super::*;
     use base64::Engine as _;
+
+    /// The capture records the lines of at most [`MAX_CHANGED_PATHS`]
+    /// paths that differ from HEAD, the limit the host names when it cannot
+    /// attribute a change of more.
+    #[test]
+    fn the_capture_lists_at_most_the_changed_paths_the_host_names() {
+        assert!(REPOSITORY_CAPTURE_SCRIPT
+            .contains(&format!("if [ \"$differ_count\" -le {MAX_CHANGED_PATHS} ]")));
+    }
 
     /// One capture field of the command's output.
     fn field<'a>(output: &'a str, name: &str) -> &'a str {

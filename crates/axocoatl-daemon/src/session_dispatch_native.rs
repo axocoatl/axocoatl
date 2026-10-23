@@ -325,6 +325,35 @@ pub(crate) fn retained_call_reservation(
     }
 }
 
+/// What one request of the model a retained native provider profile
+/// `configuration` serves may hold, as its provider states it to the host
+/// that fits each request: its context, and the output allowance each
+/// request reserves of it. `None` for a profile that is not a native one.
+pub(crate) fn retained_request_window(configuration: &str) -> Option<(usize, usize)> {
+    match serde_json::from_str::<NativeRuntimeConfiguration>(configuration).ok()? {
+        NativeRuntimeConfiguration::Ollama(runtime) => Some((
+            runtime.observation.context_tokens,
+            runtime.max_output_tokens,
+        )),
+        NativeRuntimeConfiguration::OpenRouter(runtime) => {
+            // As the provider's capabilities: the context less the
+            // reasoning allowance, within the endpoint's own prompt limit.
+            let observation = &runtime.openrouter_observation;
+            let output = runtime.max_output_tokens;
+            let reasoning = observation
+                .response_allowance(output, runtime.reasoning)
+                .saturating_sub(output);
+            Some((
+                observation
+                    .context_tokens
+                    .saturating_sub(reasoning)
+                    .min(observation.prompt_limit().saturating_add(output)),
+                output,
+            ))
+        }
+    }
+}
+
 impl NativeDefinitionPreparation {
     pub(crate) fn new(
         config: AgentConfig,

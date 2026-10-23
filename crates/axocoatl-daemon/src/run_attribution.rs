@@ -327,11 +327,38 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
                 Err(reason) => ActivationChanges::Unknown(reason),
             };
         }
+        return ActivationChanges::Unknown(
+            "HEAD moved between its captures, and their manifest and patch are larger than a \
+             capture records, so they cannot be compared"
+                .into(),
+        );
     }
-    ActivationChanges::Unknown(
-        "its captures are larger than the recorded manifest and patch bounds, so they cannot be compared"
-            .into(),
-    )
+    // What a capture does not list when more paths differ from HEAD than it
+    // lists, or their lines do not fit its output.
+    let unlisted = if before.changed.is_none() {
+        "Before"
+    } else {
+        "After"
+    };
+    ActivationChanges::Unknown(format!(
+        "its {unlisted} capture lists none of the paths that differ from HEAD (it lists at most \
+         {}, within its output), and its manifest and patch pass what it records, so the \
+         captures cannot be compared",
+        grouped_count(axocoatl_session::execution_content::MAX_CHANGED_PATHS)
+    ))
+}
+
+/// `count` with a comma between each group of three digits, as `10,000`.
+fn grouped_count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 /// One entry of a capture manifest: the path as recorded (bytes), its mode,

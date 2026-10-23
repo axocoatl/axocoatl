@@ -1075,8 +1075,10 @@ prompt: "{task}"
     #[tokio::test]
     async fn a_pass_whose_receipt_does_not_cover_every_path_carries_a_warning() {
         let run = context(&[], later());
-        let reason = "writer (generation 1) in turn turn-1: its captures are larger than the \
-                      recorded manifest and patch bounds, so they cannot be compared";
+        let reason = "writer (generation 1) in turn turn-1: its After capture lists none of the \
+                      paths that differ from HEAD (it lists at most 10,000, within its output), \
+                      and its manifest and patch pass what it records, so the captures cannot \
+                      be compared";
         let host = FakeHost {
             waits: Mutex::new(vec![observation(
                 TurnState::Completed,

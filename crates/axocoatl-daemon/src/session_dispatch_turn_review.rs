@@ -10,9 +10,9 @@ use super::*;
 use axocoatl_session::execution_content::{ActivationRepositorySnapshot, RepositorySnapshotPhase};
 use axocoatl_session::turn_checks::{group_of, CheckGroup};
 use axocoatl_session::turn_review::{
-    binding_failure, bounded, describe_change, describe_partial_change, parse_verdict,
-    review_condition_id, review_criterion, review_node, ReviewCriterion, ReviewProof,
-    ReviewVerdict, MAX_ANSWER_BYTES,
+    binding_failure, bounded, describe_change, describe_partial_change, fit_description,
+    parse_verdict, review_condition_id, review_criterion, review_node, ChangeBudget,
+    DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof, ReviewVerdict, MAX_ANSWER_BYTES,
 };
 use base64::Engine;
 
@@ -69,10 +69,18 @@ pub(crate) const ADJUDICATION_RULE: &str = "Answer every finding below in an ADJ
 /// one finding.
 const UNNUMBERED: &str = "The reviewer did not number its findings, so they are one finding, F1.";
 
+/// What the reviewer's prompt says when the change it shows is not all of
+/// it.
+pub(crate) const PARTIAL_CHANGE_RULE: &str = "Not all of the change is shown below: the \
+     notes in the Change section say what was left out (the data of binary files, which are \
+     named with their sizes, or text cut to fit your context). You have not seen that part. \
+     Read the files those notes name before you judge them, and do not approve code you have \
+     not read.";
+
 /// The opening of the reviewer's prompt about the result whose repository
-/// tree is `tree`: what to judge, the verdict line, and how to write
-/// findings.
-fn reviewer_prompt_head(tree: Option<&str>) -> String {
+/// tree is `tree`: what to judge, the verdict line, how to write findings,
+/// and, when the change shown is `partial`, that it is not all of it.
+fn reviewer_prompt_head(tree: Option<&str>, partial: bool) -> String {
     format!(
         "You are the required reviewer of this turn. Its request is above. Review the \
          result below against that request: the final answer of each Agent that did the \
@@ -82,9 +90,63 @@ fn reviewer_prompt_head(tree: Option<&str>) -> String {
          this form. The first line is exactly one of:\n\
          VERDICT: APPROVE\nVERDICT: CHANGES\nThen list each finding on its own line as \
          path:line: what is wrong and what to change. {FINDING_ID_RULE} Approve only when \
-         nothing must change.\n\nRepository tree reviewed: {}\n",
+         nothing must change.\n\n{}Repository tree reviewed: {}\n",
+        if partial {
+            format!("{PARTIAL_CHANGE_RULE}\n\n")
+        } else {
+            String::new()
+        },
         tree.unwrap_or("not captured")
     )
+}
+
+/// Tokens of a reviewer's request the host does not count where it builds
+/// the prompt: the activation input's JSON around the guidance (about 700
+/// tokens with the repository's description), the definitions of the
+/// reviewer's read-only tools (about 550 for the four a loadout's reviewer
+/// has), the round's note and the messages' framing, with room for a few
+/// more tools.
+const REVIEW_REQUEST_RESERVE: usize = 2_048;
+
+/// The context and output allowance a reviewer is fitted to when its model
+/// has no native provider profile the host can read: the smallest context
+/// onboarding configures for a run's local model
+/// ([`axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS`]) and the output
+/// bound of an Agent that names none.
+const FALLBACK_REVIEWER_WINDOW: (usize, usize) = (
+    axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS as usize,
+    axocoatl_config::loadout::DEFAULT_MAX_OUTPUT_TOKENS,
+);
+
+/// The tokens `text` takes in a reviewer's request as the host counts a
+/// request against its model's context (cl100k): the more of the text and
+/// the text as the reviewer's JSON input carries it. Without the counter, its
+/// bytes, which no count passes.
+pub(crate) fn review_tokens(text: &str) -> usize {
+    static COUNTER: std::sync::OnceLock<Option<axocoatl_token::ApproximateCounter>> =
+        std::sync::OnceLock::new();
+    let json = serde_json::to_string(text).unwrap_or_default();
+    match COUNTER.get_or_init(|| axocoatl_token::ApproximateCounter::new().ok()) {
+        Some(counter) => {
+            use axocoatl_token::TokenCounter;
+            counter.count_text(text).max(counter.count_text(&json))
+        }
+        None => json.len(),
+    }
+}
+
+/// The tokens the change may take in the request of a reviewer whose model
+/// holds `context` tokens and reserves `output` of them for each answer,
+/// when the rest of its prompt takes `spent` as the host counts it. The host
+/// refuses a request whose prompt and output allowance pass
+/// [`axocoatl_token::COMPRESSION_TRIGGER_PCT`] of the context (27,852 of
+/// 32,768); the change takes at most three quarters of what that leaves
+/// beside the output allowance, less what the rest of the request takes, so
+/// a provider that counts more than the host does still holds it.
+pub(crate) fn change_budget(context: usize, output: usize, spent: usize) -> usize {
+    let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
+    (limit.saturating_sub(output) / 4 * 3)
+        .saturating_sub(spent.saturating_add(REVIEW_REQUEST_RESERVE))
 }
 
 /// The note that sends review round `round`'s `findings` back to the lead.
@@ -171,6 +233,59 @@ impl DispatchState {
                 .find(|capture| capture.phase == phase)
                 .filter(|capture| capture.unavailable.is_none() && capture.tree_sha256.is_some()),
         ))
+    }
+
+    /// The context of the reviewer's model and the output allowance each of
+    /// its requests reserves, from the native provider profile its
+    /// definition retained when its team was applied (so every round of a
+    /// turn is shown the change the same way), or
+    /// [`FALLBACK_REVIEWER_WINDOW`] without one.
+    fn reviewer_window(&self, graph: &TurnGraphSnapshot) -> Result<(usize, usize)> {
+        let Some(reviewer) = review_node(graph) else {
+            return Ok(FALLBACK_REVIEWER_WINDOW);
+        };
+        Ok(self
+            .content
+            .resolve_provider_profile(&self.canonical, &reviewer.definition.snapshot)
+            .map_err(error)?
+            .and_then(|(_, profile)| {
+                super::native::retained_request_window(profile.configuration())
+            })
+            .unwrap_or(FALLBACK_REVIEWER_WINDOW))
+    }
+
+    /// The tokens of the reviewer's request the prompt does not hold but the
+    /// host counts where it builds it: the turn's request with the context
+    /// it captured, and the reviewer's own instructions.
+    fn review_request_tokens(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        graph: &TurnGraphSnapshot,
+    ) -> Result<usize> {
+        let mut tokens = 0;
+        if let Some((_, request)) = self
+            .content
+            .retained_request(snapshot.turn_id())
+            .map_err(error)?
+        {
+            tokens += review_tokens(&request.effective_input);
+            if !request.context.is_empty() {
+                tokens += review_tokens(&serde_json::to_string(&request.context).map_err(error)?);
+            }
+        }
+        if let Some(reviewer) = review_node(graph) {
+            if let ActivationEvidenceContent::Definition { configuration, .. } = self
+                .content
+                .resolve_activation_evidence(&reviewer.definition.snapshot)
+                .map_err(error)?
+            {
+                tokens += match serde_json::from_str::<axocoatl_core::AgentConfig>(&configuration) {
+                    Ok(config) => config.system_prompt.as_deref().map_or(0, review_tokens),
+                    Err(_) => review_tokens(&configuration),
+                };
+            }
+        }
+        Ok(tokens)
     }
 
     /// The result `activations` left, as the reviewer is shown it, or why
@@ -269,10 +384,39 @@ impl DispatchState {
                 })
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         };
+        let tree = after.as_ref().and_then(|after| after.tree_sha256.clone());
+        let mut answers = String::new();
+        for item in activations {
+            let name = super::turn_checks::agent_name(
+                &self.content,
+                Some(graph),
+                &item.activation.node_id,
+            );
+            let answer = self.accepted_answer(snapshot, &item.activation)?;
+            answers.push_str(&format!(
+                "\n## Final answer of {name}\n{}\n",
+                bounded(&answer, MAX_ANSWER_BYTES)
+            ));
+        }
+        // The change fits the reviewer's context beside the rest of its
+        // request: the head (counted with the note a partial change adds),
+        // the answers, the turn's request and the reviewer's instructions.
+        let (context, output) = self.reviewer_window(graph)?;
+        let spent = review_tokens(&reviewer_prompt_head(tree.as_deref(), true))
+            + review_tokens(&answers)
+            + review_tokens("\n## Change\n")
+            + self.review_request_tokens(snapshot, graph)?;
+        let budget = ChangeBudget {
+            tokens: change_budget(context, output, spent),
+            count: &review_tokens,
+        };
         let change = match &after {
-            None => "No repository capture was taken: the reviewed Agents cannot run commands \
-                     or change files, so there is no change to show."
-                .to_owned(),
+            None => DescribedChange {
+                text: "No repository capture was taken: the reviewed Agents cannot run \
+                       commands or change files, so there is no change to show."
+                    .to_owned(),
+                partial: false,
+            },
             Some(after) => {
                 let moved = before
                     .as_ref()
@@ -289,47 +433,54 @@ impl DispatchState {
                         earlier.and_then(patch).as_deref(),
                         &after_patch,
                         after.patch_complete,
+                        budget,
                     );
                     if earlier.is_some_and(|before| !before.patch_complete) {
-                        change = format!(
+                        change.text = format!(
                             "The capture taken when the turn began could not record its whole \
                              patch, so this is every uncommitted change against HEAD, including \
-                             any made before the turn.\n{change}"
+                             any made before the turn.\n{}",
+                            change.text
                         );
                     }
                     change
                 } else {
-                    describe_partial_change(
-                        earlier.and_then(|before| before.changed_manifest.as_deref()),
-                        after.changed_manifest.as_deref(),
-                        &after.patch_prefix,
-                        after.patch_bytes,
-                    )
+                    let listed = match (&before, moved) {
+                        (Some(before), true) if before.changed_manifest.is_some() => {
+                            EarlierPaths::OtherHead
+                        }
+                        (Some(before), false) => before
+                            .changed_manifest
+                            .as_deref()
+                            .map_or(EarlierPaths::NotListed, EarlierPaths::Listed),
+                        _ => EarlierPaths::NotListed,
+                    };
+                    DescribedChange {
+                        text: fit_description(
+                            describe_partial_change(
+                                listed,
+                                after.changed_manifest.as_deref(),
+                                &after.patch_prefix,
+                                after.patch_bytes,
+                            ),
+                            budget,
+                        ),
+                        partial: true,
+                    }
                 };
                 if moved {
-                    change = format!(
+                    change.text = format!(
                         "HEAD moved during the turn, so this is every uncommitted change against \
-                         the new HEAD, including any made before the turn.\n{change}"
+                         the new HEAD, including any made before the turn.\n{}",
+                        change.text
                     );
                 }
                 change
             }
         };
-        let tree = after.as_ref().and_then(|after| after.tree_sha256.clone());
-        let mut prompt = reviewer_prompt_head(tree.as_deref());
-        for item in activations {
-            let name = super::turn_checks::agent_name(
-                &self.content,
-                Some(graph),
-                &item.activation.node_id,
-            );
-            let answer = self.accepted_answer(snapshot, &item.activation)?;
-            prompt.push_str(&format!(
-                "\n## Final answer of {name}\n{}\n",
-                bounded(&answer, MAX_ANSWER_BYTES)
-            ));
-        }
-        prompt.push_str(&format!("\n## Change\n{change}"));
+        let mut prompt = reviewer_prompt_head(tree.as_deref(), change.partial);
+        prompt.push_str(&answers);
+        prompt.push_str(&format!("\n## Change\n{}", change.text));
         Ok(Ok(ReviewCandidate { tree, prompt }))
     }
 
@@ -1180,7 +1331,7 @@ mod tests {
     /// line, beside the verdict form 1.2 reads.
     #[test]
     fn the_reviewer_prompt_carries_the_numbering_rule() {
-        let prompt = reviewer_prompt_head(Some("tree-1"));
+        let prompt = reviewer_prompt_head(Some("tree-1"), false);
         assert!(
             prompt.contains("VERDICT: APPROVE\nVERDICT: CHANGES\n"),
             "{prompt}"
@@ -1191,7 +1342,10 @@ mod tests {
             prompt.ends_with("Repository tree reviewed: tree-1\n"),
             "{prompt}"
         );
-        assert!(reviewer_prompt_head(None).contains("Repository tree reviewed: not captured"));
+        assert!(
+            reviewer_prompt_head(None, false).contains("Repository tree reviewed: not captured")
+        );
+        assert!(!prompt.contains(PARTIAL_CHANGE_RULE), "{prompt}");
         // The example the rule gives is itself a finding the host reads.
         let example = FINDING_ID_RULE
             .split('`')
@@ -1343,9 +1497,9 @@ mod tests {
     /// a patch chosen to cost the most. A reviewer with a 32,768-token
     /// context, which a request may fill to 27,852 with its output
     /// allowance, holds it beside the rest of its request (about 10,000
-    /// tokens for `axocoatl run fix`). The first 1.5.0 build listed every
-    /// changed path up to 48 KiB: 3,072 generated files beside a fix cost
-    /// about 22,000 tokens there, and that reviewer could not start.
+    /// tokens for `axocoatl run fix`). Listing every changed path up to
+    /// 48 KiB instead would cost about 22,000 tokens for 3,072 generated
+    /// files beside a fix, and that reviewer could not start.
     #[test]
     fn a_change_too_large_to_record_is_described_in_a_few_thousand_tokens() {
         use axocoatl_session::turn_review::{describe_partial_change, MAX_PARTIAL_CHANGE_BYTES};
@@ -1365,12 +1519,25 @@ mod tests {
         // bytes, more than the 10,000 paths it lists.
         let three = names(3072);
         let listed = changed_lines(three.iter().map(Vec::as_slice));
-        let few =
-            describe_partial_change(Some(""), Some(&listed), &generated_prefix(1024), 4_717_831);
-        let many = describe_partial_change(Some(""), None, &generated_prefix(256), 6_208_208);
+        let few = describe_partial_change(
+            EarlierPaths::Listed(""),
+            Some(&listed),
+            &generated_prefix(1024),
+            4_717_831,
+        );
+        let many = describe_partial_change(
+            EarlierPaths::Listed(""),
+            None,
+            &generated_prefix(256),
+            6_208_208,
+        );
         // Without the lines of the capture taken when the turn began.
-        let unknown =
-            describe_partial_change(None, Some(&listed), &generated_prefix(1024), 4_717_831);
+        let unknown = describe_partial_change(
+            EarlierPaths::NotListed,
+            Some(&listed),
+            &generated_prefix(1024),
+            4_717_831,
+        );
         for (label, change) in [("3,072", &few), ("12,288", &many), ("unknown", &unknown)] {
             assert!(
                 tokens(change) <= 5_000,
@@ -1393,12 +1560,257 @@ mod tests {
             .collect();
         let lines = changed_lines(costly.iter().map(Vec::as_slice));
         let noisy = String::from_utf8_lossy(&noise(12 * 1024, 5)).into_owned();
-        let worst = describe_partial_change(None, Some(&lines), &noisy, 50_000_000);
+        let worst =
+            describe_partial_change(EarlierPaths::NotListed, Some(&lines), &noisy, 50_000_000);
         assert!(
             worst.len() <= MAX_PARTIAL_CHANGE_BYTES + 128,
             "{}",
             worst.len()
         );
         assert!(tokens(&worst) <= 9_000, "worst: {} tokens", tokens(&worst));
+    }
+
+    /// The reviewer is told, before the change, when what it is shown is not
+    /// all of it, and that it has not seen the rest; a change shown whole
+    /// adds nothing.
+    #[test]
+    fn the_reviewer_prompt_says_what_it_did_not_see() {
+        let partial = reviewer_prompt_head(Some("tree-1"), true);
+        assert!(
+            partial.ends_with(&format!(
+                "Approve only when nothing must change.\n\n{PARTIAL_CHANGE_RULE}\n\nRepository \
+                 tree reviewed: tree-1\n"
+            )),
+            "{partial}"
+        );
+        for said in [
+            "Not all of the change is shown below",
+            "You have not seen that part.",
+            "do not approve code you have not read",
+        ] {
+            assert!(PARTIAL_CHANGE_RULE.contains(said), "{said}");
+        }
+        let whole = reviewer_prompt_head(Some("tree-1"), false);
+        assert!(!whole.contains("Not all of the change"), "{whole}");
+        assert_eq!(whole.len() + PARTIAL_CHANGE_RULE.len() + 2, partial.len());
+    }
+
+    /// The fix to src/lib.rs the release gate's writer makes.
+    const GATE_FIX: &str = "diff --git a/src/lib.rs b/src/lib.rs\nindex 384eba8..4dda3a8 100644\n\
+        --- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -15,7 +15,7 @@ pub fn paginate<T: Clone>(items: \
+        &[T], size: usize) -> Vec<Vec<T>> {\n         let length = if page + 1 < count {\n      \
+               size\n         } else {\n-            items.len() % size\n+            \
+        items.len() - start\n         };\n         pages.push(items[start..start + \
+        length].to_vec());\n     }\n";
+
+    /// A new file of `size` random bytes as `git diff --binary` prints it:
+    /// `literal`, then a line of base85 per 52 bytes (they do not compress).
+    fn binary_patch(path: &str, size: usize, seed: u64) -> String {
+        const BASE85: &[u8] =
+            b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
+        let mut patch = format!(
+            "diff --git a/{path} b/{path}\nnew file mode 100755\nindex \
+             0000000000000000000000000000000000000000..{}\nGIT binary patch\nliteral {size}\n",
+            "7f4b1e46a3b60975bbfb9e59a1995d3237fb8d69"
+        );
+        for chunk in noise(size, seed).chunks(52) {
+            patch.push(if chunk.len() == 52 { 'z' } else { 'a' });
+            for byte in noise(chunk.len().div_ceil(4) * 5, u64::from(chunk[0]) + seed) {
+                patch.push(BASE85[byte as usize % BASE85.len()] as char);
+            }
+            patch.push('\n');
+        }
+        patch.push_str("\nliteral 0\nHcmV?d00001\n\n");
+        patch
+    }
+
+    /// A new text file of `bytes` bytes of base64, as `base64` wraps it.
+    fn base64_patch(path: &str, bytes: usize, seed: u64) -> String {
+        use base64::Engine as _;
+        let text = base64::engine::general_purpose::STANDARD.encode(noise(bytes / 4 * 3, seed));
+        let lines: Vec<&str> = text
+            .as_bytes()
+            .chunks(76)
+            .map(|line| std::str::from_utf8(line).unwrap())
+            .collect();
+        let mut patch = format!(
+            "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..3b7d2f0\n--- \
+             /dev/null\n+++ b/{path}\n@@ -0,0 +1,{} @@\n",
+            lines.len()
+        );
+        for line in lines {
+            patch.push('+');
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        patch
+    }
+
+    /// A new Rust file of about `bytes` bytes of real source: the start of
+    /// the session crate's review module.
+    fn rust_patch(path: &str, bytes: usize) -> String {
+        let source = include_str!("../../axocoatl-session/src/turn_review.rs");
+        let mut lines = Vec::new();
+        let mut size = 0;
+        for line in source.lines() {
+            if size + line.len() + 2 > bytes {
+                break;
+            }
+            size += line.len() + 2;
+            lines.push(line);
+        }
+        let mut patch = format!(
+            "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..5c6d7e8\n--- \
+             /dev/null\n+++ b/{path}\n@@ -0,0 +1,{} @@\n",
+            lines.len()
+        );
+        for line in lines {
+            patch.push('+');
+            patch.push_str(line);
+            patch.push('\n');
+        }
+        patch
+    }
+
+    /// A whole change, as the release gate's writers have left them beside
+    /// the fix, is shown within what the reviewer's context holds beside the
+    /// rest of its request as `axocoatl run fix` makes it, counted as the
+    /// host counts a request: binary files named with their sizes and none
+    /// of their data, 400 KB of base64 text left out and listed, and 30 KiB
+    /// of Rust shown whole to a 32,768-token reviewer. Fitted to the
+    /// smallest context onboarding configures, the Rust is left out and
+    /// listed instead. In 1.4 and the 1.5.0 candidate a 24 KiB binary file
+    /// was shown as its base85 data and that reviewer could not start.
+    #[test]
+    fn a_whole_change_is_shown_within_the_reviewer_context() {
+        use axocoatl_session::turn_review::MAX_CHANGE_BYTES;
+        let instructions = axocoatl_config::loadout::builtin_loadouts()
+            .into_iter()
+            .map(std::result::Result::unwrap)
+            .find(|loadout| loadout.file.id == "fix")
+            .and_then(|loadout| loadout.file.review)
+            .and_then(|review| review.instructions)
+            .unwrap();
+        let head = reviewer_prompt_head(Some(&"0".repeat(64)), true);
+        let answers = "\n## Final answer of writer\nFixed src/lib.rs: the last page is now sized \
+                       by the items left after its start, so it is full when the total is a \
+                       multiple of the page size.\n";
+        let task = "Paging skips the last item when the total is a multiple of the page size\n";
+        let spent = review_tokens(&head)
+            + review_tokens(answers)
+            + review_tokens("\n## Change\n")
+            + review_tokens(task)
+            + review_tokens(&instructions);
+        let rust = rust_patch("src/pages.rs", 30 * 1024);
+        assert!(rust.len() > 29 * 1024, "{}", rust.len());
+        let scenarios = [
+            (
+                "one 24 KiB binary",
+                format!("{GATE_FIX}{}", binary_patch("test_fix", 24 * 1024, 1)),
+            ),
+            (
+                "one 200 KiB binary",
+                format!("{GATE_FIX}{}", binary_patch("test_fix", 200 * 1024, 2)),
+            ),
+            (
+                "400 KB of base64 text",
+                format!("{GATE_FIX}{}", base64_patch("data.b64", 400_000, 3)),
+            ),
+            ("30 KiB of Rust", format!("{GATE_FIX}{rust}")),
+        ];
+        // The old bound alone kept 48 KiB of each, far past the context.
+        assert!(review_tokens(&scenarios[0].1) > 20_000);
+        for (context, output) in [(32_768, 8_192), FALLBACK_REVIEWER_WINDOW] {
+            let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
+            let budget = change_budget(context, output, spent);
+            for (label, patch) in &scenarios {
+                assert!(
+                    patch.len() <= 512 * 1024,
+                    "{label}: a capture records it whole"
+                );
+                let change = describe_change(
+                    None,
+                    patch,
+                    true,
+                    ChangeBudget {
+                        tokens: budget,
+                        count: &review_tokens,
+                    },
+                );
+                let text = &change.text;
+                let tokens = review_tokens(text);
+                eprintln!(
+                    "{context}: {label}: patch {} bytes, {} tokens; shown {} bytes, {tokens} \
+                     tokens of a budget of {budget}; the rest of the prompt {spent}",
+                    patch.len(),
+                    review_tokens(patch),
+                    text.len()
+                );
+                assert!(tokens <= budget, "{label}: {tokens} > {budget}");
+                assert!(
+                    spent + tokens + REVIEW_REQUEST_RESERVE + output <= limit,
+                    "{label}"
+                );
+                assert!(text.contains(GATE_FIX), "{label}: the fix is shown: {text}");
+                assert!(!text.contains("\nz") && !text.contains("HcmV"), "{label}");
+                assert!(text.len() <= MAX_CHANGE_BYTES + 16 * 1024, "{label}");
+            }
+        }
+        let shown = |context: usize, output: usize, patch: &str| {
+            describe_change(
+                None,
+                patch,
+                true,
+                ChangeBudget {
+                    tokens: change_budget(context, output, spent),
+                    count: &review_tokens,
+                },
+            )
+        };
+        // Binary files: named with their sizes, nothing else left out.
+        for (index, size) in [(0, 24 * 1024), (1, 200 * 1024)] {
+            let change = shown(32_768, 8_192, &scenarios[index].1);
+            assert!(change.partial);
+            assert!(
+                change.text.contains(&format!(
+                    "GIT binary patch\n[binary data left out: the file's new content is {size} \
+                     bytes]\n"
+                )),
+                "{}",
+                change.text
+            );
+            assert!(!change.text.contains("Not all of the change"));
+        }
+        // Dense text: left out and listed with its bytes, the fix shown.
+        let change = shown(32_768, 8_192, &scenarios[2].1);
+        assert!(change.partial);
+        assert!(
+            change
+                .text
+                .starts_with("[Not all of the change is shown: its patch is "),
+            "{}",
+            change.text
+        );
+        assert!(
+            change.text.contains("\ndata.b64: left out, "),
+            "{}",
+            change.text
+        );
+        // 30 KiB of Rust: whole, exactly as the patch has it.
+        assert_eq!(
+            shown(32_768, 8_192, &scenarios[3].1),
+            DescribedChange {
+                text: scenarios[3].1.clone(),
+                partial: false
+            }
+        );
+        let (context, output) = FALLBACK_REVIEWER_WINDOW;
+        let change = shown(context, output, &scenarios[3].1);
+        assert!(change.partial);
+        assert!(
+            change.text.contains("\nsrc/pages.rs: left out, "),
+            "{}",
+            change.text
+        );
     }
 }
