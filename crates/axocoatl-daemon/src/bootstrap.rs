@@ -2951,12 +2951,23 @@ struct DataDirLease {
 /// Canonicalization makes equivalent path spellings share the same authority,
 /// while the digest keeps host paths out of container metadata.
 fn local_runtime_authority(data_root: &SecureDir) -> Result<String, DaemonError> {
+    Ok(runtime_authority_of(data_root))
+}
+
+/// The runtime authority of the daemon whose data directory is `data_root`:
+/// the label its containers and volumes carry
+/// ([`local_runtime_authority`]).
+pub fn runtime_authority_of(data_root: &SecureDir) -> String {
     use sha2::{Digest, Sha256};
 
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(root_authority_bytes(data_root))
-    ))
+    format!("{:x}", Sha256::digest(root_authority_bytes(data_root)))
+}
+
+/// The toolchain cache volume of the Workspace at `workspace` (canonical)
+/// of the daemon whose data directory is `data_root`: the name that daemon
+/// gives it (`AxocoatlDaemon::toolchain_cache_volume`).
+pub fn toolchain_cache_volume_of(data_root: &SecureDir, workspace: &Path) -> String {
+    SessionSandbox::toolchain_cache_volume_name(&runtime_authority_of(data_root), workspace)
 }
 
 #[cfg(test)]

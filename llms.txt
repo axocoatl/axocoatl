@@ -307,7 +307,7 @@ axocoatl connect claude-code
 axocoatl connect codex
 axocoatl connect codex --status|--refresh
 axocoatl secret set|list|remove
-axocoatl recipe build|list
+axocoatl recipe build|list|clear-cache
 ```
 
 The browser product has one interactive route at `/`. The HTTP and WebSocket APIs
