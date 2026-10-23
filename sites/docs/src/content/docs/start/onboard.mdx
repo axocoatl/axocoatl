@@ -243,8 +243,13 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
-   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | How well this reviewer reviews has not been measured. The 1.5.0 release gate requires runs with the local models onboarding sets up on its Mac to pass, and its evidence names them ([Install](/start/install/)) |
-   | Under 48 GB | — | — | Not yet verified with local models. Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | How well this reviewer reviews has not been measured |
+   | Under 48 GB | — | — | Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
+
+   The 1.5.0 release gate requires runs with the local models onboarding sets up on its
+   Mac to pass. It checks neither that Mac's memory nor which models onboarding chose
+   there, and its evidence names both, so those runs verify local models only on that
+   memory ([Install](/start/install/)).
 
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
    judges it (at most about 0.65 of its memory): on a 24 GB Mac only `gpt-oss:20b` of

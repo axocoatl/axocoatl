@@ -172,9 +172,15 @@ quality or performance claims about them.
   were. Such a pass would show that those models run there, not how well the reviewer
   reviews.
 - What the release gate's other paths run on beyond what their steps check: the Linux
-  path (`D1`) is to run in a new Ubuntu 24.04 VM, as the gate's instructions say, but no
-  step checks the system or its architecture, so the pages name Ubuntu 24.04 only as
-  what the instructions use; the evidence records the system.
+  path (`D1`) is to run as a new user made with `adduser` in a new Ubuntu 24.04 VM, as
+  the gate's instructions say, but its steps check only that the account starts without
+  Axocoatl, its data or stored secrets, or Podman, not that the user is new, nor the
+  system or its architecture. So the pages name the new user and Ubuntu 24.04 only as
+  what the instructions use; the evidence records the system and the account.
+- A record for every run: the gate verifies the receipt and the record of each run on
+  the fixtures, but of each timed run on a real repository (`C1-real-repo`) only the
+  receipt, and of the `--keep pr` run only the receipt, which the verify-receipt Action
+  checks. The pages say which.
 - The `axocoatl run` summary on the README and the marketing home page is an example of
   the format `axocoatl run fix` prints (a small Go repository whose check is
   `go test ./...`, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing), not a
