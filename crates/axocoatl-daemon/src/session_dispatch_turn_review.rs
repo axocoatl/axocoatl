@@ -32,9 +32,9 @@ struct ReviewRound {
     /// The reviewer generation that runs it.
     round: u32,
     /// The host's note asking again for a verdict the previous round's
-    /// answer did not carry, shown beside that answer; `None` for a round
-    /// about a new result.
-    reask: Option<EvidenceRef>,
+    /// answer did not carry, and whether that answer is shown beside it;
+    /// `None` for a round about a new result.
+    reask: Option<(EvidenceRef, bool)>,
 }
 
 /// A digest naming one host step of this turn's review.
@@ -54,6 +54,12 @@ const UNREADABLE_AGAIN: &str = "The reviewer's answer had no single VERDICT: APP
 /// when it asks again, in the next round, about the same result.
 const REASK: &str = "Your previous answer did not contain a verdict line. Reply with exactly \
      `VERDICT: APPROVE` or `VERDICT: CHANGES` on its own line, followed by findings.";
+/// What the host tells such a reviewer instead when that answer takes more
+/// than the room its request keeps for it ([`reask_room`]), so it is not
+/// shown again.
+const REASK_UNSHOWN: &str = "Your previous answer did not contain a verdict line, and it is too \
+     long to show again here. Review the result again and reply with exactly `VERDICT: APPROVE` \
+     or `VERDICT: CHANGES` on its own line, followed by findings.";
 const NOT_CAPTURED: &str = "The repository could not be captured after the Agents finished, so \
      the reviewer would not see the exact result. Continue runs the review again.";
 /// The rule the host appends to every reviewer prompt, so the lead can answer
@@ -101,6 +107,10 @@ fn reviewer_prompt_head(tree: Option<&str>, partial: bool) -> String {
     )
 }
 
+/// Tokens the host counts for each image a request carries, whatever its
+/// size (`axocoatl_token::ApproximateCounter`).
+const IMAGE_TOKENS: usize = 1_024;
+
 /// Tokens of a reviewer's request the host does not count where it builds
 /// the prompt: the activation input's JSON around the guidance (about 700
 /// tokens with the repository's description), the definitions of the
@@ -136,6 +146,26 @@ pub(crate) fn review_tokens(text: &str) -> usize {
     }
 }
 
+/// Most tokens of a previous answer a request that asks the reviewer again
+/// for its verdict shows beside the result ([`reask_room`]).
+const MAX_REASK_ANSWER_TOKENS: usize = 2_048;
+
+/// Tokens of the record that carries a previous answer beside its text: the
+/// activation it came from and its usage, as the reviewer's JSON input
+/// carries them.
+const REASK_ANSWER_FRAME: usize = 256;
+
+/// The tokens of its previous answer a reviewer whose model holds `context`
+/// tokens and reserves `output` of them for each answer is shown again when
+/// the host asks it again for a verdict: a sixteenth of what one request may
+/// hold beside the output allowance, at most [`MAX_REASK_ANSWER_TOKENS`].
+/// Every round's request keeps that room, so the result is shown the same
+/// way when it is asked again; a longer answer is not shown again.
+pub(crate) fn reask_room(context: usize, output: usize) -> usize {
+    let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
+    (limit.saturating_sub(output) / 16).min(MAX_REASK_ANSWER_TOKENS)
+}
+
 /// The tokens the change may take in the request of a reviewer whose model
 /// holds `context` tokens and reserves `output` of them for each answer,
 /// when the rest of its prompt takes `spent` as the host counts it. The host
@@ -148,6 +178,84 @@ pub(crate) fn change_budget(context: usize, output: usize, spent: usize) -> usiz
     let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
     (limit.saturating_sub(output) / 4 * 3)
         .saturating_sub(spent.saturating_add(REVIEW_REQUEST_RESERVE))
+}
+
+/// The wait before a review round a transient provider failure ended runs
+/// again when the provider stated no `Retry-After`: 4 seconds, twice the
+/// provider retry's own backoff, doubled for each of the reviewer's rounds
+/// this turn already ran again (`earlier`), and at most the longest
+/// `Retry-After` the host honors.
+pub(crate) fn review_rerun_backoff(earlier: usize) -> std::time::Duration {
+    let doubled = u32::try_from(earlier)
+        .ok()
+        .and_then(|earlier| 2u32.checked_pow(earlier))
+        .and_then(|factor| (crate::provider_retry::DEFAULT_RETRY_BACKOFF * 2).checked_mul(factor))
+        .unwrap_or(crate::provider_retry::MAX_RETRY_AFTER);
+    doubled.min(crate::provider_retry::MAX_RETRY_AFTER)
+}
+
+/// Why a reviewer that did not finish can in a fresh conversation, read
+/// from the host-written first line of its recorded failure: its model kept
+/// calling tools and gave no answer, even when asked for its final answer
+/// without tools; used every tool round of its activation; or reached its
+/// token limit for the activation. A new activation of the same round starts
+/// without that conversation and with its own token limit. `None` for any
+/// other failure: one the same request meets again (a request larger than
+/// the model's context, a Session budget used up, a refused admission), a
+/// refusal, or a provider's, which [`crate::provider_retry`] judges.
+pub(crate) fn rerun_cause_of_text(text: &str) -> Option<&'static str> {
+    let first = text.lines().next()?;
+    let line = first.strip_prefix("Activation failed: ")?;
+    if line.starts_with("Tool call failed: agent tool loop - ") {
+        return Some("its model kept calling tools and gave no answer");
+    }
+    if line.starts_with("This Agent reached its token limit for this activation") {
+        return Some("it reached its token limit for the activation");
+    }
+    let view = axocoatl_session::execution_content::classify_activation_failure(first)?;
+    (view.class == "round_limit").then_some("it used every tool round of its activation")
+}
+
+/// Most bytes of a reviewer's own failure a review's reason quotes.
+const MAX_FAILURE_CAUSE_BYTES: usize = 300;
+
+/// The cause a reviewer's recorded failure states on its first line, in
+/// words for the person: a request larger than its model takes says how
+/// many tokens it needed and the limit; any other cause is quoted, at most
+/// [`MAX_FAILURE_CAUSE_BYTES`].
+fn failure_cause(text: &str) -> Option<String> {
+    let line = text
+        .lines()
+        .next()?
+        .strip_prefix("Activation failed: ")?
+        .trim()
+        .trim_end_matches('.');
+    if let Some((required, limit)) = line
+        .strip_prefix("Current request needs ")
+        .and_then(|rest| rest.split_once(" context tokens, exceeding limit "))
+        .and_then(|(required, limit)| {
+            Some((required.parse::<u64>().ok()?, limit.parse::<u64>().ok()?))
+        })
+    {
+        return Some(format!(
+            "its request needed {} tokens of its model's context, more than the {} one request \
+             may take with its output allowance, so the change, the Agents' answers and its \
+             instructions did not fit",
+            super::repository_snapshot::group_digits(required),
+            super::repository_snapshot::group_digits(limit)
+        ));
+    }
+    if line.is_empty() {
+        return None;
+    }
+    if line.len() <= MAX_FAILURE_CAUSE_BYTES {
+        return Some(line.to_owned());
+    }
+    let mut end = MAX_FAILURE_CAUSE_BYTES;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!("{}...", &line[..end]))
 }
 
 /// The note that sends review round `round`'s `findings` back to the lead.
@@ -257,7 +365,8 @@ impl DispatchState {
 
     /// The tokens of the reviewer's request the prompt does not hold but the
     /// host counts where it builds it: the turn's request with the context
-    /// it captured, and the reviewer's own instructions.
+    /// it captured, the reviewer's own instructions, and the attachments its
+    /// admission gave it.
     fn review_request_tokens(
         &self,
         snapshot: &DurableTurnSnapshot,
@@ -285,8 +394,72 @@ impl DispatchState {
                     Err(_) => review_tokens(&configuration),
                 };
             }
+            if let Some((_, admission)) = self
+                .content
+                .turn_admission(&self.canonical, &self.turn_id)
+                .map_err(error)?
+            {
+                if let Some(admitted) = admission
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id == reviewer.node_id)
+                {
+                    for attachment in &admitted.attachments {
+                        tokens += self.attachment_tokens(attachment)?;
+                    }
+                }
+            }
         }
         Ok(tokens)
+    }
+
+    /// The tokens one of the reviewer's attachments takes in its request:
+    /// a text attachment as its input carries it, and a binary one as its
+    /// description there, the visual allowance the host counts for an image
+    /// ([`IMAGE_TOKENS`]) and the text it adds for one: the text extracted
+    /// from it, or a document's own text.
+    fn attachment_tokens(&self, reference: &EvidenceRef) -> Result<usize> {
+        Ok(
+            match self
+                .content
+                .resolve_activation_evidence(reference)
+                .map_err(error)?
+            {
+                evidence @ ActivationEvidenceContent::Attachment { .. } => {
+                    review_tokens(&serde_json::to_string(&evidence).map_err(error)?)
+                }
+                ActivationEvidenceContent::BinaryAttachment { attachment } => {
+                    let image = attachment
+                        .media_type()
+                        .split('/')
+                        .next()
+                        .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("image"));
+                    let described = serde_json::json!({
+                        "kind": "binary_attachment",
+                        "reference_id": attachment.reference_id(),
+                        "name": attachment.name(),
+                        "media_type": attachment.media_type(),
+                        "source_sha256": attachment.source_sha256(),
+                        "byte_len": attachment.byte_len(),
+                        "representation": "attachment_text",
+                    })
+                    .to_string();
+                    let text = match attachment.extracted_text() {
+                        Some(text) => review_tokens(text),
+                        None if image => 0,
+                        None => {
+                            let source = attachment.to_attachment().map_err(error)?;
+                            review_tokens(&String::from_utf8_lossy(&source.bytes))
+                        }
+                    };
+                    review_tokens(&described)
+                        + review_tokens(&format!("<attachment name=\"{}\">", attachment.name()))
+                        + if image { IMAGE_TOKENS } else { 0 }
+                        + text
+                }
+                _ => 0,
+            },
+        )
     }
 
     /// The result `activations` left, as the reviewer is shown it, or why
@@ -401,12 +574,17 @@ impl DispatchState {
         }
         // The change fits the reviewer's context beside the rest of its
         // request: the head (counted with the note a partial change adds),
-        // the answers, the turn's request and the reviewer's instructions.
+        // the answers, the turn's request, the reviewer's instructions and
+        // attachments, and the room a request asking it again for a verdict
+        // keeps for its previous answer.
         let (context, output) = self.reviewer_window(graph)?;
         let spent = review_tokens(&reviewer_prompt_head(tree.as_deref(), true))
             + review_tokens(&answers)
             + review_tokens("\n## Change\n")
-            + self.review_request_tokens(snapshot, graph)?;
+            + self.review_request_tokens(snapshot, graph)?
+            + reask_room(context, output)
+            + REASK_ANSWER_FRAME
+            + review_tokens(REASK_UNSHOWN);
         let budget = ChangeBudget {
             tokens: change_budget(context, output, spent),
             count: &review_tokens,
@@ -907,7 +1085,7 @@ impl DispatchState {
         let manifest_id =
             InputManifestId::new(format!("review-input-{}", &digest[..48])).map_err(error)?;
         let mut guidance = vec![request, prompt, round_text.clone()];
-        guidance.extend(reask.clone());
+        guidance.extend(reask.as_ref().map(|(note, _)| note.clone()));
         let event = match previous {
             Some(previous) => {
                 let mut input = previous.input.clone();
@@ -916,9 +1094,10 @@ impl DispatchState {
                 input.guidance = guidance;
                 input.repository = repository;
                 // Asked again, the reviewer reads the answer that had no
-                // verdict; a round about a new result starts clean.
+                // verdict when it fits the room its request keeps for it; a
+                // round about a new result starts clean.
                 input.revision_context = match (&reask, &previous.output) {
-                    (Some(_), Some(output)) => Some(RevisionContext {
+                    (Some((_, true)), Some(output)) => Some(RevisionContext {
                         activation: previous.activation.clone(),
                         output: output.clone(),
                     }),
@@ -928,7 +1107,7 @@ impl DispatchState {
                     previous: previous.activation.clone(),
                     input: Box::new(input),
                     invalidated_descendants: vec![],
-                    evidence: reask.unwrap_or(round_text),
+                    evidence: reask.map_or(round_text, |(note, _)| note),
                 }
             }
             None => {
@@ -974,6 +1153,8 @@ impl DispatchState {
     /// required checks passed. Whether anything was recorded or started.
     fn drive_review(&mut self) -> Result<bool> {
         self.ready()?;
+        // Set again below while a round waits to run again.
+        self.review_rerun_at_ms = None;
         let snapshot = self.canonical.snapshot(&self.turn_id).map_err(error)?;
         let contract = snapshot.contract();
         if contract.state() != Some(LogicalTurnState::Running)
@@ -1131,20 +1312,39 @@ impl DispatchState {
             ActivationState::Failed
             | ActivationState::Interrupted
             | ActivationState::Superseded => {
-                // One transient provider failure of this round's model call
-                // does not end the review: the round runs again, once.
-                if current_round
-                    && self.transient_review_failure(&snapshot, &criterion, &latest)?
-                    && self.rerun_review_round(&snapshot, &latest)?
-                {
-                    return Ok(true);
+                // One transient provider failure of this round's model call,
+                // or a model that did not finish in a way a fresh
+                // conversation can, does not end the review: the round runs
+                // again, once, after the provider's Retry-After or a backoff
+                // for a transient failure.
+                if current_round {
+                    if let Some(at) = self.review_rerun_at(&snapshot, &criterion, &latest)? {
+                        if now_ms()? < at {
+                            // The driver waits until then; see
+                            // `review_rerun_wait`.
+                            self.review_rerun_at_ms = Some(at);
+                            return Ok(false);
+                        }
+                        if self.rerun_review_round(&snapshot, &latest)? {
+                            return Ok(true);
+                        }
+                    }
                 }
+                let cause = self
+                    .reviewer_failure(&snapshot, &latest)?
+                    .map(|cause| format!(": {cause}"))
+                    .unwrap_or_default();
                 let reason = if latest.activation.execution_epoch_id == epoch {
-                    "The reviewer did not finish, so nothing approved this result. Select the \
-                     reviewer and Continue to run it again, or Finish."
+                    format!(
+                        "The reviewer did not finish, so nothing approved this result{cause}. \
+                         Select the reviewer and Continue to run it again, or Finish."
+                    )
                 } else {
-                    "The reviewer did not finish in an earlier epoch and was not restarted. \
-                     Select the reviewer and Continue to run it again, or Finish."
+                    format!(
+                        "The reviewer did not finish in an earlier epoch and was not \
+                         restarted{cause}. Select the reviewer and Continue to run it again, or \
+                         Finish."
+                    )
                 };
                 let proof = serde_json::json!({"kind":"required_review","turn_id":snapshot.turn_id(),
                     "epoch_id":epoch,"reviewer":latest.activation,"activations":activations,
@@ -1157,45 +1357,100 @@ impl DispatchState {
         }
     }
 
-    /// Whether the reviewer activation `failed` ended because its model call
-    /// failed transiently (a 429, a 5xx, a timeout or a reset connection, as
-    /// [`crate::provider_retry`] judges them) and its round may run again:
-    /// it has not already run again in this epoch, and a round remains, as
-    /// the host asks again for a verdict only while one remains. A cause the
-    /// recorded failure does not state is not transient.
-    fn transient_review_failure(
+    /// The failure the reviewer activation `failed` recorded, when its
+    /// failure reference is that output: its text and when it was recorded.
+    fn recorded_failure(
         &self,
         snapshot: &DurableTurnSnapshot,
-        criterion: &ReviewCriterion,
         failed: &ContractActivation,
-    ) -> Result<bool> {
-        if failed.state != ActivationState::Failed
-            || failed.activation.generation >= criterion.max_rounds
-            || snapshot
-                .contract()
-                .activations()
-                .iter()
-                .any(|item| crate::provider_retry::reruns_review_round(item, failed))
-        {
-            return Ok(false);
-        }
+    ) -> Result<Option<(String, u64)>> {
         let Some(reservation) = self
             .content
             .activation_output_reservation(snapshot, &failed.activation)
             .map_err(error)?
         else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(settled) = self
             .content
             .activation_output_settlement(&reservation)
             .map_err(error)?
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        Ok(failed.failure.as_ref() == Some(settled.reference())
-            && crate::provider_retry::transient_failure_of_text(&settled.content().output.text)
-                .is_some())
+        let output = &settled.content().output;
+        Ok((failed.failure.as_ref() == Some(settled.reference()))
+            .then(|| (output.text.clone(), output.recorded_at_unix_ms)))
+    }
+
+    /// When the review round the reviewer activation `failed` ended in runs
+    /// again (Unix milliseconds), or `None` when it does not. It runs again
+    /// once, and only while a round remains, as the host asks again for a
+    /// verdict only while one remains: after the provider's `Retry-After`,
+    /// or else [`review_rerun_backoff`], from when the failure was recorded,
+    /// when the model call failed transiently (a 429, a 5xx, a timeout or a
+    /// reset connection, as [`crate::provider_retry`] judges them); at once
+    /// when the model did not finish in a way a fresh conversation can
+    /// ([`rerun_cause_of_text`]). A cause the recorded failure does not
+    /// state runs nothing again.
+    fn review_rerun_at(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        criterion: &ReviewCriterion,
+        failed: &ContractActivation,
+    ) -> Result<Option<u64>> {
+        let reviewer: Vec<&ContractActivation> = snapshot
+            .contract()
+            .activations()
+            .iter()
+            .filter(|item| item.activation.node_id == failed.activation.node_id)
+            .collect();
+        if failed.state != ActivationState::Failed
+            || failed.activation.generation >= criterion.max_rounds
+            || reviewer
+                .iter()
+                .any(|item| crate::provider_retry::reruns_review_round(item, failed))
+        {
+            return Ok(None);
+        }
+        let Some((text, recorded_at)) = self.recorded_failure(snapshot, failed)? else {
+            return Ok(None);
+        };
+        if let Some(failure) = crate::provider_retry::transient_failure_of_text(&text) {
+            // The reviewer's rounds this turn already ran again.
+            let earlier = reviewer
+                .iter()
+                .filter(|next| {
+                    reviewer
+                        .iter()
+                        .any(|previous| crate::provider_retry::reruns_review_round(previous, next))
+                })
+                .count();
+            let wait = match failure {
+                crate::provider_retry::ProviderFailure::Status {
+                    retry_after: Some(wait),
+                    ..
+                } => wait,
+                _ => review_rerun_backoff(earlier),
+            };
+            let wait = u64::try_from(wait.as_millis()).map_err(error)?;
+            return Ok(Some(recorded_at.saturating_add(wait)));
+        }
+        Ok(rerun_cause_of_text(&text).map(|_| recorded_at))
+    }
+
+    /// Why the reviewer activation `failed` did not finish, in words for the
+    /// person, from the first line of its recorded failure: for a request
+    /// larger than the reviewer's model takes, how many tokens it needed and
+    /// the limit. `None` when it recorded none.
+    fn reviewer_failure(
+        &self,
+        snapshot: &DurableTurnSnapshot,
+        failed: &ContractActivation,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .recorded_failure(snapshot, failed)?
+            .and_then(|(text, _)| failure_cause(&text)))
     }
 
     /// Run the review round `failed` ended in again: the next generation of
@@ -1249,7 +1504,8 @@ impl DispatchState {
     /// rounds remain. An answer without a readable verdict about the tree it
     /// was shown records nothing while a round remains and the host has not
     /// yet asked this reviewer again about this result: the note to ask again
-    /// with in the next round is returned instead.
+    /// with in the next round is returned instead, and whether that answer is
+    /// shown beside it (when it fits [`reask_room`]).
     fn record_verdict(
         &mut self,
         snapshot: &DurableTurnSnapshot,
@@ -1257,7 +1513,7 @@ impl DispatchState {
         item: &ContractActivation,
         candidate: ReviewCandidate,
         activations: Vec<ActivationRef>,
-    ) -> Result<Option<EvidenceRef>> {
+    ) -> Result<Option<(EvidenceRef, bool)>> {
         let epoch = item.activation.execution_epoch_id.clone();
         let round = item.activation.generation;
         let answer = self.accepted_answer(snapshot, &item.activation)?;
@@ -1276,16 +1532,26 @@ impl DispatchState {
         );
         let mut asked_again = false;
         if verdict == ReviewVerdict::Unreadable && unbound.is_none() {
-            let note = self
-                .content
-                .retain_activation_evidence(ActivationEvidenceContent::Guidance {
-                    text: REASK.to_owned(),
-                })
-                .map_err(error);
-            let note = self.fail_closed(note)?.reference().clone();
-            asked_again = item.input.guidance.contains(&note);
+            let graph = snapshot
+                .contract()
+                .graph()
+                .ok_or_else(|| error("a reviewed turn has no graph"))?;
+            let (context, output) = self.reviewer_window(graph)?;
+            let shown = review_tokens(&answer) <= reask_room(context, output);
+            let mut notes = Vec::with_capacity(2);
+            for text in [REASK, REASK_UNSHOWN] {
+                let note = self
+                    .content
+                    .retain_activation_evidence(ActivationEvidenceContent::Guidance {
+                        text: text.to_owned(),
+                    })
+                    .map_err(error);
+                notes.push(self.fail_closed(note)?.reference().clone());
+            }
+            asked_again = notes.iter().any(|note| item.input.guidance.contains(note));
             if !asked_again && round < criterion.max_rounds {
-                return Ok(Some(note));
+                let note = notes.swap_remove(if shown { 0 } else { 1 });
+                return Ok(Some((note, shown)));
             }
         }
         let passed = verdict == ReviewVerdict::Approve && unbound.is_none();
@@ -1358,6 +1624,19 @@ impl SessionDispatchController {
     /// anything changed.
     pub(crate) fn drive_turn_review(&self) -> Result<bool> {
         self.lock()?.drive_review()
+    }
+
+    /// How long until the review round the last review step left waiting
+    /// runs again, after a transient provider failure: `None` when none
+    /// waits.
+    pub(crate) fn review_rerun_wait(&self) -> Result<Option<std::time::Duration>> {
+        let state = self.lock()?;
+        let Some(at) = state.review_rerun_at_ms else {
+            return Ok(None);
+        };
+        Ok(Some(std::time::Duration::from_millis(
+            at.saturating_sub(now_ms()?),
+        )))
     }
 }
 
@@ -1735,11 +2014,16 @@ mod tests {
                        by the items left after its start, so it is full when the total is a \
                        multiple of the page size.\n";
         let task = "Paging skips the last item when the total is a multiple of the page size\n";
-        let spent = review_tokens(&head)
-            + review_tokens(answers)
-            + review_tokens("\n## Change\n")
-            + review_tokens(task)
-            + review_tokens(&instructions);
+        let spent = |context: usize, output: usize| {
+            review_tokens(&head)
+                + review_tokens(answers)
+                + review_tokens("\n## Change\n")
+                + review_tokens(task)
+                + review_tokens(&instructions)
+                + reask_room(context, output)
+                + REASK_ANSWER_FRAME
+                + review_tokens(REASK_UNSHOWN)
+        };
         let rust = rust_patch("src/pages.rs", 30 * 1024);
         assert!(rust.len() > 29 * 1024, "{}", rust.len());
         let scenarios = [
@@ -1761,6 +2045,7 @@ mod tests {
         assert!(review_tokens(&scenarios[0].1) > 20_000);
         for (context, output) in [(32_768, 8_192), FALLBACK_REVIEWER_WINDOW] {
             let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
+            let spent = spent(context, output);
             let budget = change_budget(context, output, spent);
             for (label, patch) in &scenarios {
                 assert!(
@@ -1801,7 +2086,7 @@ mod tests {
                 patch,
                 true,
                 ChangeBudget {
-                    tokens: change_budget(context, output, spent),
+                    tokens: change_budget(context, output, spent(context, output)),
                     count: &review_tokens,
                 },
             )
@@ -1851,5 +2136,93 @@ mod tests {
             "{}",
             change.text
         );
+    }
+
+    /// A re-ask shows the previous answer only within a sixteenth of what a
+    /// request may hold beside the output allowance, at most 2,048 tokens,
+    /// and every round's request keeps that room.
+    #[test]
+    fn a_reask_keeps_a_bounded_room_for_the_previous_answer() {
+        // 32,768 tokens: (27,852 - 8,192) / 16.
+        assert_eq!(reask_room(32_768, 8_192), 1_228);
+        let (context, output) = FALLBACK_REVIEWER_WINDOW;
+        assert_eq!(reask_room(context, output), 358);
+        assert_eq!(reask_room(262_144, 8_192), MAX_REASK_ANSWER_TOKENS);
+        assert_eq!(reask_room(4_096, 8_192), 0);
+    }
+
+    /// Only a failure a fresh conversation can do better than runs a review
+    /// round again at once: a model that kept calling tools and gave no
+    /// answer, used every tool round, or reached its token limit for the
+    /// activation. The same request's context overflow, a used-up Session
+    /// budget, a refusal or a provider's failure does not.
+    #[test]
+    fn only_a_reviewer_a_fresh_conversation_can_help_runs_again_at_once() {
+        let failed = |line: &str| format!("Activation failed: {line}\n\nmore detail");
+        for (line, cause) in [
+            (
+                "Tool call failed: agent tool loop - the model was asked for its final answer \
+                 (your last 4 tool rounds repeated the same calls); it called a tool instead \
+                 (read_file) and wrote no answer. Retry with a more capable model or narrow the \
+                 task",
+                "its model kept calling tools and gave no answer",
+            ),
+            (
+                "Tool call failed: agent tool loop - the model returned no final answer after 3 \
+                 tool calls, including 1 failed and 0 unresolved calls",
+                "its model kept calling tools and gave no answer",
+            ),
+            (
+                "This Agent reached its tool-round limit for this activation (128 rounds) and \
+                 still asked for read_file; those calls did not run. Run it again to go on, or \
+                 narrow the task.",
+                "it used every tool round of its activation",
+            ),
+            (
+                "This Agent reached its token limit for this activation (16,000 tokens; 17,000 \
+                 needed). Raise the Agent's token budget or narrow the task.",
+                "it reached its token limit for the activation",
+            ),
+        ] {
+            assert_eq!(rerun_cause_of_text(&failed(line)), Some(cause), "{line}");
+        }
+        for text in [
+            failed("Current request needs 34440 context tokens, exceeding limit 27852"),
+            failed("The Session budget for this Agent is used up"),
+            failed("LLM provider error: ollama API error: 502 - upstream failure"),
+            failed("LLM provider error: Content filtered by ollama: safety"),
+            "Tool call failed: agent tool loop - no host line".to_owned(),
+            String::new(),
+        ] {
+            assert_eq!(rerun_cause_of_text(&text), None, "{text}");
+        }
+    }
+
+    /// A review's reason quotes the reviewer's own failure, and says in words
+    /// how many tokens a request too large for its model needed and the
+    /// limit.
+    #[test]
+    fn a_reviewer_failure_is_said_in_words() {
+        assert_eq!(
+            failure_cause(
+                "Activation failed: Current request needs 34440 context tokens, exceeding limit \
+                 27852\n\ndetail"
+            )
+            .as_deref(),
+            Some(
+                "its request needed 34,440 tokens of its model's context, more than the 27,852 \
+                 one request may take with its output allowance, so the change, the Agents' \
+                 answers and its instructions did not fit"
+            )
+        );
+        assert_eq!(
+            failure_cause("Activation failed: LLM provider error: ollama API error: 503 - x.")
+                .as_deref(),
+            Some("LLM provider error: ollama API error: 503 - x")
+        );
+        let long = failure_cause(&format!("Activation failed: {}", "é".repeat(400))).unwrap();
+        assert!(long.len() <= MAX_FAILURE_CAUSE_BYTES + 3 && long.ends_with("..."));
+        assert_eq!(failure_cause("not the host's line"), None);
+        assert_eq!(failure_cause("Activation failed: "), None);
     }
 }

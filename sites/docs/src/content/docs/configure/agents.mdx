@@ -347,8 +347,10 @@ starts the reviewer in a fresh conversation. It is shown the request, each requi
 Agent's final answer (up to 16 KiB each) and the change the turn made: every file
 whose patch against HEAD differs from the one captured when the turn began. A binary
 file is named with its size, never shown as data. The rest is shown whole when it fits
-beside the rest of the reviewer's request: three quarters of what one request to its
-model may hold beside the output allowance (85% of the context), and at most 48 KiB.
+beside the rest of the reviewer's request (the request, the answers, its instructions,
+its attachments and the room kept for asking it again): three quarters of what one
+request to its model may hold beside the output allowance (85% of the context), and at
+most 48 KiB.
 A larger change is shown source first, then generated and dense text, then binary
 files, each file whole when it fits and else cut at a hunk boundary; a note first says
 that not all of it is shown, and the files left out are listed with their bytes. The
@@ -361,10 +363,27 @@ the answer is the findings. The turn completes only when the reviewer approves t
 result it was shown. An answer without a readable verdict approves nothing: one with no
 verdict line, verdict lines that disagree, or a verdict line that says anything else.
 While a round remains, Axocoatl asks the reviewer once more, in the next round, about
-the same result, showing it the answer that had no verdict; that uses the round. The
+the same result, showing it the answer that had no verdict when that answer fits the room
+every round's request keeps for it (a sixteenth of what one request may hold beside the
+output allowance, at most 2,048 tokens) and otherwise saying it is too long to show
+again; that uses the round. The
 verdict is bound to the answers and the repository tree it judged: a later revision of
 the lead makes it stale, and when the reviewer can capture the repository, a tree that
 changed before or while it read fails the verdict.
+
+When the reviewer does not finish for one of the reasons below, Axocoatl runs its round
+again, once, while a round remains, with the same prompt in a fresh conversation. After
+a transient failure of its model call (a 429, a 5xx, a timeout or a reset connection) it
+first waits for the provider's `Retry-After`, or 4 seconds when the provider states
+none, doubled for each round already run again in the turn, at most 30 seconds; a
+`Retry-After` longer than 30 seconds is not waited for, and the review ends. While it
+waits, the workbench shows the review as under way, and **Stop** ends the wait. When its
+model kept calling tools and gave no answer, even when asked for its final answer without
+tools, used every tool round of its activation or reached its token limit for the
+activation, it runs again at once. Otherwise, or when the run again does not finish
+either, the turn needs your attention and the review says why in the reviewer's own
+words: for a request larger than its model takes, how many tokens it needed and the
+limit. A run prints that reason on its `Needs attention` line.
 
 When the reviewer asks for changes, Axocoatl sends its findings to the lead as a
 revision in a new epoch, the way **Revise** does, then runs the required checks and the

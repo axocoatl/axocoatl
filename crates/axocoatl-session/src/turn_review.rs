@@ -1523,6 +1523,22 @@ pub fn project_review(
         {
             view.state = "running".into();
             view.reason = "The reviewer is reviewing the result.".into();
+        } else if contract.state() == Some(LogicalTurnState::Running)
+            && contract.stop_requested().is_none()
+            && reviewing.is_some_and(|item| {
+                item.state == crate::turn_contract::ActivationState::Failed
+                    && contract
+                        .epochs()
+                        .last()
+                        .is_some_and(|epoch| epoch.id == item.activation.execution_epoch_id)
+            })
+        {
+            // The host has not recorded the round yet: it runs it again once
+            // a wait for the provider ends, or records why it ended.
+            view.state = "running".into();
+            view.reason = "The reviewer did not finish; its round runs again shortly when a new \
+                           run can help, or the review ends saying why."
+                .into();
         } else if contract.state() == Some(LogicalTurnState::Finished)
             && contract
                 .stop_requested()

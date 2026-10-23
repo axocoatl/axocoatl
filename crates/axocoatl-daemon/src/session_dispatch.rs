@@ -124,6 +124,9 @@ pub use repository::OwnedRepositoryCheck;
 pub(crate) use repository_activation::validate_repository_tools;
 pub use repository_activation::RepositoryActivationResource;
 pub use run::{AutonomousActivationResources, PreparedActivation, SettledActivation};
+pub(crate) use turn_review::rerun_cause_of_text as review_rerun_cause_of_text;
+#[cfg(test)]
+pub(crate) use turn_review::review_rerun_backoff;
 #[path = "session_dispatch_native.rs"]
 mod native;
 // 1.3 external agents (workstream `agents`): the controller's port for
@@ -195,6 +198,10 @@ struct DispatchState {
     repository_reattachments: HashMap<EvidenceRef, EvidenceRef>,
     repository_registration:
         Option<std::sync::Weak<crate::bootstrap::session_dispatch::RepositoryRegistrationGate>>,
+    /// When the review round a transient provider failure ended runs again
+    /// (Unix milliseconds), while the driver waits for it; see
+    /// `drive_review`.
+    review_rerun_at_ms: Option<u64>,
     poisoned: Option<String>,
     #[cfg(test)]
     fail_at: Option<TestFailure>,

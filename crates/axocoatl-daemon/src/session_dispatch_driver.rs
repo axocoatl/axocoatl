@@ -206,6 +206,16 @@ impl AutonomousTurnDriver {
                 if self.controller.drive_turn_review()? {
                     continue;
                 }
+                // A review round a transient provider failure ended runs
+                // again once the provider's Retry-After or the backoff has
+                // passed; a command meanwhile (a Stop, say) wakes the driver.
+                if let Some(wait) = self.controller.review_rerun_wait()? {
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {},
+                        _ = &mut notification => {},
+                    }
+                    continue;
+                }
                 if let Some(outcome) = self.finish_quiescent(inspected_revision)? {
                     return Ok(outcome);
                 }

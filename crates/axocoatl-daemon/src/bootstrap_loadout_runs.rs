@@ -519,20 +519,31 @@ fn turn_state(state: &str) -> TurnState {
 
 /// Why a turn that did not complete needs a person, when its record says in
 /// words: the readiness of its required checks that failed, such as a
-/// repository that could not be captured around them, and why. A run ends
-/// its turn, so the workbench's hint to Continue is left out.
+/// repository that could not be captured around them, and why; else its
+/// current review that ended without a verdict, such as a reviewer whose
+/// request did not fit its model's context, and why. A run ends its turn, so
+/// the workbench's hint to Continue is left out.
 fn attention_reason(
     view: &crate::session_control_plane::SessionTurnControlPlane,
 ) -> Option<String> {
     if turn_state(&view.state) == TurnState::Completed {
         return None;
     }
-    let readiness = view
+    let reason = match view
         .required_check_readiness
         .as_ref()
-        .filter(|readiness| readiness.state == "failed")?;
-    let reason: String = readiness
-        .reason
+        .filter(|readiness| readiness.state == "failed")
+    {
+        Some(readiness) => &readiness.reason,
+        None => {
+            &view
+                .required_review
+                .as_ref()
+                .filter(|review| review.state == "failed" && review.current)?
+                .reason
+        }
+    };
+    let reason: String = reason
         .split_inclusive(". ")
         .filter(|sentence| !sentence.contains("Continue"))
         .collect();
@@ -3928,6 +3939,67 @@ mod tests {
         completed.required_check_readiness.as_mut().unwrap().state = "failed".into();
         let observed = observation_from_control_plane(&completed, &[], None, &HashMap::new());
         assert_eq!(observed.attention_reason, None);
+    }
+
+    /// A turn that needs attention because its current review ended without
+    /// a verdict carries why, such as a reviewer whose request did not fit
+    /// its model's context, without the hint to Continue; a review that asked
+    /// for changes, or one about an earlier result, carries none: its
+    /// verdict and findings say it.
+    #[test]
+    fn a_turn_needing_attention_carries_why_its_review_did_not_finish() {
+        use crate::session_control_plane::EvidenceValue;
+        let mut view = projection(
+            "needs_attention",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        let reason = "The reviewer did not finish, so nothing approved this result: its request \
+                      needed 34,440 tokens of its model's context, more than the 27,852 one \
+                      request may take with its output allowance, so the change, the Agents' \
+                      answers and its instructions did not fit. Select the reviewer and \
+                      Continue to run it again, or Finish.";
+        view.required_review = Some(axocoatl_session::turn_review::TurnReviewView {
+            reviewer: "reviewer".into(),
+            state: "failed".into(),
+            reason: reason.into(),
+            verdict: Some(axocoatl_session::turn_review::ReviewVerdict::Unreadable),
+            findings: String::new(),
+            round: Some(1),
+            max_rounds: 3,
+            current: true,
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some(
+                "The reviewer did not finish, so nothing approved this result: its request \
+                 needed 34,440 tokens of its model's context, more than the 27,852 one request \
+                 may take with its output allowance, so the change, the Agents' answers and its \
+                 instructions did not fit."
+            )
+        );
+        // Failed readiness says why first: the review never ran.
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "failed".into(),
+            reason: "A check failed. Fix the cause, then Continue to run the checks again.".into(),
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some("A check failed.")
+        );
+        view.required_check_readiness = None;
+        for (state, current) in [("changes", true), ("failed", false)] {
+            let review = view.required_review.as_mut().unwrap();
+            review.state = state.into();
+            review.current = current;
+            let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+            assert_eq!(observed.attention_reason, None, "{state} {current}");
+        }
     }
 
     /// An activation that failed with an empty recorded reason ends with

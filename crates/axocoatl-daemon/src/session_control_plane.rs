@@ -610,18 +610,36 @@ impl SessionTurnControlPlane {
                             .map(|output| (previous, output))
                     });
                     if let Some((previous, output)) = failed {
-                        if let Some(failure) = crate::provider_retry::transient_failure_of_text(
-                            &output.content.output.text,
-                        ) {
+                        let text = &output.content.output.text;
+                        let round = previous.activation.activation.generation;
+                        // A provider's transient failure is a provider
+                        // retry; a reviewer that did not finish in a way a
+                        // fresh conversation can is a run again of its own.
+                        let rerun = match crate::provider_retry::transient_failure_of_text(text) {
+                            Some(failure) => Some((
+                                "provider_retry",
+                                crate::provider_retry::review_retry_note(&failure, round),
+                            )),
+                            None => crate::session_dispatch::review_rerun_cause_of_text(text).map(
+                                |cause| {
+                                    (
+                                        "review_rerun",
+                                        format!(
+                                            "The reviewer did not finish ({cause}); its review \
+                                             round {round} was run again, once, in a fresh \
+                                             conversation on the same result"
+                                        ),
+                                    )
+                                },
+                            ),
+                        };
+                        if let Some((kind, note)) = rerun {
                             evidence.push(ControlPlaneEvidence {
-                                kind: "provider_retry".into(),
+                                kind: kind.into(),
                                 reference: EvidenceValue::available(
                                     output.reference.as_str().into(),
                                 ),
-                                summary: bounded_text(&crate::provider_retry::review_retry_note(
-                                    &failure,
-                                    previous.activation.activation.generation,
-                                )),
+                                summary: bounded_text(&note),
                                 recorded_at: EvidenceValue::available(
                                     output.content.output.recorded_at_unix_ms,
                                 ),
