@@ -1782,7 +1782,29 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     assert!(!VALUE_ON_COMMAND_LINE.contains("sk-"));
     let refused = flag_takes_no_value("--api-key");
     assert!(refused.contains("--api-key takes no value"), "{refused}");
-    assert!(refused.contains("signs you in in the browser"), "{refused}");
+    assert!(
+        refused.contains("`axocoatl connect codex` signs you in to your ChatGPT plan"),
+        "{refused}"
+    );
+    assert!(!VALUE_ON_COMMAND_LINE.contains("--api-key"));
+    assert!(!refused.contains("connect codex --api-key"), "{refused}");
+    // This version refuses the API-key route, pointing to the ChatGPT
+    // sign-in, and the device-code refusal of the route's internals stays.
+    for flag in ["--api-key", "--api-key-only"] {
+        let refused = codex::api_key_not_available(flag);
+        assert!(
+            refused.starts_with(&format!(
+                "axocoatl connect codex {flag} is not available in Axocoatl {}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{refused}"
+        );
+        assert!(refused.contains("nothing was run or stored"), "{refused}");
+        assert!(
+            refused.contains("--param credential=codex-chatgpt"),
+            "{refused}"
+        );
+    }
     assert!(!flag_takes_no_value("--no-browser").contains("signs you in"));
     let parsed = Cli::try_parse_from(["x", "codex", "--api-key"]).unwrap();
     let ConnectCommands::Codex {

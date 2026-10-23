@@ -20,9 +20,12 @@
 //! `codex-chatgpt` (same store and rules as `axocoatl secret set`: `0600`,
 //! replaced atomically).
 //!
-//! With `--api-key` ([`Keep::ApiKeyAndSignIn`]) it also stores the OpenAI API
-//! key OpenAI issues with the browser sign-in as the secret `codex-openai`,
-//! and with `--api-key-only` ([`Keep::ApiKeyOnly`]) only that key. Codex
+//! With `--api-key` ([`Keep::ApiKeyAndSignIn`]) it would also store the
+//! OpenAI API key OpenAI issues with the browser sign-in as the secret
+//! `codex-openai`, and with `--api-key-only` ([`Keep::ApiKeyOnly`]) only that
+//! key; this version refuses both before anything runs
+//! ([`api_key_not_available`]), since the route was never tried with an
+//! OpenAI Platform organization. Codex
 //! 0.160.1's browser sign-in (`codex-rs/login/src/server.rs`) exchanges the
 //! id token it obtained at `auth.openai.com/oauth/token`
 //! (`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
@@ -357,13 +360,28 @@ pub(crate) fn what_is_kept(keep: Keep) -> String {
 }
 
 /// The message when `--api-key` (or `--api-key-only`, `flag`) comes with
-/// `--device-auth`.
+/// `--device-auth` ([`connect`] refuses it whoever calls it; the command
+/// line refuses both flags first, [`api_key_not_available`]).
 pub(crate) fn api_key_needs_browser(flag: &str) -> String {
     format!(
         "{flag} cannot be used with --device-auth: OpenAI issues the API key only with the \
          browser sign-in (Codex exchanges that sign-in for a key; the device-code sign-in gets \
          none), so nothing was run. Run `axocoatl connect codex {flag}` without --device-auth, \
          on a computer with a browser."
+    )
+}
+
+/// The refusal of `--api-key` and `--api-key-only` (`flag`) in this
+/// version, which points to the ChatGPT sign-in.
+pub(crate) fn api_key_not_available(flag: &str) -> String {
+    format!(
+        "axocoatl connect codex {flag} is not available in Axocoatl {}: storing the OpenAI \
+         API key OpenAI issues with the sign-in was never tried with an OpenAI Platform \
+         organization, so nothing was run or stored. Sign in with your ChatGPT plan instead: \
+         `axocoatl connect codex` stores your ChatGPT sign-in as {CODEX_CHATGPT_SECRET}, which \
+         a Codex writer uses with `--param credential={CODEX_CHATGPT_SECRET}` (or with \
+         credential auto when no {CODEX_SECRET} is stored).",
+        env!("CARGO_PKG_VERSION")
     )
 }
 
@@ -727,9 +745,6 @@ pub(crate) fn sign_in_how(device_auth: bool, in_container: bool, opens: bool) ->
 pub(crate) fn needs_terminal() -> String {
     "axocoatl connect codex needs an interactive terminal: it runs `codex login`, which signs \
      you in through the browser (or, with --device-auth, shows a code to enter on another \
-     device). Run it in a terminal; `axocoatl connect codex --api-key` also stores the \
-     OpenAI API key OpenAI issues with the browser sign-in. Only for automation without a \
-     browser, `axocoatl secret set codex-openai --from-env VAR` stores a key that is already \
-     in the environment variable VAR."
+     device). Run it in a terminal."
         .to_string()
 }

@@ -908,9 +908,7 @@ async fn external_fix_admission_child_body() {
     // nothing else stops it); with --no-build it is one more: both at once.
     let no_credential = "Agent writer (codex) has credential auto, and neither codex-openai \
                          nor codex-chatgpt is stored: run `axocoatl connect codex` to sign in \
-                         with your ChatGPT plan (stored as codex-chatgpt), or `axocoatl \
-                         connect codex --api-key` to also store the OpenAI API key OpenAI \
-                         issues with that sign-in (as codex-openai), then run again";
+                         with your ChatGPT plan (stored as codex-chatgpt), then run again";
     let message = usage(admit(request("fix-codex", &[], "codex-none")).await);
     assert_eq!(message, no_credential);
     let no_build = |params: &[(&str, &str)], id: &str| {
@@ -952,7 +950,9 @@ async fn external_fix_admission_child_body() {
     );
     assert!(
         message.contains("needs the credential codex-openai (")
-            && message.contains("axocoatl connect codex --api-key"),
+            && message
+                .contains("sign in with your ChatGPT plan instead with `axocoatl connect codex`")
+            && message.contains("--param credential=codex-chatgpt"),
         "{message}"
     );
 

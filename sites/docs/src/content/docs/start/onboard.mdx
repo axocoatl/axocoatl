@@ -68,7 +68,7 @@ macOS a missing `git` is the Command Line Tools stub; onboarding offers
 ```text
 Who writes the code?
 > Claude Code (your Claude Pro or Max plan; claude found at ~/.local/bin/claude)
-  Codex (your ChatGPT plan, or an OpenAI API key)
+  Codex (your ChatGPT plan)
   A local model on this computer (Ollama, no account, needs 48 GB memory or more)
   A hosted model (OpenRouter credits)
 ```
@@ -308,12 +308,12 @@ open for that step; see [Repository toolchains](/configure/toolchains/).
 ### Step 3C: Codex
 
 Codex works the same way through `axocoatl connect codex`, which builds the Codex
-sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Onboarding
-asks which account pays for Codex runs, your ChatGPT plan (recommended) or an OpenAI API
-key (`axocoatl connect codex --api-key-only`; it needs an OpenAI Platform organization
-and is billed at API rates), and names that credential on the run command it prints
-(`--param credential=codex-chatgpt` or `codex-openai`), so storing a key later does not
-move a ChatGPT-plan setup to API billing.
+sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Codex runs
+bill to your ChatGPT plan: onboarding names that credential on the run command it prints
+(`--param credential=codex-chatgpt`), so a key stored later does not move the setup to
+API billing. 1.5.0 stores no OpenAI API key for Codex (`axocoatl connect codex
+--api-key` is not available); a configuration that already names `codex-openai` keeps it
+when that key is stored, and otherwise moves to your ChatGPT plan and says so.
 
 ### Step 3D: OpenRouter
 

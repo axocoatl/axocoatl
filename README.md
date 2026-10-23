@@ -512,7 +512,6 @@ axocoatl loadouts list|show|validate
 axocoatl record verify <file>    Check a run's record bundle
 axocoatl connect claude-code     Sign in Claude Code and store its token, never shown
 axocoatl connect codex           Sign in Codex with your ChatGPT plan, never shown
-axocoatl connect codex --api-key  Also store the OpenAI API key OpenAI issues (not yet tested live)
 axocoatl connect codex --status|--refresh  Show the sign-in, or refresh it now (no token shown)
 axocoatl secret set <name>       Store another route credential from stdin or --from-env VAR
 axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)

@@ -22,9 +22,11 @@
 //! same way, with a private `CODEX_HOME`, and stores the ChatGPT sign-in
 //! Codex writes there: by default the pinned Codex in a throwaway container
 //! ([`codex_container`]), whose sign-in page Axocoatl opens on this computer
-//! ([`browser`]), or a Codex CLI on this computer with `--codex`. With
-//! `--api-key` it also stores the OpenAI API key OpenAI issues with the
-//! browser sign-in (`codex-openai`), and with `--api-key-only` only that key.
+//! ([`browser`]), or a Codex CLI on this computer with `--codex`. Its
+//! `--api-key` and `--api-key-only`, which would also or only store the
+//! OpenAI API key OpenAI issues with the browser sign-in (`codex-openai`),
+//! are refused in this version before anything runs: that route was never
+//! tried with an OpenAI Platform organization.
 //! `claude setup-token` opens the browser itself (Claude Code 2.1.271's
 //! bundle starts its OAuth flow without `skipBrowserOpen`), so nothing is
 //! opened for it. `axocoatl connect codex --refresh` and `--status`
@@ -93,9 +95,9 @@ pub(crate) mod exit {
     // `connect codex` uses CONNECTED, NO_TOKEN (no ChatGPT sign-in was
     // stored by `codex login`, also when the sign-in was not completed
     // within the sign-in time, `--sign-in-timeout`), USAGE (also
-    // `--api-key` with `--device-auth`, or a value on the command line),
-    // FAILURE, INTERRUPTED and, with `--api-key` or `--api-key-only`,
-    // NO_API_KEY. `connect codex --refresh` uses CONNECTED (refreshed),
+    // `--api-key` or `--api-key-only`, which this version refuses, or a
+    // value on the command line), FAILURE and INTERRUPTED; NO_API_KEY only
+    // once the API-key route is open again. `connect codex --refresh` uses CONNECTED (refreshed),
     // REJECTED (OpenAI refused the refresh: sign in again), NO_TOKEN (no
     // sign-in stored), USAGE, UNVERIFIED (the refresh could not be
     // completed: the token endpoint could not be reached, did not answer in
@@ -136,8 +138,7 @@ pub enum ConnectCommands {
     /// Run the official `codex login` (the pinned Codex, in a throwaway
     /// container through Podman) with a private CODEX_HOME, and store the
     /// ChatGPT sign-in it makes (never shown) as the secret codex-chatgpt,
-    /// for Codex writers with `credential: codex-chatgpt`; with --api-key,
-    /// also the OpenAI API key OpenAI issues with it, as codex-openai
+    /// for Codex writers with `credential: codex-chatgpt`
     Codex {
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
@@ -164,16 +165,15 @@ pub enum ConnectCommands {
             conflicts_with = "codex"
         )]
         sign_in_timeout: Option<u64>,
-        /// Also store the OpenAI API key OpenAI issues with the browser
-        /// sign-in, never shown, as the secret codex-openai (a Codex writer's
-        /// default credential, billed at OpenAI API rates to an OpenAI
-        /// Platform organization, not to your ChatGPT plan); the ChatGPT
-        /// sign-in is stored as codex-chatgpt too. Not with --device-auth
-        #[arg(long)]
+        /// Refused in this version, before anything runs: it would also
+        /// store the OpenAI API key OpenAI issues with the browser sign-in,
+        /// as the secret codex-openai, and that route was never tried with
+        /// an OpenAI Platform organization. Taken so the refusal can say so
+        /// instead of clap's own error.
+        #[arg(long, hide = true)]
         api_key: bool,
-        /// Like --api-key, but store only the API key (codex-openai), not
-        /// the ChatGPT sign-in
-        #[arg(long)]
+        /// Refused like --api-key: it would store only the API key.
+        #[arg(long, hide = true)]
         api_key_only: bool,
         /// Ask the running daemon to refresh the stored ChatGPT sign-in now,
         /// the way it refreshes it before a request; prints when the new
@@ -605,8 +605,13 @@ fn needs_terminal() -> String {
 pub(crate) const VALUE_ON_COMMAND_LINE: &str =
     "axocoatl connect codex takes no key, token or other value on its command line, so \
      nothing was run or stored (the value is not repeated here). You never type or paste a \
-     key: `axocoatl connect codex --api-key` signs you in in the browser and stores the OpenAI \
-     API key OpenAI issues with that sign-in, without showing it.";
+     key: `axocoatl connect codex` signs you in to your ChatGPT plan in the browser and \
+     stores the sign-in, without showing it.";
+
+/// What the refusals of a key on the command line add for `--api-key…`.
+const NEVER_TYPE_A_KEY: &str = " You never type or paste a key: `axocoatl connect codex` signs \
+                                you in to your ChatGPT plan in the browser and stores the \
+                                sign-in, without showing it.";
 
 /// The refusal of a value given to a `connect` flag that takes none
 /// (`--api-key=VALUE`), in place of clap's own error, which would print it.
@@ -616,11 +621,7 @@ pub(crate) fn flag_takes_no_value(flag: &str) -> String {
          in case it is a key or token)."
     );
     if flag.starts_with("--api-key") {
-        message.push_str(
-            " You never type or paste a key: `axocoatl connect codex --api-key` signs you in in \
-             the browser and stores the OpenAI API key OpenAI issues with that sign-in, without \
-             showing it.",
-        );
+        message.push_str(NEVER_TYPE_A_KEY);
     }
     message
 }
@@ -660,11 +661,7 @@ pub(crate) fn unknown_argument(starts_with: Option<&str>, suggested: Option<&str
         message.push_str(&format!(" Did you mean {suggested}?"));
     }
     if starts_with.is_some_and(|flag| flag.starts_with("--api-key")) {
-        message.push_str(
-            " You never type or paste a key: `axocoatl connect codex --api-key` signs you in in \
-             the browser and stores the OpenAI API key OpenAI issues with that sign-in, without \
-             showing it.",
-        );
+        message.push_str(NEVER_TYPE_A_KEY);
     }
     message
 }
@@ -754,9 +751,9 @@ pub async fn cmd_connect(command: ConnectCommands) -> i32 {
             ..
         } => {
             let keep = codex::Keep::from_flags(api_key, api_key_only);
-            // Before anything else: no sign-in could give the key asked for.
-            if device_auth && keep.api_key() {
-                eprintln!("✗ {}", codex::api_key_needs_browser(keep.flag()));
+            // Before anything else: this version stores no API key.
+            if keep.api_key() {
+                eprintln!("✗ {}", codex::api_key_not_available(keep.flag()));
                 return exit::USAGE;
             }
             return cmd_connect_codex(config, device_auth, path, no_browser, sign_in_timeout, keep)

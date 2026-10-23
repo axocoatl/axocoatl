@@ -286,14 +286,9 @@ fn connect_codex_refuses_without_an_interactive_terminal() {
 }
 
 /// Run the built `axocoatl connect codex --codex <fake> ARGS` in a
-/// pseudo-terminal in `root`, pressing Enter at the fake's prompt; its exit
+/// pseudo-terminal in `root`, pressing Enter at the fake's prompt only when
+/// `prompted` (a run refused before `codex login` never shows it); its exit
 /// code and everything it showed.
-fn run_in_terminal(root: &Path, args: &[&str]) -> (u32, Vec<u8>) {
-    run_in_terminal_until(root, args, true)
-}
-
-/// [`run_in_terminal`], waiting for the fake's prompt only when `prompted`
-/// (a run refused before `codex login` never shows it).
 fn run_in_terminal_until(root: &Path, args: &[&str], prompted: bool) -> (u32, Vec<u8>) {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -390,17 +385,14 @@ fn api_key_root(root: &Path, api_key: serde_json::Value) -> (String, String) {
     (access, refresh)
 }
 
-/// `connect codex --api-key` as the built binary runs it: the browser
-/// sign-in's API key, which the fake Codex writes to `auth.json`, is stored
-/// exactly as `codex-openai` (`0600`) beside the ChatGPT sign-in; neither
-/// is shown, and the key is in no other file in the run's directories
-/// (data root, working directory, HOME, TMPDIR) or the system's temporary
-/// directory. Without a key in `auth.json`, nothing is stored as
-/// `codex-openai`, the command says so and exits 8; with `--api-key-only`
-/// then, nothing at all is stored.
+/// `connect codex --api-key` and `--api-key-only` as the built binary runs
+/// them: this version refuses both before anything runs (the route was
+/// never tried with an OpenAI Platform organization), with exit code 3 and a
+/// message that points to the ChatGPT sign-in. `codex login` never runs,
+/// even when Codex would have issued a key, nothing is stored, and the data
+/// root is not even made.
 #[test]
-fn connect_codex_with_api_key_stores_the_key_openai_issued() {
-    let since = std::time::SystemTime::now();
+fn connect_codex_refuses_the_api_key_route_and_points_to_the_chatgpt_sign_in() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -409,198 +401,60 @@ fn connect_codex_with_api_key_stores_the_key_openai_issued() {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
-
-    let issued = root.join("issued");
-    std::fs::create_dir(&issued).unwrap();
-    let (access, refresh) = api_key_root(&issued, serde_json::json!(key));
-    let (code, shown) = run_in_terminal(&issued, &["--api-key"]);
-    let text = String::from_utf8_lossy(&shown).into_owned();
-    assert_eq!(code, 0, "{text}");
-    let flat: String = text.split(['\r', '\n']).collect();
-    assert!(
-        flat.contains("stores the OpenAI API key OpenAI issues with it as secret codex-openai"),
-        "{text}"
-    );
-    assert!(
-        flat.contains(
-            "Connected Codex: stored the OpenAI API key OpenAI issued with your sign-in as \
-             secret codex-openai and your ChatGPT sign-in as secret codex-chatgpt"
-        ),
-        "{text}"
-    );
-    assert!(flat.contains("billed at OpenAI API rates"), "{text}");
-    for secret in [&key, &access, &refresh] {
-        assert!(leaked_positions(&shown, secret).is_empty(), "{text}");
-    }
-    let stored_key = issued.join("data/secrets/codex-openai");
-    assert_eq!(std::fs::read(&stored_key).unwrap(), key.as_bytes());
-    assert_eq!(
-        std::fs::metadata(&stored_key).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    let sign_in = std::fs::read_to_string(issued.join("data/secrets/codex-chatgpt")).unwrap();
-    assert!(sign_in.contains(&access) && !sign_in.contains(&key));
-    let mut everything = Vec::new();
-    tree(&root, &mut everything);
-    for path in &everything {
-        if path.is_file() && path != &stored_key && path != &issued.join("bin/auth") {
-            let bytes = std::fs::read(path).unwrap();
-            assert!(
-                !bytes
-                    .windows(key.len())
-                    .any(|window| window == key.as_bytes()),
-                "{}",
-                path.display()
-            );
-        }
-    }
-    let mut temporary = Vec::new();
-    tree(&std::env::temp_dir(), &mut temporary);
-    for path in temporary {
-        let recent = std::fs::symlink_metadata(&path).is_ok_and(|metadata| {
-            metadata.is_file()
-                && metadata.len() < 4 * 1024 * 1024
-                && metadata.modified().is_ok_and(|modified| modified >= since)
-        });
-        if recent && !path.starts_with(&root) && !path.starts_with(directory.path()) {
-            if let Ok(bytes) = std::fs::read(&path) {
-                assert!(
-                    !bytes
-                        .windows(key.len())
-                        .any(|window| window == key.as_bytes()),
-                    "{}",
-                    path.display()
-                );
-            }
-        }
-    }
-    let listed = Command::new(BIN)
-        .args(["secret", "list", "-c"])
-        .arg(issued.join("axocoatl.yaml"))
-        .env("AXOCOATL_DATA_DIR", issued.join("data"))
-        .env("HOME", issued.join("home"))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&listed.stdout),
-        "codex-chatgpt\ncodex-openai\n"
-    );
-
-    for (name, args, sign_in_kept) in [
-        ("none", &["--api-key"][..], true),
-        ("none-only", &["--api-key-only"][..], false),
-    ] {
+    for (name, flag) in [("key", "--api-key"), ("key-only", "--api-key-only")] {
         let run = root.join(name);
         std::fs::create_dir(&run).unwrap();
-        api_key_root(&run, serde_json::Value::Null);
-        let (code, shown) = run_in_terminal(&run, args);
+        api_key_root(&run, serde_json::json!(key));
+        let (code, shown) = run_in_terminal_until(&run, &[flag], false);
         let text = String::from_utf8_lossy(&shown).into_owned();
-        assert_eq!(code, 8, "{text}");
+        assert_eq!(code, 3, "{text}");
         let flat: String = text.split(['\r', '\n']).collect();
         assert!(
-            flat.contains(
-                "OpenAI issued no API key with this sign-in, so nothing was stored as \
-                 codex-openai. API-key mode needs an OpenAI Platform organization"
-            ),
+            flat.contains(&format!(
+                "axocoatl connect codex {flag} is not available in Axocoatl {}: storing the \
+                 OpenAI API key OpenAI issues with the sign-in was never tried with an OpenAI \
+                 Platform organization, so nothing was run or stored. Sign in with your ChatGPT \
+                 plan instead: `axocoatl connect codex` stores your ChatGPT sign-in as \
+                 codex-chatgpt",
+                env!("CARGO_PKG_VERSION")
+            )),
             "{text}"
         );
-        assert!(!run.join("data/secrets/codex-openai").exists());
-        assert_eq!(
-            run.join("data/secrets/codex-chatgpt").exists(),
-            sign_in_kept,
-            "{text}"
-        );
-        if sign_in_kept {
-            assert!(
-                flat.contains("Your ChatGPT sign-in was stored as codex-chatgpt"),
-                "{text}"
-            );
-        }
+        assert!(!run.join("bin/seen").exists(), "codex login ran:\n{text}");
+        assert!(!run.join("data").exists(), "{text}");
+        assert!(leaked_positions(&shown, &key).is_empty(), "{text}");
     }
-}
-
-/// With one place left in the store, `connect codex --api-key` needs two
-/// (codex-openai and codex-chatgpt): it is refused with exit code 5 before
-/// `codex login` runs, so no sign-in is made and nothing is stored, rather
-/// than storing the key, losing the sign-in and exiting 5. With one of the
-/// two already stored, it fits and stores both.
-#[test]
-fn connect_codex_with_api_key_needs_room_for_both_secrets_before_signing_in() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
-    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let key = format!(
-        "sk-proj-{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    api_key_root(&root, serde_json::json!(key));
-    let fill = |name: &str| {
+    // Without a terminal, and with --device-auth, the same refusal comes
+    // first.
+    for args in [&["--api-key"][..], &["--api-key-only", "--device-auth"]] {
         let output = Command::new(BIN)
-            .args(["secret", "set", name, "-c"])
+            .args(["connect", "codex", "-c"])
             .arg(root.join("axocoatl.yaml"))
+            .args(args)
             .env("AXOCOATL_DATA_DIR", root.join("data"))
-            .env("HOME", root.join("home"))
-            .env("AXO_FILLER", "sk-test-filler")
-            .args(["--from-env", "AXO_FILLER"])
+            .env("HOME", &root)
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-    for index in 1..64 {
-        fill(&format!("filler-{index}"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(3), "{args:?}: {stderr}");
+        assert!(stderr.contains("is not available in Axocoatl"), "{stderr}");
+        assert!(!root.join("data").exists(), "{args:?}");
     }
-    let secrets = root.join("data/secrets");
-    assert_eq!(std::fs::read_dir(&secrets).unwrap().count(), 63);
-
-    let (code, shown) = run_in_terminal_until(&root, &["--api-key"], false);
-    let text = String::from_utf8_lossy(&shown).into_owned();
-    assert_eq!(code, 5, "{text}");
-    let flat: String = text.split(['\r', '\n']).collect();
-    assert!(
-        flat.contains(
-            "the store holds 63 secrets and this needs 2 new ones (codex-openai and \
-             codex-chatgpt), more than the 64 it can hold; remove 1 first; `codex login` was \
-             not run, so no sign-in was made"
-        ),
-        "{text}"
-    );
-    assert!(!root.join("bin/seen").exists(), "codex login ran:\n{text}");
-    assert!(!secrets.join("codex-openai").exists());
-    assert!(!secrets.join("codex-chatgpt").exists());
-    assert_eq!(std::fs::read_dir(&secrets).unwrap().count(), 63);
-
-    // `--api-key-only` needs one place, and fits.
-    let (code, shown) = run_in_terminal(&root, &["--api-key-only"]);
-    let text = String::from_utf8_lossy(&shown).into_owned();
-    assert_eq!(code, 0, "{text}");
-    assert_eq!(
-        std::fs::read(secrets.join("codex-openai")).unwrap(),
-        key.as_bytes()
-    );
-    assert!(!secrets.join("codex-chatgpt").exists());
-    // Now full: `--api-key` would need a place for codex-chatgpt.
-    let (code, shown) = run_in_terminal_until(&root, &["--api-key"], false);
-    let text = String::from_utf8_lossy(&shown).into_owned();
-    assert_eq!(code, 5, "{text}");
-    let flat: String = text.split(['\r', '\n']).collect();
-    assert!(
-        flat.contains("the store already holds 64 secrets"),
-        "{text}"
-    );
-    assert!(!secrets.join("codex-chatgpt").exists());
+    // Neither flag is offered in the help.
+    let help = Command::new(BIN)
+        .args(["connect", "codex", "--help"])
+        .output()
+        .unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(!help.contains("--api-key"), "{help}");
 }
 
-/// `--api-key` with `--device-auth`, and a key typed on the command line
-/// (after `--api-key`, as `--api-key=KEY`, as one argument with
-/// `--api-key`, to `--sign-in-timeout` or to `--url`), are refused before
-/// anything runs, with exit code 3; the value is never repeated.
+/// `--api-key` (refused in this version, also with `--device-auth`), and a
+/// key typed on the command line (after `--api-key`, as `--api-key=KEY`, as
+/// one argument with `--api-key`, to `--sign-in-timeout` or to `--url`), are
+/// refused before anything runs, with exit code 3; the value is never
+/// repeated.
 #[test]
 fn connect_codex_refuses_device_auth_and_a_typed_key_with_api_key() {
     let directory = tempfile::tempdir().unwrap();
@@ -611,12 +465,11 @@ fn connect_codex_refuses_device_auth_and_a_typed_key_with_api_key() {
     for (args, said) in [
         (
             vec!["--api-key", "--device-auth"],
-            "--api-key cannot be used with --device-auth: OpenAI issues the API key only with \
-             the browser sign-in",
+            "axocoatl connect codex --api-key is not available in Axocoatl",
         ),
         (
             vec!["--api-key-only", "--device-auth"],
-            "--api-key-only cannot be used with --device-auth",
+            "axocoatl connect codex --api-key-only is not available in Axocoatl",
         ),
         (
             vec!["--api-key", typed.as_str()],

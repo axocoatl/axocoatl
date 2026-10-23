@@ -123,9 +123,8 @@ without showing it), `axocoatl connect codex` (which runs the pinned `codex logi
 container with a private in-memory CODEX_HOME, or a host Codex with `--codex PATH`, and
 stores the ChatGPT sign-in without showing it; the daemon
 refreshes its access token on the host, for a Codex writer with
-`credential: codex-chatgpt`; with `--api-key`, not yet tested live, it also stores the
-OpenAI API key OpenAI issues with the browser sign-in as `codex-openai`, which the default
-Codex credential then prefers, billed at API rates) or, for other credentials and automation without a browser,
+`credential: codex-chatgpt`; `--api-key`, which would also store an OpenAI API key, is
+not available in 1.5.0) or, for other credentials and automation without a browser,
 `axocoatl secret set` (stdin or `--from-env`, never argv)
 and added on the host by an egress route, so the container sees a placeholder; tester-army/e2e can run as a required check.
 

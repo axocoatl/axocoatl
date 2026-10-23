@@ -181,30 +181,40 @@ pub(crate) async fn run(
                 path.display()
             ));
         }
-        let items = vec![
-            "your ChatGPT plan (recommended)".to_string(),
-            "an OpenAI API key (needs an OpenAI Platform organization; billed at API rates)"
-                .to_string(),
-        ];
-        let api_key = match o.kept.codex_credential.as_deref() {
-            Some(kept @ (CODEX_SECRET | CODEX_CHATGPT_SECRET)) => {
-                o.ui.say(format!(
-                    "  Codex runs bill to {} (kept from your configuration: {kept})",
-                    if kept == CODEX_SECRET {
-                        "an OpenAI API key"
-                    } else {
-                        "your ChatGPT plan"
-                    }
-                ));
-                kept == CODEX_SECRET
-            }
-            _ => o.ui.select("Bill Codex runs to:", &items, 0) == 1,
-        };
-        let (credential, connect_args): (&'static str, Vec<&str>) = if api_key {
-            (CODEX_SECRET, vec!["connect", "codex", "--api-key-only"])
+        // This version stores no OpenAI API key for Codex (`axocoatl connect
+        // codex --api-key` is refused: it was never tried with an OpenAI
+        // Platform organization), so Codex runs bill to the ChatGPT plan,
+        // unless the configuration already names an API key that is stored.
+        let kept = o.kept.codex_credential.as_deref();
+        let api_key = kept == Some(CODEX_SECRET) && stored(o, &[CODEX_SECRET]).is_some();
+        if api_key {
+            o.ui.say(format!(
+                "  Codex runs bill to an OpenAI API key (kept from your configuration: \
+                 {CODEX_SECRET})"
+            ));
+        } else if kept == Some(CODEX_SECRET) {
+            o.ui.say(format!(
+                "  Your configuration names {CODEX_SECRET}, an OpenAI API key, and none is \
+                 stored. This version does not store one (`axocoatl connect codex --api-key` \
+                 is not available), so Codex runs bill to your ChatGPT plan \
+                 ({CODEX_CHATGPT_SECRET})."
+            ));
+        } else if kept == Some(CODEX_CHATGPT_SECRET) {
+            o.ui.say(format!(
+                "  Codex runs bill to your ChatGPT plan (kept from your configuration: \
+                 {CODEX_CHATGPT_SECRET})"
+            ));
         } else {
-            (CODEX_CHATGPT_SECRET, vec!["connect", "codex"])
+            o.ui.say(format!(
+                "  Codex runs bill to your ChatGPT plan ({CODEX_CHATGPT_SECRET})."
+            ));
+        }
+        let credential = if api_key {
+            CODEX_SECRET
+        } else {
+            CODEX_CHATGPT_SECRET
         };
+        let connect_args = vec!["connect", "codex"];
         // Named on every run's command line, not `auto`: storing a key later
         // would otherwise move a ChatGPT-plan setup to API billing.
         choice.codex_credential = Some(credential);
@@ -216,13 +226,8 @@ pub(crate) async fn run(
             None => {
                 let question = format!(
                     "Sign in now? `axocoatl {}` builds the Codex sandbox image once (about 0.8 to \
-                     1.2 GB) and opens your browser to sign in{}.",
-                    connect_args.join(" "),
-                    if api_key {
-                        " and take an OpenAI API key"
-                    } else {
-                        " with your ChatGPT account"
-                    }
+                     1.2 GB) and opens your browser to sign in with your ChatGPT account.",
+                    connect_args.join(" ")
                 );
                 if !sandbox_ready && !o.ui.plan() {
                     o.step_left(format!(
