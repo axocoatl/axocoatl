@@ -22,6 +22,27 @@ def walk(value, &block)
   end
 end
 
+# Every action a workflow, a composite action or a docs example uses is a
+# reviewed release that runs on Node.js 24 or is a composite action: GitHub's
+# runners force Node 20 actions onto Node 24 and warn on every job. To move
+# one, check its action.yml's `runs.using` at the new commit and change it here.
+REVIEWED_ACTIONS = {
+  "actions/checkout" => "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", # v5.1.0, node24
+  "actions/setup-node" => "249970729cb0ef3589644e2896645e5dc5ba9c38", # v6.5.0, node24
+  "actions/setup-go" => "924ae3a1cded613372ab5595356fb5720e22ba16", # v6.5.0, node24
+  "actions/setup-python" => "e797f83bcb11b83ae66e0230d6156d7c80228e7c", # v6.0.0, node24
+  "actions/upload-artifact" => "cf430e030ddbb5b0abf93d22962f4752f3646cd9", # v7.0.2, node24
+  "actions/download-artifact" => "9000827ccba6bdab643e8b6fd33ac0654aef8333", # v8.0.2, node24
+  "actions/attest-build-provenance" => "4d101475d8b20a2381f78447822ac1eab6504dd8", # v4.2.2, composite
+  "Swatinem/rust-cache" => "6323deb102c322ba6fcbdcafc7e3dddab59af2b6", # v2.9.2, node24
+  "dtolnay/rust-toolchain" => "4360b52568e2003a75bf9bc1d59f33a8e3fc893c", # composite
+  "cloudflare/wrangler-action" => "953926a2e2182532811c01a25e53647d93bf07c0", # v4.1.3, node24
+}.freeze
+reviewed_action = lambda do |reference|
+  name, sha = reference.split("@", 2)
+  REVIEWED_ACTIONS[name] == sha
+end
+
 workflows = Dir[WORKFLOW_DIR.join("*.{yml,yaml}")].sort
 workflows.each do |path|
   begin
@@ -43,6 +64,9 @@ workflows.each do |path|
       reference = mapping["uses"].to_s
       unless reference.start_with?("./") || reference.match?(/\A[^\s@]+@\h{40}\z/)
         errors << "#{path}: action is not pinned to a full commit: #{reference}"
+      end
+      unless reference.start_with?("./") || reviewed_action.call(reference)
+        errors << "#{path}: #{reference} is not a reviewed Node 24 or composite release (REVIEWED_ACTIONS)"
       end
     end
 
@@ -88,6 +112,9 @@ composite_actions.each do |path|
       unless reference.start_with?("./") || reference.match?(/\A[^\s@]+@\h{40}\z/)
         errors << "#{label}: action is not pinned to a full commit: #{reference}"
       end
+      unless reference.start_with?("./") || reviewed_action.call(reference)
+        errors << "#{label}: #{reference} is not a reviewed Node 24 or composite release (REVIEWED_ACTIONS)"
+      end
     end
     next unless step["run"]
     run_blocks += 1
@@ -100,6 +127,18 @@ composite_actions.each do |path|
       File.write(file, step["run"].to_s + "\n")
       _stdout, stderr, status = Open3.capture3("bash", "-n", file)
       errors << "#{label}: invalid run-block shell syntax: #{stderr.strip}" unless status.success?
+    end
+  end
+end
+
+# The workflow examples people copy from the docs pin the same releases.
+docs_examples = `git -C #{ROOT} ls-files --cached --others --exclude-standard -- 'sites/docs/src/content/*.md' 'sites/docs/src/content/*.mdx' 'README.md'`
+                .lines.map(&:strip).reject(&:empty?).uniq.sort
+docs_examples.each do |relative|
+  ROOT.join(relative).read(encoding: "UTF-8").scan(/^\s*-?\s*uses:\s*([^\s#]+@[^\s#]+)/).flatten.each do |reference|
+    next if reference.start_with?("./", "axocoatl/")
+    unless reviewed_action.call(reference)
+      errors << "#{relative}: its example uses #{reference}, not a reviewed Node 24 release (REVIEWED_ACTIONS)"
     end
   end
 end

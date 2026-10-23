@@ -158,6 +158,16 @@ with_change refused 'an evidence check that no longer names who ran the override
   "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(%q(--triggering-actor \"\$TRIGGERING_ACTOR\"), %q(--triggering-actor \"\$ACTOR\")) or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/release.yml
 
+with_change refused 'a Node 20 action in a workflow' \
+  'is not a reviewed Node 24 or composite release' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/ci.yml\"; s = File.read(p); s.sub!(\"actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09\", \"actions/checkout@11d5960a326750d5838078e36cf38b85af677262\") or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/ci.yml
+
+with_change refused 'a Node 20 action in a docs example' \
+  'its example uses actions/checkout@11d5960a326750d5838078e36cf38b85af677262' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \"sites/docs/src/content/docs/workbench/receipts.mdx\"; s = File.read(p); s.sub!(\"actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09\", \"actions/checkout@11d5960a326750d5838078e36cf38b85af677262\") or abort(\"no anchor\"); File.write(p, s)'" \
+  sites/docs/src/content/docs/workbench/receipts.mdx
+
 if ((failures)); then
   echo "Workflow contract self-test: FAIL ($failures failed, $pass_count passed)" >&2
   exit 1

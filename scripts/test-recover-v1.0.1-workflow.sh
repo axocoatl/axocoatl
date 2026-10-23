@@ -93,7 +93,7 @@ test "$(grep -Fxc '    cargo publish --locked --no-verify -p "$crate"' "$publish
   || fail "the resilient publisher must contain exactly one guarded Cargo publication command"
 test "$(grep -Fc 'recovery-control/scripts/prove-release-crates.sh' "$workflow")" = 2 \
   || fail "the registry API and sparse index must be reproved before release publication and in final production proof"
-test "$(grep -Fc 'cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd' "$workflow")" = 2 \
+test "$(grep -Fc 'cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0' "$workflow")" = 2 \
   || fail "the incident-local workflow must perform exactly one marketing and one docs deployment"
 test "$(grep -Fc "node-version: '22'" "$workflow")" = 3 \
   || fail "both marketing jobs and the docs job must pin Node 22"
