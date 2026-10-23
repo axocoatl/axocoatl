@@ -21,7 +21,8 @@ use super::{Choice, Onboarding};
 pub(crate) const OPENROUTER_API: &str = "https://openrouter.ai/api/v1";
 
 /// The writer onboarding suggests: Qwen3-Coder 30B-A3B, the model the local
-/// default `qwen3-coder:30b` runs, which several OpenRouter providers serve.
+/// default `qwen3-coder:30b` runs, which two OpenRouter providers served with
+/// healthy endpoints when it was chosen (2026-10-23).
 pub(crate) const DEFAULT_WRITER: &str = "qwen/qwen3-coder-30b-a3b-instruct";
 /// The reviewer onboarding suggests: another vendor's model, the family of
 /// the reviewer Axocoatl has measured (gpt-oss 120B).
@@ -860,18 +861,59 @@ fn key_value(o: &Onboarding, key: &Key) -> zeroize::Zeroizing<String> {
     }
 }
 
+/// Why a model cannot run in native Sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Unusable {
+    why: String,
+    /// OpenRouter reports every endpoint that fits unavailable or degraded
+    /// right now, which can pass; else no endpoint fits, or the model is
+    /// not one OpenRouter's catalog has, which waiting does not change.
+    for_now: bool,
+}
+
+impl Unusable {
+    /// `The writer model cannot run now: WHY.`, or `… cannot be used in
+    /// native Sessions: WHY.`, as a sentence.
+    fn said(&self, role: &str) -> String {
+        let why = self.why.trim_end();
+        let end = if why.ends_with(['.', '!', '?']) {
+            ""
+        } else {
+            "."
+        };
+        if self.for_now {
+            format!("The {role} model cannot run now: {why}{end}")
+        } else {
+            format!("The {role} model cannot be used in native Sessions: {why}{end}")
+        }
+    }
+}
+
 /// Why `model` cannot run in native Sessions now, from its endpoints, read
-/// as a run reads them: `Ok(None)` when it can, `Ok(Some(why))` when it
+/// as a run reads them: `Ok(None)` when it can, `Ok(Some(_))` when it
 /// cannot (every endpoint that fits unavailable or degraded right now, or
 /// none fits), `Err(why)` when they could not be read.
-async fn endpoint_problem(api: &str, key: &str, model: &str) -> Result<Option<String>, String> {
+async fn endpoint_problem(api: &str, key: &str, model: &str) -> Result<Option<Unusable>, String> {
     match axocoatl_llm_openai::observe_native_openrouter_endpoints(api, key, model).await {
         Ok(endpoints) => Ok(endpoints.refusal(model).map(|refusal| match refusal {
-            axocoatl_llm::ProviderError::ApiError { message, .. }
-            | axocoatl_llm::ProviderError::InvalidRequest { message, .. } => message,
-            other => other.to_string(),
+            // OpenRouter's status: every endpoint that fits is down now.
+            axocoatl_llm::ProviderError::ApiError { message, .. } => Unusable {
+                why: message,
+                for_now: true,
+            },
+            axocoatl_llm::ProviderError::InvalidRequest { message, .. } => Unusable {
+                why: message,
+                for_now: false,
+            },
+            other => Unusable {
+                why: other.to_string(),
+                for_now: false,
+            },
         })),
-        Err(axocoatl_llm::ProviderError::InvalidRequest { message, .. }) => Ok(Some(message)),
+        Err(axocoatl_llm::ProviderError::InvalidRequest { message, .. }) => Ok(Some(Unusable {
+            why: message,
+            for_now: false,
+        })),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -927,7 +969,7 @@ async fn usable_model(
     }
     let mut tried = vec![model.clone()];
     loop {
-        let why = match endpoint_problem(&o.openrouter_api, key, &model).await {
+        let unusable = match endpoint_problem(&o.openrouter_api, key, &model).await {
             Ok(None) => {
                 o.ui.ok(format!(
                     "OpenRouter has an endpoint for {model} that native Sessions can use now"
@@ -940,39 +982,40 @@ async fn usable_model(
                 ));
                 return Some(model);
             }
-            Ok(Some(why)) => why,
+            Ok(Some(unusable)) => unusable,
         };
         let suggestion = healthy_suggestion(&o.openrouter_api, key, &tried, avoid)
             .await
             .unwrap_or_default();
-        if !o.ui.interactive() {
-            let flag = if role == "writer" {
-                "--writer-model openrouter:VENDOR/MODEL"
+        // Running onboarding again later helps only while OpenRouter
+        // reports the endpoints down.
+        let flag = if role == "writer" {
+            "--writer-model openrouter:VENDOR/MODEL"
+        } else {
+            "--reviewer openrouter:VENDOR/MODEL"
+        };
+        let step = format!(
+            "{} Run `axocoatl onboard` again {}with another {role} model ({flag}{})",
+            unusable.said(role),
+            if unusable.for_now { "later, or " } else { "" },
+            if suggestion.is_empty() {
+                String::new()
             } else {
-                "--reviewer openrouter:VENDOR/MODEL"
-            };
-            o.step_left(format!(
-                "The {role} model cannot run now: {why} Run `axocoatl onboard` again later, or \
-                 with another {role} model ({flag}{})",
-                if suggestion.is_empty() {
-                    String::new()
-                } else {
-                    format!(", such as openrouter:{suggestion}")
-                }
-            ));
+                format!(", such as openrouter:{suggestion}")
+            }
+        );
+        if !o.ui.interactive() {
+            o.step_left(step);
             return None;
         }
-        o.ui.fail(format!("The {role} model cannot run now: {why}"));
+        o.ui.fail(unusable.said(role));
         let next = o.ui.input(
             &format!("Another model for the {role} (vendor/model; empty stops here)"),
             suggestion,
         );
         let next = next.trim().trim_start_matches("openrouter:").to_string();
         if next.is_empty() || Some(next.as_str()) == avoid || tried.contains(&next) {
-            o.step_left(format!(
-                "Choose another {role} model for OpenRouter, or run `axocoatl onboard` again \
-                 later: {why}"
-            ));
+            o.step_left(step);
             return None;
         }
         tried.push(next.clone());
