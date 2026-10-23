@@ -34,12 +34,28 @@ const ERROR_MARKER: &str = "\n[truncated: provider error exceeded the 64 KiB saf
 /// A reqwest client with a bounded connect phase. Buffered requests add a
 /// per-request total timeout; streams use a header deadline plus an idle timer.
 pub fn http_client() -> reqwest::Client {
+    client_builder()
+        .build()
+        .expect("provider HTTP client uses only static valid settings")
+}
+
+/// [`http_client`] that never uses a proxy, for a server on this computer or
+/// its network (Ollama): reqwest otherwise sends every request, to
+/// `localhost` and `127.0.0.1` too, through `HTTP_PROXY` or `HTTPS_PROXY`
+/// unless `NO_PROXY` names the host, and a proxy cannot reach this
+/// computer's loopback.
+pub fn direct_http_client() -> reqwest::Client {
+    client_builder()
+        .no_proxy()
+        .build()
+        .expect("provider HTTP client uses only static valid settings")
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .pool_idle_timeout(Duration::from_secs(90))
         .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("provider HTTP client uses only static valid settings")
 }
 
 fn utf8_prefix(value: &str, max_bytes: usize) -> &str {
@@ -428,6 +444,80 @@ fn parse_event(bytes: &[u8]) -> Result<Option<SseEvent>, ProviderError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Set in the child process of
+    /// [`the_direct_client_ignores_proxy_variables`].
+    const PROXY_CHILD: &str = "AXOCOATL_LLM_PROXY_TEST_CHILD";
+
+    /// [`direct_http_client`] connects straight to a server on this computer
+    /// with `HTTP_PROXY` and `HTTPS_PROXY` set and no `NO_PROXY`, where
+    /// [`http_client`] goes through the proxy. The variables are set only
+    /// in a child process of this test binary, which runs this one test.
+    #[test]
+    fn the_direct_client_ignores_proxy_variables() {
+        if std::env::var_os(PROXY_CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transport::tests::the_direct_client_ignores_proxy_variables",
+                    "--nocapture",
+                ])
+                .env(PROXY_CHILD, "1")
+                .env("HTTP_PROXY", "http://127.0.0.1:9")
+                .env("HTTPS_PROXY", "http://127.0.0.1:9")
+                .env_remove("NO_PROXY")
+                .env_remove("no_proxy")
+                .output()
+                .unwrap();
+            let shown = String::from_utf8_lossy(&output.stdout);
+            assert!(output.status.success(), "{shown}");
+            assert!(shown.contains("1 passed"), "{shown}");
+            return;
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let serve = |name: &'static str| {
+                let seen = seen.clone();
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let port = listener.local_addr().unwrap().port();
+                std::thread::spawn(move || {
+                    use std::io::{Read, Write};
+                    for stream in listener.incoming() {
+                        let mut stream = stream.unwrap();
+                        let mut buffer = [0u8; 1024];
+                        let _ = stream.read(&mut buffer);
+                        seen.lock().unwrap().push(name);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        );
+                    }
+                });
+                port
+            };
+            let ollama = serve("ollama");
+            let proxy = serve("proxy");
+            std::env::set_var("HTTP_PROXY", format!("http://127.0.0.1:{proxy}"));
+            for host in ["127.0.0.1", "localhost"] {
+                let url = format!("http://{host}:{ollama}/api/tags");
+                let direct = direct_http_client().get(&url).send().await.unwrap();
+                assert_eq!(direct.status(), 200);
+                assert_eq!(
+                    seen.lock().unwrap().drain(..).collect::<Vec<_>>(),
+                    ["ollama"]
+                );
+                let proxied = http_client().get(&url).send().await.unwrap();
+                assert_eq!(proxied.status(), 200);
+                assert_eq!(
+                    seen.lock().unwrap().drain(..).collect::<Vec<_>>(),
+                    ["proxy"]
+                );
+            }
+        });
+    }
 
     #[test]
     fn decoder_handles_split_utf8_crlf_and_multiline_data() {

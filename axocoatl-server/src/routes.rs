@@ -317,8 +317,10 @@ pub async fn llm_health(State(state): State<AppState>) -> Json<LlmHealthResponse
 
 async fn ollama_tags(base_url: &str) -> Result<Vec<String>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    // Ollama is on this computer or its network: never through a proxy.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
@@ -4733,7 +4735,11 @@ pub async fn list_models(
                 .as_ref()
                 .map(|o| o.base_url.clone())
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
-            match reqwest::get(format!("{base}/api/tags")).await {
+            let tags = match reqwest::Client::builder().no_proxy().build() {
+                Ok(client) => client.get(format!("{base}/api/tags")).send().await,
+                Err(error) => Err(error),
+            };
+            match tags {
                 Ok(resp) => match resp.json::<serde_json::Value>().await {
                     Ok(v) => v["models"]
                         .as_array()
@@ -7454,9 +7460,12 @@ async fn proxy_preview_http_to_port(
         }
     };
     let upstream = session_preview_upstream(host_port, &tail, query.as_deref());
+    // The Preview's port is on this computer's loopback: never through a
+    // proxy, which would see the Preview's requests in plain text.
     let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
     {
         Ok(client) => client,

@@ -18,8 +18,8 @@ use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
-        validated_endpoint, SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
+        bounded_redacted, direct_http_client, network_error, next_stream_item, read_error_text,
+        read_json, validated_endpoint, SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
         STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
@@ -556,9 +556,10 @@ impl OllamaProvider {
     }
 
     /// Create with a custom base URL (for remote Ollama or a compatible implementation).
+    /// Ollama is on this computer or its network, so no proxy is used.
     pub fn with_base_url(base_url: impl Into<String>, model: impl Into<String>) -> Self {
         Self {
-            client: http_client(),
+            client: direct_http_client(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             model: model.into(),
         }

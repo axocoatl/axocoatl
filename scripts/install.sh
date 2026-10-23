@@ -867,7 +867,9 @@ else
   info "resolving latest release..."
   tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep '"tag_name"' | head -n1 | cut -d'"' -f4)"
-  [ -n "$tag" ] || err "could not resolve latest release tag"
+  # GitHub answers at most 60 requests an hour from one address without a
+  # token, which a shared office or CI address can use up.
+  [ -n "$tag" ] || err "could not resolve the latest release from api.github.com (it answers at most 60 requests an hour from one address without a token); set AXOCOATL_VERSION to a release tag, such as v1.5.0, to install that release without asking it"
 fi
 
 tarball="${BIN}-${tag}-${target}.tar.gz"

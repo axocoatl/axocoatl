@@ -47,7 +47,11 @@ command to passing runs, every receipt verified:
     `~/.local/bin`, when they are at its top level where the installer can tell nothing
     before them keeps them from running (it cannot see `set -e` and a failing command, a
     sourced file that exits, or a syntax error, and it can misread a valid file in other
-    ways).
+    ways). Its line goes at the end of the file; when something before that end can stop
+    a new terminal from reading it (a `return`, `exit` or `exec` other than one only for
+    shells that are not interactive, as in Ubuntu's `~/.bashrc`, or a line the installer
+    cannot follow), it says so and to move the line above that point, instead of saying
+    new terminals find `axocoatl`.
     In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
     job's later steps.
   </TabItem>
@@ -149,6 +153,34 @@ only reads. `axocoatl onboard` sets up both, and Podman where it can install it
 | Embedding model, from huggingface.co on the first daemon start | 87 MB |
 
 A run's sandbox also pulls its base image and packages the first time it starts.
+
+### Proxies, VPNs and rate limits
+
+Axocoatl 1.5.0 does not support an HTTP proxy (`HTTPS_PROXY`, `HTTP_PROXY`,
+`ALL_PROXY`) for Sessions and runs:
+
+- A Session's network, which a run uses for its dependency install, web tools, and
+  Claude Code's and Codex's model calls, goes through Axocoatl's egress broker on this
+  computer, which connects to each allowed host directly. It never
+  reads the proxy variables, and the containers do not get them. On a network that
+  reaches the internet only through a proxy, a run cannot install its dependencies or
+  reach a model API from the sandbox. `axocoatl doctor` and `axocoatl onboard` warn
+  when `HTTPS_PROXY` or `HTTP_PROXY` is set.
+- Requests to this computer (from `axocoatl run` and the other commands to the daemon,
+  and to Ollama and a Session's Preview) never use a proxy, whatever the variables say,
+  so the daemon's API token never reaches one.
+- Requests the daemon and the CLI make themselves to hosts on the internet (a native
+  Agent's model calls to OpenRouter or another hosted provider, onboarding's checks of
+  OpenRouter's catalog) follow the proxy variables and `NO_PROXY`, as the HTTP library
+  Axocoatl uses reads them. None of this has been tested behind a proxy.
+
+Neither has a VPN that the Podman machine's network (gvproxy, on macOS) must use been
+tested. The installer resolves the latest release with one request to
+`api.github.com` without a token, which GitHub answers at most 60 times an hour for one
+address; set `AXOCOATL_VERSION` (as above) to skip it. The installer's downloads use
+`curl`, which reads `https_proxy` and `HTTPS_PROXY` itself (not tested). Session base
+images come from Docker Hub, which limits pulls without a sign-in per address;
+`podman login docker.io` raises it to your Docker account's limit (not tested).
 
 ## Runtime prerequisites
 

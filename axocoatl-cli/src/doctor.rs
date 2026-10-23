@@ -1754,8 +1754,10 @@ fn is_loopback(host: &str) -> bool {
 /// What `GET /health` of the daemon on `host:port` says its version is.
 pub(crate) async fn daemon_version(host: &str, port: u16) -> Option<String> {
     let url = crate::onboard::smoke::health_url(host, port);
+    // A daemon on this computer: no proxy can reach it.
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
         .ok()?
         .get(url)

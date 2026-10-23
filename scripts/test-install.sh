@@ -46,6 +46,8 @@ if [ "${TEST_INSTALL_TOOL_MODE:-}" = "1" ]; then
       printf '%s\n' "$url" >> "$TEST_CURL_LOG"
       case "$url" in
         */releases/latest)
+          # refused: GitHub's answer when its hourly limit is used up.
+          [ "${TEST_LATEST:-ok}" = ok ] || exit 22
           printf '{"tag_name":"%s"}\n' "$TEST_TAG"
           ;;
         *.tar.gz.sha256)
@@ -186,6 +188,9 @@ done
 
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 case_count=0
+# How the stub answers GitHub's latest-release request in run_case: ok, or
+# refused (its hourly limit used up).
+latest_mode=ok
 
 run_case() {
   name=$1
@@ -227,6 +232,7 @@ run_case() {
   TEST_INSTALL_TOOL_MODE=1 \
   TEST_ARCH="$arch" \
   TEST_TAG="$current_tag" \
+  TEST_LATEST="$latest_mode" \
   TEST_GLIBC="$glibc" \
   TEST_MACOS="$macos" \
   TEST_CHECKSUM_MODE="$checksum" \
@@ -277,6 +283,15 @@ run_case checksum-missing fail "checksum download failed" Linux x86_64 none "gli
 run_case checksum-malformed fail "malformed checksum file" Linux x86_64 none "glibc 2.35" unavailable malformed "$fake_bin"
 run_case checksum-mismatch fail "checksum mismatch" Linux x86_64 none "glibc 2.35" unavailable mismatch "$fake_bin"
 run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" Linux x86_64 none "glibc 2.35" unavailable valid "$no_hash_bin"
+# GitHub refuses the latest-release request (60 an hour from one address
+# without a token): the installer says so and how to skip it, and downloads
+# nothing.
+latest_mode=refused
+run_case latest-refused fail "set AXOCOATL_VERSION to a release tag, such as v1.5.0, to install that release without asking it" Linux x86_64 none "glibc 2.35" unavailable valid "$fake_bin"
+latest_mode=ok
+grep -F 'at most 60 requests an hour from one address without a token' "$work_dir/latest-refused.out" >/dev/null \
+  || fail "latest-refused did not name GitHub's limit: $(cat "$work_dir/latest-refused.out")"
+[ "$(grep -c . "$work_dir/latest-refused.curl")" = 1 ] || fail "latest-refused downloaded after the refusal: $(cat "$work_dir/latest-refused.curl")"
 
 [ ! -s "$work_dir/linux-old-glibc.curl" ] || fail "old glibc reached the network stub"
 [ ! -s "$work_dir/linux-musl.curl" ] || fail "musl reached the network stub"

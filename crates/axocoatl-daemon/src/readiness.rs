@@ -335,8 +335,10 @@ pub fn ollama_model_items(wanted: &[String], pulled: &[String]) -> Vec<Readiness
 }
 
 async fn ollama_tags(base_url: &str) -> Result<Vec<String>, String> {
+    // Ollama is on this computer or its network: never through a proxy.
     let client = reqwest::Client::builder()
         .timeout(TAGS_TIMEOUT)
+        .no_proxy()
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
