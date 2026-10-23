@@ -3,13 +3,18 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: verify-marketing-gate.sh <portable|source-bound> <output-directory>" >&2
+  echo "Usage: verify-marketing-gate.sh <portable|source-bound> <output-directory> [--installer-from-release]" >&2
   exit 2
 }
 
-[[ $# -eq 2 ]] || usage
+# --installer-from-release: the site serves scripts/install.sh at the tag of
+# the CLI version, fetched from the remote (scripts/served-installer.sh), as
+# every deployment does; without it (CI, preflight), the working tree's, which
+# is never deployed.
+[[ $# -eq 2 || ( $# -eq 3 && "$3" == --installer-from-release ) ]] || usage
 film_mode=$1
 output=$2
+installer_from_release=${3:+yes}
 case "$film_mode" in portable|source-bound) ;; *) usage ;; esac
 [[ -n "$output" ]] || usage
 
@@ -31,9 +36,13 @@ build_site() {
   ./sites/marketing/scripts/sync-assets.sh
   validate_site "$@"
   node sites/marketing/scripts/build.mjs "$output"
-  cp scripts/install.sh "$output/install.sh"
-  sh -n "$output/install.sh"
-  cmp -s scripts/install.sh "$output/install.sh"
+  if [[ -n "$installer_from_release" ]]; then
+    ./scripts/served-installer.sh "$output/install.sh"
+  else
+    cp scripts/install.sh "$output/install.sh"
+    sh -n "$output/install.sh"
+    cmp -s scripts/install.sh "$output/install.sh"
+  fi
   validate_site "$output" "$@"
 }
 
