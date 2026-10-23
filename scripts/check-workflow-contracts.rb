@@ -549,6 +549,36 @@ unless step_position.call("test-gate", "Require a monotonic stable release versi
   errors << ".github/workflows/release.yml: normal release gate lacks the stable-SemVer frontier proof"
 end
 
+# Build provenance: prove-artifacts, which verified the four archives, signs
+# an attestation of each and proves it verifies for this workflow at this
+# tag; only that job may ask for an OIDC token.
+attest_steps = release_steps.call("prove-artifacts")
+attest = attest_steps.index { |step| step["uses"].to_s.start_with?("actions/attest-build-provenance@") }
+verify_set = attest_steps.index { |step| step["name"] == "Verify checksums, contents, and completeness" }
+attest_verify = attest_steps.index { |step| step["run"].to_s.include?("gh attestation verify") }
+unless attest && verify_set && attest_verify && verify_set < attest && attest < attest_verify
+  errors << ".github/workflows/release.yml: prove-artifacts must attest the verified archives (actions/attest-build-provenance) and then run gh attestation verify"
+end
+subjects = attest ? attest_steps[attest].dig("with", "subject-path").to_s : ""
+%w[x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin].each do |target|
+  errors << ".github/workflows/release.yml: the attestation does not name the #{target} archive" \
+    unless subjects.include?("-#{target}.tar.gz")
+end
+verify_source = attest_verify ? attest_steps[attest_verify]["run"].to_s : ""
+["--signer-workflow", "--source-ref", "--source-digest", "--deny-self-hosted-runners"].each do |flag|
+  errors << ".github/workflows/release.yml: gh attestation verify lacks #{flag}" unless verify_source.include?(flag)
+end
+attest_permissions = jobs.fetch("prove-artifacts").fetch("permissions", {})
+unless attest_permissions["attestations"] == "write" && attest_permissions["id-token"] == "write"
+  errors << ".github/workflows/release.yml: prove-artifacts needs attestations: write and id-token: write"
+end
+jobs.each do |job_name, job|
+  next if job_name == "prove-artifacts"
+  if job.is_a?(Hash) && job.dig("permissions", "id-token")
+    errors << ".github/workflows/release.yml: #{job_name} must not ask for an OIDC token (id-token)"
+  end
+end
+
 # The browser gate: ci.yml's product-browser legs, which release.yml repeats
 # before anything is built: the release build in Chromium on x86_64 and
 # aarch64 Linux, and in WebKit on x86_64 Linux and macOS.

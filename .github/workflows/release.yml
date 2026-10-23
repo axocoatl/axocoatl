@@ -462,6 +462,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+      # Sign the archives' build provenance with this run's identity.
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -480,6 +483,35 @@ jobs:
           aarch64-unknown-linux-gnu
           x86_64-apple-darwin
           aarch64-apple-darwin
+      # The macOS binaries are signed ad hoc, not notarized: the attestation
+      # is how anyone can check that an archive came from this workflow at
+      # this tag (`gh attestation verify`, docs/start/install).
+      - name: Attest the build provenance of every release archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/axocoatl-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+            dist/axocoatl-${{ github.ref_name }}-aarch64-unknown-linux-gnu.tar.gz
+            dist/axocoatl-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz
+            dist/axocoatl-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
+      - name: Prove every archive's attestation verifies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for target in \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
+          do
+            gh attestation verify "dist/axocoatl-$GITHUB_REF_NAME-$target.tar.gz" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "$(git rev-parse "$GITHUB_SHA^{commit}")" \
+              --deny-self-hosted-runners
+          done
       - name: Prove any prior-attempt verified set is byte-identical
         env:
           ARTIFACT_NAME: verified-release-${{ github.run_id }}-${{ github.ref_name }}
