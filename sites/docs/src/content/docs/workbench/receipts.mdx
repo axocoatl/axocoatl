@@ -40,7 +40,11 @@ pre-authentication encoding of the statement's exact bytes.
     fetch a URL, search the web, connect to an MCP server or run a tool itself
     ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)), `allow`
     when the route sent bodies unread (`provider_fetch: allow`), and absent for a route to
-    a host that is not a model API;
+    a host that is not a model API; and, in receipts since 1.5.0, under `limits` the
+    resource caps the Session's container got (`memory`, `cpus`, `pids`) and, under
+    `not_applied`, each cap its host could not apply because rootless Podman lacks that
+    cgroup controller ([Sandboxes](/configure/sandboxes/)), which `axocoatl receipt verify`
+    prints;
   - `network`: the Outcome's network summary;
   - `checks`: each required check's name, state, exit code, timeout, command and the tree
     it ran on;

@@ -208,6 +208,61 @@ pub fn podman_item(
     }
 }
 
+/// The resource caps a Session container gets on this Podman host (`host`,
+/// `container_host`), when it cannot get every one: a warning naming each
+/// cap left out, or, with `sandbox.require_resource_limits` (`require`), a
+/// failure, since Sessions then refuse to start (the second value says so
+/// for the blocked Create session). `None` when every cap applies.
+pub fn resource_caps_item(
+    host: &axocoatl_isolation::container_host::ContainerHost,
+    require: bool,
+) -> Option<(ReadinessItem, Option<String>)> {
+    let missing = host.caps.not_applied();
+    if missing.is_empty() {
+        return None;
+    }
+    let controllers = format!("[{}]", host.controllers.join(", "));
+    let fix = "Run `axocoatl doctor`: it says how to give rootless Podman the missing cgroup \
+               controllers."
+        .to_string();
+    Some(if require {
+        let detail = format!(
+            "Podman can use the cgroup controllers {controllers}, so a Session container would \
+             run without its {} cap, and sandbox.require_resource_limits refuses to start it.",
+            missing.join(", ")
+        );
+        (
+            ReadinessItem::new(
+                "sandbox.resource_caps",
+                "Resource caps",
+                ReadinessStatus::Fail,
+                detail.clone(),
+                Some(format!(
+                    "{fix} Or set sandbox.require_resource_limits to false to start Sessions \
+                     without that cap."
+                )),
+            ),
+            Some(detail),
+        )
+    } else {
+        (
+            ReadinessItem::new(
+                "sandbox.resource_caps",
+                "Resource caps",
+                ReadinessStatus::Warn,
+                format!(
+                    "Podman can use the cgroup controllers {controllers}, so Session containers \
+                     run without their {} cap; each Session's record and each run's notes and \
+                     receipt say so.",
+                    missing.join(", ")
+                ),
+                Some(fix),
+            ),
+            None,
+        )
+    })
+}
+
 /// The Ollama server items: the server itself, its version and its cloud
 /// mode, as native Sessions require them.
 pub fn ollama_server_items(
@@ -484,12 +539,19 @@ pub async fn check_readiness(inputs: ReadinessInputs) -> ReadinessReport {
             None,
         ));
     } else {
-        let (item, blocked) = podman_item(
-            &axocoatl_isolation::podman::detect().await,
-            &InstallRoute::detect(),
-        );
+        let podman = axocoatl_isolation::podman::detect().await;
+        let (item, blocked) = podman_item(&podman, &InstallRoute::detect());
         sections.sandbox.push(item);
         sessions_blocked = blocked;
+        if matches!(podman, PodmanReadiness::Ready) {
+            if let Some((item, blocked)) = axocoatl_isolation::container_host::container_host()
+                .await
+                .and_then(|host| resource_caps_item(&host, config.sandbox.require_resource_limits))
+            {
+                sections.sandbox.push(item);
+                sessions_blocked = sessions_blocked.or(blocked);
+            }
+        }
     }
 
     if let Some(ollama) = &config.providers.ollama {
@@ -844,6 +906,38 @@ mod tests {
         let connected = writer_items(&["claude-code-oauth".into(), "codex-chatgpt".into()]);
         assert!(connected[0].detail.starts_with("Connected"));
         assert!(connected[1].detail.starts_with("Connected"));
+    }
+
+    /// A host that cannot apply a resource cap is a warning that names it,
+    /// or a failure that blocks Sessions when every cap is required; one
+    /// that can apply them all says nothing.
+    #[test]
+    fn a_resource_cap_the_host_cannot_apply_is_said() {
+        use axocoatl_isolation::container_host::ContainerHost;
+        let all = ContainerHost::parse(r#"["cpu","io","memory","pids"] false"#, true).unwrap();
+        assert!(resource_caps_item(&all, true).is_none());
+        let no_cpu = ContainerHost::parse(r#"["memory","pids"] false"#, true).unwrap();
+        let (item, blocked) = resource_caps_item(&no_cpu, false).unwrap();
+        assert_eq!(item.status, ReadinessStatus::Warn);
+        assert!(
+            item.detail.contains("[memory, pids]")
+                && item
+                    .detail
+                    .contains("without their CPU (2 CPUs, cgroup controller cpu) cap"),
+            "{item:?}"
+        );
+        assert!(item.fix.as_deref().unwrap().contains("axocoatl doctor"));
+        assert_eq!(blocked, None);
+        let (item, blocked) = resource_caps_item(&no_cpu, true).unwrap();
+        assert_eq!(item.status, ReadinessStatus::Fail);
+        assert!(
+            item.fix
+                .as_deref()
+                .unwrap()
+                .contains("sandbox.require_resource_limits to false"),
+            "{item:?}"
+        );
+        assert!(blocked.unwrap().contains("refuses to start it"));
     }
 
     #[test]

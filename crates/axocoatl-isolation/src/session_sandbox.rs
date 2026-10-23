@@ -2024,7 +2024,8 @@ impl SessionSandbox {
             if !missing.is_empty() {
                 tracing::warn!(
                     controllers = %host.controllers.join(", "),
-                    "this host's Podman cannot apply the Session container's {} cap:                      starting it without {}",
+                    "this host's Podman cannot apply the Session container's {} cap: \
+                     starting it without {}",
                     missing.join(", "),
                     if missing.len() == 1 { "that cap" } else { "those caps" }
                 );
