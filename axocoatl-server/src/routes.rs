@@ -216,6 +216,10 @@ pub struct HealthResponse {
     /// The Axocoatl version this daemon runs, so `axocoatl doctor` can say
     /// when it differs from the CLI's (an upgrade that was not restarted).
     pub version: &'static str,
+    /// When this daemon started, before reading its configuration (Unix
+    /// milliseconds), so onboarding can tell a daemon that runs an older
+    /// configuration file.
+    pub started_at_ms: u64,
 }
 
 pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
@@ -224,6 +228,7 @@ pub async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
         status: "healthy".to_string(),
         agents: daemon.agent_count().await,
         version: axocoatl_daemon::readiness::DAEMON_VERSION,
+        started_at_ms: axocoatl_daemon::readiness::started_at_ms(),
     })
 }
 

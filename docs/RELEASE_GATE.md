@@ -216,7 +216,8 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    there.
 5. `axocoatl doctor --json` must say `"ready": true` with no `fail` item in
    any section. Plain `axocoatl doctor` must exit 0 and read as a new user
-   reads it: `Ready for: … axocoatl run fix`, a last line `Ready: yes`, and no
+   reads it: `Ready for: … axocoatl run fix` (on the Claude Code and Codex paths, that
+   writer's own `fix-claude-code` or `fix-codex`), a last line `Ready: yes`, and no
    `[FAIL]` line.
 6. `axocoatl dev` must serve on the configured port.
 7. On each fixture in `tests/fixtures/newuser/` (`node-plain`, `node-deps`,

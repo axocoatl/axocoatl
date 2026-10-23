@@ -3783,10 +3783,19 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         "axocoatl",
         "case \"$1 $2\" in \"receipt key\") echo k-test ;; esac; exit 0",
     );
+    // Started after the configuration below was written.
+    let later = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 3_600_000;
     let health = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/health"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": "ok", "started_at_ms": later})),
+        )
         .mount(&health)
         .await;
     let facts = facts(
@@ -3858,6 +3867,165 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
             .any(|call| call.starts_with("axocoatl serve")),
         "{:?}",
         shims.calls()
+    );
+}
+
+/// A daemon that started before the configuration changed runs the old
+/// one (`onboard --update` adding OpenRouter, say): the first run restarts
+/// the Always-On Service and uses it once it answers with the new start, or
+/// stops another daemon only when the person agrees.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
+    let shims = Shims::new();
+    shims.add(
+        "axocoatl",
+        "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
+    );
+    let later = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 3_600_000;
+    let health = MockServer::start().await;
+    // `healthy` and the start check before the restart; the new start after.
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "started_at_ms": 1})),
+        )
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(&health)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": "ok", "started_at_ms": later})),
+        )
+        .with_priority(2)
+        .mount(&health)
+        .await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Manual,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs::default(),
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(
+        &o.paths.config_path,
+        format!(
+            "agents: []\nserver:\n  port: {}\n  host: \"127.0.0.1\"\n",
+            health.address().port()
+        ),
+    )
+    .unwrap();
+    let agents = o.host.home.join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("ai.axocoatl.daemon.plist"),
+        "<key>ProgramArguments</key><array><string>/usr/local/bin/axocoatl</string></array>",
+    )
+    .unwrap();
+    let choice = Choice {
+        writer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        reviewer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        ..Choice::default()
+    };
+    assert!(
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await,
+        "{}\n{:?}",
+        o.ui.output(),
+        o.steps
+    );
+    let calls = shims.calls();
+    let stop = calls
+        .iter()
+        .position(|call| call == "axocoatl service stop");
+    let start = calls
+        .iter()
+        .position(|call| call == "axocoatl service start");
+    let run = calls
+        .iter()
+        .position(|call| call.starts_with("axocoatl run fix --task"));
+    assert!(stop.is_some() && stop < start && start < run, "{calls:?}");
+    assert!(o
+        .ui
+        .output()
+        .contains("Restart it now (this ends any Session turn or run in progress)? yes"));
+
+    // The service is installed but stopped, and another daemon from before
+    // 1.5.0 (its `/health` says no start) answers: that daemon is the one to
+    // stop, once the person agrees. Declined: nothing is stopped or run.
+    shims.add(
+        "axocoatl",
+        "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   no' ;; esac; exit 0",
+    );
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "ok"})))
+        .mount(&health)
+        .await;
+    let before = shims.calls().len();
+    o.ui = Ui::scripted(vec![Answer::No]);
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(
+        o.steps.iter().any(|step| step.starts_with(&format!(
+            "The daemon on port {} runs the configuration from before this onboarding",
+            health.address().port()
+        ))),
+        "{:?}",
+        o.steps
+    );
+    let after = &shims.calls()[before..];
+    assert!(
+        !after.iter().any(|call| call.starts_with("axocoatl run")
+            || call.starts_with("axocoatl serve")
+            || call == "axocoatl service stop"
+            || call == "axocoatl service start"),
+        "{after:?}"
+    );
+
+    // The running service, declined: it is not restarted.
+    shims.add(
+        "axocoatl",
+        "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
+    );
+    let before = shims.calls().len();
+    o.steps.clear();
+    o.ui = Ui::scripted(vec![Answer::No]);
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false).await);
+    assert!(
+        o.steps.iter().any(
+            |step| step.starts_with("The Always-On Service runs the configuration from before")
+        ),
+        "{:?}",
+        o.steps
+    );
+    let after = &shims.calls()[before..];
+    assert!(
+        !after.iter().any(|call| call.starts_with("axocoatl run")
+            || call == "axocoatl service stop"
+            || call == "axocoatl service start"),
+        "{after:?}"
     );
 }
 

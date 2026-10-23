@@ -1619,6 +1619,9 @@ async fn bind_or_exit(
 }
 
 async fn cmd_dev(config_path: &std::path::Path) {
+    // `/health` names this moment: before the configuration is read, so a
+    // file that changes later is always newer than the one this runs.
+    axocoatl_daemon::readiness::started_at_ms();
     let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {
@@ -1699,6 +1702,9 @@ async fn cmd_dev(config_path: &std::path::Path) {
 }
 
 async fn cmd_serve(config_path: &std::path::Path) {
+    // `/health` names this moment: before the configuration is read, so a
+    // file that changes later is always newer than the one this runs.
+    axocoatl_daemon::readiness::started_at_ms();
     let config = match load_cli_config(config_path).await {
         Ok(c) => c,
         Err(e) => {

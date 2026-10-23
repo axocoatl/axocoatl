@@ -108,7 +108,7 @@ asset URLs do not redirect.
 | GET | `/brand/{file}` | Canonical brand assets (public with the local token) |
 | GET | `/.axocoatl/preview-picker.js` on a Preview Host | Picker bridge for the dedicated Preview origin; communication is limited to source-and-origin-validated `postMessage` events |
 | GET | `/axo-tap.js` | Compatibility picker asset for the response-sandboxed legacy proxy (public with the local token) |
-| GET | `/health` | Overall status, Agent count and the running Axocoatl's `version` (public) |
+| GET | `/health` | Overall status, Agent count, the running Axocoatl's `version` and `started_at_ms`, when this daemon started, before it read its configuration (Unix milliseconds) (public) |
 | GET | `/health/ready` | `200` when at least one Agent is spawned, otherwise `503` (public) |
 | GET | `/health/live` | Liveness probe (public) |
 

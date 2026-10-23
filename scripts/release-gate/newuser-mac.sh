@@ -135,13 +135,41 @@ config_file() { gate_config_path; }
 daemon_port() { gate_server_port "$(config_file)"; }
 daemon_up() { curl -fsS "http://127.0.0.1:${1:-$(daemon_port)}/health/live" >/dev/null 2>&1; }
 
+# daemon_stale PORT: the daemon on PORT started before the configuration last
+# changed (`onboard --update` after it started), or does not say when it
+# started (before 1.5.0), so it runs an older configuration.
+daemon_stale() {
+  curl -fsS "http://127.0.0.1:$1/health" 2>/dev/null | node -e '
+    let text = "";
+    process.stdin.on("data", (d) => (text += d)).on("end", () => {
+      let started;
+      try { started = JSON.parse(text).started_at_ms; } catch { process.exit(1); }
+      const changed = require("fs").statSync(process.argv[1]).mtimeMs;
+      process.exit(typeof started !== "number" || changed > started ? 0 : 1);
+    });' "$(config_file)"
+}
+
 ensure_daemon() {
   local port
   port=$(daemon_port)
   [ -n "$port" ] || port=8080
   if daemon_up "$port"; then
-    gate_record "the daemon answers on port $port" pass '' '' '' 'already running (service or dev)'
-    return 0
+    if ! daemon_stale "$port"; then
+      gate_record "the daemon answers on port $port" pass '' '' '' 'already running (service or dev)'
+      return 0
+    fi
+    # As a person would after onboarding changed the configuration: restart
+    # the `axocoatl dev` this gate started. Anything else is a failure.
+    if [ -z "$dev_pid" ] || ! kill -0 "$dev_pid" 2>/dev/null; then
+      gate_record "the daemon on port $port runs the current configuration" fail '' '' '' \
+        "it started before $(config_file) last changed, and it is not the axocoatl dev this gate started"
+      return 1
+    fi
+    kill -INT "$dev_pid" 2>/dev/null
+    wait "$dev_pid"
+    dev_pid=''
+    gate_record "restart axocoatl dev after the configuration changed" pass '' '' '' \
+      "it started before $(config_file) last changed" optional
   fi
   cd "$work" || return 1
   axocoatl dev >"$GATE_ATTACH/logs/dev.log" 2>&1 &
@@ -174,7 +202,7 @@ doctor_ready() {
   ' "$GATE_ATTACH/doctor.json"
   # As a new user reads it: the command the site shows, as written.
   gate_step "axocoatl doctor (as the site shows it) exits 0" -- axocoatl doctor
-  gate_doctor_text_check "$GATE_ATTACH/logs/$(gate_slug "axocoatl doctor (as the site shows it) exits 0").log"
+  gate_doctor_text_check "$GATE_ATTACH/logs/$(gate_slug "axocoatl doctor (as the site shows it) exits 0").log" "${1:-fix}"
 }
 
 path_begin() {
@@ -283,7 +311,7 @@ path_claude_code() {
   path_begin claude-code
   install_once || { path_end; return; }
   onboard "onboard --update --writer claude-code" --update --writer claude-code
-  doctor_ready
+  doctor_ready fix-claude-code
   ensure_daemon
   local hero
   hero=$(node "$gate_commands_js" first "$site/index.html" "axocoatl run fix-claude-code") \
@@ -351,7 +379,7 @@ path_codex() {
   install_once || { path_end; return; }
   onboard "onboard --update --writer codex" --update --writer codex
   confirm "Codex billing was set to the ChatGPT plan" "Did onboarding ask how to bill Codex, and did you choose the ChatGPT plan?"
-  doctor_ready
+  doctor_ready fix-codex
   ensure_daemon
   local command
   command=$(node "$gate_commands_js" first "$site/index.html" "axocoatl run fix-codex" 2>/dev/null \

@@ -517,17 +517,19 @@ gate_sudo_check() {
   fi
 }
 
-# gate_doctor_text_check LOG: plain doctor's verdict as a new user reads it:
-# "Ready for: ... axocoatl run fix", a last "Ready: yes", no [FAIL] line.
+# gate_doctor_text_check LOG [LOADOUT]: plain doctor's verdict as a new user
+# reads it: "Ready for: ... axocoatl run LOADOUT" (default fix; a writer's own
+# loadout such as fix-codex may carry its parameters), a last "Ready: yes",
+# no [FAIL] line.
 gate_doctor_text_check() {
-  local log=$1 problems=''
-  grep -Eq '^Ready for: (.*, )?axocoatl run fix(,|$)' "$log" || problems="no 'Ready for: axocoatl run fix'"
+  local log=$1 loadout=${2:-fix} problems=''
+  grep -Eq "^Ready for: (.*, )?axocoatl run $loadout( [^,]*)?(,|\$)" "$log" || problems="no 'Ready for: axocoatl run $loadout'"
   [ "$(grep -v '^[[:space:]]*$' "$log" | tail -n 1)" = 'Ready: yes' ] || problems="${problems:+$problems; }the last line is not 'Ready: yes'"
   ! grep -q '\[FAIL\]' "$log" || problems="${problems:+$problems; }$(grep -m 1 '\[FAIL\]' "$log")"
   if [ -z "$problems" ]; then
-    gate_record "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]" pass '' '' '' ''
+    gate_record "doctor says Ready for: axocoatl run $loadout, Ready: yes, no [FAIL]" pass '' '' '' ''
   else
-    gate_record "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]" fail '' '' '' "$problems"
+    gate_record "doctor says Ready for: axocoatl run $loadout, Ready: yes, no [FAIL]" fail '' '' '' "$problems"
   fi
 }
 

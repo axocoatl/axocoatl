@@ -170,7 +170,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     left alone and checked.
   - The first run uses the daemon that runs, waiting for a service Step 6 just started,
     and never starts a second one beside it; it works in a new owner-only temporary
-    directory. `--start dev` runs `axocoatl dev` as its own process.
+    directory. A daemon that started before the configuration changed (`--update` adding
+    OpenRouter, say) would run the old one: onboarding asks to restart the Always-On
+    Service when it runs, or to stop the other daemon, waits for it to exit and starts one
+    for the run. `/health` now names when a daemon started; one that does not say, from
+    before 1.5.0, counts as older. `--start dev` runs `axocoatl dev` as its own process.
   - `--yes` with `--writer`, `--reviewer`, `--writer-model`, `--ollama-url`, `--podman`,
     `--machine-cpus`, `--machine-memory`, `--pull`, `--recipe-build`, `--connect`,
     `--openrouter-key-env`, `--port`, `--start`, `--smoke-test`, `--allow-sudo`,

@@ -20,6 +20,21 @@ use serde::Serialize;
 /// This Axocoatl's version, as `/health` and the readiness report name it.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+static STARTED_AT_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// When this daemon started (Unix milliseconds), as `/health` names it.
+/// The first call fixes it: `axocoatl dev` and `axocoatl serve` make it
+/// before they read the configuration, so a configuration file changed
+/// later is newer than the one the daemon runs (the router's call covers
+/// other entry points).
+pub fn started_at_ms() -> u64 {
+    *STARTED_AT_MS.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64)
+    })
+}
+
 /// How long the model list may take before Ollama counts as unreachable.
 const TAGS_TIMEOUT: Duration = Duration::from_secs(5);
 

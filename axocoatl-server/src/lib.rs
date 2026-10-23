@@ -29,6 +29,8 @@ pub fn build_router(
     cors_origins: Vec<String>,
     rate_limiter: Arc<middleware::RateLimiter>,
 ) -> Router {
+    // `/health` names this start: the configuration is read by now.
+    axocoatl_daemon::readiness::started_at_ms();
     let auth_for_mw = auth.clone();
     let authenticated = auth.enabled;
     let cors_origins_for_auth = Arc::new(cors_origins.clone());
@@ -1117,9 +1119,11 @@ mod tests {
             status: "healthy".into(),
             agents: 0,
             version: env!("CARGO_PKG_VERSION"),
+            started_at_ms: 1,
         })
         .unwrap();
         assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(health["started_at_ms"], 1);
         assert_eq!(health["status"], "healthy");
     }
 
