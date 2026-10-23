@@ -1403,9 +1403,18 @@ agent:**
   resolved on dedicated threads (not tokio's blocking pool), for at most 5 s per
   release. An error other than a missing path (a permission, as for the overlay of a
   `--userns=keep-id` container, whose directory in Podman's storage belongs to a
-  subordinate uid), no answer in time, or a `--volumes-from` naming a container Podman no
-  longer lists keeps every candidate, logged at `info` with the container, the mount and
-  the reason.
+  subordinate uid), no answer in time, a `--volumes-from` naming a container Podman no
+  longer lists, a container that has never started (its overlay volumes are reported only
+  once it has) or one that mounts a volume plugin's volume keeps every candidate, logged
+  at `info` once per mount point and reason: with the container and its mount when a
+  container is the reason, and with Podman's error when Podman did not answer. A container
+  run `--privileged` or with `CAP_SYS_ADMIN` keeps a candidate below any host directory it
+  takes, since its processes can mount on it themselves, and a `--rootfs` is a host
+  directory it takes. Nothing is removed at all while a container Axocoatl cannot list
+  could hold the directory (`held_elsewhere`): Docker is installed, Podman lists another
+  connection (a Podman machine's rootful one on macOS), rootful Podman's API is enabled on
+  Linux (`/run/podman`, as Ubuntu's package does), or Podman lists a container only with
+  `--external`.
   Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected

@@ -111,22 +111,37 @@
 //! in Podman's storage then belongs to a subordinate uid, mode 0700), so
 //! such a container keeps every mount point Axocoatl made until it is
 //! removed. A stale NFS, SMB or sshfs mount fails with a stale file handle
-//! or does not return. Each such keep is logged at `info`, naming the
-//! container, its mount and what failed ([`log_kept`]).
+//! or does not return. So does a container that has never started (inspect
+//! reports an overlay volume only once its container has, and removing the
+//! directory would make its start fail), and one that mounts a volume of
+//! another driver than `local` (a volume plugin, whose host directory Podman
+//! does not report). Each such keep is logged at `info` once for each mount
+//! point and reason, naming the container and its mount when a container is
+//! the reason, or Podman's error when Podman did not answer ([`log_kept`]).
+//!
+//! A container run `--privileged` or with `CAP_SYS_ADMIN` added can mount on
+//! the directory itself (a tmpfs over `node_modules` in a bind of the
+//! repository), which no inspect reports, so a host directory it takes that
+//! is above the directory keeps it whatever is mounted below. A container's
+//! `--rootfs` is a host directory it takes, at `/`.
+//!
+//! Nothing is removed while a container this Podman does not list could
+//! have a mount on it ([`held_elsewhere`]): when Docker is installed, Podman
+//! lists another connection (every Podman machine on macOS has a rootful
+//! one), rootful Podman's API is enabled on Linux (`/run/podman`, which
+//! Ubuntu's podman package enables), or `podman ps -a --external` lists a
+//! container `podman ps -a` does not (Buildah's, a `podman build`'s, which
+//! cannot be inspected). Every mount point then stays, empty and the
+//! person's, and the daemon says why once. On a Mac and on Ubuntu 24.04 as
+//! packaged, that is always.
 //!
 //! What this does not see, so a mount on the directory that removing it
 //! breaks:
-//! - containers of another runtime (Docker), of rootful Podman (`sudo
-//!   podman`) while Axocoatl's is rootless, or of another Podman connection
-//!   or machine, and those `podman ps -a` lists only with `--external`
-//!   (Buildah's, a `podman build`'s);
+//! - containers of rootful Podman (`sudo podman`) on a Linux computer whose
+//!   rootful API is not enabled, and of container engines other than Docker
+//!   and Podman (nerdctl, LXC);
 //! - the tmpfs Podman mounts for an image's `VOLUME` under
 //!   `--image-volume=tmpfs` (neither inspect nor `podman ps` reports it);
-//! - an overlay volume of a container that has never started (inspect
-//!   reports none until it has; removing the directory makes its start
-//!   fail);
-//! - a volume of another driver (a volume plugin), and a root filesystem
-//!   given with `--rootfs`;
 //! - a bind through a link that has been removed or changed since the
 //!   container started;
 //! - the directory reached through another mount of it: a bind mount on the
@@ -171,10 +186,16 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 /// object a line: its id, its mounts, its tmpfs mounts, which `Mounts`
 /// leaves out (`GetMounts` in Podman's `libpod/container_inspect.go`
 /// discards them, 4.9.3 to 6.1.4), and the containers it takes mounts from
-/// with `--volumes-from`, whose bind mounts `Mounts` leaves out too. The
-/// id's field is `ID` (Podman cannot evaluate `.Id`, its JSON name, inside
-/// `json`).
-const INSPECT_FORMAT: &str = r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}},"VolumesFrom":{{json .HostConfig.VolumesFrom}}}"#;
+/// with `--volumes-from`, whose bind mounts `Mounts` leaves out too; its
+/// root filesystem when given with `--rootfs`; whether it may mount
+/// filesystems itself (`--privileged`, or `CAP_SYS_ADMIN` added); and when it
+/// started (`0001-01-01T00:00:00Z` for never: Podman reports an overlay
+/// volume only once its container has started). The id's field is `ID`
+/// (Podman cannot evaluate `.Id`, its JSON name, inside `json`). Every field
+/// is there in Podman 4.9.3 and 6.1.4.
+const INSPECT_FORMAT: &str = r#"{"Id":{{json .ID}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}},"VolumesFrom":{{json .HostConfig.VolumesFrom}},"Rootfs":{{json .Rootfs}},"Privileged":{{json .HostConfig.Privileged}},"CapAdd":{{json .HostConfig.CapAdd}},"StartedAt":{{json .State.StartedAt}}}"#;
+/// What `podman container inspect` says for a container that never started.
+const NEVER_STARTED: &str = "0001-01-01T00:00:00Z";
 /// What `podman volume inspect` prints of each volume, one JSON object a
 /// line: its name, its driver and the options it was made with.
 const VOLUME_FORMAT: &str =
@@ -466,6 +487,11 @@ pub(crate) enum Kept {
     /// Podman or the host could not say whether a container has a mount on
     /// it: why.
     Unknown(String),
+    /// A container this Podman does not list could have a mount on it: one
+    /// of another engine (Docker), of another Podman connection or machine,
+    /// of rootful Podman, or one Podman lists only with `--external`
+    /// ([`held_elsewhere`]): which.
+    Elsewhere(String),
 }
 
 /// What [`release_unused`] decided for one mount point it made and no start
@@ -830,9 +856,17 @@ struct Listed {
     mounts: Option<Vec<String>>,
     #[serde(rename = "Labels", default)]
     labels: Option<HashMap<String, String>>,
+    /// `storage` for a container Podman lists only with `--external` (a
+    /// Buildah container, or a `podman build`'s), which it cannot inspect.
+    #[serde(rename = "State", default)]
+    state: Option<String>,
 }
 
 impl Listed {
+    fn external(&self) -> bool {
+        self.state.as_deref() == Some("storage")
+    }
+
     /// The mount point its labels say Axocoatl made for it, and which
     /// directory that was, when both are plausible.
     fn labelled_mountpoint(&self) -> Option<(PathBuf, Mark)> {
@@ -868,6 +902,32 @@ struct Inspected {
     /// the start of one ([`volumes_from_container`]).
     #[serde(rename = "VolumesFrom", default)]
     volumes_from: Option<Vec<String>>,
+    /// Its root filesystem, a host directory, when given with `--rootfs`.
+    #[serde(rename = "Rootfs", default)]
+    rootfs: Option<String>,
+    #[serde(rename = "Privileged", default)]
+    privileged: Option<bool>,
+    /// Capabilities added (`CAP_SYS_ADMIN`, or `SYS_ADMIN` as given).
+    #[serde(rename = "CapAdd", default)]
+    cap_add: Option<Vec<String>>,
+    /// When it last started; [`NEVER_STARTED`] when it never has.
+    #[serde(rename = "StartedAt", default)]
+    started_at: Option<String>,
+}
+
+impl Inspected {
+    /// Whether its processes may mount filesystems themselves (a tmpfs
+    /// over a directory of a bind mount), which no inspect reports: it runs
+    /// `--privileged` or with `CAP_SYS_ADMIN` (or every capability) added.
+    fn may_mount(&self) -> bool {
+        self.privileged == Some(true)
+            || self.cap_add.iter().flatten().any(|cap| {
+                matches!(
+                    cap.trim_start_matches("CAP_").to_ascii_uppercase().as_str(),
+                    "SYS_ADMIN" | "ALL"
+                )
+            })
+    }
 }
 
 #[derive(Debug, Default, Clone, serde::Deserialize)]
@@ -989,6 +1049,8 @@ enum HostKind {
     Overlay(&'static str),
     /// The device of the bind volume named here ([`InspectedVolume::bound`]).
     VolumeDevice(String),
+    /// Its root filesystem (`--rootfs`).
+    Rootfs,
 }
 
 /// A host directory one of a container's mounts takes.
@@ -1034,6 +1096,7 @@ impl Host {
             HostKind::VolumeDevice(name) => {
                 format!("the device of volume {name}, which container {container} mounts at {at}")
             }
+            HostKind::Rootfs => format!("the root filesystem of container {container}"),
         }
     }
 
@@ -1074,6 +1137,9 @@ struct Mounts {
     /// `HostConfig.Tmpfs`, what `podman ps` lists for it, and where the bind
     /// mounts it takes with `--volumes-from` are.
     destinations: HashSet<PathBuf>,
+    /// Its processes may mount filesystems themselves ([`Inspected::may_mount`]):
+    /// any place below a host directory it takes may have a mount on it.
+    may_mount: bool,
     /// Why what it mounts cannot be told, when it cannot.
     unknown: Option<String>,
 }
@@ -1092,8 +1158,26 @@ impl Mounts {
     ) -> Result<Self, String> {
         let mut mounts = Self {
             id: container.id.clone().unwrap_or_default(),
+            may_mount: container.may_mount(),
             ..Self::default()
         };
+        if container.started_at.as_deref() == Some(NEVER_STARTED) {
+            mounts.unknown = Some(format!(
+                "container {} has never started, and Podman reports an overlay volume only once \
+                 its container has. Node dependency mount points Axocoatl made stay until it \
+                 starts or is removed",
+                short_id(&mounts.id)
+            ));
+        }
+        if let Some(rootfs) = container
+            .rootfs
+            .as_deref()
+            .filter(|rootfs| Path::new(rootfs).is_absolute())
+        {
+            mounts
+                .hosts
+                .push(Host::new(rootfs, Path::new("/"), HostKind::Rootfs));
+        }
         mounts.destinations.extend(listed.iter().map(PathBuf::from));
         mounts.destinations.extend(
             container
@@ -1167,7 +1251,8 @@ impl Mounts {
     fn place(&self, path: &Path, real: &Path, destination: &Path) -> Option<PathBuf> {
         let below = path.strip_prefix(real).ok()?;
         let at = destination.join(below);
-        (below.as_os_str().is_empty() || self.destinations.contains(&at)).then_some(at)
+        (below.as_os_str().is_empty() || self.may_mount || self.destinations.contains(&at))
+            .then_some(at)
     }
 
     /// The first of its host directories that, read with `read`, is one of
@@ -1593,8 +1678,8 @@ async fn containers(listed: &[Listed]) -> Result<Vec<Mounts>, String> {
         .collect();
     names.sort();
     names.dedup();
-    let volumes: HashMap<String, Option<PathBuf>> = if names.is_empty() {
-        HashMap::new()
+    let inspected_volumes: Vec<InspectedVolume> = if names.is_empty() {
+        Vec::new()
     } else {
         inspect_existing(
             &["volume", "inspect"],
@@ -1605,10 +1690,11 @@ async fn containers(listed: &[Listed]) -> Result<Vec<Mounts>, String> {
             podman_output,
         )
         .await?
-        .into_iter()
-        .filter_map(|volume| Some((volume.name.clone()?, volume.bound())))
-        .collect()
     };
+    let volumes: HashMap<String, Option<PathBuf>> = inspected_volumes
+        .iter()
+        .filter_map(|volume| Some((volume.name.clone()?, volume.bound())))
+        .collect();
     let mut mounts = inspected
         .iter()
         .map(|container| {
@@ -1621,7 +1707,53 @@ async fn containers(listed: &[Listed]) -> Result<Vec<Mounts>, String> {
         })
         .collect::<Result<Vec<Mounts>, String>>()?;
     take_volumes_from(&mut mounts, &inspected, listed);
+    plugin_volumes_unknown(&mut mounts, &inspected, &inspected_volumes);
     Ok(mounts)
+}
+
+/// Mark each of `containers` that mounts a volume of a driver other than
+/// `local` (a volume plugin) as one whose mounts cannot be told: Podman does
+/// not report which host directory such a volume uses.
+fn plugin_volumes_unknown(
+    containers: &mut [Mounts],
+    inspected: &[Inspected],
+    volumes: &[InspectedVolume],
+) {
+    let plugins: HashMap<&str, &str> = volumes
+        .iter()
+        .filter_map(|volume| {
+            let driver = volume
+                .driver
+                .as_deref()
+                .filter(|driver| *driver != "local")?;
+            Some((volume.name.as_deref()?, driver))
+        })
+        .collect();
+    if plugins.is_empty() {
+        return;
+    }
+    for (container, mounts) in inspected.iter().zip(containers.iter_mut()) {
+        let plugin = container
+            .mounts
+            .iter()
+            .flatten()
+            .filter(|mount| mount.is_volume())
+            .find_map(|mount| {
+                let name = mount.name.as_deref()?;
+                Some((name, *plugins.get(name)?))
+            });
+        if let Some((name, driver)) = plugin {
+            mounts.unknown.get_or_insert_with(|| {
+                format!(
+                    "container {} mounts volume {name} of the volume plugin {driver}, and Podman \
+                     does not say which host directory such a volume uses. Node dependency mount \
+                     points Axocoatl made stay while container {} exists",
+                    short_id(&mounts.id),
+                    short_id(&mounts.id)
+                )
+            });
+        }
+    }
 }
 
 /// One bounded `podman` command, its standard output.
@@ -1776,17 +1908,26 @@ pub(crate) async fn adopt_labelled_named(containers: &[String]) {
 }
 
 /// Say why a release kept the mount point at `path`. When Axocoatl cannot
-/// tell, at `info`, which the daemon shows by default: the directory stays,
-/// and nothing else tells the person why.
+/// tell, or a container it cannot see could have a mount on it, at `info`,
+/// which the daemon shows by default: the directory stays, and nothing else
+/// tells the person why. Each such reason is said once for each mount point
+/// in a process, not at every container start and removal.
 fn log_kept(path: &Path, why: &Kept) {
     match why {
-        Kept::Unknown(why) => tracing::info!(
+        Kept::Unknown(why) if first_said(path, why) => tracing::info!(
             path = %path.display(),
             %why,
             "kept the empty Node dependency mount point Axocoatl made: it cannot tell whether a \
              container has a mount on it, and removes it at a later container start or removal \
              once it can"
         ),
+        Kept::Elsewhere(why) if first_said(path, why) => tracing::info!(
+            path = %path.display(),
+            %why,
+            "kept the empty Node dependency mount point Axocoatl made: a container it cannot see \
+             could have a mount on it, so it stays, empty and yours"
+        ),
+        Kept::Unknown(_) | Kept::Elsewhere(_) => {}
         Kept::Listed | Kept::Mounted { .. } => tracing::debug!(
             path = %path.display(),
             ?why,
@@ -1795,28 +1936,254 @@ fn log_kept(path: &Path, why: &Kept) {
     }
 }
 
+/// Whether this process has not said `why` for `path` yet (and now has).
+fn first_said(path: &Path, why: &str) -> bool {
+    static SAID: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+    let mut said = SAID
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Bounded: a long-lived daemon with many repositories says some again.
+    if said.len() >= 4096 {
+        said.clear();
+    }
+    said.insert((path.to_path_buf(), why.to_string()))
+}
+
+/// Live tests of the removal itself run as if [`held_elsewhere`] found
+/// nothing on the computer they run on.
+#[cfg(test)]
+pub(crate) static ASSUME_NOTHING_ELSEWHERE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Why a container the `podman` this process runs does not list could have
+/// a mount on a directory Axocoatl made, when one could; `None` when none
+/// could. Removing the directory breaks such a mount, and Axocoatl cannot ask
+/// about it, so then every mount point stays, empty and the person's:
+/// - Docker: a `docker` program on `PATH` that is not Podman's own `docker`
+///   (a link to `podman`, or a script that runs it), `DOCKER_HOST` (unless
+///   it names this user's rootless Podman socket, as a Podman machine sets
+///   it), or a Docker socket (`/var/run/docker.sock`,
+///   `~/.docker/run/docker.sock`, `$XDG_RUNTIME_DIR/docker.sock`);
+/// - another Podman connection than the one this process uses (`podman
+///   system connection list`): another machine, or a machine's rootful
+///   connection, as every Podman machine on macOS has;
+/// - rootful Podman's API on Linux (`/run/podman`, which Ubuntu's podman
+///   package enables), when this process is not root: `sudo podman`
+///   containers are not listed to the person.
+pub(crate) async fn held_elsewhere() -> Option<String> {
+    #[cfg(test)]
+    if ASSUME_NOTHING_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    held_elsewhere_here().await
+}
+
+/// [`held_elsewhere`] on this computer, as it is.
+pub(crate) async fn held_elsewhere_here() -> Option<String> {
+    let env = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    let mut sockets = vec![PathBuf::from("/var/run/docker.sock")];
+    if let Some(home) = env("HOME") {
+        sockets.push(Path::new(&home).join(".docker/run/docker.sock"));
+    }
+    let runtime = env("XDG_RUNTIME_DIR").map(PathBuf::from);
+    if let Some(runtime) = &runtime {
+        sockets.push(runtime.join("docker.sock"));
+    }
+    // This user's rootless Podman socket, which a Podman machine (Fedora
+    // CoreOS) names in DOCKER_HOST.
+    let own_podman = runtime
+        .or_else(|| cfg!(unix).then(|| PathBuf::from(format!("/run/user/{}", current_uid()))))
+        .map(|runtime| runtime.join("podman/podman.sock"));
+    let mut found: Vec<String> = Vec::new();
+    found.extend(docker_engine(
+        env("PATH").as_deref(),
+        &sockets,
+        env("DOCKER_HOST").as_deref(),
+        own_podman.as_deref(),
+    ));
+    let connection = env("CONTAINER_CONNECTION");
+    let connection = connection.as_deref().and_then(OsStr::to_str);
+    match podman_output(
+        ["system", "connection", "list", "--format", "json"]
+            .map(String::from)
+            .to_vec(),
+    )
+    .await
+    .and_then(|stdout| other_connections(&stdout, connection, env("CONTAINER_HOST").is_some()))
+    {
+        Ok(others) if others.is_empty() => {}
+        Ok(others) => found.push(format!(
+            "Podman has the connection{} {}, whose containers this one does not list",
+            if others.len() == 1 { "" } else { "s" },
+            others.join(", ")
+        )),
+        Err(error) => found.push(format!("Podman did not list its connections: {error}")),
+    }
+    found.extend(rootful_api(
+        Path::new("/"),
+        cfg!(target_os = "linux"),
+        running_as_root(),
+    ));
+    (!found.is_empty()).then(|| found.join("; "))
+}
+
+#[cfg(unix)]
+fn running_as_root() -> bool {
+    rustix::process::geteuid().is_root()
+}
+
+#[cfg(not(unix))]
+fn running_as_root() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    rustix::process::getuid().as_raw()
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
+}
+
+/// Docker, when `path` (`PATH`) has a `docker` that is not Podman's, one of
+/// `sockets` exists, or `DOCKER_HOST` (`docker_host`) names another engine
+/// than `own_podman`, this user's rootless Podman socket.
+fn docker_engine(
+    path: Option<&OsStr>,
+    sockets: &[PathBuf],
+    docker_host: Option<&OsStr>,
+    own_podman: Option<&Path>,
+) -> Option<String> {
+    if let Some(docker_host) = docker_host {
+        let named = docker_host
+            .to_str()
+            .and_then(|host| host.strip_prefix("unix://"));
+        if named.is_none() || named.map(Path::new) != own_podman {
+            return Some("DOCKER_HOST names a Docker engine".to_string());
+        }
+    }
+    if let Some(socket) = sockets.iter().find(|socket| socket.exists()) {
+        return Some(format!("a Docker API socket {} exists", socket.display()));
+    }
+    let docker = std::env::split_paths(path?)
+        .map(|directory| directory.join("docker"))
+        .find(|candidate| candidate.is_file())?;
+    (!podman_as_docker(&docker)).then(|| format!("Docker is installed ({})", docker.display()))
+}
+
+/// Whether `docker` is Podman's own `docker` (podman-docker, Podman
+/// Desktop): a link to `podman`, or a script that runs it.
+fn podman_as_docker(docker: &Path) -> bool {
+    let real = std::fs::canonicalize(docker).unwrap_or_else(|_| docker.to_path_buf());
+    if real
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with("podman"))
+    {
+        return true;
+    }
+    use std::io::Read;
+    let mut start = Vec::with_capacity(4096);
+    let read = std::fs::File::open(&real)
+        .and_then(|file| file.take(4096).read_to_end(&mut start))
+        .is_ok();
+    read && start.starts_with(b"#!") && start.windows(6).any(|window| window == b"podman")
+}
+
+/// The connections `podman system connection list --format json` printed
+/// (`stdout`) other than the one this process uses: `connection`
+/// (`CONTAINER_CONNECTION`) or the default one, or none when `CONTAINER_HOST`
+/// (`container_host`) points elsewhere.
+fn other_connections(
+    stdout: &[u8],
+    connection: Option<&str>,
+    container_host: bool,
+) -> Result<Vec<String>, String> {
+    #[derive(serde::Deserialize)]
+    struct Connection {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Default", default)]
+        default: bool,
+    }
+    let connections: Vec<Connection> = parse_json_array(stdout)?;
+    Ok(connections
+        .iter()
+        .filter(|listed| match (connection, container_host) {
+            (Some(used), _) => listed.name != used,
+            (None, true) => true,
+            (None, false) => !listed.default,
+        })
+        .map(|listed| listed.name.clone())
+        .collect())
+}
+
+/// Rootful Podman's API, on Linux (`linux`) for a process that is not root:
+/// its socket's directory `/run/podman` (under `root`) exists.
+fn rootful_api(root: &Path, linux: bool, as_root: bool) -> Option<String> {
+    (linux && !as_root && root.join("run/podman").is_dir()).then(|| {
+        "rootful Podman's API is enabled (/run/podman), and the containers `sudo podman` runs \
+         are not listed to you"
+            .to_string()
+    })
+}
+
 /// Remove every Node dependency mount point this process made that no start
 /// is using and no container Podman lists (of any daemon, or the person's
 /// own) has a mount on, if it is still the empty directory made for it, and
 /// say what it decided for each one no start is using. Without one to
 /// remove it asks Podman nothing. Best effort: when Podman cannot list its
-/// containers, or Podman or the host cannot say what one mounts, everything
-/// it could concern stays for a later call.
+/// containers, or Podman or the host cannot say what one mounts, or a
+/// container it cannot see could have a mount on it ([`held_elsewhere`]),
+/// everything it could concern stays for a later call.
 pub(crate) async fn release_unused() -> Vec<(PathBuf, Decision)> {
     let candidates = registry().candidates();
     if candidates.is_empty() {
         return Vec::new();
     }
-    let in_use = match list(&[]).await {
-        Ok(listed) => in_use(&listed, &candidates).await,
-        Err(error) => {
-            tracing::debug!(%error, "kept Node dependency mount points: Podman did not list its containers");
-            let why = format!("Podman did not list its containers: {error}");
-            candidates
-                .iter()
-                .map(|(path, _)| (path.clone(), Kept::Unknown(why.clone())))
-                .collect()
-        }
+    let in_use = match held_elsewhere().await {
+        Some(why) => candidates
+            .iter()
+            .map(|(path, _)| (path.clone(), Kept::Elsewhere(why.clone())))
+            .collect(),
+        None => match list(&["--external".to_string()]).await {
+            Ok(listed) => {
+                let (external, listed): (Vec<Listed>, Vec<Listed>) =
+                    listed.into_iter().partition(Listed::external);
+                match external.first() {
+                    Some(external) => {
+                        let why = format!(
+                            "Podman lists container {} only with --external (a Buildah \
+                             container, or a podman build's), and cannot say what it mounts",
+                            external
+                                .names
+                                .iter()
+                                .flatten()
+                                .next()
+                                .map(String::as_str)
+                                .or(external.id.as_deref().map(short_id))
+                                .unwrap_or("(unnamed)")
+                        );
+                        candidates
+                            .iter()
+                            .map(|(path, _)| (path.clone(), Kept::Elsewhere(why.clone())))
+                            .collect()
+                    }
+                    None => in_use(&listed, &candidates).await,
+                }
+            }
+            Err(error) => {
+                tracing::debug!(%error, "kept Node dependency mount points: Podman did not list its containers");
+                let why = format!("Podman did not list its containers: {error}");
+                candidates
+                    .iter()
+                    .map(|(path, _)| (path.clone(), Kept::Unknown(why.clone())))
+                    .collect()
+            }
+        },
     };
     let mut decided: Vec<(PathBuf, Decision)> = candidates
         .iter()
@@ -2639,6 +3006,7 @@ mod tests {
                 .map(|(_, at)| PathBuf::from(at))
                 .chain(others.iter().map(PathBuf::from))
                 .collect(),
+            may_mount: false,
             unknown: None,
         }
     }
@@ -2848,6 +3216,278 @@ mod tests {
             assert!(seen[0].1.contains(said), "{said:?} in {:?}", seen[0].1);
         }
         assert_eq!(seen[1].0, tracing::Level::DEBUG);
+    }
+
+    /// A keep Axocoatl cannot explain otherwise is said once for each mount
+    /// point and reason, not at every container start and removal.
+    #[test]
+    fn a_keep_is_said_once_for_each_mount_point_and_reason() {
+        let seen = Seen::default();
+        let path = Path::new("/said-once/node_modules");
+        let docker = Kept::Elsewhere("Docker is installed (/usr/local/bin/docker)".into());
+        tracing::subscriber::with_default(seen.clone(), || {
+            log_kept(path, &docker);
+            log_kept(path, &docker);
+            log_kept(
+                path,
+                &Kept::Unknown("Podman did not list its containers".into()),
+            );
+            log_kept(
+                path,
+                &Kept::Unknown("Podman did not list its containers".into()),
+            );
+            log_kept(Path::new("/said-once-too/node_modules"), &docker);
+        });
+        let seen = seen.0.lock().unwrap();
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert!(seen.iter().all(|(level, _)| *level == tracing::Level::INFO));
+        assert!(seen[0].1.contains("a container it cannot see"), "{seen:?}");
+        assert!(seen[0].1.contains("why=Docker is installed"), "{seen:?}");
+    }
+
+    /// Docker counts when a `docker` on PATH is not Podman's own, when one
+    /// of its sockets exists, or when DOCKER_HOST is set; Podman's `docker`
+    /// (a link to podman, or podman-docker's script) does not.
+    #[cfg(unix)]
+    #[test]
+    fn docker_counts_unless_its_docker_is_podman() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let bin = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([bin.path()]).unwrap();
+        let none: Vec<PathBuf> = vec![bin.path().join("no-such.sock")];
+        assert_eq!(docker_engine(Some(&path), &none, None, None), None);
+        assert_eq!(docker_engine(None, &none, None, None), None);
+        // Podman's own docker: a link to podman ...
+        std::fs::write(bin.path().join("podman"), b"\x7fELF").unwrap();
+        symlink(bin.path().join("podman"), bin.path().join("docker")).unwrap();
+        assert_eq!(docker_engine(Some(&path), &none, None, None), None);
+        // ... or podman-docker's script.
+        std::fs::remove_file(bin.path().join("docker")).unwrap();
+        std::fs::write(
+            bin.path().join("docker"),
+            "#!/bin/sh\n[ -e /etc/containers/nodocker ] || echo 'Emulate Docker CLI using podman.'\nexec /usr/bin/podman \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            bin.path().join("docker"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert_eq!(docker_engine(Some(&path), &none, None, None), None);
+        // Docker's own CLI.
+        std::fs::write(bin.path().join("docker"), b"\x7fELF docker cli").unwrap();
+        let docker = docker_engine(Some(&path), &none, None, None).unwrap();
+        assert!(docker.starts_with("Docker is installed"), "{docker}");
+        // A socket, or DOCKER_HOST, without the program.
+        let empty = std::env::join_paths([bin.path().join("empty")]).unwrap();
+        let socket = bin.path().join("docker.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let said = docker_engine(Some(&empty), &[socket.clone()], None, None).unwrap();
+        assert!(said.contains(&socket.display().to_string()), "{said}");
+        let own = Path::new("/run/user/501/podman/podman.sock");
+        let docker_host =
+            |value: &str| docker_engine(Some(&empty), &none, Some(OsStr::new(value)), Some(own));
+        assert!(docker_host("unix:///var/run/docker.sock")
+            .unwrap()
+            .contains("DOCKER_HOST"));
+        assert!(docker_host("tcp://127.0.0.1:2375").is_some());
+        // A Podman machine (Fedora CoreOS) names the user's own Podman.
+        assert_eq!(docker_host("unix:///run/user/501/podman/podman.sock"), None);
+        assert!(docker_host("unix:///run/podman/podman.sock").is_some());
+    }
+
+    /// The connections Podman lists besides the one this process uses: on
+    /// a Mac, a machine's rootful twin.
+    #[test]
+    fn other_podman_connections_are_those_this_process_does_not_use() {
+        // `podman system connection list --format json`, Podman 6.1.4.
+        let mac = br#"[{"Name":"podman-machine-default","URI":"ssh://core@127.0.0.1:59451/run/user/501/podman/podman.sock","Identity":"/Users/a/.local/share/containers/podman/machine/machine","IsMachine":true,"Default":true,"ReadWrite":true},{"Name":"podman-machine-default-root","URI":"ssh://root@127.0.0.1:59451/run/podman/podman.sock","Identity":"/Users/a/.local/share/containers/podman/machine/machine","IsMachine":true,"Default":false,"ReadWrite":true}]"#;
+        assert_eq!(
+            other_connections(mac, None, false).unwrap(),
+            ["podman-machine-default-root"]
+        );
+        assert_eq!(
+            other_connections(mac, Some("podman-machine-default-root"), false).unwrap(),
+            ["podman-machine-default"]
+        );
+        assert_eq!(other_connections(mac, None, true).unwrap().len(), 2);
+        // Linux without a machine lists none.
+        assert!(other_connections(b"[]", None, false).unwrap().is_empty());
+        assert!(other_connections(b"", None, false).unwrap().is_empty());
+        assert!(other_connections(b"not json", None, false).is_err());
+    }
+
+    /// Rootful Podman's API on Linux, for a process that is not root.
+    #[test]
+    fn rootful_podman_counts_on_linux_for_a_person() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(rootful_api(root.path(), true, false), None);
+        std::fs::create_dir_all(root.path().join("run/podman")).unwrap();
+        assert!(rootful_api(root.path(), true, false)
+            .unwrap()
+            .contains("sudo podman"));
+        assert_eq!(rootful_api(root.path(), true, true), None);
+        assert_eq!(rootful_api(root.path(), false, false), None);
+    }
+
+    /// A container that may mount filesystems itself keeps a mount point
+    /// below any host directory it takes; one that never started, or that
+    /// mounts a volume plugin's volume, keeps every one; a `--rootfs` above
+    /// a mount point is a host directory it takes.
+    #[tokio::test]
+    async fn what_inspect_cannot_show_keeps_the_mount_point() {
+        let repo = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(repo.path()).unwrap();
+        let node_modules = repo.join("node_modules");
+        std::fs::create_dir(&node_modules).unwrap();
+        let inspect = |fields: &str| -> Inspected {
+            serde_json::from_str(&format!(
+                r#"{{"Id":"{}","Mounts":[{{"Type":"bind","Source":"{}","Destination":"/w"}}],"Tmpfs":{{}},"VolumesFrom":null,{fields}}}"#,
+                "c".repeat(64),
+                repo.display()
+            ))
+            .unwrap()
+        };
+        let started = r#""StartedAt":"2026-10-23T10:24:38.146066598Z""#;
+        // Privileged: a tmpfs it mounts on /w/node_modules itself is in no
+        // inspect.
+        let privileged = inspect(&format!(
+            r#""Rootfs":"","Privileged":true,"CapAdd":[],{started}"#
+        ));
+        assert!(privileged.may_mount());
+        let mounts = Mounts::of(&privileged, &[], &HashMap::new()).unwrap();
+        assert_eq!(
+            decided(&node_modules, &[mounts]).await,
+            mounted_by(&"c".repeat(64), &repo, "/w/node_modules")
+        );
+        // CAP_SYS_ADMIN, as Podman 6.1.4 lists it, or as given.
+        for caps in [r#"["CAP_SYS_ADMIN"]"#, r#"["SYS_ADMIN"]"#, r#"["ALL"]"#] {
+            assert!(inspect(&format!(
+                r#""Rootfs":"","Privileged":false,"CapAdd":{caps},{started}"#
+            ))
+            .may_mount());
+        }
+        // Without it, a bind of the repository alone keeps nothing.
+        let plain = inspect(&format!(
+            r#""Rootfs":"","Privileged":false,"CapAdd":["CAP_NET_RAW"],{started}"#
+        ));
+        assert!(!plain.may_mount());
+        let mounts = Mounts::of(&plain, &[], &HashMap::new()).unwrap();
+        assert_eq!(decided(&node_modules, &[mounts]).await, None);
+        // Never started: its overlay volumes are not reported yet.
+        let created = inspect(
+            r#""Rootfs":"","Privileged":false,"CapAdd":[],"StartedAt":"0001-01-01T00:00:00Z""#,
+        );
+        let mounts = Mounts::of(&created, &[], &HashMap::new()).unwrap();
+        assert!(matches!(
+            decided(&node_modules, &[mounts]).await,
+            Some(Kept::Unknown(why)) if why.contains("has never started")
+        ));
+        // A --rootfs above the mount point, with a volume where it is.
+        let rootfs: Inspected = serde_json::from_str(&format!(
+            r#"{{"Id":"{}","Mounts":[{{"Type":"volume","Name":"deps","Source":"/v/deps/_data","Destination":"/node_modules"}}],"Tmpfs":{{}},"Rootfs":"{}","Privileged":false,"CapAdd":[],{started}}}"#,
+            "d".repeat(64),
+            repo.display()
+        ))
+        .unwrap();
+        let mounts = Mounts::of(&rootfs, &[], &HashMap::new()).unwrap();
+        assert!(matches!(
+            decided(&node_modules, &[mounts]).await,
+            Some(Kept::Mounted { at, .. }) if at == Path::new("/node_modules")
+        ));
+        // A volume plugin's volume: Podman does not say what it uses.
+        let plugin: Inspected = serde_json::from_str(&format!(
+            r#"{{"Id":"{}","Mounts":[{{"Type":"volume","Name":"shared","Destination":"/s"}}],"Tmpfs":{{}},{started}}}"#,
+            "e".repeat(64)
+        ))
+        .unwrap();
+        let volumes: Vec<InspectedVolume> = parse_json_lines(
+            br#"{"Name":"shared","Driver":"local-persist","Options":{"mountpoint":"/data"}}
+"#,
+        )
+        .unwrap();
+        let mut mounts = vec![Mounts::of(&plugin, &[], &HashMap::new()).unwrap()];
+        plugin_volumes_unknown(&mut mounts, std::slice::from_ref(&plugin), &volumes);
+        assert!(matches!(
+            decided(&node_modules, &mounts).await,
+            Some(Kept::Unknown(why)) if why.contains("volume plugin local-persist")
+        ));
+    }
+
+    /// End-to-end: needs Podman. What `held_elsewhere` finds on this
+    /// computer: every connection Podman lists besides the one in use (on a
+    /// Mac, the machine's rootful connection), and on Linux rootful
+    /// Podman's API when it is enabled. Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   dependency_mountpoint::tests::this_computers_other_engines_are_found -- --ignored --exact
+    /// ```
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn this_computers_other_engines_are_found() {
+        let found = held_elsewhere_here().await;
+        println!("held elsewhere: {found:?}");
+        let listed = podman_output(
+            ["system", "connection", "list", "--format", "json"]
+                .map(String::from)
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+        let connection = std::env::var("CONTAINER_CONNECTION").ok();
+        let others = other_connections(
+            &listed,
+            connection.as_deref(),
+            std::env::var_os("CONTAINER_HOST").is_some(),
+        )
+        .unwrap();
+        for other in &others {
+            assert!(
+                found
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains(other.as_str()),
+                "{other} in {found:?}"
+            );
+        }
+        if cfg!(target_os = "linux") && !running_as_root() && Path::new("/run/podman").is_dir() {
+            assert!(found.as_deref().unwrap_or_default().contains("rootful"));
+        }
+    }
+
+    /// A container Podman lists only with `--external` is told from one it
+    /// lists, by its state (Podman 4.9.3, a `buildah from` container).
+    #[test]
+    fn an_external_container_is_told_by_its_state() {
+        let listed: Vec<Listed> = parse_json_array(
+            br#"[{"Id":"8679c8c1c3fa82c944492190016ebaa13714e9f24281431492bf0c066f29abc3","Names":["probe-working-container"],"State":"storage","Status":"Storage"},{"Id":"165161b7d95aabeddcacc303d6f96e271475ed5be59ee9dfa2f31e531455d886","Names":["own"],"State":"running","Mounts":["/w"]}]"#,
+        )
+        .unwrap();
+        assert!(listed[0].external());
+        assert!(!listed[1].external());
+    }
+
+    /// A mount point that a container of another engine or connection could
+    /// hold is kept like one a listed container mounts.
+    #[test]
+    fn a_mount_point_held_elsewhere_stays() {
+        let repo = tempfile::tempdir().unwrap();
+        let mut registry = Registry::default();
+        let path = made_for_a_container(&mut registry, repo.path());
+        let candidates = registry.candidates();
+        let elsewhere: HashMap<PathBuf, Kept> = [(
+            path.clone(),
+            Kept::Elsewhere("Podman has the connection podman-machine-default-root".into()),
+        )]
+        .into();
+        assert!(registry.release(candidates, &elsewhere).is_empty());
+        assert!(path.is_dir());
+        // Once nothing could hold it, it goes.
+        assert_eq!(
+            release_all(&mut registry),
+            [(path.clone(), Released::Removed)]
+        );
     }
 
     #[test]

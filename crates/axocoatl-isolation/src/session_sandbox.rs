@@ -8918,6 +8918,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn node_dependencies_are_linux_local_and_cleanup_is_exact() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         std::fs::create_dir(directory.path().join("node_modules")).unwrap();
@@ -8988,6 +8989,16 @@ mod tests {
         .await
         .unwrap()
         .is_empty());
+    }
+
+    /// Releases in this test run as if no other container engine, Podman
+    /// connection or rootful Podman could have a mount on a mount point
+    /// (`dependency_mountpoint::held_elsewhere`), which on a Mac (every
+    /// machine has a rootful connection) or Ubuntu (its podman package
+    /// enables rootful Podman's API) would keep every one.
+    fn nothing_elsewhere() {
+        crate::dependency_mountpoint::ASSUME_NOTHING_ELSEWHERE
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// What `release_unused` decides for `mountpoint` now.
@@ -9110,6 +9121,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_repository_without_node_modules_has_none_left_behind() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9117,6 +9129,10 @@ mod tests {
             .join("node_modules");
         let first_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
         let second_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
+        // A failed assertion still removes both Sessions' containers and
+        // dependency volumes.
+        let _first_leftovers = SessionLeftovers(first_id.clone());
+        let _second_leftovers = SessionLeftovers(second_id.clone());
         let start = |id: String| {
             let path = directory.path().to_path_buf();
             async move {
@@ -9180,6 +9196,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires rootless podman; run this test explicitly"]
     async fn under_the_hardened_workload_the_mount_point_is_the_persons_until_removal() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9306,6 +9323,7 @@ mod tests {
         setup: &str,
         check: &str,
     ) {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9613,6 +9631,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn mounts_taken_with_volumes_from_keep_the_mount_point() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9760,6 +9779,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires rootless podman; run this test explicitly"]
     async fn an_overlay_of_a_keep_id_container_keeps_it_and_says_why() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
