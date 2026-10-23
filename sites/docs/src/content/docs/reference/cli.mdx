@@ -50,6 +50,10 @@ logging. Set `RUST_LOG`, for example:
 RUST_LOG=debug axocoatl dev
 ```
 
+The daemon logs each HTTP request it answers at `debug`, with any sign-in token as
+`REDACTED` (`RUST_LOG=info,axocoatl_server=debug` adds them to the default `info`
+logs), and an answer with a server error (5xx) at `warn`, which it shows by default.
+
 ## Console chat
 
 ```text
