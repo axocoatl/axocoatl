@@ -833,10 +833,38 @@ else
   mkdir -p "$dest"
 fi
 
+# --- What this install replaces ---
+# The Axocoatl at the path it writes, and any daemon (`axocoatl serve`, which
+# the Always-On Service runs, or `axocoatl dev`) that runs now: a daemon keeps
+# running the binary it started from until it restarts, and only a started
+# daemon of the new version changes its data.
+previous=""
+if [ -x "${dest}/${BIN}" ]; then
+  previous="$("${dest}/${BIN}" --version 2>/dev/null | head -n 1 | awk '{print $2}')" || previous=""
+  case "$previous" in
+    ''|*[!0-9.]*) previous="" ;;
+  esac
+fi
+daemons="$(ps -A -o args= 2>/dev/null | awk -v bin="$BIN" '
+  { n = split($1, parts, "/"); if (parts[n] == bin && ($2 == "serve" || $2 == "dev")) print $1 " " $2 }
+' || true)"
+[ -z "$previous" ] || info "replacing Axocoatl ${previous} at ${dest}/${BIN}"
+
 install -m 0755 "${tmp}/${BIN}" "${dest}/${BIN}" 2>/dev/null \
   || { cp "${tmp}/${BIN}" "${dest}/${BIN}" && chmod 0755 "${dest}/${BIN}"; }
 
 info "installed ${BIN} ${tag} -> ${dest}/${BIN}"
+# A new minor or major release reads data the older one wrote, and the older
+# one cannot always read it back: the way back is the backup.
+new_version="${tag#v}"
+case "$previous" in
+  '') ;;
+  "${new_version%.*}".*) ;;
+  *) info "upgrading from Axocoatl ${previous}: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to ${previous} needs that backup)" ;;
+esac
+if [ -n "$daemons" ]; then
+  info "an Axocoatl daemon is running ($(printf '%s\n' "$daemons" | head -n 1)); it runs the binary it started from until it restarts. Restart it: '${BIN} service stop' and '${BIN} service start' for the Always-On Service, or stop '${BIN} dev' (Ctrl-C) and start it again"
+fi
 
 # --- Keep it on PATH for new terminals ---
 # A stock macOS PATH (/etc/paths) has no ~/.local/bin, and an `export` typed

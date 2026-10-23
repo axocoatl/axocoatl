@@ -1700,6 +1700,26 @@ impl AxocoatlDaemon {
                 && old_config.as_ref().is_some_and(|old| {
                     serde_json::to_value(old).ok() == serde_json::to_value(&config).ok()
                 });
+            // A slot kept as it was keeps its retained profile, unless that
+            // profile can no longer serve a turn (an Ollama profile Axocoatl
+            // 1.4 recorded on Ollama 0.20.6): its turns ask for this review,
+            // so it is observed again, as a changed Agent is, and starts a
+            // new conversation.
+            let refused_profile = match prior {
+                Some(slot) if unchanged => self
+                    .session_dispatch_lifecycles
+                    .with_session_team_stores(&token, |canonical, content, _| {
+                        Ok(matches!(
+                            content.resolve_provider_profile(canonical, &slot.definition.snapshot),
+                            Ok(Some((_, profile)))
+                                if crate::session_dispatch::retained_profile_refused(
+                                    profile.configuration()
+                                )
+                        ))
+                    })?,
+                _ => false,
+            };
+            let unchanged = unchanged && !refused_profile;
             let identity = digest(&(session_id, &edit.command_id, &slot_id))?;
             let conversation_id = if unchanged {
                 prior

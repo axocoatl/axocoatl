@@ -40,6 +40,18 @@ pub struct NativeOllamaContextObservation {
     pub thinking_supported: bool,
 }
 
+impl NativeOllamaContextObservation {
+    /// Whether native Sessions refuse to connect from this retained
+    /// observation: its schema is not the one this Axocoatl writes, or the
+    /// server version it recorded is refused now (every observation Axocoatl
+    /// 1.4 or earlier recorded: Ollama 0.20.6). Only observing the model
+    /// again, as Team & budget's Apply does, replaces it.
+    pub fn refused_when_retained(&self) -> bool {
+        self.schema_version != OBSERVATION_SCHEMA_VERSION
+            || ollama_version_refusal(&self.server_version).is_some()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct ModelIdentity {
     name: String,
@@ -471,9 +483,7 @@ impl NativeOllamaProvider {
         max_output_tokens: usize,
         max_response_bytes: usize,
     ) -> Result<Self, ProviderError> {
-        if observation.schema_version != OBSERVATION_SCHEMA_VERSION
-            || ollama_version_refusal(&observation.server_version).is_some()
-        {
+        if observation.refused_when_retained() {
             return Err(retained_version_refusal(&observation).await);
         }
         if model_key(&observation.requested_model)? != model_key(&observation.resolved_model)?

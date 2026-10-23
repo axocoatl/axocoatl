@@ -1,0 +1,40 @@
+{
+  "id": "ses-6628f8ac-ccfe-4bd0-a7cd-e1afc1596148",
+  "name": "Unused",
+  "workspace_id": "wsp-f6c97801-73ec-4cab-a58b-23851b9b7e0a",
+  "working_dir": "/private/tmp/claude-501/-Users-erick-Developer-work-codeoperators-axocoatl/0f85c334-efce-43e2-95fb-09c328c25a87/scratchpad/mk140/repo",
+  "mode": {
+    "kind": "single_agent",
+    "agent_id": "lead"
+  },
+  "status": "active",
+  "enabled_skills": [],
+  "exposed_ports": [],
+  "image": null,
+  "post_create_commands": [],
+  "check_command": null,
+  "environment": {
+    "generation": 1,
+    "state": "ready",
+    "effective_image": "docker.io/library/alpine:3.20",
+    "runtime": {
+      "backend": "podman",
+      "id": "ses-6628f8ac-ccfe-4bd0-a7cd-e1afc1596148",
+      "remote_root": null,
+      "control_plane": null,
+      "data_plane_domain": null,
+      "authority_fingerprint": null,
+      "ownership_token": null,
+      "cleanup_confirmed": true
+    },
+    "runtime_creation": null,
+    "setup_command": null,
+    "setup_approved": false,
+    "setup_reviewed": true,
+    "setup_results": [],
+    "error": null,
+    "prepared_at": 1792751221
+  },
+  "created_at": 1792751211,
+  "last_active": 1792751211
+}

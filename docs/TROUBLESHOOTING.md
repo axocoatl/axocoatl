@@ -52,7 +52,16 @@ and older, pre-releases, development builds and a new major release are refused,
 `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`), a restart when
 the `ollama` on PATH is newer than the server that answers, or 0.40.6 in place of a
 version that is too new. A Team reviewed on Ollama 0.20.6 asks to be reviewed again
-("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again").
+("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again"): in Team &
+budget, select Edit, then Preview and Apply with nothing changed. Its Ollama Agents
+are observed again and start new conversations.
+
+**A daemon older than this CLI**
+After an upgrade, a daemon started before it (the Always-On Service or an
+`axocoatl dev` terminal) runs the old binary until it restarts. `axocoatl doctor`
+names its version, or says it is older than Axocoatl 1.5.0 when it does not answer
+the version request. Restart it: `axocoatl service stop && axocoatl service start`,
+or stop `axocoatl dev` and start it again.
 
 **A model loaded with a 4096-token context**
 Ollama gives models 4096 tokens on computers with less than about 23 GiB of graphics

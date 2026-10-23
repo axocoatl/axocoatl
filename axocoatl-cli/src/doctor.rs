@@ -1397,21 +1397,26 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
         .unwrap_or_else(|| ("127.0.0.1".to_string(), 8080));
     match axocoatl_daemon::ipc::IpcClient::connect(&env.socket_path).await {
         Ok(mut client) => {
-            let version = daemon_version(&server_host, port).await;
-            let cli = env!("CARGO_PKG_VERSION");
-            sections.daemon.push(match &version {
-                Some(version) if version != cli => Item::warn(
-                    "Daemon",
-                    format!("the running daemon is Axocoatl {version}; this CLI is {cli}"),
-                    Some(
-                        "Restart it so it runs this version: `axocoatl service stop && axocoatl \
-                         service start`, or stop `axocoatl dev` and start it again"
-                            .to_string(),
-                    ),
-                ),
-                Some(version) => Item::ok("Daemon", format!("running (Axocoatl {version})")),
-                None => Item::ok("Daemon", "running (IPC reachable)"),
-            });
+            // On a connection of its own: a daemon older than 1.5.0 closes
+            // it on the version request.
+            let ipc = match axocoatl_daemon::ipc::IpcClient::connect(&env.socket_path).await {
+                Ok(mut asked) => {
+                    tokio::time::timeout(std::time::Duration::from_secs(3), asked.daemon_version())
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                }
+                Err(_) => None,
+            };
+            let health = match &ipc {
+                Some(axocoatl_daemon::ipc::DaemonVersion::Reported(_)) => None,
+                _ => daemon_version(&server_host, port).await,
+            };
+            sections.daemon.push(daemon_version_item(
+                env!("CARGO_PKG_VERSION"),
+                ipc.as_ref(),
+                health.as_deref(),
+            ));
             let check = match client
                 .request(&axocoatl_daemon::ipc::IpcRequest::RuntimeVolumes)
                 .await
@@ -1748,6 +1753,48 @@ fn is_loopback(host: &str) -> bool {
 }
 
 /// What `GET /health` of the daemon on `host:port` says its version is.
+/// The Daemon line: which Axocoatl the running daemon is, from its answer to
+/// the IPC version request (`ipc`) or, when it named none, from its
+/// `/health` (`health`), against this CLI's version `cli`. A daemon that
+/// closes the connection on the version request is older than 1.5.0, which
+/// added it: a service or `axocoatl dev` that was not restarted after an
+/// upgrade.
+fn daemon_version_item(
+    cli: &str,
+    ipc: Option<&axocoatl_daemon::ipc::DaemonVersion>,
+    health: Option<&str>,
+) -> Item {
+    use axocoatl_daemon::ipc::DaemonVersion;
+    let restart = || {
+        Some(
+            "Restart it so it runs this version: `axocoatl service stop && axocoatl service \
+             start`, or stop `axocoatl dev` and start it again"
+                .to_string(),
+        )
+    };
+    let reported = match ipc {
+        Some(DaemonVersion::Reported(version)) => Some(version.as_str()),
+        _ => health,
+    };
+    match (reported, ipc) {
+        (Some(version), _) if version != cli => Item::warn(
+            "Daemon",
+            format!("the running daemon is Axocoatl {version}; this CLI is {cli}"),
+            restart(),
+        ),
+        (Some(version), _) => Item::ok("Daemon", format!("running (Axocoatl {version})")),
+        (None, Some(DaemonVersion::BeforeVersionRequest)) => Item::warn(
+            "Daemon",
+            format!(
+                "the running daemon is older than Axocoatl 1.5.0 (it does not answer the \
+                 version request); this CLI is {cli}"
+            ),
+            restart(),
+        ),
+        (None, _) => Item::ok("Daemon", "running (IPC reachable)"),
+    }
+}
+
 pub(crate) async fn daemon_version(host: &str, port: u16) -> Option<String> {
     let url = crate::onboard::smoke::health_url(host, port);
     let response = reqwest::Client::builder()
@@ -2182,6 +2229,48 @@ pub(crate) async fn cmd_doctor(config_path: &Path, json: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Daemon line names the running daemon's version, from the IPC
+    /// version request or else `/health`. A daemon that closes the
+    /// connection on the request is older than 1.5.0 (a 1.4 service left
+    /// running after an upgrade): a warning with the restart, where it used
+    /// to pass as "running (IPC reachable)".
+    #[test]
+    fn the_daemon_line_names_a_daemon_older_than_this_cli() {
+        use axocoatl_daemon::ipc::DaemonVersion;
+        let restart = "Restart it so it runs this version: `axocoatl service stop && axocoatl \
+                       service start`, or stop `axocoatl dev` and start it again";
+        let older = daemon_version_item("1.5.0", Some(&DaemonVersion::BeforeVersionRequest), None);
+        assert_eq!(older.status, Status::Warn);
+        assert_eq!(
+            older.detail,
+            "the running daemon is older than Axocoatl 1.5.0 (it does not answer the version \
+             request); this CLI is 1.5.0"
+        );
+        assert_eq!(older.fix.as_deref(), Some(restart));
+        let reported = DaemonVersion::Reported("1.5.0".into());
+        let current = daemon_version_item("1.5.0", Some(&reported), Some("9.9.9"));
+        assert_eq!(
+            (current.status, current.detail.as_str()),
+            (Status::Ok, "running (Axocoatl 1.5.0)")
+        );
+        let other = daemon_version_item("1.5.1", Some(&reported), None);
+        assert_eq!(other.status, Status::Warn);
+        assert_eq!(
+            other.detail,
+            "the running daemon is Axocoatl 1.5.0; this CLI is 1.5.1"
+        );
+        assert_eq!(other.fix.as_deref(), Some(restart));
+        // No IPC answer at all: /health decides, and without it nothing is
+        // claimed about the version.
+        let health = daemon_version_item("1.5.1", None, Some("1.5.0"));
+        assert_eq!(health.status, Status::Warn);
+        let unknown = daemon_version_item("1.5.0", None, None);
+        assert_eq!(
+            (unknown.status, unknown.detail.as_str()),
+            (Status::Ok, "running (IPC reachable)")
+        );
+    }
 
     fn plan(
         writer: &'static str,

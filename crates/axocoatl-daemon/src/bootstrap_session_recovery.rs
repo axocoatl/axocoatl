@@ -244,6 +244,13 @@ impl AxocoatlDaemon {
     /// An explicit Send/control may attach the latest recovered turn only after
     /// the real Ready Session/Workspace/runtime owner is reacquired. Zero-turn
     /// pending entries stay pending for their normal first Begin path.
+    ///
+    /// A recovered turn that had ended is then released as a turn that ends
+    /// in this process is: the Session is between turns and does not hold its
+    /// Workspace, and its next turn reacquires it. Otherwise a next turn that
+    /// cannot start (a provider that refuses, say) would leave the Workspace
+    /// held, so every run and other Session there is refused as busy until
+    /// this Session closes or the daemon restarts.
     pub(crate) async fn ensure_registered_native_session(
         &self,
         session_id: &str,
@@ -258,12 +265,14 @@ impl AxocoatlDaemon {
         let owner = self.pending_session_repository_owner(&token).await?;
         self.require_runtime_admission()?;
         self.validate_repository_daemon_binding(&owner)?;
-        let (controller, _) = self
-            .session_dispatch_lifecycles
-            .attach_existing_turn(&token, turn, owner)?;
+        let (controller, _) =
+            self.session_dispatch_lifecycles
+                .attach_existing_turn(&token, turn.clone(), owner)?;
         controller
             .attach_stream_bus(self.stream_bus.clone())
             .map_err(recovery_error)?;
+        self.session_dispatch_lifecycles
+            .release_recovered_turn_if_ended(session_id, &turn)?;
         Ok(true)
     }
 }

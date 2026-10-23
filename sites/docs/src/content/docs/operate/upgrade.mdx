@@ -144,6 +144,73 @@ Future-version Session ledger or attachment schemas are rejected rather than
 silently interpreted. That protects against accidental corruption, but it is
 not an automatic migration path.
 
+## Upgrading from 1.4
+
+Axocoatl 1.5 starts on the data root 1.4 used, in place or as a restored copy, and keeps
+its Sessions, their History and the records of `axocoatl run`. Native Sessions now need
+Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
+
+<Steps>
+
+1. Finish or stop running work, and note the version and the service:
+
+   ```sh
+   axocoatl --version
+   axocoatl service status
+   ```
+
+2. Stop the daemon: `axocoatl service stop` for the Always-On Service, or **Ctrl-C** in
+   the terminal that runs `axocoatl dev`.
+3. Make a [complete cold backup](/operate/data-backup/#make-a-cold-backup) of the data
+   root and the configuration, and keep the 1.4 binary with it. It is the only way back
+   to 1.4 (see [Data written by 1.5](#data-written-by-15)).
+4. Install 1.5:
+
+   ```sh
+   curl -fsSL https://axocoatl.ai/install.sh | sh
+   ```
+
+   The installer names the copy it replaces and says when a daemon still runs: a daemon
+   keeps running the binary it started from until it restarts.
+5. Upgrade Ollama to 0.40.6 or later: `brew upgrade ollama && brew services restart ollama`
+   with Homebrew, or `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`
+   on Linux. `axocoatl onboard` does it after asking.
+6. Check the setup. Doctor says when Ollama still runs 0.20.6, when a configured model is
+   missing, and when a daemon that is still running is older than 1.5.0:
+
+   ```sh
+   axocoatl doctor
+   ```
+
+7. Start the daemon: `axocoatl service start`, or `axocoatl dev`. If the binary is at
+   another path than before, run `axocoatl service install` first.
+8. In each Session you continue, open **Team & budget**, select **Edit**, then
+   **Preview** and **Apply**; nothing needs to change. A Team reviewed on Ollama 0.20.6
+   says "Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again" until
+   then. Apply observes each of its Ollama Agents again on the Ollama that runs now, and
+   Preview shows each as replaced, with a new conversation, since Ollama 0.40 runs the
+   model in another engine. `axocoatl run` needs nothing: every run applies its loadout's
+   team in a new Session.
+
+</Steps>
+
+## Data written by 1.5
+
+Axocoatl 1.5 records a change whose patch is larger than 512 KiB by the patch's digest,
+its size and its first 12 KiB; 1.4 could not capture such a change. Axocoatl 1.4.0 does
+not start on a data root in which 1.5 recorded one, and says:
+
+```text
+Failed to bootstrap daemon: Session error: could not recover canonical history for Session '…': Session error: Session dispatch: invalid execution content: invalid checked repository identity; existing data was not replaced and no work was replayed
+```
+
+No command converts such a capture into one 1.4 reads. To go back to 1.4, restore the
+cold backup you made before upgrading, as [Restore](/operate/data-backup/#restore)
+describes, with the 1.4 binary: start Axocoatl 1.5 on the restored data root once and
+stop it, so that it records the copy's location (1.4.0 refuses a restored copy until
+then), then start 1.4.0. Work done with 1.5 is not in that backup. Axocoatl 1.4.0 runs
+native Ollama Sessions only on Ollama 0.20.6.
+
 ## Data written by 1.4
 
 Axocoatl 1.4 records, in each repository capture, the digest of every path that differs
