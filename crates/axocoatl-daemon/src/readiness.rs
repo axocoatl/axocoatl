@@ -334,6 +334,61 @@ pub fn ollama_model_items(wanted: &[String], pulled: &[String]) -> Vec<Readiness
         .collect()
 }
 
+/// One item per pulled model: the context Ollama loaded it with, when it
+/// has it loaded (`contexts`, from `/api/ps`, which loads nothing), against
+/// the 16,384 tokens a run needs; `context_fix` gives Ollama a larger one.
+/// A model that is not loaded has no context yet: Ollama sets it when it
+/// loads the model, which `axocoatl doctor` does.
+pub fn ollama_context_items(
+    contexts: &[(String, Result<Option<usize>, String>)],
+    context_fix: &str,
+) -> Vec<ReadinessItem> {
+    let floor = axocoatl_config::loadout::MIN_RUN_CONTEXT_TOKENS;
+    contexts
+        .iter()
+        .map(|(model, context)| {
+            let (status, detail, fix) = match context {
+                Ok(Some(tokens)) if (*tokens as u64) < floor => (
+                    ReadinessStatus::Fail,
+                    format!(
+                        "Ollama has {model} loaded with a {tokens}-token context, and a run needs \
+                         at least {floor} (the fix writer's first call alone is about 9,700 \
+                         tokens)."
+                    ),
+                    Some(format!(
+                        "Give Ollama a {}-token context: {context_fix}.",
+                        crate::loadout::admission::CONTEXT_FIX_TOKENS
+                    )),
+                ),
+                Ok(Some(tokens)) => (
+                    ReadinessStatus::Ok,
+                    format!("Ollama has it loaded with a {tokens}-token context."),
+                    None,
+                ),
+                Ok(None) => (
+                    ReadinessStatus::Ok,
+                    "Not loaded now: Ollama sets its context when it loads it. `axocoatl doctor` \
+                     loads it and checks that context."
+                        .to_string(),
+                    None,
+                ),
+                Err(error) => (
+                    ReadinessStatus::Warn,
+                    format!("Could not read its context from Ollama: {error}"),
+                    Some("Run `axocoatl doctor`.".to_string()),
+                ),
+            };
+            ReadinessItem::new(
+                format!("ollama.context:{model}"),
+                format!("Context of {model}"),
+                status,
+                detail,
+                fix,
+            )
+        })
+        .collect()
+}
+
 async fn ollama_tags(base_url: &str) -> Result<Vec<String>, String> {
     let client = reqwest::Client::builder()
         .timeout(TAGS_TIMEOUT)
@@ -448,7 +503,34 @@ pub async fn check_readiness(inputs: ReadinessInputs) -> ReadinessReport {
         let wanted = ollama_models(config);
         if reachable && !wanted.is_empty() {
             match ollama_tags(&ollama.base_url).await {
-                Ok(pulled) => sections.models.extend(ollama_model_items(&wanted, &pulled)),
+                Ok(pulled) => {
+                    let items = ollama_model_items(&wanted, &pulled);
+                    // The context each pulled model is loaded with, when it
+                    // is: read, never loaded.
+                    let mut contexts = Vec::new();
+                    for (model, item) in wanted.iter().zip(&items) {
+                        if item.status != ReadinessStatus::Ok {
+                            continue;
+                        }
+                        let context = tokio::time::timeout(
+                            TAGS_TIMEOUT,
+                            axocoatl_llm_ollama::inspect_native_ollama_model(
+                                &ollama.base_url,
+                                model,
+                            ),
+                        )
+                        .await
+                        .map_err(|_| "Ollama did not answer in time".to_string())
+                        .and_then(|inspected| inspected.map_err(|error| error.to_string()));
+                        contexts.push((model.clone(), context));
+                    }
+                    sections.models.extend(items);
+                    sections.models.extend(ollama_context_items(
+                        &contexts,
+                        &crate::loadout::admission::OllamaInstall::here()
+                            .context_fix(&crate::loadout::admission::brew_services_env()),
+                    ));
+                }
                 Err(error) => sections.models.push(ReadinessItem::new(
                     "ollama.models",
                     "Ollama models",
@@ -717,6 +799,41 @@ mod tests {
         assert_eq!(items[1].status, ReadinessStatus::Ok);
         assert!(items.iter().all(|item| !item.detail.contains("llama3.2")
             && !item.fix.as_deref().unwrap_or_default().contains("llama3.2")));
+    }
+
+    /// A pulled model Ollama has loaded with less context than a run needs
+    /// fails, with how to give it more; one loaded with enough passes; one
+    /// not loaded passes, saying its context is set when it loads.
+    #[test]
+    fn a_loaded_models_context_is_checked_against_what_a_run_needs() {
+        let fix = "add OLLAMA_CONTEXT_LENGTH=32768 to ~/.homebrew/services/ollama.env and run \
+                   `brew services restart ollama`";
+        let items = ollama_context_items(
+            &[
+                ("qwen3-coder:30b".into(), Ok(Some(4096))),
+                ("gpt-oss:20b".into(), Ok(Some(32768))),
+                ("devstral:24b".into(), Ok(None)),
+                ("mistral-small3.2:24b".into(), Err("model not found".into())),
+            ],
+            fix,
+        );
+        assert_eq!(items[0].id, "ollama.context:qwen3-coder:30b");
+        assert_eq!(items[0].status, ReadinessStatus::Fail);
+        assert!(
+            items[0].detail.contains("4096-token context"),
+            "{:?}",
+            items[0]
+        );
+        assert!(items[0].detail.contains("at least 16384"), "{:?}", items[0]);
+        assert_eq!(
+            items[0].fix.as_deref(),
+            Some(format!("Give Ollama a 32768-token context: {fix}.").as_str())
+        );
+        assert_eq!(items[1].status, ReadinessStatus::Ok);
+        assert!(items[1].detail.contains("32768-token"));
+        assert_eq!(items[2].status, ReadinessStatus::Ok);
+        assert!(items[2].detail.contains("axocoatl doctor"));
+        assert_eq!(items[3].status, ReadinessStatus::Warn);
     }
 
     #[test]
