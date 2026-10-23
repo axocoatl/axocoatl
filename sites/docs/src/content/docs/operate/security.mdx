@@ -338,8 +338,11 @@ them only in a tab of its own, which the daemon refuses in Safari.
   address with status 200 while the server received no request; its page set
   a `Domain=localhost` cookie, which did not reach `127.0.0.1`. Embedded in a
   page of another address, that address was served by the server, not by the
-  worker. Safari's Manage Website Data does not list `localhost` addresses
-  ([see below](#pages-on-other-127001-ports)), so remove such a worker with
+  worker. Safari's Manage Website Data cannot remove it: measured with the
+  system's WebKit on macOS 26.6, a service worker, `Domain=localhost` cookies
+  and host-only cookies of a `*.localhost` address formed no website data
+  record at all, while removing all website data, as History > Clear History
+  does, removed the worker and those cookies. So remove such a worker with
   History > Clear History, which removes the data of every website.
 
 ### Pages on other `127.0.0.1` ports
@@ -390,9 +393,11 @@ Settings > Privacy > Manage Website Data, where it is listed as `127.0.0.1`.
 Measured with the system's WebKit on macOS 26.6 (`WKWebsiteDataStore`, whose
 records that list shows): the cookies that pages on `127.0.0.1` set, with
 `Path=/api`, `Path=/` and `Path=/ws`, and an HttpOnly one a server set, formed
-one record named `127.0.0.1`, and removing it removed every one of them,
-while the cookies of `localhost` and `*.localhost` addresses formed no record
-at all. It was not checked by clicking through Safari's own settings.
+one record named `127.0.0.1`, and removing it removed every one of them.
+Host-only cookies of `localhost` itself formed a record named `localhost`;
+the cookies of `*.localhost` addresses, `Domain=localhost` ones included,
+formed none, and removing the `localhost` record left them in place. It was
+not checked by clicking through Safari's own settings.
 
 Such a page cannot:
 

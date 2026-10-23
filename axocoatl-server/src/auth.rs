@@ -1367,6 +1367,12 @@ mod tests {
         assert!(body.contains("axocoatl url"));
         assert!(body.contains(r#"href="/""#));
         assert!(!body.contains("ax-rail"));
+        // A browser a cookie flood keeps signed out only ever sees this page,
+        // so it names that cause and the remedy.
+        assert!(body.contains(
+            "another page open in this browser, on another <code>127.0.0.1</code> address"
+        ));
+        assert!(body.contains("Settings &gt; Privacy &gt; Manage Website Data"));
     }
 
     #[tokio::test]

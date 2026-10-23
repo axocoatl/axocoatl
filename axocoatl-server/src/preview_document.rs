@@ -268,12 +268,14 @@ pub async fn refuse_top_level_preview(request: Request, next: Next) -> Response 
     top_level_preview_refusal(request.method(), &target.session_id, listener_port, kind)
 }
 
-/// Whether a browser asked the legacy Preview path for anything other than
-/// `fetch()` or `XMLHttpRequest`: a page, a frame or any other navigation
-/// (`Sec-Fetch-Mode: navigate`), or a script, style sheet, image, worker or
-/// other subresource (any `Sec-Fetch-Dest` but `empty`). A client that sends
-/// no Fetch Metadata (a program, or a browser too old to send it) is not
-/// refused; there the response's CSP `sandbox` still applies.
+/// Whether a browser asked the legacy Preview path for anything but a data
+/// request (`Sec-Fetch-Dest: empty` without `Sec-Fetch-Mode: navigate`, what
+/// `fetch()`, `XMLHttpRequest`, `EventSource` and `navigator.sendBeacon`
+/// send): a page, a frame or any other navigation, or an embed, object,
+/// script, style sheet, image, worker or other subresource (any other
+/// `Sec-Fetch-Dest`). A client that sends no Fetch Metadata (a program, or a
+/// browser too old to send it) is not refused; there the response's CSP
+/// `sandbox` still applies.
 pub(crate) fn legacy_preview_request_is_refused(headers: &HeaderMap) -> bool {
     let dest = header_text(headers, "sec-fetch-dest");
     let mode = header_text(headers, "sec-fetch-mode");
@@ -283,8 +285,8 @@ pub(crate) fn legacy_preview_request_is_refused(headers: &HeaderMap) -> bool {
 const LEGACY_REFUSAL: &str = "The legacy Preview path serves a Session's app only to \
 data requests such as fetch() and XMLHttpRequest, and to programs that call the \
 Axocoatl API. It is the workbench's own origin, so a browser cannot open it as a page \
-or frame, or embed or load a script, style sheet, image or anything else from it. The workbench shows a Preview at \
-its own address, <session>-p<port>.localhost.\n";
+or frame, or embed or load a script, style sheet, image or anything else from it. The \
+workbench shows a Preview at its own address, <session>-p<port>.localhost.\n";
 
 /// Route middleware of `/api/sessions/{id}/proxy/{port}[/…]`: a request
 /// [`legacy_preview_request_is_refused`] refuses gets status 403 and a line of
@@ -748,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_path_refuses_every_browser_request_but_fetch() {
+    fn the_legacy_path_refuses_every_browser_request_but_data_requests() {
         let refused = |dest: &str, mode: &str| {
             legacy_preview_request_is_refused(&headers(&[
                 ("sec-fetch-dest", dest),
@@ -774,6 +776,8 @@ mod tests {
         ] {
             assert!(refused(dest, mode), "{dest} {mode}");
         }
+        // fetch() and XMLHttpRequest (cors, same-origin), EventSource (cors)
+        // and navigator.sendBeacon (no-cors).
         assert!(!refused("empty", "cors"));
         assert!(!refused("empty", "same-origin"));
         assert!(!refused("empty", "no-cors"));
