@@ -2301,13 +2301,15 @@ async fn live_npm_ci_through_the_npm_preset_and_debian_provisioning() {
     );
 }
 
-/// Live, opt-in with `AXOCOATL_LIVE_EGRESS=1`: Alpine readiness provisioning
-/// through the `alpine` preset, and `cargo fetch` of a small crate through
-/// the `crates` preset. Every connection must be allowed by the presets.
+/// Live, opt-in with `AXOCOATL_LIVE_EGRESS=1`: Alpine and Ubuntu readiness
+/// provisioning through the `alpine` and `ubuntu` presets, `cargo fetch` of a
+/// small crate through the `crates` preset, and `git ls-remote` of a GitHub
+/// repository through the `github` preset. Every connection must be allowed
+/// by the presets.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: AXOCOATL_LIVE_EGRESS=1 CONTAINER_CONNECTION=axocoatl-ci-pr74; needs the internet"]
-async fn live_alpine_provisioning_and_cargo_fetch_through_their_presets() {
+async fn live_provisioning_cargo_fetch_and_git_through_their_presets() {
     use axocoatl_isolation::{SandboxNetwork, SandboxPolicy, SessionSandbox};
     if std::env::var("AXOCOATL_LIVE_EGRESS").as_deref() != Ok("1") {
         eprintln!("skipped: set AXOCOATL_LIVE_EGRESS=1");
@@ -2324,11 +2326,18 @@ async fn live_alpine_provisioning_and_cargo_fetch_through_their_presets() {
     let mut report = Vec::new();
     for (name, image, preset, command) in [
         ("alpine", "docker.io/library/alpine:3.20", "alpine", None),
+        ("ubuntu", "docker.io/library/ubuntu:24.04", "ubuntu", None),
         (
             "crates",
             "docker.io/library/rust:bookworm",
             "crates",
             Some("cargo fetch --quiet"),
+        ),
+        (
+            "github",
+            "docker.io/library/rust:bookworm",
+            "github",
+            Some("git ls-remote https://github.com/axocoatl/axocoatl HEAD"),
         ),
     ] {
         let workspace = private.child(name).unwrap();

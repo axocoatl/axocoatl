@@ -51,6 +51,7 @@ pinned_images=(
   "docker.io/library/node@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 docker.io/library/node:22-alpine"
   "docker.io/library/node@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d docker.io/library/node:22-bookworm-slim"
   "docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 docker.io/library/rust:bookworm"
+  "docker.io/library/ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac docker.io/library/ubuntu:24.04"
 )
 # The tools image the supervisor, egress and workload suites start Sessions
 # from: Alpine with the repository commands, as Axocoatl's passive recovery
