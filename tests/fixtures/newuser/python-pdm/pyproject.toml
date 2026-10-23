@@ -1,0 +1,15 @@
+[project]
+name = "newuser-python-pdm"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.pdm.dev-dependencies]
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["pdm-backend>=2.3"]
+build-backend = "pdm.backend"

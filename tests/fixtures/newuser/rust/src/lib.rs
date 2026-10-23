@@ -25,6 +25,8 @@ pub fn paginate<T: Clone>(items: &[T], size: usize) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tests {
     use super::paginate;
+    // A diff of the two values when an assertion fails.
+    use pretty_assertions::assert_eq;
 
     fn numbers(count: u32) -> Vec<u32> {
         (1..=count).collect()

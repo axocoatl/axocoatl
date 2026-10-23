@@ -137,9 +137,14 @@ async function main() {
       const manifest = ['package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod'].find((file) => existsSync(file));
       // The plan line the product printed in CI on the fixture this
       // repository is (run-plan-lines.txt), as the CLI prints it.
+      const pyproject = manifest === 'pyproject.toml' ? readFileSync('pyproject.toml', 'utf8') : '';
+      const python = [['[tool.poetry]', 'python-poetry'], ['[tool.uv]', 'python-uv'], ['[tool.pdm.', 'python-pdm'],
+        ['[tool.hatch.envs.', 'python-hatch']].find(([marker]) => pyproject.includes(marker))?.[1];
+      const node = [['pnpm-lock.yaml', 'node-pnpm'], ['.yarnrc.yml', 'node-yarn-berry'], ['yarn.lock', 'node-yarn'],
+        ['package-lock.json', 'node-deps']].find(([file]) => existsSync(file))?.[1];
       const fixture = {
-        'package.json': existsSync('package-lock.json') ? 'node-deps' : 'node-plain',
-        'pyproject.toml': 'python-pytest',
+        'package.json': node ?? 'node-plain',
+        'pyproject.toml': python ?? 'python-pytest',
         'Cargo.toml': 'rust',
         'go.mod': 'go',
       }[manifest];
@@ -156,7 +161,8 @@ async function main() {
       const health = await fetch(`http://127.0.0.1:${config.port}/health/live`).catch(() => null);
       if (!health?.ok) return 4;
       const messages = [{ role: 'user', content: flag('--task') }];
-      for (let turn = 0; turn < 12; turn += 1) {
+      // The stub reads each fixture's probe file in turn until one matches.
+      for (let turn = 0; turn < 32; turn += 1) {
         const message = await chat(config.baseUrl, writer, messages, ['read_file', 'edit_file', 'write_file']);
         messages.push(message);
         if (!message.tool_calls?.length) break;

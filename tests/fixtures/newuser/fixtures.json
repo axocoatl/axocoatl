@@ -1,6 +1,6 @@
 {
   "schema": "axocoatl.newuser-fixtures/1",
-  "note": "What the clean-machine new-user gate (docs/RELEASE_GATE.md) expects of each fixture. image_contains and setup_contains are matched against the run's start line and record; null means the run may choose none. The gate runs the README's `axocoatl run fix` command on each fixture, except where command is fixture-readme: then the first `axocoatl run fix` command in the fixture's own README.md. A fixture with an owner is made by that workstream; until it is in the tree, test-fixtures.sh reports it PENDING and the gate fails its runs.",
+  "note": "What the clean-machine new-user gate (docs/RELEASE_GATE.md) expects of each fixture. image_contains and setup_contains are matched against the run's start line and record; null means the run may choose none. The gate runs the README's `axocoatl run fix` command on each fixture, except where command is fixture-readme: then the first `axocoatl run fix` command in the fixture's own README.md. A fixture with an owner is made by that workstream; until it is in the tree, test-fixtures.sh reports it PENDING and the gate fails its runs. A fixture with \"tiers\" runs only in those gate tiers (A is CI's, with the scripted model server); without it, in every tier.",
   "fixtures": {
     "node-plain": {
       "owner": "onboarding (the first-run sample repository)",
@@ -21,7 +21,7 @@
     "python-pytest": {
       "language": "python",
       "test_command": "pytest",
-      "host_setup": "pip install -e .[test]",
+      "host_setup": "pip install -e '.[test]'",
       "image_contains": "python",
       "setup_contains": "pip install"
     },
@@ -30,14 +30,84 @@
       "test_command": "cargo test",
       "host_setup": null,
       "image_contains": "rust",
-      "setup_contains": null
+      "setup_contains": "cargo fetch"
     },
     "go": {
       "language": "go",
       "test_command": "go test ./...",
       "host_setup": null,
       "image_contains": "go",
-      "setup_contains": null
+      "setup_contains": "go mod download"
+    },
+    "node-pnpm": {
+      "tiers": [
+        "A"
+      ],
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "corepack pnpm install --frozen-lockfile",
+      "image_contains": "node",
+      "setup_contains": "pnpm install --frozen-lockfile"
+    },
+    "node-yarn": {
+      "tiers": [
+        "A"
+      ],
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "corepack yarn install --frozen-lockfile",
+      "image_contains": "node",
+      "setup_contains": "yarn install --frozen-lockfile"
+    },
+    "node-yarn-berry": {
+      "tiers": [
+        "A"
+      ],
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "corepack yarn install --immutable",
+      "image_contains": "node",
+      "setup_contains": "yarn install --immutable"
+    },
+    "python-poetry": {
+      "tiers": [
+        "A"
+      ],
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e . 'pytest>=8.0,<9'",
+      "image_contains": "python",
+      "setup_contains": "'pytest>=8.0,<9'"
+    },
+    "python-uv": {
+      "tiers": [
+        "A"
+      ],
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e . 'pytest>=8'",
+      "image_contains": "python",
+      "setup_contains": "pip install -e . 'pytest>=8'"
+    },
+    "python-pdm": {
+      "tiers": [
+        "A"
+      ],
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e . 'pytest>=8'",
+      "image_contains": "python",
+      "setup_contains": "pip install -e . 'pytest>=8'"
+    },
+    "python-hatch": {
+      "tiers": [
+        "A"
+      ],
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e . 'pytest>=8'",
+      "image_contains": "python",
+      "setup_contains": "pip install -e . 'pytest>=8'"
     }
   }
 }

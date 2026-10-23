@@ -648,8 +648,15 @@ PODMAN
   status=$?
   set -e
   [ "$status" = 1 ] || { tail -n 30 "$sim/run.log" >&2; echo "simulation exit $status, expected 1" >&2; exit 1; }
-  # node-plain is onboarding's sample: checked once it is in the tree.
-  present=$(cd "$repo_root/tests/fixtures/newuser" && for f in node-plain node-deps python-pytest rust go; do [ -d "$f" ] && printf '%s ' "$f"; done)
+  # The fixtures each tier runs (fixtures.json), as far as they are in the
+  # tree: node-plain is onboarding's sample, checked once it is there.
+  tier_fixtures() {
+    GATE_TIER=$1 gate_fixture_names | while IFS= read -r f; do
+      [ -d "$repo_root/tests/fixtures/newuser/$f" ] && printf '%s ' "$f"
+    done
+  }
+  present=$(tier_fixtures A)
+  present_live=$(tier_fixtures D)
   node -e '
     const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const status = Object.fromEntries(e.steps.map((s) => [s.name, s.status]));
@@ -761,7 +768,7 @@ PODMAN
     const wrong = Object.entries(want).filter(([name, value]) => status[name] !== value).map(([name, value]) => `${name}: ${status[name]} (want ${value})`);
     if (wrong.length) { console.error(wrong.join("\n")); process.exit(1); }
     if (e.tier !== "D") { console.error(`tier ${e.tier}`); process.exit(1); }
-  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present"
+  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present_live"
   grep -q -- '--model' "$sim/evidence/$version/$commit/D1-sim/readme-command.txt" && { echo "the live run kept the README's --model options" >&2; exit 1; }
   if [ "$again" != 2 ] || ! grep -q 'needs a brand-new account' "$sim/live-again.log"; then
     cat "$sim/live-again.log" >&2

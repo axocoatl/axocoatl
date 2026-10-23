@@ -367,9 +367,13 @@ when a connection asks for it, so an entry must name the host the tool connects 
 
 Presets are `npm`, `yarn`, `pypi`, `crates`, `go`, `github`, `alpine`, `debian`
 and `ubuntu`. The `npm`, `crates`, `alpine` and `debian` lists were checked against
-the live registries with `npm ci`, `cargo fetch` and readiness provisioning; the
-others are not yet verified. If a tool needs a host a preset lacks, the refusal names
-it, and you can list that host yourself.
+the live registries with `npm ci`, `cargo fetch` and readiness provisioning. The
+release gate's Linux paths, which CI runs on every push to `main` and a release
+requires, install real dependencies through `npm` (npm and pnpm), `yarn` (Yarn 1 and
+Yarn 4), `pypi` (pip, for pip, Poetry, uv, PDM and Hatch projects), `crates` (`cargo
+fetch`) and `go` (`go mod download`). The `github` and `ubuntu` lists are not yet
+verified. If a tool needs a host a preset lacks, the refusal names it, and you can
+list that host yourself.
 
 A `host` is a name, never an IP address; use `cidr` for addresses. A range that is
 not wholly public must lie inside a `private_destinations` entry, and each

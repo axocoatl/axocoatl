@@ -230,13 +230,17 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    `[FAIL]` line.
 6. `axocoatl dev` must serve on the configured port.
 7. On each fixture in `tests/fixtures/newuser/` (`node-plain`, `node-deps`,
-   `python-pytest`, `rust`, `go`), the README's `axocoatl run fix` command
+   `python-pytest`, `rust`, `go`, and in Tier A also `node-pnpm`,
+   `node-yarn`, `node-yarn-berry`, `python-poetry`, `python-uv`, `python-pdm`
+   and `python-hatch`), the README's `axocoatl run fix` command
    exactly as written, plus `--junit`, `--record` and `--receipt` when it
    lacks them, must exit 0. `node-plain`, onboarding's first-run sample, has
    another bug than the README's task describes, so it runs the command its
    own README gives (`"command": "fixture-readme"` in `fixtures.json`). Each
-   run's plan line must name the image the fixture needs (and the setup,
-   for `node-deps` and `python-pytest`). The documented
+   run's plan line must name the image the fixture needs and, for every
+   fixture with dependencies (all but `node-plain`), the setup that installs
+   them through the registries opened for it (`setup_contains` in
+   `fixtures.json`). The documented
    `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .`
    and `axocoatl record verify` must exit 0, and the receipt must match the
    record.
