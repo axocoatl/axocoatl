@@ -1777,6 +1777,24 @@ async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() 
             reinstall: apt,
         },
         Case {
+            name: "dpkg path-exclude of both helpers in one line, said once",
+            os: ubuntu(),
+            helpers: None,
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                let d = shims.root.path().join("etc/dpkg/dpkg.cfg.d");
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("90-local"), "path-exclude=/usr/bin/new*map\n").unwrap();
+            },
+            why: Some(
+                "uidmap's /usr/bin/newuidmap and /usr/bin/newgidmap were removed, and dpkg is \
+                 set to leave them out (path-exclude=/usr/bin/new*map in \
+                 /etc/dpkg/dpkg.cfg.d/90-local), so reinstalling uidmap does not write them: \
+                 remove that line",
+            ),
+            reinstall: apt,
+        },
+        Case {
             name: "dpkg, helpers deleted, nothing keeps them off",
             os: ubuntu(),
             helpers: None,
@@ -2097,6 +2115,66 @@ esac"#;
             }
         }
     }
+}
+
+/// A reinstall that failed in a way the network or a repository may have
+/// caused is not kept: its step says to fix that and then run the command,
+/// in backticks, and the next run offers it and runs it again, as doctor
+/// offers it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_failed_for_the_network_is_offered_again() {
+    let fix = "sudo dnf reinstall -y shadow-utils && podman system migrate";
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'Curl error (6): Could not resolve host: mirrors.fedoraproject.org' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac"#;
+    for run in 1..=2 {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert!(!sandbox::run(&mut o).await);
+        let sudo_calls = shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count();
+        assert_eq!(sudo_calls, run, "{:?}", shims.calls());
+        assert_eq!(
+            o.steps,
+            [format!(
+                "`sudo dnf reinstall -y shadow-utils` failed (exit 1): Curl error (6): Could not \
+                 resolve host: mirrors.fedoraproject.org; fix that (often the network or the \
+                 package manager's repositories), then run `{fix}`"
+            )]
+        );
+        crate::paste_safe::assert_paste_safe(&o.steps[0]);
+    }
+    assert!(!shims
+        .home
+        .path()
+        .join(".local/share/axocoatl/onboarding/id-map-attempt.json")
+        .exists());
+    let env = crate::doctor::Environment {
+        os: fedora(),
+        host: shims.host(false),
+        ..doctor_env(&shims)
+    };
+    let config_path = shims.home.path().join("config.yaml");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert_eq!(report.sections.sandbox[0].fix.as_deref(), Some(fix));
 }
 
 /// A HOME of `/` (a service account's) is no home directory: a helper
