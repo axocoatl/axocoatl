@@ -804,6 +804,13 @@ mod tests {
         std::os::unix::fs::symlink("prod.js", root.join("config/alias.js")).unwrap();
         std::fs::create_dir_all(root.join("build")).unwrap();
         std::fs::write(root.join("build/out.js"), "ignored\n").unwrap();
+        // The modes the rows below assert, whatever the umask (0664 under
+        // Ubuntu's 002).
+        for path in ["config/prod.js", "lib/file-7.js", "new file.txt"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join(path), std::fs::Permissions::from_mode(0o644))
+                .unwrap();
+        }
         let output = capture(root, "capture_mode=observe\n").unwrap();
         let row = |path: &str, mode: &str, kind: &str, digest: &str| {
             (
