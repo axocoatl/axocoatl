@@ -49,6 +49,7 @@ use super::openrouter_api::{catalog_model, dollars, model_id, Api, ApiError, Key
 use super::openrouter_config as config_file;
 use super::openrouter_pkce::{auth_url, Callback, Pkce, Returned, AUTH_PAGE};
 use super::{exit, failure, Failure, Interrupt};
+use crate::onboard::ui::fit_prompt;
 use crate::user_paths::UserPaths;
 
 /// How long the sign-in may take by default. OpenRouter's codes expire 10
@@ -343,11 +344,18 @@ pub(crate) async fn sign_in(
                              sign-in's state, so they were not used."
                         ),
                     };
+                    // Nothing at all came back: the browser never reached
+                    // this computer's address.
+                    let nothing = if callback.connections() == 0 {
+                        format!(" No browser came back to {} in that time.", callback.url())
+                    } else {
+                        String::new()
+                    };
                     return Err(failure(
                         exit::NO_TOKEN,
                         format!(
                             "The OpenRouter sign-in was not completed within {}; nothing was \
-                             stored.{ignored} {again} {more_time}",
+                             stored.{nothing}{ignored} {again} {more_time}",
                             minutes(waited)
                         ),
                     ));
@@ -929,7 +937,7 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
             return exit::USAGE;
         }
         let credits = dialoguer::Confirm::new()
-            .with_prompt(BYOK_QUESTION)
+            .with_prompt(fit_prompt(BYOK_QUESTION, 7))
             .default(true)
             .interact()
             .unwrap_or(false);
@@ -951,29 +959,21 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     // What reaches the sign-in's loopback server goes to a log, so a
     // sign-in that never completes can be diagnosed; at a terminal, the end
     // of the sign-in time asks whether to wait again.
-    let log = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|home| home.is_absolute())
-        .and_then(|home| {
-            let directory = crate::onboard::host::log_directory(
-                &home,
-                cfg!(target_os = "macos"),
-                std::env::var_os("XDG_STATE_HOME")
-                    .map(PathBuf::from)
-                    .as_deref(),
-            );
-            crate::onboard::host::Log::create_named(
-                &directory,
-                "connect-openrouter",
-                &crate::onboard::host::stamp(),
-            )
-            .ok()
-        });
-    let report = |line: &str| {
-        if let Some(log) = &log {
-            log.line(line);
-        }
-    };
+    let log = SignInLog::new(
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+            .map(|home| {
+                crate::onboard::host::log_directory(
+                    &home,
+                    cfg!(target_os = "macos"),
+                    std::env::var_os("XDG_STATE_HOME")
+                        .map(PathBuf::from)
+                        .as_deref(),
+                )
+            }),
+    );
+    let report = |line: &str| log.line(line);
     let ask = |time: Duration| keep_waiting_at_the_terminal(time);
     let hooks = Hooks {
         keep_waiting: std::io::stdin()
@@ -999,16 +999,62 @@ pub(crate) async fn cmd_connect_openrouter(flags: Flags) -> i32 {
     if code == exit::CONNECTED {
         println!("\n{text}");
     } else {
-        if let Some(log) = &log {
-            text.push_str(&format!(
-                "\n  Each connection to the sign-in's address on this computer is logged in {} \
-                 (never a code)",
-                log.path().display()
-            ));
+        if let Some(path) = log.path() {
+            text.push_str(&log_hint(path));
         }
         eprintln!("{text}");
     }
     code
+}
+
+/// The log of `axocoatl connect openrouter`'s sign-in:
+/// `connect-openrouter-TIME.log` in its directory, made with its first line
+/// (a connection to the sign-in's loopback server), so a run that ends
+/// before any connection leaves no log and names none.
+pub(crate) struct SignInLog {
+    directory: Option<PathBuf>,
+    stamp: String,
+    log: std::sync::OnceLock<Option<crate::onboard::host::Log>>,
+}
+
+impl SignInLog {
+    /// A log in `directory` (`None`: no log is kept).
+    pub(crate) fn new(directory: Option<PathBuf>) -> Self {
+        Self {
+            directory,
+            stamp: crate::onboard::host::stamp(),
+            log: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Log `text`, making the log first.
+    pub(crate) fn line(&self, text: &str) {
+        let Some(directory) = &self.directory else {
+            return;
+        };
+        let log = self.log.get_or_init(|| {
+            crate::onboard::host::Log::create_named(directory, "connect-openrouter", &self.stamp)
+                .ok()
+        });
+        if let Some(log) = log {
+            log.line(text);
+        }
+    }
+
+    /// The log's path, once a line is in it.
+    pub(crate) fn path(&self) -> Option<&Path> {
+        self.log.get()?.as_ref().map(|log| log.path())
+    }
+}
+
+/// What a failed `axocoatl connect openrouter` adds when its log holds a
+/// line.
+pub(crate) fn log_hint(path: &Path) -> String {
+    format!(
+        "\n  Each connection to the sign-in's address on this computer is logged in {} (never a \
+         code)",
+        path.display()
+    )
 }
 
 /// The question at the end of the sign-in time, at a terminal: Enter waits
@@ -1024,7 +1070,7 @@ pub(crate) fn keep_waiting_question(time: Duration) -> String {
 
 fn keep_waiting_at_the_terminal(time: Duration) -> bool {
     dialoguer::Confirm::new()
-        .with_prompt(keep_waiting_question(time))
+        .with_prompt(fit_prompt(&keep_waiting_question(time), 7))
         .default(true)
         .interact()
         .unwrap_or(false)

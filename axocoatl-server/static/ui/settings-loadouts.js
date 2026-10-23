@@ -253,7 +253,7 @@ export class AxSettingsLoadouts extends HTMLElement {
     });
     line.append(input, copy);
     section.append(line, h('p', 'note', 'Add it to the trusted-keys file of a repository that verifies receipts: '
-      + 'axocoatl receipt verify <receipt> --keys <that file> --repo <checkout>. axocoatl receipt key prints the same '
+      + 'axocoatl receipt verify RECEIPT --keys TRUSTED_KEYS --repo CHECKOUT, with that file as TRUSTED_KEYS. axocoatl receipt key prints the same '
       + 'line; axocoatl receipt key --rotate replaces the key, and receipts the old key signed still verify with its line.'));
     detail.append(section);
     detail.append(h('p', 'note', 'A receipt proves which key signed the facts and that the covered files are the ones '
@@ -276,7 +276,7 @@ export class AxSettingsLoadouts extends HTMLElement {
       detail.append(h('h3', '', row.name));
       detail.append(h('p', 'note', `File: ${row.path || 'unknown'}`));
       detail.append(h('div', 'invalid-error', row.error));
-      detail.append(h('p', 'note', 'This file cannot be used until it is fixed. `axocoatl loadouts validate <file>` checks it without the daemon.'));
+      detail.append(h('p', 'note', 'This file cannot be used until it is fixed. `axocoatl loadouts validate FILE`, with the file above as FILE, checks it without the daemon.'));
       return;
     }
     const view = this.#view;

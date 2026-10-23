@@ -51,7 +51,7 @@ async fn the_service_needs_a_systemd_user_session() {
         "{output}"
     );
     assert!(
-        output.contains("`sudo loginctl enable-linger alex`")
+        output.contains("also run `loginctl enable-linger alex` there")
             && output.contains("Until then, start Axocoatl with `axocoatl dev`"),
         "{output}"
     );

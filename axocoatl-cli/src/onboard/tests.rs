@@ -2469,8 +2469,8 @@ async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents()
          choose a smaller reviewer with `axocoatl onboard --replace --writer claude-code`, or \
          OpenRouter for the reviewer with `axocoatl onboard --replace --writer claude-code \
          --reviewer openrouter:openai/gpt-oss-120b` (--replace backs up the configuration and \
-         writes the team for the new models; --update would keep the Agents you edited, which \
-         run gpt-oss:20b)"
+         writes the team for the new models; --update would keep the Agents that differ from \
+         what onboarding writes, which run gpt-oss:20b)"
     );
     o.kept = Kept::default();
     // A model that fits is only pulled.
@@ -4292,10 +4292,102 @@ async fn update_moves_the_team_to_the_new_models_and_keeps_edited_agents() {
     );
     assert!(
         output.contains(
-            "Kept as you edited it: scout on ollama:qwen3-coder:30b (the rest of onboarding's \
-             team moves to the models chosen; `axocoatl onboard --replace` writes the whole team \
-             again)"
+            "Kept as it is, since it differs from what onboarding writes: scout on \
+             ollama:qwen3-coder:30b (the rest of onboarding's team moves to the models chosen; \
+             `axocoatl onboard --replace` writes onboarding's whole team for the models chosen)"
         ),
+        "{output}"
+    );
+}
+
+/// `--update` over the team 1.4.0 wrote (no `# Writer:` line, no run
+/// defaults, that release's prompts) reads it as onboarding's: each prompt
+/// that differs from this release's is replaced, shown in Step 4's
+/// changes, and no Agent is said to be kept.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_over_the_team_1_4_wrote_shows_todays_prompts_in_the_changes() {
+    let shims = Shims::new();
+    shims.add("axocoatl", "exit 0");
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let port = free_port();
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            update: true,
+            port: Some(port),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let old = include_str!("../../tests/fixtures/onboard/config-1.4.0-ollama.yaml")
+        .replace(
+            "base_url: \"http://localhost:11434\"",
+            &format!("base_url: \"{}\"", ollama.url()),
+        )
+        .replace("  port: 8080\n", &format!("  port: {port}\n"));
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    let prompts = |text: &str| -> Vec<(String, String)> {
+        config::read_existing(text)
+            .unwrap()
+            .agents
+            .iter()
+            .map(|agent| {
+                let field = |name: &str| agent[name].as_str().unwrap().to_string();
+                (field("id"), field("system_prompt"))
+            })
+            .collect()
+    };
+    let new = config_text(&o);
+    let (before, after) = (prompts(&old), prompts(&new));
+    assert_eq!(
+        after[0],
+        ("lead".to_string(), config::LEAD_PROMPT.to_string())
+    );
+    let mut replaced = 0;
+    for ((id, earlier), (_, today)) in before.iter().zip(&after) {
+        if earlier != today {
+            replaced += 1;
+            for line in [
+                format!("-     system_prompt: {}", config::yaml_string(earlier)),
+                format!("+     system_prompt: {}", config::yaml_string(today)),
+            ] {
+                assert!(output.contains(&line), "{id}: {line}\n{output}");
+            }
+        }
+    }
+    // The Assistant's "… powered by Axocoatl." at least.
+    assert!(replaced >= 1, "{output}");
+    assert!(!output.contains("Kept as"), "{output}");
+    assert!(
+        output.contains("+ run:") && output.contains("+     writer: \"ollama:qwen3-coder:30b\""),
         "{output}"
     );
 }

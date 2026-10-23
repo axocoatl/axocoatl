@@ -1004,6 +1004,16 @@ pub(crate) fn user_systemd_item(
 ) -> Item {
     let user_arg = crate::onboard::host::shell_quote(user);
     if !systemd.reachable {
+        // Linger keeps the manager running, but a login that started no
+        // session still cannot reach it.
+        let linger = if systemd.linger == Some(true) {
+            " (linger is already on, so the service keeps running after you log out)".to_string()
+        } else {
+            format!(
+                "; to keep the service running after you log out, also run `loginctl \
+                 enable-linger {user_arg}` there"
+            )
+        };
         return Item::warn(
             "systemd user session",
             format!(
@@ -1014,8 +1024,7 @@ pub(crate) fn user_systemd_item(
             ),
             Some(format!(
                 "Log in as {user} directly (a desktop session, or `ssh {user_arg}@localhost`) \
-                 instead of switching users with su or sudo; to keep the service running after you \
-                 log out, also run `sudo loginctl enable-linger {user_arg}`"
+                 instead of switching users with su or sudo{linger}"
             )),
         );
     }
@@ -1194,8 +1203,8 @@ impl ModelChange {
             (
                 "--replace",
                 format!(
-                    " (`--update` would keep the Agents you edited, which run {model}; \
-                     `--replace` backs this configuration up first)"
+                    " (`--update` would keep the Agents that differ from what onboarding \
+                     writes, which run {model}; `--replace` backs this configuration up first)"
                 ),
             )
         } else {
@@ -2958,8 +2967,9 @@ mod tests {
             "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`), or \
              choose a smaller reviewer (`axocoatl onboard --replace --writer ollama --writer-model \
-             ollama:qwen3-coder:30b`) (`--update` would keep the Agents you edited, which run \
-             gpt-oss:20b; `--replace` backs this configuration up first)"
+             ollama:qwen3-coder:30b`) (`--update` would keep the Agents that differ from what \
+             onboarding writes, which run gpt-oss:20b; `--replace` backs this configuration up \
+             first)"
         );
     }
 
@@ -3005,8 +3015,9 @@ mod tests {
         assert_eq!(
             fix,
             "Use OpenRouter for it (`axocoatl onboard --replace --writer openrouter \
-             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents you \
-             edited, which run gpt-oss:20b; `--replace` backs this configuration up first)"
+             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents that \
+             differ from what onboarding writes, which run gpt-oss:20b; `--replace` backs this \
+             configuration up first)"
         );
         // That command writes the team on OpenRouter: no Ollama model is left.
         let (config, _, run) = parsed(&onboard_config::render(&plan(
@@ -3135,8 +3146,9 @@ mod tests {
             too_large_fix("qwen3-coder:30b", &kept, &run, Some("claude-code"), None),
             "Choose a smaller model (`axocoatl onboard --replace --writer claude-code`), or use \
              OpenRouter for it (`axocoatl onboard --replace --writer claude-code --reviewer \
-             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents you edited, which \
-             run qwen3-coder:30b; `--replace` backs this configuration up first)"
+             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents that differ from \
+             what onboarding writes, which run qwen3-coder:30b; `--replace` backs this \
+             configuration up first)"
         );
     }
 
@@ -3708,9 +3720,27 @@ mod tests {
             item.detail
         );
         let fix = item.fix.unwrap();
-        assert!(fix.contains("`ssh alex@localhost`"), "{fix}");
-        assert!(fix.contains("`sudo loginctl enable-linger alex`"), "{fix}");
+        assert_eq!(
+            fix,
+            "Log in as alex directly (a desktop session, or `ssh alex@localhost`) instead of \
+             switching users with su or sudo; to keep the service running after you log out, \
+             also run `loginctl enable-linger alex` there"
+        );
         crate::paste_safe::assert_paste_safe(&fix);
+        // With linger on already (`sudo -iu` into such a user), it is not
+        // asked for again.
+        let lingering = detect::UserSystemd {
+            linger: Some(true),
+            ..none.clone()
+        };
+        assert_eq!(
+            user_systemd_item(&lingering, "alex", true).fix.as_deref(),
+            Some(
+                "Log in as alex directly (a desktop session, or `ssh alex@localhost`) instead \
+                 of switching users with su or sudo (linger is already on, so the service keeps \
+                 running after you log out)"
+            )
+        );
         let session = |linger| detect::UserSystemd {
             reachable: true,
             state: "running".into(),

@@ -159,6 +159,7 @@ pub(crate) struct Callback {
     listener: TcpListener,
     port: u16,
     ignored: Arc<AtomicUsize>,
+    connections: Arc<AtomicUsize>,
 }
 
 impl Callback {
@@ -170,6 +171,7 @@ impl Callback {
             listener,
             port,
             ignored: Arc::default(),
+            connections: Arc::default(),
         })
     }
 
@@ -177,6 +179,12 @@ impl Callback {
     /// answered `400` and never exchanged).
     pub(crate) fn ignored(&self) -> usize {
         self.ignored.load(Ordering::SeqCst)
+    }
+
+    /// How many connections reached the loopback server (each one
+    /// reported).
+    pub(crate) fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
     }
 
     /// The port the system chose.
@@ -211,7 +219,8 @@ impl Callback {
         pkce: &Pkce,
         report: &(dyn Fn(&str) + Sync),
     ) -> Returned {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<(Option<Arrival>, Request)>(8);
+        let (sender, mut receiver) =
+            tokio::sync::mpsc::channel::<(Result<Arrival, NoRequest>, Request)>(8);
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
@@ -223,11 +232,15 @@ impl Callback {
                     };
                     let (sender, port, state) = (sender.clone(), self.port, pkce.state.clone());
                     tokio::spawn(async move {
-                        let Ok(Some(request)) =
-                            tokio::time::timeout(REQUEST_WAIT, read_request(&mut stream)).await
-                        else {
-                            let _ = sender.send((None, Request::Other(0, NOT_HERE_PAGE))).await;
-                            return;
+                        let read =
+                            tokio::time::timeout(REQUEST_WAIT, read_request(&mut stream)).await;
+                        let request = match read.unwrap_or(Err(NoRequest::Late)) {
+                            Ok(request) => request,
+                            Err(no_request) => {
+                                let ignored = Request::Other(0, NOT_HERE_PAGE);
+                                let _ = sender.send((Err(no_request), ignored)).await;
+                                return;
+                            }
                         };
                         let arrival = Arrival::of(&request);
                         let request = classify(&request, port, &state);
@@ -238,11 +251,12 @@ impl Callback {
                             Request::WrongState => (400, WRONG_STATE_PAGE),
                         };
                         respond(&mut stream, status, page).await;
-                        let _ = sender.send((Some(arrival), request)).await;
+                        let _ = sender.send((Ok(arrival), request)).await;
                     });
                 }
                 Some((arrival, request)) = receiver.recv() => {
-                    report(&Arrival::line(arrival.as_ref(), &request));
+                    self.connections.fetch_add(1, Ordering::SeqCst);
+                    report(&Arrival::line(arrival.as_ref().map_err(|why| *why), &request));
                     match request {
                         Request::Other(..) => {}
                         Request::WrongState => {
@@ -285,13 +299,11 @@ impl Arrival {
     }
 
     /// `OpenRouter sign-in: GET /callback (Host 127.0.0.1:53111): the
-    /// sign-in's code`.
-    fn line(arrival: Option<&Self>, request: &Request) -> String {
-        let Some(arrival) = arrival else {
-            return format!(
-                "OpenRouter sign-in: a connection sent no request within {} s; ignored",
-                REQUEST_WAIT.as_secs()
-            );
+    /// sign-in's code`, or why a connection gave no request.
+    fn line(arrival: Result<&Self, NoRequest>, request: &Request) -> String {
+        let arrival = match arrival {
+            Ok(arrival) => arrival,
+            Err(why) => return format!("OpenRouter sign-in: a connection {}; ignored", why.said()),
         };
         let outcome = match request {
             Request::Code(_) => "the sign-in's code, with its state".to_string(),
@@ -309,6 +321,35 @@ impl Arrival {
     }
 }
 
+/// Why a connection to the loopback server gave no request to answer (it
+/// is closed unanswered).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoRequest {
+    /// It sent no whole request line and headers within [`REQUEST_WAIT`].
+    Late,
+    /// It was closed, or failed, before it sent them.
+    Closed,
+    /// They were longer than [`MAX_REQUEST_BYTES`].
+    TooLong,
+    /// What it sent is no HTTP/1 request.
+    NotHttp,
+}
+
+impl NoRequest {
+    /// What the connection did, for a log line.
+    fn said(self) -> String {
+        match self {
+            Self::Late => format!("sent no whole request within {} s", REQUEST_WAIT.as_secs()),
+            Self::Closed => "was closed before it sent a whole request".to_string(),
+            Self::TooLong => format!(
+                "sent a request longer than {} KiB",
+                MAX_REQUEST_BYTES / 1024
+            ),
+            Self::NotHttp => "sent something that is no HTTP/1 request".to_string(),
+        }
+    }
+}
+
 /// A request's line and headers, read up to their blank line.
 struct RawRequest {
     method: String,
@@ -319,32 +360,38 @@ struct RawRequest {
     fetch_mode: Option<String>,
 }
 
-async fn read_request(stream: &mut TcpStream) -> Option<RawRequest> {
+async fn read_request(stream: &mut TcpStream) -> Result<RawRequest, NoRequest> {
     let mut bytes = Zeroizing::new(Vec::with_capacity(1024));
     let mut buffer = [0u8; 1024];
     let end = loop {
-        let read = stream.read(&mut buffer).await.ok()?;
+        let read = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|_| NoRequest::Closed)?;
         if read == 0 {
-            return None;
+            return Err(NoRequest::Closed);
         }
         bytes.extend_from_slice(&buffer[..read]);
         if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
             break end;
         }
         if bytes.len() > MAX_REQUEST_BYTES {
-            return None;
+            return Err(NoRequest::TooLong);
         }
     };
-    let head = std::str::from_utf8(&bytes[..end]).ok()?;
+    let head = std::str::from_utf8(&bytes[..end]).map_err(|_| NoRequest::NotHttp)?;
     let mut lines = head.split("\r\n");
-    let mut request_line = lines.next()?.split(' ');
-    let (method, target, version) = (
-        request_line.next()?,
-        request_line.next()?,
-        request_line.next()?,
-    );
-    if request_line.next().is_some() || !version.starts_with("HTTP/1.") {
-        return None;
+    let mut request_line = lines.next().unwrap_or_default().split(' ');
+    let (Some(method), Some(target), Some(version), None) = (
+        request_line.next(),
+        request_line.next(),
+        request_line.next(),
+        request_line.next(),
+    ) else {
+        return Err(NoRequest::NotHttp);
+    };
+    if !version.starts_with("HTTP/1.") {
+        return Err(NoRequest::NotHttp);
     }
     let headers: Vec<(&str, &str)> = lines
         .filter_map(|line| {
@@ -358,7 +405,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<RawRequest> {
             .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
             .map(|(_, value)| value.to_string())
     };
-    Some(RawRequest {
+    Ok(RawRequest {
         method: method.to_string(),
         target: target.to_string(),
         host: header("host"),
@@ -824,5 +871,71 @@ pub(crate) mod tests {
                 Returned::Code(_) => panic!("{query} gave a code"),
             }
         }
+    }
+
+    /// Each connection that gives no request is logged with what it did
+    /// (closed early, sent no HTTP/1 request, sent too much, sent nothing in
+    /// time), and the sign-in still takes its real answer after them.
+    #[tokio::test]
+    async fn a_connection_without_a_request_is_logged_with_what_it_did() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let callback = Callback::bind().await.unwrap();
+        let pkce = Pkce::from_random(&[3; 32], &[4; 16]);
+        let url = callback.url();
+        let state = pkce.state().to_string();
+        let address = format!("127.0.0.1:{}", callback.port());
+        let browser = tokio::spawn(async move {
+            // Each stray connection is read to its end, so the server has
+            // logged it before the next one.
+            async fn closed_by_the_server(mut stream: TcpStream) {
+                let mut rest = Vec::new();
+                let _ = stream.read_to_end(&mut rest).await;
+                assert!(rest.is_empty(), "{rest:?}");
+            }
+            let silent = TcpStream::connect(&address).await.unwrap();
+            let mut closed = TcpStream::connect(&address).await.unwrap();
+            closed.shutdown().await.unwrap();
+            closed_by_the_server(closed).await;
+            let mut not_http = TcpStream::connect(&address).await.unwrap();
+            not_http.write_all(b"HELLO THERE\r\n\r\n").await.unwrap();
+            closed_by_the_server(not_http).await;
+            let mut too_long = TcpStream::connect(&address).await.unwrap();
+            too_long
+                .write_all(&vec![b'a'; MAX_REQUEST_BYTES + 1024])
+                .await
+                .unwrap();
+            closed_by_the_server(too_long).await;
+            closed_by_the_server(silent).await;
+            browse(&format!("{url}?code=after&state={state}")).await
+        });
+        let lines = std::sync::Mutex::new(Vec::new());
+        let report = |line: &str| lines.lock().unwrap().push(line.to_string());
+        let returned = tokio::time::timeout(
+            Duration::from_secs(30),
+            callback.wait_reporting(&pkce, &report),
+        )
+        .await
+        .unwrap();
+        assert_eq!(browser.await.unwrap().0, 200);
+        assert!(matches!(returned, Returned::Code(code) if code.as_str() == "after"));
+        let lines = lines.into_inner().unwrap();
+        assert_eq!(callback.connections(), 5);
+        assert_eq!(
+            lines[..4],
+            [
+                "OpenRouter sign-in: a connection was closed before it sent a whole request; \
+                 ignored",
+                "OpenRouter sign-in: a connection sent something that is no HTTP/1 request; \
+                 ignored",
+                "OpenRouter sign-in: a connection sent a request longer than 16 KiB; ignored",
+                "OpenRouter sign-in: a connection sent no whole request within 5 s; ignored",
+            ],
+            "{lines:?}"
+        );
+        assert!(
+            lines[4].starts_with("OpenRouter sign-in: GET /callback (Host 127.0.0.1:")
+                && lines[4].ends_with("): the sign-in's code, with its state"),
+            "{lines:?}"
+        );
     }
 }

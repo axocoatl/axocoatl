@@ -1,0 +1,39 @@
+# Axocoatl — local Ollama setup
+agents:
+  - id: assistant
+    name: "Assistant"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a helpful assistant powered by Axocoatl."
+    token_budget:
+      per_execution: 16000
+      per_call: 8192
+      overflow_policy: warn
+
+  - id: researcher
+    name: "Researcher"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "You are a research assistant. Provide detailed, factual answers."
+    depends_on: []
+
+  - id: summarizer
+    name: "Summarizer"
+    provider: ollama
+    model: llama3.2
+    system_prompt: "Summarize the input in 1-2 sentences."
+    depends_on: [researcher]
+
+workflows:
+  - id: research-and-summarize
+    name: "Research and Summarize"
+    agents: [researcher, summarizer]
+    entry_point: researcher
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+
+server:
+  port: 8080
+  host: "127.0.0.1"

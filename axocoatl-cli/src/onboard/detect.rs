@@ -981,8 +981,10 @@ pub(crate) struct UserSystemd {
     pub(crate) reachable: bool,
     /// What it said: its state, or why it did not answer.
     pub(crate) state: String,
-    /// `loginctl show-user USER --property=Linger --value`: the manager
-    /// keeps running after the user logs out (`None`: not known).
+    /// `loginctl show-user USER --property=Linger --value`, or for a user
+    /// loginctl does not know (no session, no linger) whether
+    /// `/var/lib/systemd/linger/USER` exists: the manager keeps running
+    /// after the user logs out (`None`: not known).
     pub(crate) linger: Option<bool>,
 }
 
@@ -1034,6 +1036,12 @@ pub(crate) async fn user_systemd(host: &Host, user: &str) -> UserSystemd {
             "yes" => Some(true),
             "no" => Some(false),
             _ => None,
+        })
+        // The flag `loginctl enable-linger` sets, which systemd reads at
+        // boot.
+        .or_else(|| {
+            let flags = host.at("/var/lib/systemd/linger");
+            flags.is_dir().then(|| flags.join(user).exists())
         });
     UserSystemd {
         reachable,
@@ -2027,6 +2035,17 @@ mod tests {
         let none = user_systemd(&host, "alex").await;
         assert!(!none.reachable);
         assert_eq!(none.state, "Failed to connect to bus: No medium found");
+        // A user loginctl does not know: linger is read from its flag file.
+        shims.add(
+            "loginctl",
+            "echo 'Failed to get user: User ID 1001 is not logged in or lingering' >&2; exit 1",
+        );
+        assert_eq!(user_systemd(&host, "alex").await.linger, None);
+        let flags = shims.root.path().join("var/lib/systemd/linger");
+        std::fs::create_dir_all(&flags).unwrap();
+        assert_eq!(user_systemd(&host, "alex").await.linger, Some(false));
+        std::fs::write(flags.join("alex"), "").unwrap();
+        assert_eq!(user_systemd(&host, "alex").await.linger, Some(true));
         // No systemctl at all.
         let empty = Shims::new();
         assert!(!user_systemd(&empty.host(false), "alex").await.reachable);

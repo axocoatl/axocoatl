@@ -224,7 +224,7 @@ export class AxRunOutcome extends HTMLElement {
     link.setAttribute('download', `${outcome.run_id}.receipt.dsse.json`);
     actions.append(link, el('span', 'muted mono', receipt.statement_sha256 || ''));
     section.append(actions, el('p', 'muted',
-      'Check it with axocoatl receipt verify <file> --keys <trusted keys> --repo <checkout>. '
+      'Check it with axocoatl receipt verify FILE --keys TRUSTED_KEYS --repo CHECKOUT, where TRUSTED_KEYS is a file of the receipt keys you trust. '
       + 'It proves which key signed these facts and that the covered files are the ones judged, not that the change is correct.'));
   }
 

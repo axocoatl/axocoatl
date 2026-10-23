@@ -582,6 +582,56 @@ async fn a_model_openrouter_reports_unavailable_is_said_before_the_setup_is_writ
     }
 }
 
+/// A model with no endpoint native Sessions can use is said as that, not as
+/// OpenRouter's status: running onboarding again later would not change
+/// it, so the step left names another model only, and nothing is saved.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_model_no_endpoint_fits_is_not_said_to_be_down_for_now() {
+    use crate::connect_cmd::openrouter_tests::endpoint_row;
+    use crate::onboard::openrouter::{DEFAULT_WRITER, SUGGESTED};
+    let server = openrouter(issued(), described()).await;
+    let mut row = endpoint_row(DEFAULT_WRITER, "fake/no-tools", 0, 100.0);
+    row["supported_parameters"] = serde_json::json!(["max_tokens"]);
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(format!(
+            "/api/v1/models/{DEFAULT_WRITER}/endpoints"
+        )))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"data": {"id": DEFAULT_WRITER, "endpoints": [row]}}),
+            ),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let shims = Shims::new();
+    let mut o = on_a_mac(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        gate_args(true),
+        &server,
+    )
+    .await;
+    connect(&o, &server).await;
+    let before = config_text(&o);
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::NOT_READY, "{output}");
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert_eq!(
+        o.steps[0],
+        format!(
+            "The writer model cannot be used in native Sessions: no OpenRouter endpoint for \
+             {DEFAULT_WRITER} has exact text/tool limits and bounded pricing: fake/no-tools: \
+             does not accept max_tokens and tools. Run `axocoatl onboard` again with another \
+             writer model (--writer-model openrouter:VENDOR/MODEL, such as openrouter:{})",
+            SUGGESTED[1]
+        )
+    );
+    assert_eq!(config_text(&o), before);
+}
+
 /// Moving a setup with a key written in the file to the browser sign-in:
 /// the configuration names the secret, its comment says the key is in the
 /// secret store, and the backup leaves the old key out, saying so.

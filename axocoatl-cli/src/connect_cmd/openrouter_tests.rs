@@ -2033,8 +2033,9 @@ async fn at_a_terminal_the_sign_in_asks_to_keep_waiting_and_reports_each_return(
     assert_eq!(code, exit::NO_TOKEN);
     assert!(
         message.starts_with(
-            "The OpenRouter sign-in was not completed within 1 minute; nothing was stored."
-        ),
+            "The OpenRouter sign-in was not completed within 1 minute; nothing was stored. No \
+             browser came back to http://127.0.0.1:"
+        ) && message.contains("/callback in that time."),
         "{message}"
     );
     assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
@@ -2044,6 +2045,41 @@ async fn at_a_terminal_the_sign_in_asks_to_keep_waiting_and_reports_each_return(
         "No sign-in came back within 10 minutes. Keep waiting 10 minutes more? (No stops the \
          sign-in; nothing is stored.)"
     );
+}
+
+/// `connect openrouter`'s log is made by its first line, a connection to
+/// the sign-in's address: a run that ends before any leaves no log, and a
+/// failure names the log only once it has a line.
+#[test]
+fn the_sign_in_log_is_made_by_the_first_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let logs = directory.path().join("Logs");
+    let log = SignInLog::new(Some(logs.clone()));
+    assert_eq!(log.path(), None);
+    assert!(!logs.exists());
+    log.line("OpenRouter sign-in: GET /favicon.ico (Host 127.0.0.1:4100): answered 404");
+    log.line("OpenRouter sign-in: a connection was closed before it sent a whole request");
+    let path = log.path().unwrap().to_path_buf();
+    assert!(path.starts_with(&logs), "{}", path.display());
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("connect-openrouter-") && name.ends_with(".log"),
+        "{name}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);
+    assert_eq!(
+        log_hint(&path),
+        format!(
+            "\n  Each connection to the sign-in's address on this computer is logged in {} \
+             (never a code)",
+            path.display()
+        )
+    );
+    // Without a home directory no log is kept.
+    let none = SignInLog::new(None);
+    none.line("a line");
+    assert_eq!(none.path(), None);
 }
 
 fn browser_never_returning() -> (Browser, Arc<Seen>) {

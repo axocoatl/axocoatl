@@ -491,7 +491,8 @@ impl Onboarding {
                 "--replace",
                 format!(
                     " (--replace backs up the configuration and writes the team for the new \
-                     models; --update would keep the Agents you edited, which run {})",
+                     models; --update would keep the Agents that differ from what onboarding \
+                     writes, which run {})",
                     models.join(" and ")
                 ),
             )
@@ -1233,12 +1234,14 @@ fn config_plan(
 fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig) -> bool {
     let path = o.paths.config_path.clone();
     let mut kept = Vec::new();
+    let mut moved = false;
     let (old, new) = match existing {
         ExistingConfig::None => (None, config::render(plan)),
         ExistingConfig::Replace(old) => (Some(old.clone()), config::render(plan)),
         ExistingConfig::Update(old) => match config::update(old, plan, &path) {
             Ok(updated) => {
                 kept = updated.kept;
+                moved = updated.moved;
                 (Some(old.clone()), updated.text)
             }
             Err(error) => {
@@ -1249,17 +1252,27 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             }
         },
     };
-    // Agents of onboarding's team edited by hand stay as they are.
+    // Agents of onboarding's team that differ from what it writes (edited
+    // by hand, or 1.0's Assistant) stay as they are.
     if !kept.is_empty() {
         let agents: Vec<String> = kept
             .iter()
             .map(|(id, model)| format!("{id} on {model}"))
             .collect();
         o.ui.say(format!(
-            "  Kept as you edited {}: {} (the rest of onboarding's team moves to the models \
-             chosen; `axocoatl onboard --replace` writes the whole team again)",
-            if kept.len() == 1 { "it" } else { "them" },
-            agents.join(", ")
+            "  Kept as {}: {} ({}`axocoatl onboard --replace` writes onboarding's whole team \
+             for the models chosen)",
+            if kept.len() == 1 {
+                "it is, since it differs from what onboarding writes"
+            } else {
+                "they are, since they differ from what onboarding writes"
+            },
+            agents.join(", "),
+            if moved {
+                "the rest of onboarding's team moves to the models chosen; "
+            } else {
+                ""
+            }
         ));
     }
     if let Some(old) = &old {

@@ -105,8 +105,9 @@ and they are checked before you sign in. The models above are examples. The comm
    ends, it asks whether to keep waiting (Enter waits as long again). Each
    connection to that address is written to a log, `connect-openrouter-<time>.log`
    beside onboarding's (`~/Library/Logs/Axocoatl` on macOS, `~/.local/state/axocoatl`
-   on Linux), its method, path and `Host` only, never the code; a sign-in that fails
-   names the log. In WSL the page opens with `wslview`, in Windows' browser.
+   on Linux), its method, path and `Host` only, never the code; the first connection
+   makes the log. A sign-in that fails names the log, or says that no browser came
+   back. In WSL the page opens with `wslview`, in Windows' browser.
    Cancelling it in the browser, running out of time or pressing Ctrl-C stores
    nothing.
 4. Checks the key with OpenRouter (`GET /api/v1/key`) and shows its label, credit
