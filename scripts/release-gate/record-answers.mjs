@@ -15,11 +15,13 @@
 // SessionHistoryEntry), or, for a Session with legacy turns only, a bare
 // list of SessionTurn (turn_ledger.rs). Superseded turns are not in it.
 //   execution_v2  {turn: ExecutionTurnView}: an accepted answer is an
-//                 activation whose `currently_accepted` is true; its
-//                 `output` is {status: "available", content: {text, kind}}
+//                 activation whose `currently_accepted` is true, or one a
+//                 review revision replaced after it was accepted (its state
+//                 is `superseded`; turn_contract.rs); its `output` is
+//                 {status: "available", content: {text, kind}}
 //                 (execution_content.rs). Partial, reserved and streamed
-//                 output, and a failed activation's, was never accepted and
-//                 is not read.
+//                 output, and a refused or failed activation's, was never
+//                 accepted and is not read.
 //   legacy_v1     {turn: SessionTurn}: `final_output`, and each output in
 //                 `agent_outputs` that is not superseded.
 // An accepted activation whose output the record does not hold, an entry of
@@ -116,13 +118,16 @@ export function acceptedAnswers(history) {
       if (!turn || !Array.isArray(turn.activations)) throw new Error(`history entry ${index + 1} (execution_v2) has no activations`);
       if (turn.superseded) return;
       for (const activation of turn.activations) {
-        if (activation?.currently_accepted !== true) continue;
+        // A round the review sent back was still an accepted answer, and a
+        // slipped one is the likeliest to be sent back.
+        const replaced = activation?.activation?.state === 'superseded';
+        if (activation?.currently_accepted !== true && !replaced) continue;
         const node = activation.activation?.activation?.node_id ?? '?';
         const name = activation.definition_name?.content ?? node;
         const where = `turn ${turn.turn_id}, ${name}`;
         const output = activation.output;
         if (output?.status !== 'available' || typeof output.content?.text !== 'string') {
-          throw new Error(`${where}: the accepted activation's output is not in the record (${output?.status ?? 'no output'})`);
+          throw new Error(`${where}: the ${replaced ? 'replaced' : 'accepted'} activation's output is not in the record (${output?.status ?? 'no output'})`);
         }
         answers.push({ where, text: output.content.text });
       }

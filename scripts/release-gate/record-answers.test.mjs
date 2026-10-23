@@ -42,13 +42,31 @@ test('markup in an accepted answer fails, naming where', () => {
   assert.equal(checkRecord(record({ verdict: 'checks_failed', entries: history(SLIP, 'x') })).status, 1);
 });
 
-test('output that was never accepted is not read: a refused or replaced activation\'s', () => {
+test('output that was never accepted is not read: a refused activation\'s', () => {
   const entries = history('Fixed it.', SLIP);
   entries[0].turn.activations[1].currently_accepted = false;
+  entries[0].turn.activations[1].activation.state = 'refused';
   assert.equal(checkRecord(record({ verdict: 'needs_attention', entries })).status, 0);
   const superseded = history(SLIP, SLIP);
   superseded[0].turn.superseded = true;
   assert.deepEqual(acceptedAnswers(superseded), []);
+});
+
+test('an answer a review revision replaced was accepted, and is read', () => {
+  // Round 1 slipped and was sent back; round 2 passed.
+  const entries = history(SLIP, 'VERDICT: CHANGES');
+  for (const activation of entries[0].turn.activations) {
+    activation.currently_accepted = false;
+    activation.activation.state = 'superseded';
+  }
+  const round2 = history('Fixed it.', 'VERDICT: APPROVE')[0].turn.activations;
+  entries[0].turn.activations.push(...round2);
+  const result = checkRecord(record({ verdict: 'pass', entries }));
+  assert.equal(result.status, 1);
+  assert.match(result.line, /<function=|<\/tool_call>/);
+  // A replaced activation whose output the record lacks cannot be checked.
+  entries[0].turn.activations[0].output = { status: 'missing' };
+  assert.equal(checkRecord(record({ verdict: 'pass', entries })).status, 2);
 });
 
 test('a pass or checks_failed run with no accepted answer cannot be checked; a run that needs attention may have none', () => {

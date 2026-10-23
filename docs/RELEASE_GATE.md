@@ -205,9 +205,10 @@ text ran nothing it meant to run. The check
 `lib.sh`) needs no daemon:
 
 - It reads every answer the run accepted from the Session history in the
-  run's record: each activation the record marks `currently_accepted`,
-  whose output is the answer. A refused, failed or replaced activation's
-  output was never accepted and is not read. It reads only a whole record
+  run's record: each activation the record marks `currently_accepted`, and
+  each one a review revision replaced after it was accepted (`superseded`),
+  whose output is the answer. A refused or failed activation's output was
+  never accepted and is not read. It reads only a whole record
   (its end line's line count and digest, as `axocoatl record verify`
   checks). A history it cannot read, an accepted activation whose output
   the record does not hold, or a run that passed or whose checks failed
@@ -1013,8 +1014,10 @@ model download dominates unless models are cached.
     the browser the person will sign in to OpenRouter with, with the
     `ssh -L` line to run first in a plain or cloud VM. The step passes when
     the gate's listener received that request and the person saw the
-    page. A sign-in that later never calls back is then not the
-    forwarding.
+    page. In a Lima VM whose guest agent forwards every loopback port, a
+    sign-in that later never calls back is then not the forwarding; in a
+    plain or cloud VM the sign-in's own callback port needs its own
+    `ssh -L` line, which onboarding prints.
   - It then removes the account's own range of subordinate ids from
     `/etc/subuid` and `/etc/subgid` with `sudo` (after a backup in its work
     directory, put back if onboarding adds none), so that onboarding must

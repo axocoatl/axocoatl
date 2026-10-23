@@ -979,7 +979,21 @@ gate_markup_check() {
     >"$GATE_TMP/markup.diff" 2>"$GATE_TMP/markup.err" \
     || ! git -C "$repo" ls-files --others --exclude-standard -z -- . "${outside[@]}" \
       >"$GATE_TMP/markup.new" 2>>"$GATE_TMP/markup.err" \
-    || ! (cd "$repo" && xargs -0 sh -c 'grep -a -H -n -F -e "<function=" -e "</tool_call>" -- /dev/null "$@"; [ $? -le 1 ]' gate-grep \
+    || ! (cd "$repo" && xargs -0 sh -c '
+      # A symlink is read as its link text, as Git records it; a regular
+      # file as its bytes.
+      status=0
+      for file; do
+        if [ -L "$file" ]; then
+          readlink -- "$file" | sed "s|^|$file:link:|" | grep -a -F -e "<function=" -e "</tool_call>"
+        elif [ -f "$file" ]; then
+          grep -a -H -n -F -e "<function=" -e "</tool_call>" -- "$file"
+        else
+          continue
+        fi
+        [ $? -le 1 ] || status=2
+      done
+      exit $status' gate-grep \
       <"$GATE_TMP/markup.new" >"$GATE_TMP/markup.found" 2>>"$GATE_TMP/markup.err"); then
     gate_record "$name" fail '' '' '' "$answers; cannot read what the run changed in $repo: $(head -c 200 "$GATE_TMP/markup.err" | tr '\n' ' ')"
     return 1
