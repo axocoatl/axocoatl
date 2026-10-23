@@ -555,6 +555,23 @@ impl Onboarding {
         })
     }
 
+    /// How long loading an Ollama model (and each contract probe after it)
+    /// may take: the configuration's `providers.ollama.first_token_timeout_secs`
+    /// when it sets one, as the daemon and doctor read it, else
+    /// [`axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT`]; never less than
+    /// two minutes ([`crate::ollama_setup::observed_context`]).
+    pub(crate) fn ollama_load_timeout(&self) -> std::time::Duration {
+        std::fs::read_to_string(&self.paths.config_path)
+            .ok()
+            .and_then(|text| config::read_existing(&text).ok())
+            .and_then(|existing| existing.providers?.ollama?.first_token_timeout_secs)
+            .filter(|secs| (1..=axocoatl_config::MAX_FIRST_TOKEN_TIMEOUT_SECS).contains(secs))
+            .map_or(
+                axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT,
+                std::time::Duration::from_secs,
+            )
+    }
+
     /// What Step 5's check (the code `doctor` runs) needs about this
     /// computer; `contexts`: the models Step 3 already loaded.
     fn doctor_env(

@@ -2177,6 +2177,51 @@ esac"#;
     assert_eq!(report.sections.sandbox[0].fix.as_deref(), Some(fix));
 }
 
+/// Onboarding loads a model (and runs the contract probes) with the
+/// configuration's `providers.ollama.first_token_timeout_secs`, as doctor
+/// and the daemon do, so raising it, as a load that took too long says,
+/// helps the next onboarding run; without one, or with one out of range,
+/// 600 seconds.
+#[tokio::test]
+async fn onboarding_loads_a_model_with_the_configured_first_token_timeout() {
+    let shims = Shims::new();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Brew,
+    )
+    .await;
+    let o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        yes(WriterChoice::Ollama),
+    );
+    assert_eq!(
+        o.ollama_load_timeout(),
+        axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    for (secs, expected) in [("1800", 1800), ("0", 600), ("3601", 600)] {
+        std::fs::write(
+            &o.paths.config_path,
+            format!(
+                "providers:\n  ollama:\n    base_url: \"http://localhost:11434\"\n    \
+                 first_token_timeout_secs: {secs}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            o.ollama_load_timeout(),
+            std::time::Duration::from_secs(expected),
+            "{secs}"
+        );
+    }
+}
+
 /// A HOME of `/` (a service account's) is no home directory: a helper
 /// under it is not taken for a copy no package installed.
 #[cfg(unix)]

@@ -522,3 +522,54 @@ fn configured_provider_timeouts_replace_the_provider_defaults() {
         StreamTimeouts::HOSTED
     );
 }
+
+/// Every provider the daemon registers, and the Ollama one it makes for an
+/// Agent, gets the timeouts its block sets.
+#[test]
+fn every_configured_provider_waits_as_its_block_says() {
+    use axocoatl_llm::transport::StreamTimeouts;
+    use std::time::Duration;
+    let config = axocoatl_config::parse_config(
+        "providers:\n  ollama:\n    base_url: http://127.0.0.1:11434\n    \
+         first_token_timeout_secs: 1801\n    idle_timeout_secs: 91\n  openai:\n    \
+         api_key: sk-x\n    first_token_timeout_secs: 1802\n  openrouter:\n    \
+         api_key: sk-or-x\n    first_token_timeout_secs: 1803\n  anthropic:\n    \
+         api_key: x\n    first_token_timeout_secs: 1804\n  gemini:\n    api_key: x\n    \
+         first_token_timeout_secs: 1805\n  mistral:\n    api_key: x\n    \
+         first_token_timeout_secs: 1806\n    idle_timeout_secs: 92\n",
+        std::path::Path::new("test.yaml"),
+    )
+    .unwrap();
+    let mut registry = axocoatl_llm::ProviderRegistry::new();
+    AxocoatlDaemon::setup_providers(&config, &mut registry).unwrap();
+    let hosted = |secs: u64| StreamTimeouts {
+        first_token: Duration::from_secs(secs),
+        idle: StreamTimeouts::HOSTED.idle,
+    };
+    for (name, timeouts) in [
+        ("openai", hosted(1802)),
+        ("openrouter", hosted(1803)),
+        ("anthropic", hosted(1804)),
+        ("gemini", hosted(1805)),
+        (
+            "mistral",
+            StreamTimeouts {
+                first_token: Duration::from_secs(1806),
+                idle: Duration::from_secs(92),
+            },
+        ),
+    ] {
+        let provider = registry.get(name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(provider.stream_timeouts(), Some(timeouts), "{name}");
+    }
+    let ollama =
+        AxocoatlDaemon::resolve_base_provider(&config, &registry, "ollama", Some("qwen3:8b"))
+            .unwrap();
+    assert_eq!(
+        ollama.stream_timeouts(),
+        Some(StreamTimeouts {
+            first_token: Duration::from_secs(1801),
+            idle: Duration::from_secs(91),
+        })
+    );
+}

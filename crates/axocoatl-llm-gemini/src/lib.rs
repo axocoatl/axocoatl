@@ -9,7 +9,7 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         bounded_redacted, http_client, network_error, read_error_text, read_json, SseDecoder,
-        StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
+        StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_response_tool_call,
     validate_stream_terminal, ChatRequest, ChatResponse, FinishReason, LlmProvider,
@@ -540,6 +540,10 @@ impl GeminiProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for GeminiProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         "gemini"
     }
@@ -742,10 +746,8 @@ impl LlmProvider for GeminiProvider {
             let mut next_function_call_index = 0usize;
             let mut first_tool_call: Option<(usize, String)> = None;
             let mut native_parts = Vec::new();
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             loop {
-                let next = deadlines.next(&mut bytes, total_deadline, "gemini").await?;
+                let next = deadlines.next(&mut bytes, "gemini").await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

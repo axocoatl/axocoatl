@@ -84,6 +84,40 @@ async fn openrouter_billing_requires_explicit_credits_before_observation() {
         Err(error) if error.to_string().contains("configured fallback"))
     );
 }
+/// The native Ollama provider a Session runs waits as
+/// `providers.ollama` says: its first-token and idle timeouts, else
+/// Ollama's defaults.
+#[tokio::test]
+async fn a_native_ollama_provider_gets_the_configured_timeouts() {
+    use axocoatl_llm::transport::StreamTimeouts;
+    let (server, _) = metadata_server().await;
+    let preparation = NativeDefinitionPreparation::new(
+        config(),
+        AgentDefinitionId::new("timeouts").unwrap(),
+        1,
+        limits(8192),
+    )
+    .unwrap();
+    let configured = StreamTimeouts {
+        first_token: std::time::Duration::from_secs(1801),
+        idle: std::time::Duration::from_secs(91),
+    };
+    let credentials = NativeProviderCredentials {
+        ollama_base_url: Some(server.uri()),
+        ollama_timeouts: Some(configured),
+        ..Default::default()
+    };
+    let runtime = preparation.observe_configured(&credentials).await.unwrap();
+    let provider = runtime.verify_credentials(&credentials).await.unwrap();
+    assert_eq!(provider.stream_timeouts(), Some(configured));
+    let unset = NativeProviderCredentials {
+        ollama_timeouts: None,
+        ..credentials
+    };
+    let provider = runtime.verify_credentials(&unset).await.unwrap();
+    assert_eq!(provider.stream_timeouts(), Some(StreamTimeouts::LOCAL));
+}
+
 fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(root: &Path, path: &Path, output: &mut BTreeMap<String, Vec<u8>>) {
         for entry in std::fs::read_dir(path).unwrap() {

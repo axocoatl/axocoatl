@@ -8,7 +8,7 @@ use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
         bounded_redacted, http_client, network_error, read_error_text, read_json, SseDecoder,
-        StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
+        StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_response_tool_call,
     validate_stream_terminal, ChatRequest, ChatResponse, FinishReason, LlmProvider,
@@ -608,6 +608,10 @@ impl AnthropicProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         "anthropic"
     }
@@ -812,10 +816,8 @@ impl LlmProvider for AnthropicProvider {
             let mut saw_usage = false;
             let mut pending_finish = None;
             let mut saw_message_stop = false;
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             'response: loop {
-                let next = deadlines.next(&mut bytes, total_deadline, "anthropic").await?;
+                let next = deadlines.next(&mut bytes, "anthropic").await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

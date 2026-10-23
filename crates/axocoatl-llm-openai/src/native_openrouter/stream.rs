@@ -185,7 +185,6 @@ pub(super) fn decode(
         // retained response bound, which the Session boundary enforces on
         // what is kept. One event still fits within that bound.
         let mut decoder = SseDecoder::new(MAX_STREAM_BYTES, bounds.response_bytes);
-        let deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
         let mut finished = None;
         let mut terminal_usage = None;
         let mut terminal_cost = None;
@@ -198,7 +197,7 @@ pub(super) fn decode(
         // so the stream keeps its order.
         let mut pending_reasoning = String::new();
         'wire: loop {
-            let chunk = deadlines.next(&mut bytes, deadline, PROVIDER).await?;
+            let chunk = deadlines.next(&mut bytes, PROVIDER).await?;
             let eof = chunk.is_none();
             let frames = match chunk {
                 Some(chunk) => decoder.push(&chunk.map_err(|e| transport_error(&e, &[&key]))?)?,

@@ -772,7 +772,7 @@ fn validate_provider_key_secrets(providers: &ProvidersConfigYaml) -> Result<(), 
 /// The longest `first_token_timeout_secs` a provider block accepts: an hour.
 pub const MAX_FIRST_TOKEN_TIMEOUT_SECS: u64 = 3600;
 /// The longest `idle_timeout_secs` a provider block accepts: a streamed
-/// answer ends after 15 minutes in any case.
+/// answer ends 15 minutes after its first chunk in any case.
 pub const MAX_IDLE_TIMEOUT_SECS: u64 = 900;
 
 /// Each provider block's `first_token_timeout_secs` is 1 to
