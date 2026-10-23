@@ -364,18 +364,27 @@ pub(crate) fn joined(cmds: &[Cmd]) -> String {
 /// cursor is on, so a prompt wider than the terminal left its first rows
 /// on the screen and printed them again. `reserve` is the room the prompt's
 /// row needs after it (the `[Y/n] ` of a question). Without a terminal size
-/// the prompt is returned whole.
-fn fit_prompt(prompt: &str, reserve: usize) -> String {
+/// the prompt is returned whole. Every dialoguer prompt goes through it
+/// (`every_long_prompt_is_fitted_to_the_terminal`).
+pub(crate) fn fit_prompt(prompt: &str, reserve: usize) -> String {
     let term = dialoguer::console::Term::stderr();
-    let Some((_, columns)) = term.size_checked() else {
-        return prompt.to_string();
-    };
-    let mut rows = wrap_rows(prompt, usize::from(columns).saturating_sub(reserve + 1));
-    let last = rows.pop().unwrap_or_default();
+    let columns = term.size_checked().map(|(_, columns)| usize::from(columns));
+    let (rows, last) = prompt_rows(prompt, reserve, columns);
     for row in rows {
         let _ = term.write_line(&row);
     }
     last
+}
+
+/// [`fit_prompt`] for a terminal `columns` wide: the rows to print first,
+/// and the last row, which dialoguer shows with `reserve` after it.
+fn prompt_rows(prompt: &str, reserve: usize, columns: Option<usize>) -> (Vec<String>, String) {
+    let Some(columns) = columns else {
+        return (Vec::new(), prompt.to_string());
+    };
+    let mut rows = wrap_rows(prompt, columns.saturating_sub(reserve + 1));
+    let last = rows.pop().unwrap_or_default();
+    (rows, last)
 }
 
 /// The items of a menu as a terminal `columns` wide shows them, and the
@@ -505,6 +514,82 @@ mod tests {
         let rows = wrap_rows(&path, 30);
         assert!(rows.iter().all(|row| row.chars().count() <= 30), "{rows:?}");
         assert_eq!(rows.concat().replace(' ', ""), path.replace(' ', ""));
+    }
+
+    /// A question wider than the terminal leaves only its last row to
+    /// dialoguer, with room for `[Y/n] `: `axocoatl connect openrouter`'s
+    /// questions too.
+    #[test]
+    fn a_long_question_leaves_dialoguer_one_row_that_fits() {
+        use std::time::Duration;
+        for question in [
+            crate::connect_cmd::openrouter::keep_waiting_question(Duration::from_secs(600)),
+            crate::connect_cmd::openrouter::BYOK_QUESTION.to_string(),
+        ] {
+            for columns in [60, 80, 100] {
+                let (rows, last) = prompt_rows(&question, 7, Some(columns));
+                assert!(!rows.is_empty(), "{columns}: {question}");
+                assert!(last.chars().count() + 7 < columns, "{columns}: {last}");
+                assert!(
+                    rows.iter().all(|row| row.chars().count() < columns),
+                    "{columns}: {rows:?}"
+                );
+                assert_eq!(format!("{} {last}", rows.join(" ")), question);
+            }
+            assert_eq!(
+                prompt_rows(&question, 7, None),
+                (Vec::new(), question.clone())
+            );
+            assert_eq!(prompt_rows(&question, 7, Some(400)), (Vec::new(), question));
+        }
+    }
+
+    /// Every dialoguer prompt in the CLI is fitted to the terminal
+    /// ([`fit_prompt`]), but a short fixed one: a prompt that wraps is
+    /// printed twice when dialoguer redraws it.
+    #[test]
+    fn every_long_prompt_is_fitted_to_the_terminal() {
+        fn sources(directory: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        sources(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        // Not written whole, so this test is not one of the calls.
+        let call = concat!(".with", "_prompt(");
+        let mut prompts = 0;
+        let mut unfitted = Vec::new();
+        for file in files {
+            let source = std::fs::read_to_string(&file).unwrap();
+            let joined: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
+            for (index, _) in joined.match_indices(call) {
+                prompts += 1;
+                let argument = &joined[index + call.len()..];
+                let short = argument.starts_with('"')
+                    && argument[1..]
+                        .find('"')
+                        .is_some_and(|end| end < 40 && argument[1 + end..].starts_with("\")"));
+                if !argument.starts_with("fit_prompt(") && !short {
+                    let shown: String = argument.chars().take(60).collect();
+                    unfitted.push(format!("{}: {shown}", file.display()));
+                }
+            }
+        }
+        assert!(prompts >= 6, "the scan found {prompts} prompts");
+        assert!(
+            unfitted.is_empty(),
+            "prompts not fitted:\n{}",
+            unfitted.join("\n")
+        );
     }
 
     /// A menu whose items are wider than the terminal shows each in full,
