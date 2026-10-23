@@ -10,6 +10,7 @@
 use super::route_tests::{grant, position, recorded, send, spec, tls_client, RelaySidecar};
 use super::tests::{FakeRecord, FakeResolver};
 use super::*;
+use crate::egress_broker::upstream::HOST_OLLAMA_CHECK_AGENT;
 use axocoatl_config::egress_host_ollama::HOST_OLLAMA_ROUTE_HOST as OLLAMA;
 use axocoatl_exec::egress::protocol::DaemonFrame;
 use bytes::Bytes;
@@ -29,14 +30,26 @@ pub(crate) struct Seen {
     /// The path and query, as sent.
     pub(crate) target: String,
     pub(crate) host: String,
+    /// The `User-Agent`, empty without one.
+    pub(crate) agent: String,
     /// The body as it arrived.
     pub(crate) body: Bytes,
+}
+
+/// What the fake Ollama's `GET /api/status` says about its cloud features.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Cloud {
+    Off,
+    On,
+    /// No `/api/status` (404), as an Ollama older than the cloud setting.
+    Unreported,
 }
 
 /// A plain-HTTP server standing in for Ollama on a free loopback port.
 pub(crate) struct FakeOllama {
     pub(crate) addr: SocketAddr,
     seen: Arc<Mutex<Vec<Seen>>>,
+    cloud: Arc<Mutex<Cloud>>,
 }
 
 impl FakeOllama {
@@ -44,13 +57,17 @@ impl FakeOllama {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
+        let cloud = Arc::new(Mutex::new(Cloud::Off));
         let by_server = seen.clone();
+        let cloud_by_server = cloud.clone();
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
                 let seen = by_server.clone();
+                let cloud = cloud_by_server.clone();
                 tokio::spawn(async move {
                     let service = hyper::service::service_fn(move |request: Request<Incoming>| {
                         let seen = seen.clone();
+                        let cloud = *cloud.lock().unwrap();
                         async move {
                             let method = request.method().to_string();
                             let path = request.uri().path().to_string();
@@ -59,12 +76,16 @@ impl FakeOllama {
                                 .path_and_query()
                                 .map(|target| target.as_str().to_string())
                                 .unwrap_or_default();
-                            let host = request
-                                .headers()
-                                .get(hyper::header::HOST)
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or_default()
-                                .to_string();
+                            let header = |name| {
+                                request
+                                    .headers()
+                                    .get(name)
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or_default()
+                                    .to_string()
+                            };
+                            let host = header(hyper::header::HOST);
+                            let agent = header(hyper::header::USER_AGENT);
                             let body = request
                                 .into_body()
                                 .collect()
@@ -76,6 +97,7 @@ impl FakeOllama {
                                 path: path.clone(),
                                 target,
                                 host,
+                                agent,
                                 body,
                             });
                             let (status, body) = match path.as_str() {
@@ -86,10 +108,18 @@ impl FakeOllama {
                                     StatusCode::OK,
                                     r#"{"message":{"role":"assistant","content":"ok"},"done":true}"#,
                                 ),
-                                "/api/status" => (
-                                    StatusCode::OK,
-                                    r#"{"cloud":{"disabled":true,"source":"env"}}"#,
-                                ),
+                                "/api/status" => match cloud {
+                                    Cloud::Off => (
+                                        StatusCode::OK,
+                                        r#"{"cloud":{"disabled":true,"source":"env"}}"#,
+                                    ),
+                                    Cloud::On => {
+                                        (StatusCode::OK, r#"{"cloud":{"disabled":false}}"#)
+                                    }
+                                    Cloud::Unreported => {
+                                        (StatusCode::NOT_FOUND, "404 page not found")
+                                    }
+                                },
                                 _ => (StatusCode::NOT_FOUND, r#"{"error":"not found"}"#),
                             };
                             let mut response = Response::new(Full::new(Bytes::from(body)));
@@ -103,11 +133,36 @@ impl FakeOllama {
                 });
             }
         });
-        Self { addr, seen }
+        Self { addr, seen, cloud }
     }
 
+    /// The requests the route sent on, without the route's own cloud checks.
     pub(crate) fn seen(&self) -> Vec<Seen> {
-        self.seen.lock().unwrap().clone()
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| seen.agent != HOST_OLLAMA_CHECK_AGENT)
+            .cloned()
+            .collect()
+    }
+
+    /// How many times the route asked for the cloud mode.
+    pub(crate) fn cloud_checks(&self) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| {
+                seen.agent == HOST_OLLAMA_CHECK_AGENT
+                    && (seen.method.as_str(), seen.path.as_str()) == ("GET", "/api/status")
+            })
+            .count()
+    }
+
+    /// What `GET /api/status` says from now on.
+    pub(crate) fn set_cloud(&self, cloud: Cloud) {
+        *self.cloud.lock().unwrap() = cloud;
     }
 }
 
@@ -253,6 +308,169 @@ async fn the_host_route_reaches_ollama_on_loopback_and_records_every_request() {
     assert!(policy < open && open < request && request < response);
     assert!(response < missing && missing < close);
     assert!(f.egress.state().relays.is_empty());
+}
+
+/// Ollama is asked for its cloud mode before each request the route sends:
+/// once its cloud features are on, or it no longer reports them, a request
+/// is refused with `ollama_cloud_not_off` (403) and recorded, nothing
+/// reaches Ollama, and the same connection carries requests again once they
+/// are off. An Ollama that does not answer the question gets nothing either
+/// (502).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_request_waits_for_ollama_to_report_its_cloud_features_off() {
+    let ollama = FakeOllama::start().await;
+    let port = ollama.addr.port();
+    let f = fixture(host_ollama(port, None)).await;
+    let (_grant, hash, _) = grant(&f.egress, spec(GrantKind::Agent, true)).await;
+    let sidecar = RelaySidecar::attach(&f.egress, 1).await;
+    let pipe = sidecar
+        .open(1, RequestKind::Connect, OLLAMA, 443, &hash)
+        .await
+        .unwrap();
+    let ca = f.egress.authority_der().unwrap();
+    let tls = tls_client(pipe, &ca, OLLAMA).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(connection);
+    let (status, _) = send(&mut sender, "/api/tags", OLLAMA, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ollama.cloud_checks(), 1);
+    assert_eq!(ollama.seen().len(), 1);
+
+    for (cloud, found) in [
+        (Cloud::On, "has its cloud features on"),
+        (
+            Cloud::Unreported,
+            "does not report its cloud mode (GET /api/status)",
+        ),
+    ] {
+        ollama.set_cloud(cloud);
+        let (status, body) = send(&mut sender, "/api/tags", OLLAMA, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "ollama_cloud_not_off");
+        let reason = body["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(&format!("Ollama at 127.0.0.1:{port} {found}"))
+                && reason.contains("OLLAMA_NO_CLOUD=1"),
+            "{reason}"
+        );
+        assert!(
+            body["hint"]
+                .as_str()
+                .unwrap()
+                .starts_with("Nothing was sent to Ollama."),
+            "{body}"
+        );
+        assert_eq!(ollama.seen().len(), 1, "nothing reached Ollama");
+    }
+    ollama.set_cloud(Cloud::Off);
+    let (status, _) = send(&mut sender, "/api/tags", OLLAMA, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ollama.seen().len(), 2);
+    assert_eq!(ollama.cloud_checks(), 4);
+    recorded(&f.record, |event| {
+        matches!(
+            event,
+            NetworkEvent::Response {
+                seq_in_conn: 4,
+                status: 200,
+                ..
+            }
+        )
+    })
+    .await;
+    let refused: Vec<u64> = f
+        .record
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            NetworkEvent::Request {
+                seq_in_conn,
+                decision: RecordDecision::Deny,
+                reason: Some(reason),
+                path,
+                ..
+            } if reason == "ollama_cloud_not_off" && path == "/api/tags" => Some(*seq_in_conn),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refused, [2, 3]);
+
+    // Nothing listens on the route's port: nothing is sent, and the client
+    // is told Ollama did not answer.
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let f = fixture(host_ollama(closed, None)).await;
+    let (_grant, hash, _) = grant(&f.egress, spec(GrantKind::Agent, true)).await;
+    let sidecar = RelaySidecar::attach(&f.egress, 1).await;
+    let pipe = sidecar
+        .open(1, RequestKind::Connect, OLLAMA, 443, &hash)
+        .await
+        .unwrap();
+    let ca = f.egress.authority_der().unwrap();
+    let tls = tls_client(pipe, &ca, OLLAMA).await.unwrap();
+    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(connection);
+    let (status, body) = send(&mut sender, "/api/tags", OLLAMA, None).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(
+        body.contains("ollama_cloud_not_off") && body.contains("did not answer GET /api/status"),
+        "{body}"
+    );
+}
+
+/// The same against real Ollama servers on this computer: one that reports
+/// its cloud features off (`AXO_LIVE_OLLAMA_CLOUD_OFF_PORT`) lists its
+/// models through the route, one with them on
+/// (`AXO_LIVE_OLLAMA_CLOUD_ON_PORT`, such as `OLLAMA_HOST=127.0.0.1:8390
+/// HOME=$(mktemp -d) ollama serve`) gets nothing. Only `GET /api/tags` is
+/// sent; no model runs.
+///
+/// ```text
+/// AXO_LIVE_OLLAMA_CLOUD_OFF_PORT=11434 AXO_LIVE_OLLAMA_CLOUD_ON_PORT=8390 \
+///   cargo test -p axocoatl-daemon --lib actual_ollama_cloud_mode -- --ignored
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires two Ollama servers on this computer, one with its cloud features on"]
+async fn actual_ollama_cloud_mode_decides_each_request_on_the_host_route() {
+    for (variable, expected) in [
+        ("AXO_LIVE_OLLAMA_CLOUD_OFF_PORT", StatusCode::OK),
+        ("AXO_LIVE_OLLAMA_CLOUD_ON_PORT", StatusCode::FORBIDDEN),
+    ] {
+        let port: u16 = std::env::var(variable)
+            .unwrap_or_else(|_| panic!("set {variable}"))
+            .parse()
+            .unwrap();
+        let f = fixture(host_ollama(port, None)).await;
+        let (_grant, hash, _) = grant(&f.egress, spec(GrantKind::Agent, true)).await;
+        let sidecar = RelaySidecar::attach(&f.egress, 1).await;
+        let pipe = sidecar
+            .open(1, RequestKind::Connect, OLLAMA, 443, &hash)
+            .await
+            .unwrap();
+        let ca = f.egress.authority_der().unwrap();
+        let tls = tls_client(pipe, &ca, OLLAMA).await.unwrap();
+        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+            .await
+            .unwrap();
+        tokio::spawn(connection);
+        let (status, body) = send(&mut sender, "/api/tags", OLLAMA, None).await;
+        assert_eq!(status, expected, "{variable}: {body}");
+        if expected == StatusCode::FORBIDDEN {
+            assert!(
+                body.contains("ollama_cloud_not_off") && body.contains("has its cloud features on"),
+                "{body}"
+            );
+        } else {
+            assert!(body.contains("\"models\""), "{body}");
+        }
+    }
 }
 
 /// Without the setting the name is refused whatever the allowlist says, and

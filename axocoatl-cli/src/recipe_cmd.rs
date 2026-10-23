@@ -1,6 +1,7 @@
 //! `axocoatl recipe build|list`: build Session images from Axocoatl's
 //! pinned recipes (claude-code, codex, e2e, and the language toolchains
-//! node, python, rust and go) with Podman. Owner: workstream
+//! node, python, rust and go) with Podman. `axocoatl recipe clear-cache`
+//! removes a Workspace's toolchain cache volume. Owner: workstream
 //! `agents` (the e2e recipe file belongs to `e2e`).
 //!
 //! A build composes the base and the named fragments
@@ -33,6 +34,19 @@ pub enum RecipeCommands {
     },
     /// List recipes and the images built from them
     List {
+        /// Path to config file (selects the data directory)
+        #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
+        config: PathBuf,
+    },
+    /// Remove a repository's toolchain cache (the packages its runs'
+    /// setups installed); its next run installs them again
+    ClearCache {
+        /// The repository whose cache to remove (default: the current directory)
+        #[arg(long, value_name = "DIR", conflicts_with = "all")]
+        repo: Option<PathBuf>,
+        /// Remove the toolchain cache of every repository of this data directory
+        #[arg(long)]
+        all: bool,
         /// Path to config file (selects the data directory)
         #[arg(short, long, default_value_os_t = crate::default_config_path_for_clap())]
         config: PathBuf,
@@ -83,9 +97,132 @@ pub(crate) fn list_lines(images: &[recipe_images::RecipeImageRecord]) -> Vec<Str
     lines
 }
 
+/// `axocoatl recipe clear-cache`: remove the toolchain cache volume of the
+/// repository `repo` (canonical), or with `all` every one of the daemon
+/// whose data directory is `data_dir`, and say what was removed. A volume
+/// a container still uses (an open Session of that repository) is left,
+/// with what to do.
+async fn clear_cache(data_dir: &Path, repo: Option<&Path>) -> i32 {
+    let root = match axocoatl_core::SecureDir::open_existing_all(data_dir) {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!(
+                "✗ the data directory {} cannot be opened: {error}",
+                data_dir.display()
+            );
+            return FAILURE;
+        }
+    };
+    if let Err(error) = crate::podman_preflight().await {
+        eprintln!("✗ {error}");
+        return FAILURE;
+    }
+    let authority = axocoatl_daemon::bootstrap::runtime_authority_of(&root);
+    let present =
+        match axocoatl_isolation::SessionSandbox::toolchain_cache_volumes(&authority).await {
+            Ok(present) => present,
+            Err(error) => {
+                eprintln!("✗ {error}");
+                return FAILURE;
+            }
+        };
+    let targets: Vec<String> = match repo {
+        Some(repo) => {
+            let volume = axocoatl_daemon::bootstrap::toolchain_cache_volume_of(&root, repo);
+            present.into_iter().filter(|name| *name == volume).collect()
+        }
+        None => present,
+    };
+    if targets.is_empty() {
+        match repo {
+            Some(repo) => println!(
+                "No toolchain cache to remove for {}: no run of it has made one",
+                repo.display()
+            ),
+            None => println!("No toolchain cache to remove"),
+        }
+        return 0;
+    }
+    let mut code = 0;
+    for volume in targets {
+        match axocoatl_isolation::SessionSandbox::remove_toolchain_cache_volume(&volume).await {
+            Ok(()) => println!(
+                "✓ Removed the toolchain cache {volume}; the next run installs its packages again"
+            ),
+            Err(error) => {
+                let error = match error {
+                    axocoatl_isolation::IsolationError::OciSetupFailed(message) => message,
+                    other => other.to_string(),
+                };
+                if error.contains("being used") || error.contains("in use") {
+                    eprintln!("✗ {}", in_use_line(&volume).await);
+                } else {
+                    eprintln!("✗ {error}");
+                }
+                code = FAILURE;
+            }
+        }
+    }
+    code
+}
+
+/// Why the toolchain cache `volume` was left: the Sessions whose container
+/// still uses it, by id when Podman names them, and what to do.
+async fn in_use_line(volume: &str) -> String {
+    let sessions = axocoatl_isolation::SessionSandbox::volume_sessions(volume)
+        .await
+        .unwrap_or_default();
+    let (whose, close) = if sessions.is_empty() {
+        (
+            "a container".to_string(),
+            "`axocoatl session close SESSION_ID`".to_string(),
+        )
+    } else {
+        (
+            format!("the container of Session {}", sessions.join(", ")),
+            sessions
+                .iter()
+                .map(|id| format!("`axocoatl session close {id}`"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    };
+    format!(
+        "The toolchain cache {volume} was not removed: {whose} still uses it. Let the run on \
+         this repository end, or close that Session (in the workbench, or {close}), then run \
+         this again."
+    )
+}
+
 /// Returns the process exit code.
 pub async fn cmd_recipe(command: RecipeCommands) -> i32 {
     match command {
+        RecipeCommands::ClearCache { repo, all, config } => {
+            let repo = match (all, repo) {
+                (true, _) => None,
+                (false, repo) => {
+                    let repo = repo.unwrap_or_else(|| PathBuf::from("."));
+                    match std::fs::canonicalize(&repo) {
+                        Ok(canonical) if canonical.is_dir() => Some(canonical),
+                        Ok(_) => {
+                            eprintln!("✗ {} is not a directory", repo.display());
+                            return USAGE;
+                        }
+                        Err(error) => {
+                            eprintln!("✗ {}: {error}", repo.display());
+                            return USAGE;
+                        }
+                    }
+                }
+            };
+            match data_dir(&config) {
+                Ok(data_dir) => clear_cache(&data_dir, repo.as_deref()).await,
+                Err(error) => {
+                    eprintln!("✗ {error}");
+                    FAILURE
+                }
+            }
+        }
         RecipeCommands::Build { recipes, config } => {
             let image = match recipes::image_name(&recipes) {
                 Ok(image) => image,
@@ -167,6 +304,31 @@ mod tests {
     struct Cli {
         #[command(subcommand)]
         command: RecipeCommands,
+    }
+
+    #[test]
+    fn clear_cache_takes_one_repository_or_all() {
+        let parsed = Cli::try_parse_from(["x", "clear-cache"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            RecipeCommands::ClearCache {
+                repo: None,
+                all: false,
+                ..
+            }
+        ));
+        let parsed = Cli::try_parse_from(["x", "clear-cache", "--repo", "/src/app"]).unwrap();
+        assert!(
+            matches!(parsed.command, RecipeCommands::ClearCache { repo: Some(repo), .. }
+            if repo == Path::new("/src/app"))
+        );
+        assert!(matches!(
+            Cli::try_parse_from(["x", "clear-cache", "--all"])
+                .unwrap()
+                .command,
+            RecipeCommands::ClearCache { all: true, .. }
+        ));
+        assert!(Cli::try_parse_from(["x", "clear-cache", "--all", "--repo", "."]).is_err());
     }
 
     #[test]

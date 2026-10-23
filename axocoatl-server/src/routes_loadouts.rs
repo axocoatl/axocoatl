@@ -66,13 +66,29 @@ pub async fn validate_loadout(
 }
 
 /// End a run whose driver could not record its Outcome: the run fails with
-/// the reason, never left unfinished.
+/// the reason, never left unfinished, and its Session's runtime stops.
 async fn fail_run(host: &DaemonRunHost, context: &RunContext, reason: String) {
     let mut outcome = axocoatl_daemon::loadout::driver::empty_outcome(
         context,
         axocoatl_daemon::loadout::driver::now_ms(),
     );
     outcome.error = Some(reason);
+    if let Err(reason) = host.stop_session_runtime(&context.session_id).await {
+        let warning = axocoatl_daemon::loadout::driver::session_runtime_not_stopped(
+            &context.session_id,
+            &reason,
+        );
+        outcome.warnings.push(warning.clone());
+        let _ = host
+            .record(
+                &context.run_id,
+                RunEvent::Warning {
+                    at_ms: axocoatl_daemon::loadout::driver::now_ms(),
+                    warning,
+                },
+            )
+            .await;
+    }
     outcome.finished_at_ms = axocoatl_daemon::loadout::driver::now_ms();
     outcome.decide(Default::default());
     if let Err(reason) = host.seal(&context.run_id, &outcome).await {
@@ -701,6 +717,15 @@ impl RunHost for DaemonRunHost {
             .await
             .seal_loadout_run(run_id, outcome)
             .await
+    }
+
+    async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+        self.state
+            .read()
+            .await
+            .stop_loadout_run_runtime(session_id)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {

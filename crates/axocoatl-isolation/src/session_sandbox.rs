@@ -1230,6 +1230,68 @@ impl SessionSandbox {
         ]
     }
 
+    /// The toolchain cache volumes of the daemon whose runtime authority is
+    /// `runtime_authority`, by their labels
+    /// ([`Self::toolchain_cache_volume_create_args`]).
+    pub async fn toolchain_cache_volumes(
+        runtime_authority: &str,
+    ) -> Result<Vec<String>, IsolationError> {
+        let mut list = Command::new(PODMAN);
+        list.args([
+            "volume".to_string(),
+            "ls".into(),
+            "--filter".into(),
+            format!(
+                "label={}={TOOLCHAIN_CACHE_VOLUME_ROLE}",
+                crate::egress_image::ROLE_LABEL
+            ),
+            "--filter".into(),
+            format!("label={RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
+            "--format".into(),
+            "{{.Name}}".into(),
+        ]);
+        let output = Self::run_bounded_command(list, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "listing the toolchain cache volumes: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|name| name.starts_with(TOOLCHAIN_CACHE_VOLUME_PREFIX))
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// The ids of the Sessions whose container (running or not) mounts the
+    /// volume `volume`.
+    pub async fn volume_sessions(volume: &str) -> Result<Vec<String>, IsolationError> {
+        let mut list = Command::new(PODMAN);
+        list.args([
+            "ps".to_string(),
+            "--all".into(),
+            "--filter".into(),
+            format!("volume={volume}"),
+            "--format".into(),
+            "{{.Names}}".into(),
+        ]);
+        let output = Self::run_bounded_command(list, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "listing the containers that use the volume {volume}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|name| name.trim().strip_prefix("axo-ses-"))
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
     /// Remove the toolchain cache volume `volume` (its packages and, for
     /// Python, its virtual environment). The next run downloads them again.
     pub async fn remove_toolchain_cache_volume(volume: &str) -> Result<(), IsolationError> {

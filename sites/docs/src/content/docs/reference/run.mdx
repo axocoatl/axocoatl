@@ -95,7 +95,14 @@ restart it", and a run that starts anyway notes it.
 The daemon checks a run in one pass before it creates anything (admission), and refuses it
 with every problem it found, in one message:
 
-1. The loadout, the task and the repository.
+1. The loadout, the task and the repository. The repository becomes the run's Workspace,
+   which its Session mounts read-write, so it keeps to the rules of Open workspace…: one
+   of Axocoatl's own directories (its data, configuration, lease or control-socket
+   directory, or a folder inside one) is refused (`workspace_protected`), and so is a
+   folder too broad to be a Workspace, such as the file system root, your home folder
+   and the folders above it, or a folder that contains one of Axocoatl's own directories
+   (`workspace_too_broad`), unless you opened it with Open workspace… in the workbench
+   and confirmed it.
 2. The parameters, with the defaults above. Every missing parameter is named at once, with
    the `--model ROLE=provider:model` (or `--param`) that sets it and the `run.models` key
    that can.
@@ -235,6 +242,18 @@ stops each of its own turns that did not complete, such as one that needs attent
 a person's Stop would (a `closing_turn` phase line on standard error), so the next run
 on the repository is admitted. The Outcome keeps each turn as it was observed.
 
+Then the run stops its Session's runtime, before its network summary, receipt and
+Outcome are written: the Session's container, egress sidecar and browser stop, as when
+the daemon stops, so a run that ended leaves nothing running. A run that ends at its
+environment (the setup or the toolchain failed, or its read-only Agents cannot read the
+repository) stops it too. The Session stays open with its turns, History, team, network
+record and changes, so Keep, the record bundle and the workbench work as before, and what
+needs its container again, such as its Terminal in the workbench, starts it again. When
+the runtime cannot be stopped, for example because another Session's turn holds the
+Workspace, the run has the warning `session_runtime_not_stopped`, which names the Session
+and `axocoatl session close`; the verdict and the exit code do not change. A run refused
+after its Session was made (the check probe) closes that Session.
+
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
@@ -293,7 +312,7 @@ writes `--junit`, `--record` and `--receipt`, and exits with code 6.
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
 | 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, an audit area's findings could not be read, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
-| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a writer and reviewer on the same model because of a [default from your setup](#models-from-your-setup); a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; an external writer's credential that is not stored (the one it names, or none of its runtime's for `credential: auto`), a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; a native model (an Agent's or the reviewer's) on a provider other than Ollama or OpenRouter, or on one that is not configured; an Ollama server that cannot be reached, runs a refused version or has its cloud models on, or a model it does not have, that is not GGUF, that fails the contract probes, or that it loads with less than 16,384 tokens of context; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for one model call, or for the run's checks or review. Admission reports every one it finds at once. |
+| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a repository that is one of Axocoatl's own directories, or too broad to be a Workspace and not opened as one; a missing or unknown parameter; a writer and reviewer on the same model because of a [default from your setup](#models-from-your-setup); a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; an external writer's credential that is not stored (the one it names, or none of its runtime's for `credential: auto`), a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; a native model (an Agent's or the reviewer's) on a provider other than Ollama or OpenRouter, or on one that is not configured; an Ollama server that cannot be reached, runs a refused version or has its cloud models on, or a model it does not have, that is not GGUF, that fails the contract probes, or that it loads with less than 16,384 tokens of context; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for one model call, or for the run's checks or review. Admission reports every one it finds at once. |
 | 4 | The daemon could not be reached, or it refused the credential; with `--dry-run`, also a daemon too old to have a dry run. |
 | 5 | Infrastructure: Podman is not installed, has no machine, cannot start its machine or does not answer; Ollama is still busy after one retry, fails to load a model (HTTP 500) or stops answering while admission checks a model; the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`); a recipe image was not built; the Session environment failed; OpenRouter's catalog could not be read for an e2e check; a provider failed when the Session started; or another daemon error. |
 | 6 | You interrupted the run. |
@@ -450,5 +469,6 @@ run only while the daemon process that admitted it is running.
 
 <Aside>
 A run is an ordinary Session. Open it in the workbench to read its turns, the Agent graph,
-the network record and Git while it runs or after it ends.
+the network record and Git while it runs or after it ends. Once the run has ended, its
+container is stopped until something in the Session needs it again.
 </Aside>

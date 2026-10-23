@@ -225,6 +225,7 @@ else `AXOCOATL_URL`, else the configured server address, and authenticate with
 | `axocoatl secret remove <NAME>` | Delete one stored secret |
 | `axocoatl recipe build <RECIPE>... [-c CONFIG]` | Build one Session image with Podman from Axocoatl's pinned recipes `claude-code`, `codex` and `e2e`, combined in that order, and record its image id in the data root; Sessions trust it by that id |
 | `axocoatl recipe list` | List the recipes and the images built from them |
+| `axocoatl recipe clear-cache [--repo DIR \| --all] [-c CONFIG]` | Remove the [toolchain cache](/configure/toolchains/#caches-the-second-run-is-offline) volume of the repository `DIR` (default: the current directory), or with `--all` of every repository of this data root, with Podman; the next run installs the packages again. A volume that a container of one of the repository's Sessions still uses is left, and the command names that Session and says to let its run end or close it; it then exits with status 5 |
 
 `connect`, `secret` and `recipe` use the data root of `--config` or `AXOCOATL_DATA_DIR`; give them
 the daemon's, so it finds what they store. `recipe build` downloads its base image and the

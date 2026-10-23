@@ -46,6 +46,9 @@ type ClientBody = http_body_util::combinators::BoxBody<Bytes, BoxError>;
 
 /// Header that says the broker refused a request, and why.
 pub const DENIED_HEADER: &str = "x-axocoatl-egress";
+/// Why the route to Ollama on this computer refused a request: Ollama did
+/// not report its cloud features off when asked just before it.
+pub const HOST_OLLAMA_CLOUD_REFUSED: &str = "ollama_cloud_not_off";
 /// Longest request head (request line and headers) read.
 const MAX_HEAD_BYTES: usize = 64 * 1024;
 const MAX_HEADERS: usize = 128;
@@ -1135,6 +1138,38 @@ impl Connection {
         } else {
             OutgoingBody::Streamed(body)
         };
+        // The route to Ollama on this computer sends a request only while
+        // Ollama reports its cloud features off, asked again for each one:
+        // turned on after the Session's network opened, a local copy of a
+        // cloud model would reach ollama.com under a name no check knows.
+        if let Some(port) = route.host_loopback_port() {
+            let observed = self
+                .upstream
+                .host_ollama_cloud_mode(port)
+                .await
+                .map_err(|error| error.0);
+            let answered = observed.is_ok();
+            if let Some(reason) = crate::session_egress::host_ollama_cloud_refusal_for(
+                port,
+                observed.as_ref().map_err(String::as_str),
+            ) {
+                return self.refuse(
+                    &facts,
+                    refusal(
+                        if answered {
+                            StatusCode::FORBIDDEN
+                        } else {
+                            StatusCode::BAD_GATEWAY
+                        },
+                        HOST_OLLAMA_CLOUD_REFUSED,
+                        reason,
+                        "Nothing was sent to Ollama. Ask the user to turn Ollama's cloud \
+                         features off on the computer running Axocoatl.",
+                        false,
+                    ),
+                );
+            }
+        }
         // A credential the daemon keeps current itself (a sign-in it
         // refreshes) gives its value, and any headers that go with it, on a
         // route to its own host only; any other route reads its file as a

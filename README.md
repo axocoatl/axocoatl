@@ -516,6 +516,7 @@ axocoatl connect codex --api-key  Also store the OpenAI API key OpenAI issues (n
 axocoatl connect codex --status|--refresh  Show the sign-in, or refresh it now (no token shown)
 axocoatl secret set <name>       Store another route credential from stdin or --from-env VAR
 axocoatl recipe build <recipe>…  Build a Session image (claude-code, codex, e2e)
+axocoatl recipe clear-cache      Remove a repository's toolchain cache (--repo DIR or --all)
 axocoatl workflow list | run     Compatibility view/run for manual Automations
 axocoatl agents list|status|restart
 axocoatl tokens report           Per-agent token usage

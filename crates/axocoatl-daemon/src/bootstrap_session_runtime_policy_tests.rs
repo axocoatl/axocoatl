@@ -128,10 +128,12 @@ async fn actual_check_past_its_timeout_is_recorded_timed_out() {
 /// Session's authority, the request reaches the stand-in addressed to
 /// itself, and the record holds the connection, the request and the
 /// response. Another reserved name is refused, and nothing is resolved.
+/// Once the stand-in reports its cloud features on, the next request from
+/// the container is refused (`ollama_cloud_not_off`) and never reaches it.
 #[tokio::test]
 #[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE and the egress-capable embedded helper"]
 async fn actual_egress_reaches_host_ollama_only_through_its_route() {
-    use crate::session_egress::host_ollama_tests::FakeOllama;
+    use crate::session_egress::host_ollama_tests::{Cloud, FakeOllama};
     use crate::session_egress::tests::{FakeRecord, FakeResolver};
     use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
     use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
@@ -166,12 +168,31 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
     // The image has no HTTP client but git, whose smart-HTTP request for a
     // repository URL ending in `?` is GET /api/tags with git's suffix as the
     // query: one of the requests the route allows. Its request for
-    // `/api/pull.git` is one the route refuses.
+    // `/api/pull.git` is one the route refuses. After a pause, during which
+    // the stand-in turns its cloud features on, the same allowed request
+    // again.
     let command = "echo \"ollama=$OLLAMA_HOST\"; \
          git ls-remote 'https://ollama.host.axocoatl.internal/api/tags?' 2>&1 | tail -1; \
          echo \"rc=$?\"; \
          git ls-remote https://ollama.host.axocoatl.internal/api/pull.git 2>&1 | tail -1; \
-         git ls-remote https://other.axocoatl.internal/x.git 2>&1 | tail -1; true";
+         git ls-remote https://other.axocoatl.internal/x.git 2>&1 | tail -1; \
+         sleep 6; \
+         git ls-remote 'https://ollama.host.axocoatl.internal/api/tags?cloud-on' 2>&1 | tail -1; true";
+    let ollama = Arc::new(ollama);
+    let flip = {
+        let ollama = ollama.clone();
+        tokio::spawn(async move {
+            while !ollama
+                .seen()
+                .iter()
+                .any(|request| request.path == "/api/tags")
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            ollama.set_cloud(Cloud::On);
+        })
+    };
     let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
     let result = tokio::time::timeout(Duration::from_secs(180), async {
         r.controller
@@ -191,6 +212,7 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
     let settled = result.unwrap().unwrap();
     assert!(idle.unwrap());
     assert!(settled.accepted, "{:?}", settled.failure);
+    flip.await.unwrap();
     let shown: Vec<String> = provider.requests.lock().unwrap()[1]
         .iter()
         .filter_map(ChatMessage::text_content)
@@ -215,6 +237,14 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
         !seen.iter().any(|request| request.path.contains("pull")),
         "{seen:?}"
     );
+    // The request after the cloud features came on never reached it.
+    assert!(
+        !seen
+            .iter()
+            .any(|request| request.target.contains("cloud-on")),
+        "{seen:?}"
+    );
+    assert!(ollama.cloud_checks() >= 2, "{}", ollama.cloud_checks());
     assert!(resolver.queries().is_empty(), "{:?}", resolver.queries());
 
     let events = record.events();
@@ -257,6 +287,14 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
             .any(|event| matches!(event, NetworkEvent::Open {
             decision: Recorded::Deny, reason: Some(reason), host, ..
         } if reason == "reserved_host" && host == "other.axocoatl.internal")),
+        "{events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, NetworkEvent::Request {
+            decision: Recorded::Deny, reason: Some(reason), path, ..
+        } if reason == "ollama_cloud_not_off" && path == "/api/tags")),
         "{events:#?}"
     );
 }

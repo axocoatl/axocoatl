@@ -690,11 +690,21 @@ SHA-256 of its bytes. The lattice in Settings displays a loadout's graph read-on
 no execution path for loadouts.
 
 **Admission.** `POST /api/runs` (from `axocoatl run`) resolves parameters (unknown names
-refused, missing required ones a usage error), canonicalizes the repository and finds or
+refused, missing required ones a usage error), canonicalizes the repository and checks it
+against `WorkspaceScope` as Session creation does (one of Axocoatl's own directories is
+`workspace_protected`; a broad folder is `workspace_too_broad` unless it is already a
+Workspace, which Open workspace… registers only after the person confirms it), finds or
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
-repository HEAD and the paths that were dirty. It is idempotent on `request_id`.
+repository HEAD and the paths that were dirty. It is idempotent on `request_id`. Any
+failure after the Session exists closes it again (`close_refused_run_session`). A run
+stops its Session's runtime when it ends (`RunHost::stop_session_runtime`, before the
+network summary, the receipt and the `Ended` event; `stop_loadout_run_runtime` on the
+daemon, under the Workspace operation and the Session's start lock, refused while a turn
+of it runs), and so do the environment-failure path and a driver error (`fail_run`): the
+containers go as at a daemon stop, the Session stays open, and `ensure_sandbox` starts it
+again on demand. A stop that fails is the warning `session_runtime_not_stopped`.
 
 **Per-Session sandbox.** Every place the daemon reads the network mode or the workload plan
 for a Session goes through `session_sandbox_policy`: an unbound Session gets the global
@@ -879,7 +889,11 @@ and recorded like any route. It allows only Ollama's inference and model listing
 (`egress_broker::rules::HOST_OLLAMA_RULES`), refusing pulls, pushes, creates, copies,
 deletes, blobs, the account endpoints and web search and fetch, and checks bodies with
 `provider_fetch::check_ollama`, which refuses a cloud model (a tag that is `cloud` or
-ends in `-cloud`) that Ollama would run on `ollama.com`.
+ends in `-cloud`) that Ollama would run on `ollama.com`. The decision point opens with the
+route only when Ollama reports its cloud features disabled
+(`session_egress::host_ollama_cloud_refusal`), and the broker asks `GET /api/status`
+again before each request (`UpstreamConnector::host_ollama_cloud_mode`), refusing with
+`ollama_cloud_not_off` while Ollama does not report them disabled.
 
 ## Automations
 
