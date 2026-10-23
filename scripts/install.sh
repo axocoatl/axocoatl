@@ -793,10 +793,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 info "downloading ${tarball} (${tag})..."
-curl -fsSL "$url" -o "${tmp}/${tarball}" || err "download failed: $url"
+# This shell writes the downloads, not curl: the curl snap (what Ubuntu offers
+# when curl is missing) has a /tmp of its own, so `-o` into this directory
+# fails with "(23) client returned ERROR on write".
+curl -fsSL "$url" > "${tmp}/${tarball}" || err "download failed: $url"
 
 # --- Require and verify the release checksum ---
-curl -fsSL "$sha_url" -o "${tmp}/sha" \
+curl -fsSL "$sha_url" > "${tmp}/sha" \
   || err "checksum download failed: $sha_url"
 
 if ! awk -v expected_name="$tarball" '

@@ -29,12 +29,17 @@ if [ "${TEST_INSTALL_TOOL_MODE:-}" = "1" ]; then
       fi
       ;;
     curl)
-      output=""
+      output=/dev/stdout
       url=""
       while [ "$#" -gt 0 ]; do
         case "$1" in
           -o)
             [ "$#" -ge 2 ] || exit 2
+            # The curl snap cannot write in the installer's /tmp directory.
+            if [ "${TEST_CURL_SNAP:-}" = 1 ]; then
+              echo "curl: (23) client returned ERROR on write of 1369 bytes" >&2
+              exit 23
+            fi
             output=$2
             shift 2
             ;;
@@ -284,6 +289,15 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 [ ! -s "$work_dir/darwin-version-unavailable.curl" ] || fail "unknown macOS version reached the network stub"
 [ ! -s "$work_dir/windows-native.curl" ] || fail "native Windows reached the network stub"
 [ ! -s "$work_dir/unsupported-arch.curl" ] || fail "unsupported architecture reached the network stub"
+
+# Ubuntu offers the curl snap when curl is missing. Its /tmp is its own, so it
+# cannot write a file in the installer's temporary directory (measured with
+# curl 8.22.0 from the snap on Ubuntu 24.04: "(23) client returned ERROR on
+# write"); the installer writes what curl prints instead.
+TEST_CURL_SNAP=1
+export TEST_CURL_SNAP
+run_case linux-curl-snap pass "checksum verified" Linux aarch64 aarch64-unknown-linux-gnu "glibc 2.39" unavailable valid "$fake_bin"
+unset TEST_CURL_SNAP
 
 # --- PATH handling ---------------------------------------------------------
 # Each case installs where /usr/local/bin is not writable (or is, and is on
