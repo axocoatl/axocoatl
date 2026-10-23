@@ -123,7 +123,8 @@ acceleration, booting a Linux kernel of that architecture) does provide Landlock
 x86_64 Alpine 3.22 virtual machine (Linux 6.12) with Podman 5.6 installed in it, in each
 x86_64 image with rootless Podman and with Podman as root, running a test binary
 cross-built for `x86_64-unknown-linux-musl`. On 2026-10-13 the 1.3.2 payloads passed the
-same way: the aarch64 one 32 of 32 on a Linux 7.1 aarch64 kernel with rootless Podman 5.8,
+same way: the aarch64 one 32 of 32 on a Linux 7.1 aarch64 kernel with rootless Podman 5.8
+(older than the Podman 6.1 tested on macOS for 1.5.0),
 the x86_64 one 64 of 64 in that x86_64 Alpine virtual machine (Linux 6.12, Podman 5.6).
 On 2026-10-13 the 1.4.0 payloads passed the same suites: 32 of 32 on aarch64 and 64 of 64
 on x86_64.

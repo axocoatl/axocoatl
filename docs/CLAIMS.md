@@ -159,15 +159,18 @@ quality or performance claims about them.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and
   onboarding offers on a 48 GB Mac. It is smaller than its writer. How well it reviews has
   not been measured, and the pages that name it as a reviewer say so.
-  The local pair (`qwen3-coder:30b` and `gpt-oss:20b`) ran end to end on a 48 GB Mac in
-  the 1.5.0 release gate (path `C1-local` in `docs/RELEASE_GATE.md`; the signed evidence
-  bundle is under `release-evidence/1.5.0/`). That shows the pair runs there, not how well
-  it reviews.
+  The 1.5.0 release gate requires the local pair (`qwen3-coder:30b` and `gpt-oss:20b`) to
+  pass end to end on a 48 GB Mac (path `C1-local` in `docs/RELEASE_GATE.md`; the signed
+  evidence bundle goes under `release-evidence/1.5.0/`). That shows the pair runs there,
+  not how well it reviews.
 - The `axocoatl run` summary on the README and the marketing home page is an example of
   the format `axocoatl run fix` prints (a small Go repository whose check is
   `go test ./...`, `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing), not a
   measurement.
 - Speed of helpers or of parallel workers through Axocoatl (no speed claims).
+- `axocoatl run` in a hosted CI job with real models. It is not built for 1.5.0 either:
+  there is no action that runs it and no way to import a CI signing key; only the
+  verify-receipt Action, which checks a receipt in a pull request on GitHub, is.
 - Whether the default team, or any team, beats one Agent through Axocoatl beyond T1.
 
 ## Adding a claim

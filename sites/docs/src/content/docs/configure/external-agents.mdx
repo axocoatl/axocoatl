@@ -790,7 +790,8 @@ requests reach the backend with the refreshed token and the account id, the rota
 sign-in is stored, and no token is in the container, its configuration, the network record
 or the program's requests. Against OpenAI's own service, on 2026-10-11, a fix run of the
 pinned Codex 0.160.1 (`gpt-6-luna`) with a ChatGPT plan passed through Axocoatl
-1.3.1-rc2: Codex's 6 requests to `chatgpt.com/backend-api/codex/responses` went through
+1.3.1-rc2 (the 1.5.0 release gate runs `fix-codex` with a ChatGPT sign-in, but does not
+repeat these checks of the container, the log and the record): Codex's 6 requests to `chatgpt.com/backend-api/codex/responses` went through
 the route with the sign-in the daemon added and were answered `200`, the container held
 only the placeholder, and no token-shaped string appeared in the container, the daemon's
 log, the record, the JUnit report or the output. The run cost $0.0014.

@@ -145,7 +145,7 @@ On **Linux and WSL2**:
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
 - Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (the 1.5.0
-  release gate ran Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
+  release gate runs Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
   or newer. Podman 4.3 to 4.8 is accepted and reported as not tested.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
@@ -243,7 +243,7 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
-   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Ran end to end on a 48 GB Mac in the 1.5.0 release gate; this reviewer's quality has not been measured |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | The 1.5.0 release gate requires it to pass end to end on a 48 GB Mac; this reviewer's quality has not been measured |
    | Under 48 GB | — | — | Not yet verified with local models. Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
 
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
@@ -347,9 +347,11 @@ The key, in this order:
      issues as the secret `openrouter` in Axocoatl's secret store (`0600`), never
      showing it. The configuration gets `api_key_secret: openrouter` and
      `openrouter_billing: credits`, never the key. The callback is a loopback port,
-     so from a VM, open the link in a browser that can reach that port (Lima
-     forwards a guest's loopback ports to the host; elsewhere, forward it with
-     `ssh -L`). Cancelling in the browser or running out of time stores nothing, and
+     so from a VM, open the link in a browser that can reach that port: Lima
+     forwards a guest's loopback ports to the host's unless the VM runs in plain mode
+     (`limactl create --plain`, or `plain: true`), which turns forwarding off; in
+     plain mode or on a cloud VM, forward the port first with
+     `ssh -L PORT:127.0.0.1:PORT`. Cancelling in the browser or running out of time stores nothing, and
      the step left says to run onboarding again.
    - **Read it from an environment variable**: you name it (default
      `OPENROUTER_API_KEY`); the configuration names the variable, not the key.

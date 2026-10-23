@@ -287,11 +287,12 @@ it stays stopped, and the bridge answers every proxied request with `502` until 
 Session's runtime is started again. The proxy fails closed: while it is down,
 nothing gets out.
 
-What it costs, measured on one Mac with rootless Podman 5.8: `npm ci` of an Express
-fixture (about 65 packages, empty npm cache) took 1.5 s under `egress` against 0.7 s
-under `bridge`; it made 15 connections through the proxy. The wall time of an Agent's
-tool call did not change measurably. Your numbers will differ with the registry, the
-network and the tool.
+What it cost when it was measured, for Axocoatl 1.2.0 on one Mac with rootless Podman
+5.8 (an older measurement: for 1.5.0, Podman 6.1 is the version tested on macOS):
+`npm ci` of an Express fixture (about 65 packages, empty npm cache) took 1.5 s under
+`egress` against 0.7 s under `bridge`; it made 15 connections through the proxy. The
+wall time of an Agent's tool call did not change measurably. Your numbers will differ
+with the registry, the network and the tool.
 
 What egress does not cover:
 
