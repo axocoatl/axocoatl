@@ -10,11 +10,15 @@
 //! begin it, and every block must name an offered tool with values that fit
 //! its parameters. JSON is never read as a call.
 //!
-//! An answer that calls an offered tool in a way that cannot be run (a
-//! malformed block, prose after the calls, a tool the request did not offer,
-//! values that do not fit, a call written as JSON) is refused instead of
-//! becoming a final answer that ran nothing: the turn needs attention and the
-//! refusal says why.
+//! An answer that calls an offered tool in a way that cannot be run is
+//! refused instead of becoming a final answer that ran nothing: the turn
+//! needs attention and the refusal says why. That is a line that begins with
+//! a call tag but does not start a runnable run (a malformed block, prose
+//! after the calls, a tool the request did not offer, values that do not
+//! fit), a call block written after other text on its line, or a call
+//! written as JSON that ends the answer. Code fences, HTML blocks and
+//! indented code quote what they hold, and code spans quote a call tag after
+//! other text on its line.
 
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
@@ -32,6 +36,14 @@ const MARKERS: [&str; 2] = ["<function=", "<tool_call>"];
 /// on work done inside the stream.
 const TEXT_CALL_LIMIT: usize = 128;
 const TEXT_CALL_CONTENT_LIMIT: usize = 256 * 1024;
+/// Why a call in an answer cut at its output limit cannot run.
+const CUT_CALL: &str = "the response reached its output limit (Ollama's done_reason \"length\") \
+                        before the call was complete";
+/// Why a call block written after other text on its line cannot run.
+const NOT_LINE_START: &str = "its call tag does not begin a line, and only a run of calls that \
+                              begins a line and ends the answer runs";
+/// The longest tool name read from a call tag.
+const MAX_TAG_WORD: usize = 256;
 
 /// Whether a response to `request` may hold calls written as text: tools were
 /// offered, the answer is not structured output, and no stop sequence of the
@@ -76,6 +88,13 @@ pub(crate) fn read_text_calls(
     let mut first = None;
     let mut called = None;
     let mut json_line = None;
+    // Call tags that do not begin their line, outside code fences, HTML
+    // blocks, indented code and code spans, read a paragraph (its lines up
+    // to a blank line or a block) at a time, since a code span may run over
+    // several of its lines.
+    let mut inline = Vec::new();
+    let mut paragraph: Option<(usize, usize)> = None;
+    let mut indented = IndentedCode::default();
     let mut opener = Opener::default();
     let mut at = 0;
     while let Some((line, next)) = next_line(content, at, true) {
@@ -88,37 +107,234 @@ pub(crate) fn read_text_calls(
         } else if open && line.starts_with('{') {
             json_line = Some(at);
         }
+        let code = indented.read(line, open);
+        if open && !code && !line.trim().is_empty() {
+            paragraph = Some((paragraph.map_or(at, |(start, _)| start), at + line.len()));
+        } else if let Some((start, end)) = paragraph.take() {
+            inline.extend(inline_tags(content, start, end));
+        }
         opener.read(line, at, open);
         at = next;
     }
+    if let Some((start, end)) = paragraph {
+        inline.extend(inline_tags(content, start, end));
+    }
     if let (Some((start, answer_end)), Some(name)) = (first, &called) {
         let why = if !complete {
-            "the response reached its output limit (Ollama's done_reason \"length\") \
-             before the call was complete"
-                .to_owned()
+            CUT_CALL.to_owned()
         } else if content.len() > TEXT_CALL_CONTENT_LIMIT {
             "the answer is longer than 256 KiB".to_owned()
         } else {
             match recover(&content[start..], request, provider) {
-                Ok(calls) => return TextCalls::Calls { answer_end, calls },
+                // A call block before the run, after other text on its line,
+                // cannot run: the run alone would run without it.
+                Ok(calls) => {
+                    let before: Vec<usize> =
+                        inline.iter().copied().filter(|tag| *tag < start).collect();
+                    return match inline_call(&content[..start], &before, request, true) {
+                        Some(refusal) => TextCalls::Unreadable(refusal),
+                        None => TextCalls::Calls { answer_end, calls },
+                    };
+                }
                 Err(why) => why,
             }
         };
-        return TextCalls::Unreadable(format!(
-            "the model wrote a call to {name} as answer text that Axocoatl cannot run: {why}"
-        ));
+        return TextCalls::Unreadable(cannot_run(name, &why));
+    }
+    if let Some(refusal) = inline_call(content, &inline, request, complete) {
+        return TextCalls::Unreadable(refusal);
     }
     // A call written as JSON, the whole answer or the lines that end it.
     for candidate in [Some(0), json_line].into_iter().flatten() {
         if let Some(name) = json_call(content[candidate..].trim()).filter(|name| offered(name)) {
-            return TextCalls::Unreadable(format!(
-                "the model wrote a call to {name} as JSON in its answer, which Axocoatl never \
-                 runs: only calls Ollama returns as tool calls, or that end the answer in \
-                 Qwen3-Coder's <function=…> format, run"
-            ));
+            return TextCalls::Unreadable(json_refusal(&name));
         }
     }
     TextCalls::Answer
+}
+
+/// The refusal of a call to `name` written as text that cannot run, and why.
+fn cannot_run(name: &str, why: &str) -> String {
+    format!("the model wrote a call to {name} as answer text that Axocoatl cannot run: {why}")
+}
+
+/// The refusal of a call to `name` written as JSON that ends the answer.
+fn json_refusal(name: &str) -> String {
+    format!(
+        "the model wrote a call to {name} as JSON in its answer, which Axocoatl never runs: \
+         only calls Ollama returns as tool calls, or that begin a line and end the answer in \
+         Qwen3-Coder's <function=…> format, run"
+    )
+}
+
+/// Why `content` cannot run when it holds a call that does not begin its
+/// line: a call block to an offered tool written after other text on the
+/// line (`Looking.<function=glob>` and a parameter or `</function>` after
+/// it; a mention of the tag in prose is no call block), or, when the answer
+/// is complete, a `<tool_call>` block that holds a JSON call to an offered
+/// tool and ends the answer. `tags` are where call tags that do not begin
+/// their line start, outside code fences, HTML blocks, indented code and code
+/// spans. `complete` is false when the response stopped at its output limit.
+/// `None` when it holds no such call.
+fn inline_call(
+    content: &str,
+    tags: &[usize],
+    request: &ChatRequest,
+    complete: bool,
+) -> Option<String> {
+    let offered = |name: &str| request.tools.iter().any(|tool| tool.name == name);
+    for &at in tags {
+        let call = content[at..]
+            .strip_prefix("<tool_call>")
+            .map_or(&content[at..], str::trim_start);
+        if let Some(name) = opened_call(call).filter(|name| offered(name)) {
+            return Some(cannot_run(
+                name,
+                if complete { NOT_LINE_START } else { CUT_CALL },
+            ));
+        }
+    }
+    let tail = content.trim_end();
+    if !complete
+        || content.len() > TEXT_CALL_CONTENT_LIMIT
+        || !(tail.ends_with('}') || tail.ends_with("</tool_call>"))
+    {
+        return None;
+    }
+    // Only the last `<tool_call>` that opens JSON can hold the rest of the
+    // answer.
+    let body = tags.iter().rev().find_map(|&at| {
+        content[at..]
+            .strip_prefix("<tool_call>")
+            .map(str::trim_start)
+            .filter(|body| body.starts_with('{'))
+    })?;
+    let body = body.trim_end();
+    let body = body.strip_suffix("</tool_call>").unwrap_or(body).trim_end();
+    json_call(body)
+        .filter(|name| offered(name))
+        .map(|name| json_refusal(&name))
+}
+
+/// The tool a call block at the start of `text` opens: `<function=NAME>`
+/// with a `<parameter=…>` or `</function>` after it (blank space between),
+/// so `the <function=glob> tag` in prose opens none.
+fn opened_call(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("<function=")?;
+    let close = rest
+        .bytes()
+        .take(MAX_TAG_WORD + 1)
+        .position(|byte| byte == b'>')?;
+    let name = &rest[..close];
+    if !plain_tag_word(name) {
+        return None;
+    }
+    let after = rest[close + 1..].trim_start();
+    (after.starts_with("<parameter=") || after.starts_with("</function>")).then_some(name)
+}
+
+/// Indented code as Markdown reads it: lines indented by four columns or
+/// more that do not continue a paragraph (they follow a blank line, a code
+/// fence or an HTML block, or begin the answer), with the blank lines between
+/// them. A call tag in it is quoted text.
+#[derive(Debug)]
+struct IndentedCode {
+    inside: bool,
+    /// The last line was blank, or belonged to a fence or an HTML block.
+    can_start: bool,
+}
+
+impl Default for IndentedCode {
+    fn default() -> Self {
+        Self {
+            inside: false,
+            can_start: true,
+        }
+    }
+}
+
+impl IndentedCode {
+    /// Read the next line (`open`: outside every fence and HTML block):
+    /// whether it is indented code.
+    fn read(&mut self, line: &str, open: bool) -> bool {
+        let blank = line.trim().is_empty();
+        if !open {
+            self.inside = false;
+        } else if !blank {
+            let mut columns = 0;
+            for byte in line.bytes() {
+                match byte {
+                    b' ' => columns += 1,
+                    b'\t' => columns += 4 - columns % 4,
+                    _ => break,
+                }
+            }
+            self.inside = columns >= 4 && (self.inside || self.can_start);
+        }
+        self.can_start = blank || !open;
+        self.inside
+    }
+}
+
+/// Where call tags start in the paragraph `content[start..end]` (lines
+/// outside every block), outside its code spans and not at the start of a
+/// line (a tag there makes a call line).
+fn inline_tags(content: &str, start: usize, end: usize) -> Vec<usize> {
+    let text = &content[start..end];
+    let spans = code_spans(text);
+    let mut tags: Vec<usize> = MARKERS
+        .iter()
+        .flat_map(|marker| text.match_indices(marker).map(|(at, _)| at))
+        .filter(|at| {
+            *at > 0
+                && !matches!(text.as_bytes()[at - 1], b'\n' | b'\r')
+                && !spans.iter().any(|span| span.contains(at))
+        })
+        .map(|at| start + at)
+        .collect();
+    tags.sort_unstable();
+    tags
+}
+
+/// The byte ranges of `text`'s code spans: each runs from a run of backticks
+/// to the next run of the same length; a run without one is text.
+fn code_spans(text: &str) -> Vec<std::ops::Range<usize>> {
+    let bytes = text.as_bytes();
+    let mut runs = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let start = at;
+        while at < bytes.len() && bytes[at] == b'`' {
+            at += 1;
+        }
+        if at > start {
+            runs.push((start, at - start));
+        } else {
+            at += 1;
+        }
+    }
+    let mut spans = Vec::new();
+    let mut open = 0;
+    while open < runs.len() {
+        let (start, length) = runs[open];
+        match (open + 1..runs.len()).find(|&close| runs[close].1 == length) {
+            Some(close) => {
+                spans.push(start..runs[close].0 + length);
+                open = close + 1;
+            }
+            None => open += 1,
+        }
+    }
+    spans
+}
+
+/// `count` of `noun` in words: `1 tool`, `7 tools`.
+pub(crate) fn count_of(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 /// The calls of the run that starts `text` (the rest of the answer).
@@ -229,18 +445,26 @@ fn called_tool(line: &str, rest: &str) -> Option<String> {
 }
 
 /// The tool a call written as JSON names: `{"name": NAME, "arguments"|
-/// "parameters": {…}}` or `{NAME: {…}}`.
+/// "parameters": {…}}` (the arguments also as a string holding a JSON
+/// object, as OpenAI writes them) or `{NAME: {…}}`.
 fn json_call(text: &str) -> Option<String> {
     if !text.starts_with('{') || !text.ends_with('}') {
         return None;
     }
     let value: Value = serde_json::from_str(text).ok()?;
     let object = value.as_object()?;
+    let arguments = |value: &Value| {
+        value.is_object()
+            || value
+                .as_str()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .is_some_and(|value| value.is_object())
+    };
     match object.get("name") {
         Some(Value::String(name))
             if ["arguments", "parameters"]
                 .iter()
-                .any(|key| object.get(*key).is_some_and(Value::is_object)) =>
+                .any(|key| object.get(*key).is_some_and(arguments)) =>
         {
             Some(name.clone())
         }
@@ -506,8 +730,9 @@ fn html_start(line: &str) -> Option<(HtmlEnd, &str)> {
 /// line outside a code fence or an HTML block on, it is held until the
 /// response ends and shows whether it was a call. A line that has not ended
 /// and could still begin a call tag is held until it does, and so is a
-/// `<tool_call>` that ends a line until the next line shows whether it
-/// opens a call.
+/// `<tool_call>` that ends a line (or the start of one that may yet end it,
+/// such as a last `<` or `<tool`) until the next line shows whether it opens
+/// a call.
 #[derive(Debug, Default)]
 pub(crate) struct TextHold {
     released: usize,
@@ -546,6 +771,8 @@ impl TextHold {
         }
         let end = if may_call {
             self.scanned
+        } else if self.blocks.open() {
+            self.scanned + opener_tail(partial)
         } else {
             content.len()
         };
@@ -564,6 +791,36 @@ impl TextHold {
         self.released = end;
         Some(delta)
     }
+
+    /// How much of the text was released.
+    pub(crate) fn released(&self) -> usize {
+        self.released
+    }
+
+    /// Hold again what was released after `released`: the events that
+    /// carried it were never sent.
+    pub(crate) fn rewind(&mut self, released: usize) {
+        self.released = self.released.min(released);
+    }
+}
+
+/// Where the end of `partial`, a line that has not ended, may yet be a
+/// `<tool_call>` that ends the line ([`Opener`]): the tag with only
+/// whitespace after it, or the start of the tag (`<`, `<tool`, …) at the
+/// very end. The line is shown up to there until it ends.
+fn opener_tail(partial: &str) -> usize {
+    const OPENER: &str = "<tool_call>";
+    let text = partial.trim_end();
+    if let Some(before) = text.strip_suffix(OPENER) {
+        return before.len();
+    }
+    if text.len() < partial.len() {
+        return partial.len();
+    }
+    (1..OPENER.len())
+        .rev()
+        .find(|&length| partial.ends_with(&OPENER[..length]))
+        .map_or(partial.len(), |length| partial.len() - length)
 }
 
 /// Give each text value of a call written as text the type the tool's schema

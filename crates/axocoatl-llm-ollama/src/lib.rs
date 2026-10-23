@@ -245,8 +245,8 @@ fn text_call_refusal(why: String, finish_reason: &str, request: &ChatRequest) ->
         provider: "ollama".to_string(),
         message: format!(
             "{why}. Nothing from this response ran; Ollama ended it with finish_reason \
-             \"{finish_reason}\" and {} tools offered",
-            request.tools.len()
+             \"{finish_reason}\" and {} offered",
+            text_calls::count_of(request.tools.len(), "tool")
         ),
     }
 }
@@ -1613,11 +1613,24 @@ mod tests {
                 "misses its required parameter old",
             ),
             (flood.as_str(), "more than 128 calls"),
+            (
+                "Listing.<function=bash>\n<parameter=command>\nls\n</parameter>\n</function>",
+                "does not begin a line",
+            ),
+            (
+                "Listing. <tool_call>{\"name\": \"bash\", \"arguments\": \"{\\\"command\\\": \
+                 \\\"ls\\\"}\"}</tool_call>",
+                "as JSON",
+            ),
         ] {
             match compat_answer(content).await {
                 Err(ProviderError::RefusedResponse { message, .. }) => {
                     assert!(message.contains(says), "{content}: {message}");
                     assert!(message.contains("Nothing from this response ran"), "{message}");
+                    assert!(
+                        message.ends_with("finish_reason \"stop\" and 2 tools offered"),
+                        "{message}"
+                    );
                 }
                 other => panic!("{content}: {other:?}"),
             }
@@ -1640,6 +1653,38 @@ mod tests {
             event,
             Ok(StreamEvent::ToolCallDelta { name: Some(name), .. }) if name == "edit_file"
         )));
+        assert!(matches!(
+            events.last(),
+            Some(Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse
+            }))
+        ));
+    }
+
+    /// A `<tool_call>` that ends the prose, streamed token by token with
+    /// its newline at the start of the next token, never shows.
+    #[tokio::test]
+    async fn an_opener_streamed_token_by_token_never_shows() {
+        let call = &COMPAT_TEXT_CALL[COMPAT_TEXT_CALL.find("<function=").unwrap()..];
+        let opened = format!("\n\n{call}");
+        let events = compat_stream(&[
+            "I'll update",
+            " the heading.",
+            " <",
+            "tool",
+            "_call",
+            ">",
+            &opened,
+        ])
+        .await;
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(StreamEvent::TextDelta { delta }) => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "I'll update the heading. ");
         assert!(matches!(
             events.last(),
             Some(Ok(StreamEvent::Done {

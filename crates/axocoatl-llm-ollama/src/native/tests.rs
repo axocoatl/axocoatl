@@ -1773,6 +1773,117 @@ fn a_finish_that_overflows_releases_nothing() {
     assert!(state.finish().is_err());
 }
 
+/// A finish that fails sends none of its events: what they would have shown
+/// stays held, so the failure shows all of the answer's text (none of which
+/// runs), and their charges and recovered calls are taken back.
+#[test]
+fn a_finish_that_fails_leaves_its_text_for_the_failure() {
+    let mut state =
+        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    // As if no record had shown any of it yet.
+    state.content = TEXT_CALL.into();
+    state.terminal = Some(FinishReason::Stop);
+    state.thinking = "x".repeat(62 * 1024);
+    assert!(state.finish().is_err());
+    assert_eq!((state.emitted, state.calls.len()), (0, 0));
+    assert!(matches!(
+        state.release_held(),
+        Some(StreamEvent::TextDelta { delta }) if delta == TEXT_CALL
+    ));
+}
+
+/// Streamed: the replay metadata of a recovered call overflows the response,
+/// so the call never runs and the failure shows the whole answer, the prose
+/// and the markup.
+#[tokio::test]
+async fn a_recovered_call_whose_finish_overflows_never_runs() {
+    let mut thinking = record("", false);
+    thinking["message"]["thinking"] = json!("x".repeat(40 * 1024));
+    let events = stream_events(
+        &[
+            thinking,
+            record(TEXT_CALL, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+        workbench_request(),
+    )
+    .await;
+    assert_eq!(shown_text(&events), TEXT_CALL);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { .. }))));
+    assert!(
+        matches!(events.last(), Some(Err(ProviderError::Stream(_)))),
+        "{:?}",
+        events.last()
+    );
+}
+
+/// Ollama streams one record per token, the newline after a `<tool_call>`
+/// that ends the prose at the start of the next one: the opener never shows.
+#[tokio::test]
+async fn an_opener_streamed_token_by_token_never_shows() {
+    let tokens = [
+        "Prose",
+        ".",
+        " <",
+        "tool",
+        "_call",
+        ">",
+        "\n\n<function",
+        "=glob",
+        ">\n",
+        "<parameter=pattern>\n",
+        "src/*.js\n",
+        "</parameter>\n",
+        "</function>\n",
+        "</tool_call>",
+    ];
+    let mut records: Vec<Value> = tokens.iter().map(|token| record(token, false)).collect();
+    records.push(counted(record("", true), json!(2054), json!(55)));
+    let events = stream_events(&records, workbench_request()).await;
+    assert_eq!(shown_text(&events), "Prose. ");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::ToolCallDelta { name: Some(name), .. }) if name == "glob"
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish_reason: FinishReason::ToolUse
+        }))
+    ));
+}
+
+/// A call block written after other text on its line is refused, with the
+/// one tool offered named in the singular.
+#[tokio::test]
+async fn a_call_glued_to_the_prose_is_refused() {
+    let mut one_tool = workbench_request();
+    one_tool.tools.retain(|tool| tool.name == "glob");
+    let content = "Looking.<function=glob>\n<parameter=pattern>\nsrc/*.js\n</parameter>\n\
+                   </function>";
+    let events = stream_events(
+        &[
+            record(content, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+        one_tool,
+    )
+    .await;
+    assert_eq!(shown_text(&events), content);
+    assert!(
+        matches!(
+            events.last(),
+            Some(Err(ProviderError::RefusedResponse { message, .. }))
+                if message.contains("does not begin a line")
+                    && message.ends_with("done_reason \"stop\" and 1 tool offered")
+        ),
+        "{:?}",
+        events.last()
+    );
+}
+
 #[tokio::test]
 async fn a_tool_call_opener_ending_the_prose_is_not_left_in_the_answer() {
     let content =

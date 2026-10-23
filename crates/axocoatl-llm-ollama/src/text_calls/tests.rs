@@ -387,3 +387,172 @@ fn recovered_values_must_fit_the_tools_parameters() {
         "gives n a value that is not integer or null"
     );
 }
+
+/// A call block written after other text on its line is not a call that
+/// begins a line, so it never runs; it is refused rather than left as an
+/// answer that ran nothing.
+#[test]
+fn a_call_block_after_other_text_on_its_line_is_refused() {
+    for content in [
+        format!("Looking.{GLOB}"),
+        format!("Looking. {GLOB}\n</tool_call>"),
+        format!("Looking. <tool_call>{GLOB}\n</tool_call>"),
+        format!("Looking.\n\n {GLOB}"),
+        format!("Looking.\n  <tool_call>{GLOB}"),
+        format!("Looking.{GLOB}\nThen I will read it."),
+        "Looking.<function=glob>\n<parameter=pattern>\nsrc\n</function>".to_owned(),
+        "Looking.<function=glob></function>".to_owned(),
+        // A run that begins a line does not run without the call before it.
+        format!(
+            "Looking.{GLOB}\n<function=bash>\n<parameter=command>\nls\n</parameter>\n</function>"
+        ),
+    ] {
+        let why = unreadable(&content);
+        assert!(
+            why.starts_with("the model wrote a call to glob as answer text")
+                && why.contains("does not begin a line"),
+            "{content:?}: {why}"
+        );
+    }
+    let cut = match read_text_calls(
+        "Looking.<function=glob>\n<parameter=pattern>\nsrc",
+        &request(),
+        "ollama",
+        false,
+    ) {
+        TextCalls::Unreadable(why) => why,
+        other => panic!("{other:?}"),
+    };
+    assert!(cut.contains("done_reason \"length\""), "{cut}");
+}
+
+/// A call block quoted in code, a mention of the tag in prose and a block
+/// that names only a tool the turn does not offer stay the answer.
+#[test]
+fn quoted_or_mentioned_call_blocks_after_other_text_stay_the_answer() {
+    for content in [
+        "The <function=glob> tag opens a call, and </function> closes it.".to_owned(),
+        "Qwen writes `<function=glob></function>` for a call with no parameters.".to_owned(),
+        // A code span may run over the lines of its paragraph.
+        "Use ``<function=glob>\n</function>`` for that.".to_owned(),
+        format!("Example:\n\n    Run: {GLOB}"),
+        format!("Example:\n```\nRun: {GLOB}\n```"),
+        format!("Example:\n<pre>\nRun: {GLOB}"),
+        "Looking.<function=delete_all>\n<parameter=path>\n/\n</parameter>\n</function>".to_owned(),
+        // A call block in a value of a run that begins a line is that value.
+        "Plan.\n<function=bash>\n<parameter=command>\necho 'Run: <function=glob></function>'\n\
+         </parameter>\n</function>"
+            .to_owned(),
+    ] {
+        if content.starts_with("Plan.") {
+            let (_, calls) = recovered(&content);
+            assert_eq!(calls[0].name, "bash");
+        } else {
+            answer(&content);
+        }
+    }
+}
+
+/// JSON never runs. A JSON call to an offered tool that ends the answer (the
+/// whole answer, its last lines or a `<tool_call>` block, arguments as an
+/// object or as a string holding one) is refused; JSON in a fence or with
+/// text after it stays the answer.
+#[test]
+fn a_json_call_ending_the_answer_is_refused_and_other_json_stays_text() {
+    for content in [
+        r#"{"name": "bash", "arguments": "{\"command\": \"ls\"}"}"#.to_owned(),
+        "Listing it. <tool_call>{\"name\": \"bash\", \"arguments\": {\"command\": \"ls\"}}\
+         </tool_call>"
+            .to_owned(),
+        "Listing it.\n  <tool_call>\n{\"name\": \"bash\", \"arguments\": {\"command\": \"ls\"}}\n"
+            .to_owned(),
+    ] {
+        let why = unreadable(&content);
+        assert!(why.contains("call to bash as JSON"), "{content:?}: {why}");
+    }
+    for content in [
+        "I'll run:\n{\"name\": \"bash\", \"arguments\": {\"command\": \"ls\"}}\nThen check.",
+        "Hermes: <tool_call>{\"name\": \"bash\", \"arguments\": {\"command\": \"ls\"}}</tool_call> \
+         is the format.",
+        "Listing it. <tool_call>{\"name\": \"other\", \"arguments\": {}}</tool_call>",
+        r#"{"name": "bash", "arguments": "ls"}"#,
+    ] {
+        answer(content);
+    }
+}
+
+/// The text a [`TextHold`] has shown after each of `pieces`, then the
+/// answer's own text once the response ends: how finish ends a stream.
+fn shown_then_finished(pieces: &[&str]) -> (String, String) {
+    let mut hold = TextHold::default();
+    let mut content = String::new();
+    let mut shown = String::new();
+    for piece in pieces {
+        content.push_str(piece);
+        shown.push_str(&hold.release(&content).unwrap_or_default());
+    }
+    let end = match read(&content) {
+        TextCalls::Calls { answer_end, .. } => answer_end,
+        _ => content.len(),
+    };
+    let before = shown.clone();
+    shown.push_str(&hold.release_to(&content, end).unwrap_or_default());
+    (before, shown)
+}
+
+/// A `<tool_call>` opener that ends the prose arrives token by token, its
+/// newline at the start of the next token as Ollama streams it: it is held
+/// until its line ends, so it never shows while the call runs. Whatever the
+/// split, the text shown is the answer's own text and never call markup.
+#[test]
+fn a_tool_call_opener_split_into_tokens_is_held_until_its_line_ends() {
+    let tokens = [
+        "Prose",
+        ".",
+        " <",
+        "tool",
+        "_call",
+        ">",
+        "\n\n<function",
+        "=glob",
+        ">\n",
+        "<parameter=pattern>\n",
+        "src/*.js\n",
+        "</parameter>\n",
+        "</function>\n",
+        "</tool_call>",
+    ];
+    let content = tokens.concat();
+    let (before, shown) = shown_then_finished(&tokens);
+    assert_eq!((before.as_str(), shown.as_str()), ("Prose. ", "Prose. "));
+    let answers = [
+        content.clone(),
+        format!("Prose <tool_call>  \n{GLOB}"),
+        format!("I compare a < b.\nThen <tool_call>\n\n{GLOB}\n</tool_call>"),
+        format!("Looking.\n{GLOB}"),
+        "Ends with a <tool".to_owned(),
+        "Ends with a <tool_call>".to_owned(),
+        "x < y and <tool_call> is a tag\n".to_owned(),
+    ];
+    for content in &answers {
+        let whole = match read(content) {
+            TextCalls::Calls { answer_end, .. } => &content[..answer_end],
+            _ => content.as_str(),
+        };
+        let mut splits: Vec<Vec<&str>> = (1..content.len())
+            .filter(|at| content.is_char_boundary(*at))
+            .map(|at| vec![&content[..at], &content[at..]])
+            .collect();
+        splits.push(
+            content
+                .char_indices()
+                .map(|(at, c)| &content[at..at + c.len_utf8()])
+                .collect(),
+        );
+        for pieces in splits {
+            let (before, shown) = shown_then_finished(&pieces);
+            assert!(whole.starts_with(&before), "{pieces:?}: {before:?}");
+            assert_eq!(shown, whole, "{pieces:?}");
+        }
+    }
+}

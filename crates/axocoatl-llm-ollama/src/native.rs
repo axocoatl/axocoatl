@@ -1417,7 +1417,20 @@ impl NativeResponse {
     /// ([`text_calls::read_text_calls`]); an answer that calls an offered
     /// tool in a way that cannot run is refused ([`Self::take_rejection`]
     /// then reports it) instead of ending the turn having run nothing.
+    /// When it fails, none of its events is sent: the text they would have
+    /// shown stays held for [`Self::release_held`], and their charges and
+    /// recovered calls are taken back.
     fn finish(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
+        let (released, emitted, calls) = (self.hold.released(), self.emitted, self.calls.len());
+        let finished = self.finish_events();
+        if finished.is_err() {
+            self.hold.rewind(released);
+            self.emitted = emitted;
+            self.calls.truncate(calls);
+        }
+        finished
+    }
+    fn finish_events(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
         let mut reason = self
             .terminal
             .clone()
@@ -1452,8 +1465,8 @@ impl NativeResponse {
                     provider: PROVIDER.into(),
                     message: format!(
                         "{why}. Nothing from this response ran; Ollama ended it with \
-                         done_reason \"{done_reason}\" and {} tools offered",
-                        self.request.tools.len()
+                         done_reason \"{done_reason}\" and {} offered",
+                        text_calls::count_of(self.request.tools.len(), "tool")
                     ),
                 });
                 return Ok(events);
