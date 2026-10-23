@@ -441,9 +441,9 @@ fn is_codex_chatgpt_secret(name: &str) -> bool {
 /// `axocoatl connect claude-code`, which obtains and stores a new token
 /// without anyone seeing it; for the ChatGPT sign-in, run again (the daemon
 /// asks for a new access token after a rejection) or `axocoatl connect
-/// codex`; for Codex's OpenAI API key, a key from the environment or the
-/// ChatGPT sign-in instead (this version does not store one through
-/// `axocoatl connect codex --api-key`); otherwise pipe in only the token.
+/// codex`; for Codex's OpenAI API key, the ChatGPT sign-in instead (this
+/// version does not store a key through `axocoatl connect codex --api-key`),
+/// or a key from the environment; otherwise pipe in only the token.
 /// For the refusal of a credential a model API rejected and for `secret
 /// set`'s warnings.
 pub fn store_again_hint(name: &str) -> String {
@@ -461,7 +461,7 @@ pub fn store_again_hint(name: &str) -> String {
         );
     }
     if is_codex_api_key_secret(name) {
-        return format!("store a working OpenAI API key ({AUTOMATION}), or {CHATGPT_INSTEAD}");
+        return format!("{CHATGPT_INSTEAD}; or store a working OpenAI API key ({AUTOMATION})");
     }
     format!("store it again with `axocoatl secret set {name}`, piping in only the token")
 }
@@ -932,13 +932,13 @@ mod tests {
         let again = store_again_hint("codex-openai");
         assert!(
             again.starts_with(
-                "store a working OpenAI API key (only for automation without a browser"
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`"
             ),
             "{again}"
         );
         assert!(
             again.contains(
-                "or sign in with your ChatGPT plan instead with `axocoatl connect codex`"
+                "; or store a working OpenAI API key (only for automation without a browser"
             ),
             "{again}"
         );

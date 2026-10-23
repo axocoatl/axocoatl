@@ -25,7 +25,11 @@
 //! `codex-openai`, and with `--api-key-only` ([`Keep::ApiKeyOnly`]) only that
 //! key; this version refuses both before anything runs
 //! ([`api_key_not_available`]), since the route was never tried with an
-//! OpenAI Platform organization. Codex
+//! OpenAI Platform organization. The unit tests in `connect_cmd/tests.rs`
+//! still run that storing code with a fake Codex and a fake login container
+//! (both secrets, the key alone, no key issued, `--device-auth`, the key's
+//! form); the tests that ran it through the built binary and Podman went
+//! with the refusal, and come back with the route. Codex
 //! 0.160.1's browser sign-in (`codex-rs/login/src/server.rs`) exchanges the
 //! id token it obtained at `auth.openai.com/oauth/token`
 //! (`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
