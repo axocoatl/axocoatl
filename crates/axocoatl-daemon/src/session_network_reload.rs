@@ -638,6 +638,8 @@ mod tests {
             api_key_secret: None,
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         };
         let mut old = started.clone();
         old.providers.openai = Some(key("sk-old-value"));

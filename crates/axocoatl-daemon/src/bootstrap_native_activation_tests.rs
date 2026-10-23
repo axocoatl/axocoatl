@@ -496,3 +496,29 @@ async fn cancelled_context_observation_retains_owned_stores_without_inventing_a_
     assert_eq!(count(&server, "/api/generate").await, 0);
     assert_eq!(count(&server, "/api/chat").await, 0);
 }
+
+/// What a provider block sets for its answers' timeouts reaches the
+/// provider; unset, Ollama gets ten minutes to start and a hosted provider
+/// two.
+#[test]
+fn configured_provider_timeouts_replace_the_provider_defaults() {
+    use axocoatl_llm::transport::StreamTimeouts;
+    use std::time::Duration;
+    let config = axocoatl_config::parse_config(
+        "providers:\n  ollama:\n    base_url: http://127.0.0.1:11434\n    \
+         first_token_timeout_secs: 1800\n  openrouter:\n    api_key: sk-or-x\n    \
+         idle_timeout_secs: 30\n  anthropic:\n    api_key: x\n",
+        std::path::Path::new("test.yaml"),
+    )
+    .unwrap();
+    let ollama = ollama_stream_timeouts(config.providers.ollama.as_ref().unwrap());
+    assert_eq!(ollama.first_token, Duration::from_secs(1800));
+    assert_eq!(ollama.idle, StreamTimeouts::LOCAL.idle);
+    let openrouter = hosted_stream_timeouts(config.providers.openrouter.as_ref().unwrap());
+    assert_eq!(openrouter.first_token, StreamTimeouts::HOSTED.first_token);
+    assert_eq!(openrouter.idle, Duration::from_secs(30));
+    assert_eq!(
+        hosted_stream_timeouts(config.providers.anthropic.as_ref().unwrap()),
+        StreamTimeouts::HOSTED
+    );
+}

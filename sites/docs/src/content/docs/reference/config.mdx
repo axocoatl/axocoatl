@@ -222,6 +222,8 @@ providers:
   ollama:
     base_url: "http://127.0.0.1:11434"
     model: llama3.2
+    first_token_timeout_secs: 600   # default; how long an answer may take to start
+    idle_timeout_secs: 90           # default; longest pause within an answer
   openai:
     api_key: "${OPENAI_API_KEY}"
     base_url: null
@@ -256,6 +258,17 @@ slot/provider/model across later turns and restart until the complete transactio
 leaves model history. Missing, conflicting, or stale route markers fail closed.
 A known smaller fallback rejects an already oversized request locally, while
 unknown custom-model constraints remain endpoint-validated.
+
+Every provider block, `ollama` and the hosted ones, takes `first_token_timeout_secs`
+and `idle_timeout_secs`. The first is how long a model may take to start its answer,
+from the request to the first chunk: 600 seconds for Ollama, which loads the model and
+reads the whole prompt first (minutes on a CPU-only computer or for a long prompt), and
+120 seconds for a hosted provider; 1 to 3600. The second is the longest pause between
+chunks after that: 90 seconds, 1 to 900. A request whose answer is not streamed has the
+first-token timeout, and at least 120 seconds, for the whole answer. When either passes,
+the call fails with `first-token timeout` or `stream idle timeout` and the name of the
+setting, and Axocoatl closes the connection, so Ollama stops computing that answer. A
+streamed answer ends after 15 minutes in any case.
 
 Native Sessions accept reviewed local Ollama profiles or eligible OpenRouter-credit
 profiles, reasoning models included. `openrouter_billing: credits` declares credit

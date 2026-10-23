@@ -14,8 +14,8 @@
 use crate::OpenAiProvider;
 use axocoatl_core::{MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_llm::transport::{
-    http_client, network_error, next_stream_item, read_error_text, read_json, validated_endpoint,
-    SseDecoder, MAX_STREAM_BYTES, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
+    http_client, network_error, read_error_text, read_json, validated_endpoint, SseDecoder,
+    StreamDeadlines, StreamTimeouts, MAX_STREAM_BYTES, RESPONSE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
 };
 use axocoatl_llm::{
     provider_tool_metadata, validate_chat_response, validate_response_tool_call,
@@ -190,6 +190,12 @@ impl NativeOpenRouterProvider {
         };
         this.verify().await?;
         Ok(this)
+    }
+    /// Wait for each answer as `timeouts` say (`providers.openrouter`'s
+    /// `first_token_timeout_secs` and `idle_timeout_secs`).
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.inner = self.inner.with_stream_timeouts(timeouts);
+        self
     }
     async fn verify(&self) -> Result<(), ProviderError> {
         let profiles = observe_native_openrouter_profiles(
@@ -472,20 +478,21 @@ impl LlmProvider for NativeOpenRouterProvider {
             .observation
             .call_bounds(shape, self.max_response_bytes)?;
         self.verify().await?;
-        let response = tokio::time::timeout(
-            RESPONSE_TIMEOUT,
-            self.inner
-                .client
-                .post(self.inner.endpoint()?)
-                .bearer_auth(&self.inner.api_key)
-                .header("HTTP-Referer", "https://axocoatl.ai")
-                .header("X-OpenRouter-Title", "Axocoatl")
-                .json(&body)
-                .send(),
-        )
-        .await
-        .map_err(|_| protocol("response headers timed out"))?
-        .map_err(|e| transport_error(&e, &[&self.inner.api_key]))?;
+        let deadlines = StreamDeadlines::start(self.inner.stream_timeouts);
+        let response = deadlines
+            .headers(
+                self.inner
+                    .client
+                    .post(self.inner.endpoint()?)
+                    .bearer_auth(&self.inner.api_key)
+                    .header("HTTP-Referer", "https://axocoatl.ai")
+                    .header("X-OpenRouter-Title", "Axocoatl")
+                    .json(&body)
+                    .send(),
+                PROVIDER,
+            )
+            .await?
+            .map_err(|e| transport_error(&e, &[&self.inner.api_key]))?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let retry_after = retry_after_secs(response.headers());
@@ -498,6 +505,7 @@ impl LlmProvider for NativeOpenRouterProvider {
         }
         Ok(stream::decode(
             response,
+            deadlines,
             request,
             self.observation.clone(),
             shape,

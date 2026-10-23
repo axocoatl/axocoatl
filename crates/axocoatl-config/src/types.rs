@@ -662,6 +662,15 @@ pub struct ProviderCredentials {
     /// may select independently. A bare `"provider"` uses the backup's own
     /// default model. Not a credential.
     pub fallback: Option<String>,
+    /// Seconds this provider may take to start an answer, from sending the
+    /// request to its first chunk; 120 when unset, 1 to 3600. A request whose
+    /// answer is not streamed has this long (at least 120 s) for all of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_timeout_secs: Option<u64>,
+    /// Seconds a streamed answer may pause between chunks; 90 when unset, 1
+    /// to 900.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u64>,
 }
 
 /// [`ProviderCredentials`] as the file gives it, `api_key` possibly absent.
@@ -673,6 +682,10 @@ struct ProviderCredentialsFile {
     #[serde(default)]
     base_url: Option<String>,
     fallback: Option<String>,
+    #[serde(default)]
+    first_token_timeout_secs: Option<u64>,
+    #[serde(default)]
+    idle_timeout_secs: Option<u64>,
 }
 
 /// The refusal of a hosted provider block that names no key at all.
@@ -695,6 +708,8 @@ impl TryFrom<ProviderCredentialsFile> for ProviderCredentials {
             api_key_secret: file.api_key_secret,
             base_url: file.base_url,
             fallback: file.fallback,
+            first_token_timeout_secs: file.first_token_timeout_secs,
+            idle_timeout_secs: file.idle_timeout_secs,
         })
     }
 }
@@ -704,6 +719,14 @@ pub struct OllamaCredentials {
     pub base_url: String,
     /// Default model for Ollama agents (overridden by per-agent `model` field).
     pub model: Option<String>,
+    /// Seconds Ollama may take to start an answer, from sending the request
+    /// to its first token: it loads the model and reads the whole prompt
+    /// first. 600 when unset, 1 to 3600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_timeout_secs: Option<u64>,
+    /// Seconds an answer may pause between chunks; 90 when unset, 1 to 900.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<u64>,
 }
 
 /// Server configuration.

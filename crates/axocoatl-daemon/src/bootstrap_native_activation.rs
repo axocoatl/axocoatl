@@ -246,6 +246,12 @@ impl AxocoatlDaemon {
                 .ollama
                 .as_ref()
                 .map(|p| p.base_url.clone()),
+            ollama_timeouts: self
+                .config
+                .providers
+                .ollama
+                .as_ref()
+                .map(ollama_stream_timeouts),
             ollama_served: None,
             openrouter_api_key: self
                 .config
@@ -258,6 +264,12 @@ impl AxocoatlDaemon {
             openrouter_configuration_error: invalid_openrouter.then(|| {
                 "native OpenRouter requires the official endpoint and no configured fallback".into()
             }),
+            openrouter_timeouts: self
+                .config
+                .providers
+                .openrouter
+                .as_ref()
+                .map(hosted_stream_timeouts),
         }
     }
 }

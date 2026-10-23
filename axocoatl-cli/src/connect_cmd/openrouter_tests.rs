@@ -1061,6 +1061,8 @@ fn doctor_names_where_the_key_is_and_how_to_store_it() {
         api_key_secret: secret.map(str::to_string),
         base_url: None,
         fallback: None,
+        first_token_timeout_secs: None,
+        idle_timeout_secs: None,
     };
     assert_eq!(
         doctor_key_line(
@@ -1549,6 +1551,8 @@ async fn a_key_given_where_a_secret_name_belongs_is_never_repeated() {
         api_key_secret: Some(secret.to_string()),
         base_url: None,
         fallback: None,
+        first_token_timeout_secs: None,
+        idle_timeout_secs: None,
     };
     for (provider, key) in [
         ("Mistral", "FAKEmistralKEY0123456789abcdef"),

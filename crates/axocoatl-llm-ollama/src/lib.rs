@@ -18,9 +18,8 @@ use axocoatl_core::{MessageContent, MessageRole, TokenUsageStats};
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
-        validated_endpoint, SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT,
-        STREAM_TOTAL_TIMEOUT,
+        bounded_redacted, http_client, network_error, read_error_text, read_json,
+        validated_endpoint, SseDecoder, StreamDeadlines, StreamTimeouts, STREAM_TOTAL_TIMEOUT,
     },
     validate_chat_response, validate_provider_request, validate_required_stream_tool_call_ids,
     validate_required_tool_call_id, validate_response_tool_call, validate_stream_terminal,
@@ -547,6 +546,9 @@ pub struct OllamaProvider {
     client: reqwest::Client,
     base_url: String,
     model: String,
+    /// How long an answer may take to start and to pause
+    /// ([`StreamTimeouts::LOCAL`] unless the configuration sets them).
+    stream_timeouts: StreamTimeouts,
 }
 
 impl OllamaProvider {
@@ -561,7 +563,15 @@ impl OllamaProvider {
             client: http_client(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             model: model.into(),
+            stream_timeouts: StreamTimeouts::LOCAL,
         }
+    }
+
+    /// Wait for each answer as `timeouts` say (`providers.ollama`'s
+    /// `first_token_timeout_secs` and `idle_timeout_secs`).
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.stream_timeouts = timeouts;
+        self
     }
 
     fn endpoint(&self) -> Result<String, ProviderError> {
@@ -658,7 +668,7 @@ impl LlmProvider for OllamaProvider {
             .post(self.endpoint()?)
             .header(CONTENT_TYPE, "application/json")
             .json(&body)
-            .timeout(RESPONSE_TIMEOUT)
+            .timeout(self.stream_timeouts.buffered())
             .send()
             .await
             .map_err(|error| network_error(&error, &[]))?;
@@ -781,17 +791,18 @@ impl LlmProvider for OllamaProvider {
         let body = self.build_request_body(&request, true);
         let model_for_call = request.model_override.as_deref().unwrap_or(&self.model);
 
-        let response = tokio::time::timeout(
-            RESPONSE_TIMEOUT,
-            self.client
-                .post(self.endpoint()?)
-                .header(CONTENT_TYPE, "application/json")
-                .json(&body)
-                .send(),
-        )
-        .await
-        .map_err(|_| ProviderError::Network("Ollama response headers timed out".to_string()))?
-        .map_err(|error| network_error(&error, &[]))?;
+        let mut deadlines = StreamDeadlines::start(self.stream_timeouts);
+        let response = deadlines
+            .headers(
+                self.client
+                    .post(self.endpoint()?)
+                    .header(CONTENT_TYPE, "application/json")
+                    .json(&body)
+                    .send(),
+                self.provider_id(),
+            )
+            .await?
+            .map_err(|error| network_error(&error, &[]))?;
 
         let status = response.status();
         if status == 429 {
@@ -848,13 +859,9 @@ impl LlmProvider for OllamaProvider {
             let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
 
             'response: loop {
-                let next = next_stream_item(
-                    &mut byte_stream,
-                    total_deadline,
-                    STREAM_IDLE_TIMEOUT,
-                    "Ollama",
-                )
-                .await?;
+                let next = deadlines
+                    .next(&mut byte_stream, total_deadline, "ollama")
+                    .await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

@@ -337,6 +337,9 @@ impl NativeRuntimeConfiguration {
                     .verify(
                         credentials.ollama_base_url.as_deref(),
                         credentials.ollama_served.as_deref(),
+                        credentials
+                            .ollama_timeouts
+                            .unwrap_or(axocoatl_llm::transport::StreamTimeouts::LOCAL),
                     )
                     .await
             }
@@ -352,7 +355,12 @@ impl NativeRuntimeConfiguration {
                     )
                 })
                 .await
-                .map_err(error)?;
+                .map_err(error)?
+                .with_stream_timeouts(
+                    credentials
+                        .openrouter_timeouts
+                        .unwrap_or(axocoatl_llm::transport::StreamTimeouts::HOSTED),
+                );
                 Ok(Arc::new(provider))
             }
         }
