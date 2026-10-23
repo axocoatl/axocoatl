@@ -495,10 +495,12 @@ fn assert_nothing_shown(shown: &[u8], image: &FakeImage) {
 }
 
 #[test]
-#[ignore = "requires Podman (CONTAINER_CONNECTION) and a free 127.0.0.1:1455"]
+#[ignore = "requires Podman (on a Mac, CONTAINER_CONNECTION) and a free 127.0.0.1:1455"]
 fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
+    // On a Mac, name the machine to test with; on Linux the default
+    // connection is this computer's own Podman.
     assert!(
-        std::env::var_os("CONTAINER_CONNECTION").is_some(),
+        cfg!(not(target_os = "macos")) || std::env::var_os("CONTAINER_CONNECTION").is_some(),
         "set CONTAINER_CONNECTION to the Podman connection to test with"
     );
     assert!(port_free(), "127.0.0.1:1455 must be free for this test");
@@ -512,17 +514,32 @@ fn connect_codex_signs_in_in_a_throwaway_container_without_a_host_codex() {
     let scratch_path = scratch.path().canonicalize().unwrap();
     std::fs::set_permissions(&scratch_path, std::fs::Permissions::from_mode(0o700)).unwrap();
     // A PATH with `podman` and nothing else: no `codex` on this computer.
+    // On Linux, Podman's own engine also looks up its rootless network
+    // helpers on PATH to publish a port.
     let path_dir = scratch_path.join("path");
     std::fs::create_dir(&path_dir).unwrap();
-    let real_podman = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|directory| directory.join("podman"))
-        .find(|candidate| candidate.is_file())
-        .expect("podman on PATH");
-    std::os::unix::fs::symlink(&real_podman, path_dir.join("podman")).unwrap();
-    assert_eq!(
-        std::fs::read_dir(&path_dir).unwrap().count(),
-        1,
-        "the PATH directory holds only podman"
+    let on_path = |name: &str| {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join(name))
+            .find(|candidate| candidate.is_file())
+    };
+    let mut tools = vec!["podman"];
+    if cfg!(target_os = "linux") {
+        tools.extend(["slirp4netns", "pasta"]);
+    }
+    for tool in &tools {
+        match on_path(tool) {
+            Some(real) => std::os::unix::fs::symlink(real, path_dir.join(tool)).unwrap(),
+            None => assert_ne!(*tool, "podman", "podman on PATH"),
+        }
+    }
+    let listed: Vec<String> = std::fs::read_dir(&path_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        listed.iter().all(|name| tools.contains(&name.as_str())),
+        "the PATH directory holds only podman and its network helpers: {listed:?}"
     );
     let volumes_before = volumes();
     let ok = FakeImage::build("ok", &scratch_path);
