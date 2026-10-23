@@ -91,8 +91,12 @@ and the run id with the command to verify its
 [record bundle](/reference/run/#record-bundle). The body ends with the receipt itself, the
 DSSE envelope as base64 inside an `<!-- axocoatl-receipt:v1 … -->` comment, which GitHub
 does not display. The body is cut to fit a pull request description; the cut never
-reaches the receipt block. `axocoatl receipt verify` reads a saved description
-directly:
+reaches the receipt block. A receipt block longer than 40,000 characters (the receipt
+lists every file the run changed, so a run that changes many files can pass it) is left
+out, and the body says so. Verify that receipt from the file `--receipt` wrote or from
+the run's record bundle; the [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions)
+finds none in the description, which fails it unless `require-receipt` is `false`.
+`axocoatl receipt verify` reads a saved description directly:
 
 ```sh
 gh pr view 7 --json body --jq .body > body.md
