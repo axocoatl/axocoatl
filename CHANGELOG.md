@@ -770,6 +770,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started Monaco's services without them, and every editor of the page lacked those
   features until the page was reloaded. The workbench now gives Monaco a theme only
   once Monaco has loaded; Monaco takes the page's theme when it finishes.
+- **Workbench and loadout turns on Ollama no longer end "done" when Qwen3-Coder writes a
+  tool call as text.** `qwen3-coder:30b` on Ollama 0.40.8 sometimes writes a call
+  without its opening `<tool_call>` tag. Ollama returns such a call as the answer, so
+  the turn ended "done" without running it. The native Ollama provider now recovers
+  these calls (only for tools the turn offered, never from bare JSON) instead of taking
+  them as the final answer.
 
 ### Security
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its

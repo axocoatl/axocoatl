@@ -1037,3 +1037,367 @@ async fn refused_metadata_requests_keep_the_status_and_ollamas_message() {
     assert_eq!(check.version, None);
     assert_eq!(check.cloud, OllamaCloudMode::Unreported);
 }
+
+/// What qwen3-coder:30b on Ollama 0.40.8 wrote for a workbench turn: a call
+/// without its opening `<tool_call>` token, which Ollama returned as content
+/// ending in `stop`, with no structured call.
+const TEXT_CALL: &str = "I'll help you fix the paging bug in `src/paginate.js`. Let me first locate this file and examine its contents to understand the issue.\n\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n</tool_call>";
+
+/// The prose before that call, which stays the turn's text.
+fn prose() -> &'static str {
+    &TEXT_CALL[..TEXT_CALL.find("<function=").unwrap()]
+}
+
+/// The same turn streamed from a real Ollama 0.40.8, one record per token.
+const TEXT_CALL_STREAM: &str =
+    include_str!("fixtures/ollama-0.40.8-qwen3-coder-30b-text-call.jsonl");
+
+fn workbench_config(server: &MockServer) -> NativeOllamaConfig {
+    NativeOllamaConfig {
+        context_tokens: 32_768,
+        max_output_tokens: 256,
+        ..config(server)
+    }
+}
+
+fn workbench_request() -> ChatRequest {
+    let mut request = ChatRequest::simple("Fix the paging bug in src/paginate.js");
+    for (name, properties) in [
+        ("glob", json!({"pattern":{"type":"string"}})),
+        (
+            "read_file",
+            json!({"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}}),
+        ),
+        ("bash", json!({"command":{"type":"string"}})),
+    ] {
+        request.tools.push(ToolDefinition {
+            name: name.into(),
+            description: String::new(),
+            parameters: json!({"type":"object","properties":properties}),
+            concurrency: Default::default(),
+        });
+    }
+    request
+}
+
+fn text_of(events: &[StreamEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextDelta { delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_tool_call_written_as_text_without_its_opening_tag_is_recovered() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(TEXT_CALL, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let outcome = provider.chat_with_accounting(workbench_request()).await;
+    let response = outcome.response.unwrap();
+    assert_eq!(response.finish_reason, FinishReason::ToolUse);
+    assert_eq!(response.tool_calls.len(), 1);
+    let call = &response.tool_calls[0];
+    assert_eq!(call.name, "glob");
+    assert_eq!(call.arguments, json!({"pattern":"src/paginate.js"}));
+    assert!(!call.id.is_empty());
+    assert_eq!(
+        call.provider_metadata.get(TOOL_METADATA_PROVIDER_ID),
+        Some(&PROVIDER.to_string())
+    );
+    assert_eq!(response.content, prose());
+    assert!(!response.content.contains("<function="));
+    assert!(outcome.usage.complete);
+    assert_eq!(outcome.usage.usage, TokenUsageStats::new(2054, 55));
+}
+
+#[tokio::test]
+async fn a_text_call_split_across_records_is_never_half_shown() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    let split = TEXT_CALL.find("function=glob>").unwrap();
+    response(
+        &server,
+        &[
+            record(&TEXT_CALL[..split], false),
+            record(&TEXT_CALL[split..], false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let mut stream = provider.chat_stream(workbench_request()).await.unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+    for event in &events {
+        if let StreamEvent::TextDelta { delta } = event {
+            assert!(!delta.contains('<'), "{delta:?}");
+        }
+    }
+    assert_eq!(text_of(&events), prose());
+    let call = events
+        .iter()
+        .position(|event| matches!(event, StreamEvent::ToolCallDelta { .. }))
+        .unwrap();
+    assert!(events[call..]
+        .iter()
+        .all(|event| !matches!(event, StreamEvent::TextDelta { .. })));
+    assert!(
+        matches!(&events[call..], [
+            StreamEvent::ToolCallDelta { name: Some(name), args_delta, .. },
+            StreamEvent::ToolCallMetadata { .. },
+            StreamEvent::UsageObservation(usage),
+            StreamEvent::Done { finish_reason: FinishReason::ToolUse },
+        ] if name == "glob" && args_delta == r#"{"pattern":"src/paginate.js"}"# && usage.complete),
+        "{events:?}"
+    );
+}
+
+/// Whatever record boundaries the call arrives in, the text shown is only
+/// the prose before it, and the call is recovered once.
+#[test]
+fn a_text_call_split_anywhere_is_recovered_without_showing_its_markup() {
+    let mut splits: Vec<Vec<&str>> = (1..TEXT_CALL.len())
+        .map(|at| vec![&TEXT_CALL[..at], &TEXT_CALL[at..]])
+        .collect();
+    splits.push((0..TEXT_CALL.len()).map(|at| &TEXT_CALL[at..=at]).collect());
+    for pieces in splits {
+        let mut state =
+            NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+        let mut events = Vec::new();
+        for piece in &pieces {
+            events.extend(state.record(&record(piece, false), 200).unwrap());
+        }
+        events.extend(state.record(&record("", true), 200).unwrap());
+        events.extend(state.finish().unwrap());
+        for event in &events {
+            if let StreamEvent::TextDelta { delta } = event {
+                assert!(!delta.contains('<'), "{pieces:?}: {delta:?}");
+            }
+        }
+        assert_eq!(text_of(&events), prose(), "{pieces:?}");
+        assert_eq!(state.calls.len(), 1, "{pieces:?}");
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse
+            })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn a_real_ollama_stream_of_a_text_call_runs_the_call() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(TEXT_CALL_STREAM, "application/x-ndjson"),
+        )
+        .mount(&server)
+        .await;
+    let settings = NativeOllamaConfig {
+        model: "qwen3-coder:30b".into(),
+        ..workbench_config(&server)
+    };
+    let provider = NativeOllamaProvider::connect(settings).await.unwrap();
+    let mut stream = provider.chat_stream(workbench_request()).await.unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+    for event in &events {
+        if let StreamEvent::TextDelta { delta } = event {
+            assert!(!delta.contains('<'), "{delta:?}");
+        }
+    }
+    assert_eq!(
+        text_of(&events),
+        "I'll help you fix the paging bug in `src/paginate.js`. Let's start by examining the \
+         file to understand the current implementation and identify the bug.\n\n"
+    );
+    let calls: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::ToolCallDelta {
+                name: Some(name),
+                args_delta,
+                ..
+            } => Some((name.as_str(), args_delta.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, [("read_file", r#"{"path":"src/paginate.js"}"#)]);
+    assert!(matches!(
+        &events[events.len() - 2..],
+        [
+            StreamEvent::UsageObservation(usage),
+            StreamEvent::Done { finish_reason: FinishReason::ToolUse },
+        ] if usage.complete && usage.usage == TokenUsageStats::new(2054, 56)
+    ));
+}
+
+/// Nothing but a complete markup call to an offered tool, in a plain-text
+/// request, is ever read as a call: these answers stay what the model wrote.
+#[tokio::test]
+async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
+    let quoted_call = r#"{"note":"<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>"}"#;
+    let mut not_offered = workbench_request();
+    not_offered.tools.retain(|tool| tool.name != "glob");
+    let mut json = workbench_request();
+    json.response_format = Some(ResponseFormat::Json);
+    for (content, request) in [
+        (TEXT_CALL, not_offered),
+        (
+            "Qwen3-Coder writes <function=glob> when it calls a tool as text.",
+            workbench_request(),
+        ),
+        (TEXT_CALL, ChatRequest::simple("Fix the paging bug")),
+        (quoted_call, json),
+        (
+            r#"Run {"name":"bash","arguments":{"command":"rm -rf build"}} to clean."#,
+            workbench_request(),
+        ),
+    ] {
+        let server = MockServer::start().await;
+        valid_profile(&server).await;
+        response(
+            &server,
+            &[
+                record(content, false),
+                counted(record("", true), json!(2054), json!(55)),
+            ],
+        )
+        .await;
+        let provider = NativeOllamaProvider::connect(workbench_config(&server))
+            .await
+            .unwrap();
+        let response = provider.chat(request).await.unwrap();
+        assert_eq!(response.finish_reason, FinishReason::Stop, "{content}");
+        assert!(response.tool_calls.is_empty(), "{content}");
+        assert_eq!(response.content, content);
+    }
+}
+
+#[tokio::test]
+async fn a_structured_call_wins_over_markup_in_the_text() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    let mut done = counted(record("", true), json!(2054), json!(55));
+    done["message"]["tool_calls"] = json!([{"id":"call_native","function":{"index":0,
+        "name":"read_file","arguments":{"path":"src/paginate.js"}}}]);
+    response(&server, &[record(TEXT_CALL, false), done]).await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let response = provider.chat(workbench_request()).await.unwrap();
+    assert_eq!(response.finish_reason, FinishReason::ToolUse);
+    assert_eq!(response.tool_calls.len(), 1);
+    assert_eq!(response.tool_calls[0].id, "call_native");
+    assert_eq!(response.tool_calls[0].name, "read_file");
+    assert_eq!(response.content, TEXT_CALL);
+}
+
+/// A Session's history keeps one id per call over all its turns, so each
+/// recovered call takes an id no earlier call has.
+#[tokio::test]
+async fn recovered_calls_take_ids_unique_across_the_history() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(TEXT_CALL, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let mut request = workbench_request();
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let response = provider.chat(request.clone()).await.unwrap();
+        let call = response.tool_calls[0].clone();
+        let mut assistant = ChatMessage::assistant(response.content);
+        assistant.tool_calls = response.tool_calls;
+        request.messages.push(assistant);
+        request.messages.push(ChatMessage::tool_result(
+            "[\"src/paginate.js\"]",
+            "glob",
+            call.id.as_str(),
+        ));
+        ids.push(call.id);
+    }
+    assert_eq!(ids, ["call_text_0", "call_text_1"]);
+    provider.validate_request(&request).unwrap();
+    let body = provider.wire_request(&request).unwrap();
+    assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call_text_0");
+    assert_eq!(body["messages"][3]["tool_calls"][0]["id"], "call_text_1");
+    assert_eq!(body["messages"][4]["tool_name"], "glob");
+}
+
+#[tokio::test]
+async fn recovered_values_take_the_types_their_schema_declares() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(
+                "<function=read_file>\n<parameter=path>\nsrc/paginate.js\n</parameter>\n\
+                 <parameter=limit>\n100\n</parameter>\n</function>\n</tool_call>",
+                false,
+            ),
+            counted(record("", true), json!(2054), json!(40)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let response = provider.chat(workbench_request()).await.unwrap();
+    assert_eq!(
+        response.tool_calls[0].arguments,
+        json!({"path":"src/paginate.js","limit":100})
+    );
+}
+
+#[test]
+fn text_values_are_typed_only_as_their_schema_declares() {
+    let schema = json!({"type":"object","properties":{
+        "limit":{"type":"integer"}, "ratio":{"type":"number"}, "all":{"type":"boolean"},
+        "count":{"type":["integer","null"]}, "path":{"type":"string"}, "loose":{}}});
+    let mut arguments = json!({"limit":"100", "ratio":"1.5", "all":"True", "count":" 7 ",
+        "path":"100", "loose":"true", "other":"false"});
+    coerce_text_arguments(&mut arguments, &schema);
+    assert_eq!(
+        arguments,
+        json!({"limit":100, "ratio":1.5, "all":true, "count":7, "path":"100", "loose":"true",
+            "other":"false"})
+    );
+    let mut unparsed = json!({"limit":"lots", "ratio":"NaN", "all":"yes"});
+    coerce_text_arguments(&mut unparsed, &schema);
+    assert_eq!(
+        unparsed,
+        json!({"limit":"lots", "ratio":"NaN", "all":"yes"})
+    );
+}

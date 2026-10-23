@@ -103,6 +103,10 @@ impl Respond for NativeReply {
 }
 
 async fn server(tool: bool, json: bool) -> MockServer {
+    server_replying(NativeReply { tool, json }).await
+}
+
+async fn server_replying(reply: impl Respond + 'static) -> MockServer {
     let server = MockServer::start().await;
     for (route, body) in [
         ("/api/version", serde_json::json!({"version": axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION})),
@@ -126,10 +130,91 @@ async fn server(tool: bool, json: bool) -> MockServer {
         .await;
     Mock::given(method("POST"))
         .and(path("/api/chat"))
-        .respond_with(NativeReply { tool, json })
+        .respond_with(reply)
         .mount(&server)
         .await;
     server
+}
+
+/// What qwen3-coder:30b on Ollama 0.40.8 wrote for a workbench turn: a call
+/// without its opening `<tool_call>` token, which Ollama returned as content
+/// ending in `stop`, with no structured call.
+const TEXT_CALL: &str = "I'll help you fix the paging bug in `src/paginate.js`. Let me first locate this file and examine its contents to understand the issue.\n\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n</tool_call>";
+
+/// That text first, then a final answer once the call's result is in.
+struct TextCallReply;
+
+impl Respond for TextCallReply {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        let has_tool_result = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| message["role"] == "tool");
+        let response = serde_json::json!({
+            "model":"test-local",
+            "message":{"role":"assistant","content":if has_tool_result {"done"} else {TEXT_CALL}},
+            "done":true, "done_reason":"stop", "prompt_eval_count":10, "eval_count":2
+        });
+        ResponseTemplate::new(200).set_body_raw(format!("{response}\n"), "application/x-ndjson")
+    }
+}
+
+/// A turn whose model writes its call as text runs the call and goes on; it
+/// does not end on that text as its answer.
+#[tokio::test]
+async fn native_ollama_turn_runs_a_tool_call_the_model_wrote_as_text() {
+    let server = server_replying(TextCallReply).await;
+    let provider = NativeOllamaProvider::connect(native_config(server.uri(), "test-local"))
+        .await
+        .unwrap();
+    let mut config = agent_config("test-local", false, true, OUTPUT);
+    config.tools = vec!["glob".into()];
+    let fixture = local_fixture(config, 2 * ONE_CALL, "Fix the paging bug in src/paginate.js");
+    let tool = Arc::new(CountingTool::default());
+    let mut executor = axocoatl_tools::ToolExecutor::new();
+    executor.register_builtin("glob", tool.clone());
+    let resources = AutonomousActivationResources {
+        config: fixture.config.clone(),
+        profile: fixture.profile.clone(),
+        provider: Arc::new(provider),
+        counter: Arc::new(Counter),
+        tools: Arc::new(executor),
+    };
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(fixture.activation.clone(), resources)
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert_eq!(tool.count.load(Ordering::SeqCst), 1);
+    assert_eq!(settled.output.content().output.text, "done");
+    let calls: Vec<serde_json::Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/api/chat")
+        .map(|request| request.body_json().unwrap())
+        .collect();
+    assert_eq!(calls.len(), 2);
+    let messages = calls[1]["messages"].as_array().unwrap();
+    let call = messages
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .unwrap();
+    assert!(!call["content"].as_str().unwrap().contains("<function="));
+    assert_eq!(call["tool_calls"][0]["function"]["name"], "glob");
+    assert_eq!(
+        call["tool_calls"][0]["function"]["arguments"],
+        serde_json::json!({"pattern":"src/paginate.js"})
+    );
+    assert!(messages
+        .iter()
+        .any(|message| message["role"] == "tool" && message["tool_name"] == "glob"));
 }
 
 #[tokio::test]

@@ -71,6 +71,10 @@ const ACCOUNTING_RESERVE: usize = 2048;
 const MAX_MESSAGES: usize = 4096;
 const MAX_RECORDS: usize = 65_536;
 const THINKING_METADATA: &str = "ollama.native.thinking";
+// Where a tool call Qwen3-Coder writes as text begins when it samples a plain
+// `<` instead of its `<tool_call>` token (and so where Ollama's parser leaves it
+// in the content).
+const TEXT_CALL_MARKERS: [&str; 2] = ["<function=", "<tool_call>"];
 
 /// Explicit finite limits for an operator-configured, cloud-disabled GGUF server.
 #[derive(Debug, Clone)]
@@ -1056,6 +1060,56 @@ fn native_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, ProviderError
     Ok(values)
 }
 
+/// Give each text value of a call written as text the type the tool's schema
+/// declares for it (integer, number or boolean), as Ollama's Qwen3-Coder parser
+/// does for the calls it lifts. A value that does not parse stays text.
+fn coerce_text_arguments(arguments: &mut Value, schema: &Value) {
+    let (Some(arguments), Some(properties)) = (
+        arguments.as_object_mut(),
+        schema.get("properties").and_then(Value::as_object),
+    ) else {
+        return;
+    };
+    for (key, value) in arguments.iter_mut() {
+        let declared: Vec<&str> = match properties.get(key).and_then(|p| p.get("type")) {
+            Some(Value::String(kind)) => vec![kind.as_str()],
+            Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+            _ => continue,
+        };
+        if let Some(typed) = value.as_str().and_then(|text| typed_text(text, &declared)) {
+            *value = typed;
+        }
+    }
+}
+
+/// `text` as the first declared type it parses as, tried in Ollama's order.
+fn typed_text(text: &str, declared: &[&str]) -> Option<Value> {
+    let text = text.trim();
+    if declared.contains(&"integer") || declared.contains(&"number") {
+        if let Ok(number) = text.parse::<i64>() {
+            return Some(number.into());
+        }
+    }
+    if declared.contains(&"number") {
+        if let Some(number) = text
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+        {
+            return Some(Value::Number(number));
+        }
+    }
+    if declared.contains(&"boolean") {
+        if text.eq_ignore_ascii_case("true") {
+            return Some(true.into());
+        }
+        if text.eq_ignore_ascii_case("false") {
+            return Some(false.into());
+        }
+    }
+    None
+}
+
 struct NativeResponse {
     model: String,
     request: ChatRequest,
@@ -1067,6 +1121,10 @@ struct NativeResponse {
     token_limit: u64,
     terminal: Option<FinishReason>,
     content: String,
+    /// How much of `content` has been released as text.
+    released: usize,
+    /// `content` from a text call marker on is held until `done`.
+    holding: bool,
     thinking: String,
     calls: Vec<ToolCall>,
     /// Why the model's tool calls were refused. The response is still read to
@@ -1086,10 +1144,86 @@ impl NativeResponse {
             token_limit,
             terminal: None,
             content: String::new(),
+            released: 0,
+            holding: false,
             thinking: String::new(),
             calls: Vec::new(),
             rejected: None,
         }
+    }
+    /// The part of `content` that can be shown now: all of it when no tools
+    /// were offered. Otherwise text from a `<function=` or `<tool_call>` marker
+    /// on is held until `done` shows whether it was a call written as text,
+    /// and a short tail is kept so a marker split across records is never
+    /// half-shown.
+    fn release_text(&mut self) -> Option<String> {
+        let end = if self.request.tools.is_empty() {
+            self.content.len()
+        } else if self.holding {
+            self.released
+        } else if let Some(at) = TEXT_CALL_MARKERS
+            .iter()
+            .filter_map(|marker| self.content[self.released..].find(marker))
+            .min()
+        {
+            self.holding = true;
+            self.released + at
+        } else {
+            super::flush_boundary(&self.content, 16).max(self.released)
+        };
+        if end <= self.released {
+            return None;
+        }
+        let delta = self.content[self.released..end].to_owned();
+        self.released = end;
+        Some(delta)
+    }
+    /// Calls Qwen3-Coder wrote as text after sampling a plain `<` instead of
+    /// its `<tool_call>` token: Ollama's parser lifts only calls that open with
+    /// that token and returns the rest as content, ended by `stop`. Only the
+    /// markup shapes and only offered tools are read, never bare JSON. Each
+    /// call gets an id no call in the history has, and its text values the
+    /// types the tool's schema declares, as Ollama's own parser gives them.
+    fn recover_text_calls(&self) -> Result<Vec<ToolCall>, ProviderError> {
+        let names: Vec<String> = self
+            .request
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect();
+        let used: HashSet<&str> = self
+            .request
+            .messages
+            .iter()
+            .flat_map(|message| &message.tool_calls)
+            .map(|call| call.id.as_str())
+            .collect();
+        let mut next = 0usize;
+        let mut calls = super::parse_markup_tool_calls(&self.content, &names)?;
+        for call in &mut calls {
+            call.id = loop {
+                let id = format!("call_text_{next}");
+                next += 1;
+                if !used.contains(id.as_str()) {
+                    break id;
+                }
+            };
+            if let Some(tool) = self
+                .request
+                .tools
+                .iter()
+                .find(|tool| tool.name == call.name)
+            {
+                coerce_text_arguments(&mut call.arguments, &tool.parameters);
+            }
+            validate_response_tool_call(
+                PROVIDER,
+                &call.name,
+                &call.arguments,
+                &self.request.tools,
+            )?;
+        }
+        Ok(calls)
     }
     fn observe_counts(&mut self, value: &Value) -> Option<MeasuredTokenUsage> {
         let input = value
@@ -1304,10 +1438,8 @@ impl NativeResponse {
                 delta: thinking.into(),
             });
         }
-        if !content.is_empty() {
-            events.push(StreamEvent::TextDelta {
-                delta: content.into(),
-            });
+        if let Some(delta) = self.release_text() {
+            events.push(StreamEvent::TextDelta { delta });
         }
         if let Some(calls) = message.get("tool_calls") {
             if self.rejected.is_none() {
@@ -1347,10 +1479,42 @@ impl NativeResponse {
         Ok(events)
     }
     fn finish(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
-        let reason = self
+        let mut reason = self
             .terminal
             .clone()
             .ok_or_else(|| incomplete_stream("EOF before native terminal"))?;
+        let mut events = Vec::new();
+        let recovered = if matches!(reason, FinishReason::Stop)
+            && self.holding
+            && self.calls.is_empty()
+            && self.request.response_format != Some(ResponseFormat::Json)
+        {
+            self.recover_text_calls()?
+        } else {
+            Vec::new()
+        };
+        if recovered.is_empty() {
+            // Not a call after all: the held text is part of the answer.
+            if self.released < self.content.len() {
+                events.push(StreamEvent::TextDelta {
+                    delta: self.content[self.released..].to_owned(),
+                });
+                self.released = self.content.len();
+            }
+        } else {
+            // The held markup is replaced by the calls it wrote, so the
+            // transcript keeps the prose before it and each call once.
+            for call in recovered {
+                events.push(StreamEvent::ToolCallDelta {
+                    index: Some(self.calls.len()),
+                    id: call.id.clone(),
+                    name: Some(call.name.clone()),
+                    args_delta: call.arguments.to_string(),
+                });
+                self.calls.push(call);
+            }
+            reason = FinishReason::ToolUse;
+        }
         validate_required_stream_tool_call_ids(
             PROVIDER,
             &reason,
@@ -1393,7 +1557,6 @@ impl NativeResponse {
                 return Err(protocol("native replay metadata exceeds response capacity"));
             }
         }
-        let mut events = Vec::new();
         for (index, call) in self.calls.iter().enumerate() {
             let mut metadata = provider_tool_metadata(PROVIDER);
             if !self.thinking.is_empty() {
