@@ -49,7 +49,8 @@ mod observed_context;
 mod server_check;
 mod version_policy;
 pub use observed_context::{
-    inspect_native_ollama_model, observe_native_ollama_context, NativeOllamaContextObservation,
+    inspect_native_ollama_model, observe_native_ollama_context,
+    observe_native_ollama_context_within, NativeOllamaContextObservation,
     OBSERVATION_SCHEMA_VERSION,
 };
 use server_check::reports_cloud_disabled;
@@ -409,6 +410,18 @@ async fn metadata_request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, ProviderError> {
+    metadata_request_within(client, base_url, path, body, RESPONSE_TIMEOUT).await
+}
+
+/// [`metadata_request`] whose answer may take `timeout`: a model load, which
+/// Ollama answers once the model is loaded.
+async fn metadata_request_within(
+    client: &reqwest::Client,
+    base_url: &str,
+    path: &str,
+    body: Option<Value>,
+    timeout: std::time::Duration,
+) -> Result<Value, ProviderError> {
     let url = validated_endpoint(base_url, path, PROVIDER)?;
     // The model the request names, for a 404 about it.
     let model = body
@@ -421,7 +434,7 @@ async fn metadata_request(
         None => client.get(url),
     };
     let mut response = builder
-        .timeout(RESPONSE_TIMEOUT)
+        .timeout(timeout)
         .send()
         .await
         .map_err(|error| network_error(&error, &[]))?;

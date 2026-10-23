@@ -4,12 +4,14 @@
 use super::{
     accepted_server_version, check_shown_model,
     contract_probe::{self, ProbeKey},
-    invalid, local_client, metadata_request, ollama_version_refusal, reports_cloud_disabled,
-    shown_name, NativeOllamaConfig, NativeOllamaProvider,
+    invalid, local_client, metadata_request, metadata_request_within, ollama_version_refusal,
+    reports_cloud_disabled, shown_name, NativeOllamaConfig, NativeOllamaProvider,
 };
+use axocoatl_llm::transport::{LOCAL_FIRST_TOKEN_TIMEOUT, RESPONSE_TIMEOUT};
 use axocoatl_llm::ProviderError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 /// The `schema_version` this Axocoatl writes. Version 2 (Ollama 0.40): the
 /// observed server version is recorded (not a constant), the model was loaded
@@ -271,9 +273,33 @@ fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderEr
 /// Aliases, tags and runner identity must agree across bounded metadata reads.
 /// Concurrent external model changes cannot be made atomic by these APIs; this
 /// is point-in-time evidence and any detected disagreement is refused.
+/// The load and each probe may take [`LOCAL_FIRST_TOKEN_TIMEOUT`]
+/// ([`observe_native_ollama_context_within`] takes another).
 pub async fn observe_native_ollama_context(
     base_url: &str,
     model: &str,
+) -> Result<NativeOllamaContextObservation, ProviderError> {
+    observe_native_ollama_context_within(base_url, model, LOCAL_FIRST_TOKEN_TIMEOUT).await
+}
+
+/// [`observe_native_ollama_context`] whose model load and contract probes
+/// may each take `load_timeout` (`providers.ollama.first_token_timeout_secs`,
+/// and never less than two minutes): Ollama answers a load once the model is
+/// in memory, which on a CPU-only computer or from a slow disk can take
+/// minutes. Giving up closes the connection, and Ollama then stops loading.
+pub async fn observe_native_ollama_context_within(
+    base_url: &str,
+    model: &str,
+    load_timeout: Duration,
+) -> Result<NativeOllamaContextObservation, ProviderError> {
+    observe(base_url, model, load_timeout.max(RESPONSE_TIMEOUT)).await
+}
+
+/// [`observe_native_ollama_context_within`] with `load_timeout` as given.
+async fn observe(
+    base_url: &str,
+    model: &str,
+    load_timeout: Duration,
 ) -> Result<NativeOllamaContextObservation, ProviderError> {
     model_key(model)?;
     let client = local_client(base_url)?;
@@ -286,13 +312,19 @@ pub async fn observe_native_ollama_context(
     // for the empty prompt. Omitting options preserves the server/model choice
     // of context; shift:false starts the runner without context shifting, as
     // every inference request asks (v0.40.6 server/sched.go needsReload).
-    let loaded = metadata_request(
-        &client,
-        base_url,
-        "api/generate",
-        Some(json!({"model": first.name, "stream": false, "shift": false})),
+    let loaded = tokio::time::timeout(
+        load_timeout,
+        metadata_request_within(
+            &client,
+            base_url,
+            "api/generate",
+            Some(json!({"model": first.name, "stream": false, "shift": false})),
+            // Past the deadline above, so that one names the setting.
+            load_timeout + Duration::from_secs(5),
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| load_timed_out(&first.name, load_timeout))??;
     let load_acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
     let context = loaded_context(
         &metadata_request(&client, base_url, "api/ps", None).await?,
@@ -328,6 +360,7 @@ pub async fn observe_native_ollama_context(
             context_tokens: context,
         },
         model,
+        load_timeout,
     )
     .await?;
     let observed_at_ms = std::time::SystemTime::now()
@@ -348,6 +381,17 @@ pub async fn observe_native_ollama_context(
         tools_supported: capabilities.tools,
         thinking_supported: capabilities.thinking,
     })
+}
+
+/// The error of a model load that did not finish within `after`, naming
+/// the setting that gives it longer.
+fn load_timed_out(model: &str, after: Duration) -> ProviderError {
+    ProviderError::Network(format!(
+        "Ollama did not finish loading {model} within {} s (timed out); a computer that loads \
+         models slowly, such as one without a GPU or with the model on a slow disk, may need \
+         longer (providers.ollama.first_token_timeout_secs)",
+        after.as_secs()
+    ))
 }
 
 /// What metadata alone says of `model`, without loading it: the server runs
@@ -425,7 +469,13 @@ pub(super) async fn ensure_probed(
         contract_probe::remember_passed(key);
         return Ok(());
     }
-    contract_probe::ensure_contract(&provider.client, key, &observation.requested_model).await
+    contract_probe::ensure_contract(
+        &provider.client,
+        key,
+        &observation.requested_model,
+        provider.stream_timeouts.first_token.max(RESPONSE_TIMEOUT),
+    )
+    .await
 }
 
 /// Why a retained observation recorded on a server version this Axocoatl no

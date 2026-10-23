@@ -1328,6 +1328,12 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 &wanted,
                 &fixes,
                 env,
+                // Loading a model may take as long as a first answer may.
+                ollama
+                    .first_token_timeout_secs
+                    .map_or(axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT, |secs| {
+                        std::time::Duration::from_secs(secs)
+                    }),
                 &mut sections.models,
                 &mut model_states,
             )
@@ -2048,13 +2054,16 @@ fn writer_items(
 }
 
 /// The Ollama server and each model; returns whether the server is ready.
-/// `fixes`: each model's fixes for its role.
+/// `fixes`: each model's fixes for its role. Loading a model to read its
+/// context may take `load_timeout`.
+#[allow(clippy::too_many_arguments)]
 async fn check_ollama(
     base_url: &str,
     host: &OllamaHost,
     wanted: &BTreeMap<String, bool>,
     fixes: &BTreeMap<String, ModelFixes>,
     env: &Environment,
+    load_timeout: std::time::Duration,
     items: &mut Vec<Item>,
     states: &mut BTreeMap<String, ModelState>,
 ) -> bool {
@@ -2185,7 +2194,7 @@ async fn check_ollama(
                 Some(tokens) => Ok((tokens, String::new())),
                 None => {
                     eprintln!("  (loading {model} once to read its context…)");
-                    ollama_setup::observed_context(base_url, model).await
+                    ollama_setup::observed_context(base_url, model, load_timeout).await
                 }
             };
             match observed {

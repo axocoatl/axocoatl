@@ -862,3 +862,55 @@ async fn an_upgrade_to_a_newer_minor_is_probed_before_a_retained_profile_serves(
     assert!(refusal.contains("Ollama 0.43.0"), "{refusal}");
     assert!(refusal.contains("over-long prompt refusal"), "{refusal}");
 }
+
+/// A model load may take the load timeout (the first-token timeout, never
+/// less than two minutes); one that does not finish in time fails naming the
+/// setting that gives it longer, without waiting for Ollama.
+#[tokio::test]
+async fn a_model_load_gets_the_load_timeout_and_names_its_setting_when_late() {
+    let server = MockServer::start().await;
+    let digest = unique_digest(13);
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(&server, "GET", "/api/tags", listed(&digest)).await;
+    fixed(&server, "GET", "/api/ps", loaded(json!(4096), &digest)).await;
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(acknowledgement())
+                .set_delay(std::time::Duration::from_secs(2)),
+        )
+        .mount(&server)
+        .await;
+    probes(&server, Probes::Pass).await;
+
+    let started = std::time::Instant::now();
+    let late = observe(
+        &server.uri(),
+        "test-model",
+        std::time::Duration::from_millis(300),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(1500),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert!(
+        late.contains("Ollama did not finish loading test-model:latest"),
+        "{late}"
+    );
+    assert!(
+        late.contains("providers.ollama.first_token_timeout_secs"),
+        "{late}"
+    );
+    // A shorter setting still gives a load two minutes: this one answers
+    // after two seconds.
+    let observation =
+        observe_native_ollama_context_within(&server.uri(), "test-model", Duration::from_secs(1))
+            .await
+            .unwrap();
+    assert_eq!(observation.context_tokens, 4096);
+}

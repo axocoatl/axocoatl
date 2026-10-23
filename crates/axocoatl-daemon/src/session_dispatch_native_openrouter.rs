@@ -10,9 +10,19 @@ impl NativeDefinitionPreparation {
                     .as_deref()
                     .ok_or_else(|| error("Ollama provider is not configured"))?;
                 // Ollama's status and message, with what to do when known
-                // (`ollama pull` for a model it does not have).
+                // (`ollama pull` for a model it does not have). Loading the
+                // model may take the first-token timeout, as the first
+                // answer of a model not loaded does.
+                let load_timeout = credentials
+                    .ollama_timeouts
+                    .unwrap_or(axocoatl_llm::transport::StreamTimeouts::LOCAL)
+                    .first_token;
                 let observation = with_provider_retry(|| {
-                    axocoatl_llm_ollama::observe_native_ollama_context(base, self.model())
+                    axocoatl_llm_ollama::observe_native_ollama_context_within(
+                        base,
+                        self.model(),
+                        load_timeout,
+                    )
                 })
                 .await
                 .map_err(|failure| {
