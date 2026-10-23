@@ -1152,7 +1152,7 @@ fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
         }
         let (key, after) = body.strip_prefix("<parameter=")?.split_once('>')?;
         let (value, after) = after.split_once("</parameter>")?;
-        if !plain_tag_word(key) || !keys.insert(key) || value.lines().any(tag_line) {
+        if !plain_tag_word(key) || !keys.insert(key) || swallows_markup(value) {
             return None;
         }
         let value = value
@@ -1168,19 +1168,25 @@ fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
     }
 }
 
-/// A line that opens or closes a tag of the call format.
-fn tag_line(line: &str) -> bool {
-    let line = line.trim_start();
-    [
+/// Whether a parameter value holds markup of the call around it rather than
+/// text: a line that opens or closes a tag, another parameter, or a closed
+/// call followed by another (a value missing its `</parameter>` takes in
+/// what comes after it, on the same line or the next).
+fn swallows_markup(value: &str) -> bool {
+    let tags = [
         "<function=",
         "</function>",
         "<parameter=",
-        "</parameter>",
         "<tool_call>",
         "</tool_call>",
-    ]
-    .iter()
-    .any(|tag| line.starts_with(tag))
+    ];
+    value
+        .lines()
+        .any(|line| tags.iter().any(|tag| line.trim_start().starts_with(tag)))
+        || value.contains("<parameter=")
+        || value
+            .split_once("</function>")
+            .is_some_and(|(_, after)| after.contains("<function=") || after.contains("<tool_call>"))
 }
 
 /// A tool or parameter name inside a tag: no whitespace or markup.
@@ -1231,7 +1237,7 @@ fn fence_line(line: &str) -> Option<(char, usize, bool)> {
     if length < 3 || (mark == '`' && info.contains('`')) {
         return None;
     }
-    Some((mark, length, info.trim().is_empty()))
+    Some((mark, length, info.trim_matches([' ', '\t']).is_empty()))
 }
 
 /// The calls that end `content`, and where they start: the first line that
@@ -1258,6 +1264,14 @@ fn trailing_call_run(content: &str) -> Option<(usize, Vec<TextCall<'_>>)> {
             continue;
         }
         if fence.is_none() && (line.starts_with("<function=") || line.starts_with("<tool_call>")) {
+            // Markdown also ends a line at a lone CR, which these lines do not
+            // split on: a fence before the call could hide behind one.
+            let lone_cr = content[..start]
+                .match_indices('\r')
+                .any(|(at, _)| !content[at + 1..].starts_with('\n'));
+            if lone_cr {
+                return None;
+            }
             return call_run(&content[start..]).map(|run| (start, run));
         }
     }

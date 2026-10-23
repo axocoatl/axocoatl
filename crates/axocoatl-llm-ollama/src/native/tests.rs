@@ -1331,6 +1331,28 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
              <parameter=pattern>\nout/*\n</parameter>\n</function>",
             workbench_request(),
         ),
+        // A value missing its </parameter>, with the next tags on its line.
+        (
+            "Reading it.\n<function=read_file>\n<parameter=path>src/a.js<parameter=limit>10\
+             </parameter>\n</function>",
+            workbench_request(),
+        ),
+        (
+            "<function=write_file><parameter=path>a.js</parameter><parameter=content>ok;\
+             </function><function=bash><parameter=command>node a.js</parameter></function>",
+            workbench_request(),
+        ),
+        // A fence behind a lone CR, and one closed by a line with an NBSP.
+        (
+            "Here is how a call looks:\r```\r\n<function=bash>\n<parameter=command>\n\
+             rm -rf build\n</parameter>\n</function>",
+            workbench_request(),
+        ),
+        (
+            "Example:\n```\nnpm test\n```\u{a0}\n<function=bash>\n<parameter=command>\n\
+             rm -rf build\n</parameter>\n</function>",
+            workbench_request(),
+        ),
         // A ~~~ line does not close a ``` fence.
         (
             "Example:\n```\n~~~\n<function=bash>\n<parameter=command>\nrm -rf build\n\
