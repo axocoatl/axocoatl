@@ -45,7 +45,7 @@ impl EmbeddedSupervisor {
 const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "x86_64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-x86_64"),
-    sha256: "820f869c7da20d9dad723133c2cb15c80cd54f84d2d13db9c6649f0591962af5",
+    sha256: "79db5c0dee23bcf50c76816ac264aecec0a43687867669b058cd08caf8968dc8",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
@@ -54,7 +54,7 @@ const X86_64: EmbeddedSupervisor = EmbeddedSupervisor {
 const AARCH64: EmbeddedSupervisor = EmbeddedSupervisor {
     architecture: "aarch64",
     bytes: include_bytes!("../assets/exec-supervisor/axocoatl-exec-supervisor-linux-aarch64"),
-    sha256: "80597920f8810e63fc8e7ab61bedadbffee75069211d159da633287e285ab1af",
+    sha256: "db8abf36134f77806dd82dd4f450ea8ee1dbd782f192d894d9a1d852f7ced765",
     protocol_version: EMBEDDED_PROTOCOL_VERSION,
     package_version: EMBEDDED_PACKAGE_VERSION,
     source_sha256: EMBEDDED_SOURCE_SHA256,
