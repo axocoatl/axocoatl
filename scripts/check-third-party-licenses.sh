@@ -159,13 +159,24 @@ AXO_BUILD_DOMPURIFY_VERSION="$(jq -r '.dompurify // empty' "$AXO_MONACO_BUILD")"
 AXO_BUILD_DOMPURIFY_FIXED="$(jq -r '.dompurify_advisory_fixed // empty' "$AXO_MONACO_BUILD")"
 [ "$AXO_BUILD_DOMPURIFY_FIXED" = "$AXO_LOCK_DOMPURIFY_VERSION" ] \
   || fail "DOMPurify advisory floor and audit lock disagree"
-AXO_BUILD_DOMPURIFY_AFFECTED="$(jq -r '.dompurify_advisory_affected // empty' "$AXO_MONACO_BUILD")"
-[ "$AXO_BUILD_DOMPURIFY_AFFECTED" = '>=3.4.4 <=3.4.16' ] \
-  || fail "DOMPurify reviewed advisory range is missing from build metadata"
-AXO_BUILD_DOMPURIFY_ADVISORY="$(jq -r '.dompurify_security_advisory // empty' "$AXO_MONACO_BUILD")"
-[ "$AXO_BUILD_DOMPURIFY_ADVISORY" = \
-  'https://github.com/cure53/DOMPurify/security/advisories/GHSA-cg2g-xh64-v4q7' ] \
-  || fail "DOMPurify reviewed advisory provenance is missing from build metadata"
+# Every DOMPurify advisory the 3.4.17 rebuild answers, with its affected range.
+AXO_BUILD_DOMPURIFY_ADVISORIES="$(jq -r '.dompurify_security_advisories[]? | "\(.id) \(.url) \(.affected)"' "$AXO_MONACO_BUILD")"
+for AXO_ADVISORY in \
+  'GHSA-cg2g-xh64-v4q7 https://github.com/cure53/DOMPurify/security/advisories/GHSA-cg2g-xh64-v4q7 >=3.4.4 <=3.4.16' \
+  'GHSA-mrv2-3pqr-j5jr https://github.com/cure53/DOMPurify/security/advisories/GHSA-mrv2-3pqr-j5jr <=3.4.16' \
+  'GHSA-c6gr-qvv4-5v3f https://github.com/cure53/DOMPurify/security/advisories/GHSA-c6gr-qvv4-5v3f <=3.4.16'; do
+  printf '%s\n' "$AXO_BUILD_DOMPURIFY_ADVISORIES" | grep -Fx -- "$AXO_ADVISORY" >/dev/null \
+    || fail "DOMPurify reviewed advisory is missing from build metadata: ${AXO_ADVISORY%% *}"
+done
+[ "$(printf '%s\n' "$AXO_BUILD_DOMPURIFY_ADVISORIES" | grep -c .)" = 3 ] \
+  || fail "DOMPurify build metadata lists advisories this gate has not reviewed"
+# The source tree's own build tooling has known advisories; the record says
+# which, and that none of it ships in the payload.
+[ "$(jq -r '.build_tooling_audit.shipped' "$AXO_MONACO_BUILD")" = false ] \
+  || fail "Monaco build metadata must record its build tooling audit and that none of it ships"
+[ "$(jq -r '.build_tooling_audit.packages | length' "$AXO_MONACO_BUILD")" = \
+  "$(jq -r '.build_tooling_audit.findings | add' "$AXO_MONACO_BUILD")" ] \
+  || fail "Monaco build tooling audit names a different number of packages than findings"
 AXO_BUILD_MONACO_ISSUE="$(jq -r '.upstream_bundled_dompurify_issue // empty' "$AXO_MONACO_BUILD")"
 [ "$AXO_BUILD_MONACO_ISSUE" = \
   'https://github.com/microsoft/monaco-editor/issues/5454' ] \

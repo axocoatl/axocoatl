@@ -37,7 +37,11 @@ affects 3.4.4 through 3.4.16, and
 and
 [GHSA-c6gr-qvv4-5v3f](https://github.com/cure53/DOMPurify/security/advisories/GHSA-c6gr-qvv4-5v3f)
 affect DOMPurify through 3.4.16; 3.4.17 is the first release patched for all
-of them.
+of them. Building the payload from the source archive also installs that tree's
+own build, test and release tooling, in which `npm audit` finds 35 advisories
+(1 low, 13 moderate, 21 high, on 2026-10-23). That tooling runs only during the
+build, and none of its code is in the 151 payload files; `monaco-build.json`
+lists the packages and why.
 Every other row was compared
 byte-for-byte with the single upstream path named in the table. The source
 archives are not required during a normal build: the SHA-256 inventory makes
