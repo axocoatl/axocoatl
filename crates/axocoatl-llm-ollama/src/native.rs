@@ -1134,7 +1134,9 @@ type TextCall<'a> = (&'a str, Vec<(&'a str, &'a str)>);
 /// `text`: its name, its `<parameter=KEY>VALUE</parameter>` pairs and its
 /// length. `None` unless only whitespace and parameter pairs come between the
 /// opening tag and `</function>`. A value is text up to `</parameter>`, never
-/// read for further calls; one newline on each side is the format's own.
+/// read for further calls, and holds no line that opens or closes a tag (a
+/// value missing its `</parameter>` would otherwise swallow the next call);
+/// one newline on each side is the format's own.
 fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
     let rest = text.strip_prefix("<function=")?;
     let (name, mut body) = rest.split_once('>')?;
@@ -1142,6 +1144,7 @@ fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
         return None;
     }
     let mut parameters: Vec<(&str, &str)> = Vec::new();
+    let mut keys = HashSet::new();
     loop {
         body = body.trim_start();
         if let Some(after) = body.strip_prefix("</function>") {
@@ -1149,13 +1152,35 @@ fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
         }
         let (key, after) = body.strip_prefix("<parameter=")?.split_once('>')?;
         let (value, after) = after.split_once("</parameter>")?;
-        if !plain_tag_word(key) || parameters.iter().any(|(seen, _)| *seen == key) {
+        if !plain_tag_word(key) || !keys.insert(key) || value.lines().any(tag_line) {
             return None;
         }
-        let value = value.strip_prefix('\n').unwrap_or(value);
-        parameters.push((key, value.strip_suffix('\n').unwrap_or(value)));
+        let value = value
+            .strip_prefix("\r\n")
+            .or_else(|| value.strip_prefix('\n'))
+            .unwrap_or(value);
+        let value = value
+            .strip_suffix("\r\n")
+            .or_else(|| value.strip_suffix('\n'))
+            .unwrap_or(value);
+        parameters.push((key, value));
         body = after;
     }
+}
+
+/// A line that opens or closes a tag of the call format.
+fn tag_line(line: &str) -> bool {
+    let line = line.trim_start();
+    [
+        "<function=",
+        "</function>",
+        "<parameter=",
+        "</parameter>",
+        "<tool_call>",
+        "</tool_call>",
+    ]
+    .iter()
+    .any(|tag| line.starts_with(tag))
 }
 
 /// A tool or parameter name inside a tag: no whitespace or markup.
@@ -1191,34 +1216,49 @@ fn call_run(mut text: &str) -> Option<Vec<TextCall<'_>>> {
     }
 }
 
-/// The calls that end `content`, and where they start: a run of
-/// `<function=…>` blocks ([`call_run`]) that begins a line outside a code
-/// fence (three backticks or tildes) and goes to the end. A call quoted in an answer (fenced,
-/// indented, inline, or with prose after it) is not one the model made.
+/// A code fence line as Markdown reads it: up to three spaces, then three or
+/// more backticks (with no backtick after them) or tildes. Its character and
+/// length, and whether only whitespace follows (so it can close a fence).
+fn fence_line(line: &str) -> Option<(char, usize, bool)> {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if indent > 3 {
+        return None;
+    }
+    let line = &line[indent..];
+    let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let length = line.len() - line.trim_start_matches(mark).len();
+    let info = &line[length..];
+    if length < 3 || (mark == '`' && info.contains('`')) {
+        return None;
+    }
+    Some((mark, length, info.trim().is_empty()))
+}
+
+/// The calls that end `content`, and where they start: the first line that
+/// begins with a call tag outside a code fence must begin a run of
+/// `<function=…>` blocks ([`call_run`]) that goes to the end. Anything else
+/// (a call quoted in a fence, indented, inline, in another call's value or
+/// with prose after it, or a malformed block) leaves the text as the answer.
 fn trailing_call_run(content: &str) -> Option<(usize, Vec<TextCall<'_>>)> {
     if content.len() > TEXT_CALL_CONTENT_LIMIT {
         return None;
     }
-    let mut fenced = false;
-    let mut tried = 0usize;
+    let mut fence: Option<(char, usize)> = None;
     let mut at = 0usize;
     for line in content.split_inclusive('\n') {
         let start = at;
         at += line.len();
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            fenced = !fenced;
+        let text = line.trim_end_matches(['\n', '\r']);
+        if let Some((mark, length, bare)) = fence_line(text) {
+            fence = match fence {
+                None => Some((mark, length)),
+                Some((open, need)) if open == mark && length >= need && bare => None,
+                open => open,
+            };
             continue;
         }
-        if fenced || !(line.starts_with("<function=") || line.starts_with("<tool_call>")) {
-            continue;
-        }
-        tried += 1;
-        if tried > TEXT_CALL_LIMIT {
-            return None;
-        }
-        if let Some(run) = call_run(&content[start..]) {
-            return Some((start, run));
+        if fence.is_none() && (line.starts_with("<function=") || line.starts_with("<tool_call>")) {
+            return call_run(&content[start..]).map(|run| (start, run));
         }
     }
     None

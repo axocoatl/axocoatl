@@ -1069,6 +1069,10 @@ fn workbench_request() -> ChatRequest {
             json!({"path":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}}),
         ),
         ("bash", json!({"command":{"type":"string"}})),
+        (
+            "write_file",
+            json!({"path":{"type":"string"},"content":{"type":"string"}}),
+        ),
     ] {
         request.tools.push(ToolDefinition {
             name: name.into(),
@@ -1313,6 +1317,26 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
              </parameter>\n    </function>\n",
             workbench_request(),
         ),
+        // A value missing its </parameter> would swallow the next call.
+        (
+            "I'll write the file and run it.\n<function=write_file>\n<parameter=path>\nsrc/a.js\n\
+             </parameter>\n<parameter=content>\nconst a = 1;\n</function>\n<function=bash>\n\
+             <parameter=command>\nnode src/a.js\n</parameter>\n</function>\n</tool_call>",
+            workbench_request(),
+        ),
+        // A malformed block (a key twice) before a well-formed one.
+        (
+            "Plan.\n<function=bash>\n<parameter=command>\nmkdir out\n</parameter>\n\
+             <parameter=command>\nx\n</parameter>\n</function>\n<function=glob>\n\
+             <parameter=pattern>\nout/*\n</parameter>\n</function>",
+            workbench_request(),
+        ),
+        // A ~~~ line does not close a ``` fence.
+        (
+            "Example:\n```\n~~~\n<function=bash>\n<parameter=command>\nrm -rf build\n\
+             </parameter>\n</function>",
+            workbench_request(),
+        ),
     ] {
         let server = MockServer::start().await;
         valid_profile(&server).await;
@@ -1411,6 +1435,44 @@ async fn markup_inside_a_value_or_a_sentence_is_not_a_call() {
         assert_eq!(response.tool_calls.len(), 1, "{content}");
         assert_eq!(response.tool_calls[0].name, name);
         assert_eq!(response.tool_calls[0].arguments, arguments);
+        assert_eq!(response.content, text);
+    }
+}
+
+/// An inline code span is not a fence, and CRLF lines read like LF ones.
+#[tokio::test]
+async fn inline_code_and_crlf_do_not_hide_a_call() {
+    for (content, text) in [
+        (
+            "```npm test``` passes.\n\n<function=glob>\n<parameter=pattern>\nsrc/a.js\n\
+             </parameter>\n</function>\n</tool_call>",
+            "```npm test``` passes.\n\n",
+        ),
+        (
+            "Prose.\r\n\r\n<function=glob>\r\n<parameter=pattern>\r\nsrc/a.js\r\n\
+             </parameter>\r\n</function>\r\n</tool_call>",
+            "Prose.\r\n\r\n",
+        ),
+    ] {
+        let server = MockServer::start().await;
+        valid_profile(&server).await;
+        response(
+            &server,
+            &[
+                record(content, false),
+                counted(record("", true), json!(2054), json!(55)),
+            ],
+        )
+        .await;
+        let provider = NativeOllamaProvider::connect(workbench_config(&server))
+            .await
+            .unwrap();
+        let response = provider.chat(workbench_request()).await.unwrap();
+        assert_eq!(response.finish_reason, FinishReason::ToolUse, "{content:?}");
+        assert_eq!(
+            response.tool_calls[0].arguments,
+            json!({"pattern":"src/a.js"})
+        );
         assert_eq!(response.content, text);
     }
 }
