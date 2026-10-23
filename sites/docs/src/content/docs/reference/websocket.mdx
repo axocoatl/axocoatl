@@ -219,6 +219,7 @@ activation, without gaps. `payload.kind` is one of:
 | `text` | `delta` | Answer text delta |
 | `reasoning_summary` | `delta` | Reasoning-channel delta when the provider supplies one |
 | `provider_retry` | `reason` | The provider response ended early and one retry started; text before this marker belongs to the abandoned attempt |
+| `provider_response` | `finish_reason`, `offered_tools`, `tool_calls` | A model response completed: how it ended (`stop`, `tool_use`, `max_tokens`, `content_filter` or `error`), how many tools its request offered and how many calls it returned |
 | `tool_proposed` | `call_id`, `name`, `provider_response_group`, `provider_call_index`, `provider_call_count`, `arguments_sha256`, `arguments_bytes` | The Agent proposed a tool call; it still has to pass dispatch |
 | `tool_result` | `call_id`, `name`, `result_sha256`, `result_bytes`, `is_error` | The result the Agent saw |
 

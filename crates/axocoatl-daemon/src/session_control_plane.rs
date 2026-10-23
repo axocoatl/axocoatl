@@ -565,6 +565,17 @@ impl SessionTurnControlPlane {
                         ActivationStreamPayload::ProviderRetry { reason } => {
                             ("provider_retry", bounded_text(reason))
                         }
+                        ActivationStreamPayload::ProviderResponse {
+                            finish_reason,
+                            offered_tools,
+                            tool_calls,
+                        } => (
+                            "provider_response",
+                            bounded_text(&format!(
+                                "Model response ended: {finish_reason}; {offered_tools} tools \
+                                 offered; {tool_calls} calls"
+                            )),
+                        ),
                         ActivationStreamPayload::ReasoningSummary { delta } => {
                             ("reasoning_summary", bounded_text(delta))
                         }

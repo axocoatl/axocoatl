@@ -6319,6 +6319,11 @@ async fn dispatch_ws_command(
                                     "call_id": id, "name": name,
                                     "result": result, "is_error": is_error,
                                 }),
+                                // How a model response ended is recorded for
+                                // Sessions; a chat shows nothing for it.
+                                axocoatl_actor::AgentStreamChunk::ProviderResponse { .. } => {
+                                    continue
+                                }
                             };
                             let _ = out.send(f.to_string());
                         }

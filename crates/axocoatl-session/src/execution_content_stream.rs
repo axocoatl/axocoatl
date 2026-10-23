@@ -2,6 +2,14 @@
 //! These records do not admit tools, settle effects, or accept model state.
 use super::*;
 
+/// How a recorded provider response may have ended.
+const PROVIDER_RESPONSE_ENDS: [&str; 5] =
+    ["stop", "tool_use", "max_tokens", "content_filter", "error"];
+/// The most calls one provider response may return.
+const MAX_PROVIDER_RESPONSE_CALLS: usize = 128;
+/// A bound on the tools one recorded request offered.
+const MAX_OFFERED_TOOLS: usize = 1 << 20;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ActivationStreamPayload {
@@ -13,6 +21,15 @@ pub enum ActivationStreamPayload {
     /// the abandoned attempt.
     ProviderRetry {
         reason: String,
+    },
+    /// A provider response completed: how it ended (`stop`, `tool_use`,
+    /// `max_tokens`, `content_filter` or `error`), how many tools its request
+    /// offered and how many calls it returned. Recorded since 1.5.0, so a
+    /// stored turn shows why each model response ended as it did.
+    ProviderResponse {
+        finish_reason: String,
+        offered_tools: usize,
+        tool_calls: usize,
     },
     ReasoningSummary {
         delta: String,
@@ -146,6 +163,20 @@ pub(super) fn validate_stream(
             if reason.is_empty() || reason.len() > 1024 {
                 return Err(ExecutionContentError::Invalid(
                     "invalid provider retry observation",
+                ));
+            }
+        }
+        ActivationStreamPayload::ProviderResponse {
+            finish_reason,
+            offered_tools,
+            tool_calls,
+        } => {
+            if !PROVIDER_RESPONSE_ENDS.contains(&finish_reason.as_str())
+                || *tool_calls > MAX_PROVIDER_RESPONSE_CALLS
+                || *offered_tools > MAX_OFFERED_TOOLS
+            {
+                return Err(ExecutionContentError::Invalid(
+                    "invalid provider response observation",
                 ));
             }
         }

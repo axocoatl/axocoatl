@@ -55,6 +55,17 @@ impl SessionDispatchController {
     }
 }
 
+/// A provider response's finish reason as the activation stream records it.
+fn finish_reason_name(reason: &axocoatl_llm::FinishReason) -> &'static str {
+    match reason {
+        axocoatl_llm::FinishReason::Stop => "stop",
+        axocoatl_llm::FinishReason::ToolUse => "tool_use",
+        axocoatl_llm::FinishReason::MaxTokens => "max_tokens",
+        axocoatl_llm::FinishReason::ContentFilter => "content_filter",
+        axocoatl_llm::FinishReason::Error => "error",
+    }
+}
+
 impl AgentStreamObserver for ActivationStreamObserver {
     fn observe(&self, chunk: &AgentStreamChunk) -> std::result::Result<(), String> {
         self.record(chunk).map_err(|error| error.to_string())
@@ -72,6 +83,15 @@ impl ActivationStreamObserver {
             },
             AgentStreamChunk::Reasoning(delta) => ActivationStreamPayload::ReasoningSummary {
                 delta: delta.clone(),
+            },
+            AgentStreamChunk::ProviderResponse {
+                finish_reason,
+                offered_tools,
+                tool_calls,
+            } => ActivationStreamPayload::ProviderResponse {
+                finish_reason: finish_reason_name(finish_reason).into(),
+                offered_tools: *offered_tools,
+                tool_calls: *tool_calls,
             },
             AgentStreamChunk::ToolCallStarted {
                 source_agent,
@@ -185,14 +205,16 @@ impl ActivationStreamObserver {
                         .iter()
                         .find(|candidate| candidate.activation == self.activation)
                     {
-                        let _ = bus.send(crate::bootstrap::agent_chunk_stream_frame(
+                        if let Some(frame) = crate::bootstrap::agent_chunk_stream_frame(
                             chunk,
                             &candidate.run_id,
                             candidate.definition.definition_id.as_str(),
                             Some(self.activation.turn_id.as_str()),
                             tool_occurrence,
                             Some(self.activation.generation),
-                        ));
+                        ) {
+                            let _ = bus.send(frame);
+                        }
                     }
                 }
             }

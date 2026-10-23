@@ -7,7 +7,7 @@ use axocoatl_core::{
     AgentConfig, AgentInput, AgentOutput, ChatMessage, ConversationMode, MessageRole,
     OverflowPolicy, TokenUsageStats,
 };
-use axocoatl_llm::{ChatRequest, LlmProvider, ToolCall};
+use axocoatl_llm::{ChatRequest, LlmProvider};
 use axocoatl_memory::{AgentCheckpoint, CheckpointStore, SessionMemory, StoredMessage};
 use axocoatl_token::{BudgetError, TokenCounter, TokenTracker};
 use axocoatl_tools::{ConcurrentToolDispatcher, HookRegistry, ProviderToolNameMap, ToolExecutor};
@@ -24,28 +24,6 @@ const COMPACTION_ARCHIVE_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 const COMPACTION_ARCHIVE_FIELD_MAX_BYTES: usize = 16 * 1024;
 const COMPACTION_ARCHIVE_ENVELOPE_RESERVE_BYTES: usize = 4 * 1024;
 const MAX_PROVIDER_TOOL_CALLS: usize = 128;
-const MAX_TEXT_JSON_CANDIDATES: usize = MAX_PROVIDER_TOOL_CALLS * 2;
-
-/// Plain-text JSON tool recovery is a compatibility path for Ollama models
-/// that sometimes omit their structured function-call channel. Hosted/native
-/// protocols require provider-issued replay state (Mistral ids, Gemini thought
-/// signatures, Anthropic native blocks) that Axocoatl cannot safely invent.
-fn supports_text_tool_recovery(provider: &str) -> bool {
-    provider == "ollama"
-}
-
-/// A deterministic, portable non-empty correlation id. Ollama accepts this
-/// shape, and its exact nine ASCII-alphanumeric bytes also remain compatible
-/// with the narrowest shipped id validator (Mistral), preventing an accidental
-/// invalid history shape if the call is inspected or migrated.
-fn text_tool_recovery_id(index: usize) -> Result<String, AgentError> {
-    if index >= MAX_PROVIDER_TOOL_CALLS {
-        return Err(AgentError::Provider(format!(
-            "provider text recovery exceeded the portable {MAX_PROVIDER_TOOL_CALLS}-call limit"
-        )));
-    }
-    Ok(format!("Axo{index:06X}"))
-}
 
 /// Securely compose repository instructions for any actor behavior that runs in
 /// a directory Session. Traversal stays relative to opened directory handles so
@@ -266,8 +244,6 @@ struct StreamChatResult {
     /// An explicit observation, including known zero, must not be replaced by
     /// the legacy fallback estimate merely because its numeric total is zero.
     usage_estimate_allowed: bool,
-    provider_tool_names: ProviderToolNameMap,
-    provider_route: axocoatl_core::ProviderMetadata,
     /// Calls, by provider index, to a tool the request did not declare, each
     /// with the tool error the model gets instead. They never run.
     undeclared_tool_calls: UndeclaredToolCalls,
@@ -657,6 +633,7 @@ impl DefaultAgentBehavior {
         let mut provider_route = axocoatl_core::ProviderMetadata::new();
         let control = self.active_run_control.clone();
         let provider_id = self.provider.provider_id().to_string();
+        let offered_tools = request.tools.len();
         let empty_response = || ChatResponse {
             content: String::new(),
             tool_calls: Vec::new(),
@@ -672,8 +649,6 @@ impl DefaultAgentBehavior {
                 cancelled: true,
                 usage_complete: true,
                 usage_estimate_allowed: true,
-                provider_tool_names,
-                provider_route,
                 undeclared_tool_calls: UndeclaredToolCalls::new(),
             });
         }
@@ -690,8 +665,6 @@ impl DefaultAgentBehavior {
                         cancelled: true,
                         usage_complete: true,
                         usage_estimate_allowed: true,
-                        provider_tool_names,
-                        provider_route,
                         undeclared_tool_calls: UndeclaredToolCalls::new(),
                     });
                 }
@@ -1045,6 +1018,18 @@ impl DefaultAgentBehavior {
             ));
         }
 
+        if !cancelled {
+            if let Err(error) =
+                self.emit_stream(crate::behavior::AgentStreamChunk::ProviderResponse {
+                    finish_reason: finish_reason.clone(),
+                    offered_tools,
+                    tool_calls: tool_calls.len(),
+                })
+            {
+                fail_stream!(error);
+            }
+        }
+
         let selected_provider = provider_route
             .get(axocoatl_llm::TOOL_METADATA_ROUTE_PROVIDER)
             .cloned()
@@ -1070,8 +1055,6 @@ impl DefaultAgentBehavior {
                 saw_done || saw_usage
             },
             usage_estimate_allowed: !explicit_usage_observation,
-            provider_tool_names,
-            provider_route,
             undeclared_tool_calls,
         })
     }
@@ -3233,8 +3216,6 @@ impl AgentBehavior for DefaultAgentBehavior {
             cancelled: provider_cancelled,
             usage_complete,
             usage_estimate_allowed,
-            provider_tool_names,
-            provider_route,
             mut undeclared_tool_calls,
         } = self.stream_chat(request, provider_tool_names).await?;
         if provider_cancelled {
@@ -3255,74 +3236,17 @@ impl AgentBehavior for DefaultAgentBehavior {
         let mut execution_usage = compaction_usage;
         execution_usage.merge(&response.usage);
         // The provider has completed and this usage is now incurred. Account
-        // it before any compatibility recovery or protocol validation can
-        // reject the response; the actor error path durably checkpoints the
-        // updated cumulative total without retaining an incomplete turn.
+        // it before protocol validation can reject the response; the actor
+        // error path durably checkpoints the updated cumulative total without
+        // retaining an incomplete turn.
         if !provider_cancelled || response.usage.total() > 0 || !response.content.is_empty() {
             self.record_provider_usage(&response.usage, usage_complete)?;
         }
 
-        // Ollama compatibility fallback: some small locally served models
-        // intermittently emit tool calls as JSON in the message text rather
-        // than via the structured tool_calls channel.
-        // When `response.tool_calls` is empty we scan `response.content`
-        // for top-level JSON objects of shape `{ "tool_name": { args } }`
-        // where `tool_name` matches a registered tool, and adopt them.
-        // No-op for any model that uses the structured channel
-        // correctly — `tool_calls` is non-empty so the block is skipped.
-        // The selected route, not the wrapper's primary identity, governs both
-        // eligibility and durable provenance when fallback chose Ollama.
-        let effective_response_provider = provider_route
-            .get(axocoatl_llm::TOOL_METADATA_ROUTE_PROVIDER)
-            .filter(|provider| !provider.is_empty())
-            .cloned()
-            .or_else(|| (!response.provider.is_empty()).then(|| response.provider.clone()))
-            .unwrap_or_else(|| self.provider.provider_id().to_string());
-        if !self.active_run_cancelled
-            && response.tool_calls.is_empty()
-            && supports_text_tool_recovery(&effective_response_provider)
-        {
-            let mut fallback = Vec::new();
-            for v in extract_top_level_json(&response.content)? {
-                let Some(obj) = v.as_object() else { continue };
-                if obj.len() != 1 {
-                    continue;
-                }
-                let (key, value) = obj.iter().next().unwrap();
-                let Some(internal_name) = provider_tool_names.decode_advertised_name(key) else {
-                    continue;
-                };
-                if !value.is_object() {
-                    continue;
-                }
-                if fallback.len() >= MAX_PROVIDER_TOOL_CALLS {
-                    return Err(AgentError::Provider(format!(
-                        "provider text recovery exceeded the portable {MAX_PROVIDER_TOOL_CALLS}-call limit"
-                    )));
-                }
-                let mut provider_metadata =
-                    axocoatl_llm::provider_tool_metadata(&effective_response_provider);
-                merge_provider_metadata(
-                    &mut provider_metadata,
-                    provider_route.clone(),
-                    "provider text-recovery metadata conflicts with its selected route",
-                )?;
-                fallback.push(ToolCall {
-                    id: text_tool_recovery_id(fallback.len())?,
-                    name: internal_name.to_string(),
-                    arguments: value.clone(),
-                    provider_metadata,
-                });
-            }
-            if !fallback.is_empty() {
-                tracing::info!(
-                    count = fallback.len(),
-                    agent = %self.agent_id,
-                    "Recovered tool calls from text body (model didn't use structured channel)"
-                );
-                response.tool_calls = fallback;
-            }
-        }
+        // A call a model wrote as answer text is the provider's to read: the
+        // Ollama providers recover only Qwen3-Coder's own format ending the
+        // answer and refuse an answer that calls a tool in a way that cannot
+        // run. Text here is the answer, never a call.
         self.settle_final_answer_response(
             &mut response,
             &mut undeclared_tool_calls,
@@ -4392,80 +4316,10 @@ fn apply_consolidation_edit(
 
 /// Extract every top-level JSON object from a free-form text body.
 ///
-/// Used by the text-format tool-call fallback in `DefaultAgentBehavior`
-/// — some LLMs emit `{ "tool_name": { args } }` blocks in their message
-/// content instead of going through the structured tool_calls channel.
-/// We need to recover those, but the surrounding text is arbitrary prose,
-/// so `serde_json::Deserializer::into_iter` won't get us all the way.
-///
-/// Strategy: walk the bytes, at every `{` count balanced braces (taking
-/// string-escaping into account) until the matching `}` is found, then
-/// attempt to parse that slice as a JSON value.  On parse failure or
-/// unmatched braces we skip to the next byte.
-fn extract_top_level_json(text: &str) -> Result<Vec<serde_json::Value>, AgentError> {
-    let mut out = Vec::new();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'{' {
-            i += 1;
-            continue;
-        }
-        // Walk forward from i, tracking balanced braces + JSON strings.
-        let mut depth: i32 = 0;
-        let mut in_string = false;
-        let mut escape = false;
-        let mut j = i;
-        let mut found_end = false;
-        while j < bytes.len() {
-            let c = bytes[j];
-            if escape {
-                escape = false;
-            } else if in_string {
-                match c {
-                    b'\\' => escape = true,
-                    b'"' => in_string = false,
-                    _ => {}
-                }
-            } else {
-                match c {
-                    b'"' => in_string = true,
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            found_end = true;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            j += 1;
-        }
-        if found_end {
-            let slice = &text[i..=j];
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(slice) {
-                if out.len() >= MAX_TEXT_JSON_CANDIDATES {
-                    return Err(AgentError::Provider(format!(
-                        "provider text contained more than {MAX_TEXT_JSON_CANDIDATES} top-level JSON candidates"
-                    )));
-                }
-                out.push(v);
-            }
-            i = j + 1;
-        } else {
-            // Unbalanced — stop, there can't be another well-formed top-level
-            // object after an unclosed one starting here.
-            break;
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axocoatl_llm::ToolCall;
     include!("default_behavior_boundary_tests.rs");
     include!("default_behavior_steering_tests.rs");
     include!("default_behavior_checkpoint_tests.rs");
@@ -5025,8 +4879,8 @@ mod tests {
         }
     }
 
-    /// Models a direct Ollama-like provider that emits a valid tool call in
-    /// text instead of the structured stream channel on its first round.
+    /// Models an Ollama provider that recovered a call the model wrote as
+    /// text on its first round and streams it as a call, with its metadata.
     struct TextToolThenTextLlm {
         calls: std::sync::atomic::AtomicUsize,
         captured: Arc<std::sync::Mutex<Vec<ChatRequest>>>,
@@ -5063,21 +4917,39 @@ mod tests {
         > {
             self.captured.lock().unwrap().push(request);
             let round = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let content = if round == 0 {
-                r#"{"echo":{"text":"hi"}}"#
+            let events = if round == 0 {
+                vec![
+                    Ok(StreamEvent::ToolCallDelta {
+                        index: Some(0),
+                        id: RECOVERED_CALL_ID.to_string(),
+                        name: Some("echo".to_string()),
+                        args_delta: r#"{"text":"hi"}"#.to_string(),
+                    }),
+                    Ok(StreamEvent::ToolCallMetadata {
+                        index: Some(0),
+                        id: RECOVERED_CALL_ID.to_string(),
+                        metadata: axocoatl_llm::provider_tool_metadata("ollama"),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::ToolUse,
+                    }),
+                ]
             } else {
-                "text recovery complete"
+                vec![
+                    Ok(StreamEvent::TextDelta {
+                        delta: "text recovery complete".to_string(),
+                    }),
+                    Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ]
             };
-            Ok(Box::pin(tokio_stream::iter(vec![
-                Ok(StreamEvent::TextDelta {
-                    delta: content.to_string(),
-                }),
-                Ok(StreamEvent::Done {
-                    finish_reason: FinishReason::Stop,
-                }),
-            ])))
+            Ok(Box::pin(tokio_stream::iter(events)))
         }
     }
+
+    /// The id an Ollama provider gives a call it recovered from text.
+    const RECOVERED_CALL_ID: &str = "call_text_0a1b2c3d_0";
 
     struct TextJsonOnlyLlm {
         provider: &'static str,
@@ -5126,6 +4998,57 @@ mod tests {
                 finish_reason: FinishReason::Stop,
             }));
             Ok(Box::pin(tokio_stream::iter(events)))
+        }
+    }
+
+    /// A provider that completed a response, reported its usage and refused
+    /// it, as an Ollama provider refuses an answer that calls a tool as text
+    /// that cannot run.
+    struct RefusedAfterUsageLlm {
+        usage: TokenUsageStats,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for RefusedAfterUsageLlm {
+        fn provider_id(&self) -> &str {
+            "ollama"
+        }
+
+        fn model_id(&self) -> &str {
+            "refusing-model"
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                streaming: true,
+                tool_calling: true,
+                ..Default::default()
+            }
+        }
+
+        async fn chat(&self, _: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            unimplemented!("the refusal seam uses chat_stream")
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Ok(Box::pin(tokio_stream::iter(vec![
+                Ok(StreamEvent::TextDelta {
+                    delta: "<function=echo>\n</function>\nThen more.".to_string(),
+                }),
+                Ok(StreamEvent::Usage(self.usage.clone())),
+                Err(ProviderError::RefusedResponse {
+                    provider: "ollama".to_string(),
+                    message: "the model wrote a call to echo as answer text that Axocoatl \
+                              cannot run"
+                        .to_string(),
+                }),
+            ])))
         }
     }
 
@@ -7174,11 +7097,7 @@ mod tests {
             .find_map(|message| message.tool_calls.first())
             .expect("follow-up must replay the recovered assistant tool call");
         assert_eq!(replayed_call.name, "echo");
-        assert_eq!(replayed_call.id.len(), 9);
-        assert!(replayed_call
-            .id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric()));
+        assert_eq!(replayed_call.id, RECOVERED_CALL_ID);
         assert_eq!(
             replayed_call
                 .provider_metadata
@@ -7189,15 +7108,75 @@ mod tests {
         assert!(!replayed_call.provider_metadata.is_empty());
     }
 
+    /// Each completed provider response is observed with how it ended, how
+    /// many tools its request offered and how many calls it returned, so a
+    /// stored turn shows why it ended (a final answer that ran nothing, or a
+    /// response cut at its output limit).
     #[tokio::test]
-    async fn native_replay_providers_do_not_dispatch_plain_text_json_tools() {
+    async fn each_provider_response_is_observed_with_its_end_and_offered_tools() {
+        use axocoatl_tools::{EchoTool, ToolExecutor};
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = Arc::new(TextToolThenTextLlm {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            captured: captured.clone(),
+        });
+        let mut executor = ToolExecutor::new();
+        executor.register_builtin("echo", Arc::new(EchoTool));
+        let mut behavior = DefaultAgentBehavior::new(provider, simple_counter())
+            .with_tool_executor(Arc::new(executor));
+        let (sink, mut chunks) = tokio::sync::mpsc::unbounded_channel();
+        behavior.set_stream_sink(Some(sink));
+        behavior.on_start(&AgentConfig::default()).await.unwrap();
+        behavior
+            .execute(AgentInput::text("echo, then answer"))
+            .await
+            .unwrap();
+        let offered = captured.lock().unwrap()[0].tools.len();
+        assert!(offered > 0);
+        let mut responses = Vec::new();
+        while let Ok(chunk) = chunks.try_recv() {
+            if let crate::behavior::AgentStreamChunk::ProviderResponse {
+                finish_reason,
+                offered_tools,
+                tool_calls,
+            } = chunk
+            {
+                responses.push((finish_reason, offered_tools, tool_calls));
+            }
+        }
+        assert_eq!(
+            responses,
+            [
+                (FinishReason::ToolUse, offered, 1),
+                (FinishReason::Stop, offered, 0)
+            ]
+        );
+    }
+
+    /// JSON in an answer is never a call, on any provider: Ollama included,
+    /// whose providers read only Qwen3-Coder's own format, and refuse an
+    /// answer that calls a tool as JSON. Before 1.5.0 the actor ran
+    /// `{"tool": {…}}` found anywhere in an Ollama answer, a fenced example
+    /// too, and gave every such call the same ids in each response.
+    #[tokio::test]
+    async fn plain_text_json_is_never_dispatched_as_a_tool_call() {
         use axocoatl_tools::ToolExecutor;
 
-        for provider_id in ["mistral", "gemini", "anthropic"] {
+        for (provider_id, content) in [
+            ("mistral", r#"{"echo":{"text":"must stay text"}}"#),
+            ("gemini", r#"{"echo":{"text":"must stay text"}}"#),
+            ("anthropic", r#"{"echo":{"text":"must stay text"}}"#),
+            ("ollama", r#"{"echo":{"text":"must stay text"}}"#),
+            (
+                "ollama",
+                "An example:\n```json\n{\"echo\":{\"text\":\"must stay text\"}}\n```",
+            ),
+        ] {
             let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let provider = Arc::new(TextJsonOnlyLlm {
                 provider: provider_id,
-                content: r#"{"echo":{"text":"must stay text"}}"#.to_string(),
+                content: content.to_string(),
                 reported_usage: None,
                 calls: std::sync::atomic::AtomicUsize::new(0),
             });
@@ -7212,7 +7191,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(output.content, r#"{"echo":{"text":"must stay text"}}"#);
+            assert_eq!(output.content, content);
             assert!(output.tool_calls.is_empty());
             assert_eq!(
                 executions.load(std::sync::atomic::Ordering::SeqCst),
@@ -7267,8 +7246,7 @@ mod tests {
             .iter()
             .find_map(|message| message.tool_calls.first())
             .expect("fallback follow-up must replay recovered call");
-        assert_eq!(call.id.len(), 9);
-        assert!(call.id.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        assert_eq!(call.id, RECOVERED_CALL_ID);
         assert_eq!(
             call.provider_metadata
                 .get(axocoatl_llm::TOOL_METADATA_PROVIDER_ID)
@@ -7281,78 +7259,6 @@ mod tests {
                 .map(String::as_str),
             Some("ollama")
         );
-    }
-
-    #[tokio::test]
-    async fn excessive_ollama_text_recovery_fails_before_any_tool_dispatch() {
-        use axocoatl_tools::ToolExecutor;
-
-        let content = (0..=MAX_PROVIDER_TOOL_CALLS)
-            .map(|_| r#"{"echo":{}}"#)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let provider = Arc::new(TextJsonOnlyLlm {
-            provider: "ollama",
-            content,
-            reported_usage: Some(TokenUsageStats::new(17, 5).with_reasoning(3)),
-            calls: std::sync::atomic::AtomicUsize::new(0),
-        });
-        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut executor = ToolExecutor::new();
-        executor.register_builtin("echo", Arc::new(ExecutionCounterTool(executions.clone())));
-        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter())
-            .with_tool_executor(Arc::new(executor));
-        behavior.on_start(&AgentConfig::default()).await.unwrap();
-
-        let error = behavior
-            .execute(AgentInput::text("too many recovered calls"))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(error, AgentError::Provider(message) if message.contains("128-call")));
-        assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let usage = behavior.cumulative_token_usage_snapshot();
-        assert_eq!(usage.input_tokens, 17);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.reasoning_tokens, Some(3));
-    }
-
-    #[tokio::test]
-    async fn excessive_non_tool_json_candidates_fail_bounded_before_dispatch() {
-        use axocoatl_tools::ToolExecutor;
-
-        let content = (0..=MAX_TEXT_JSON_CANDIDATES)
-            .map(|index| format!(r#"{{"not_a_tool_{index}":null}}"#))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let provider = Arc::new(TextJsonOnlyLlm {
-            provider: "ollama",
-            content,
-            reported_usage: Some(TokenUsageStats::new(19, 7).with_reasoning(2)),
-            calls: std::sync::atomic::AtomicUsize::new(0),
-        });
-        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut executor = ToolExecutor::new();
-        executor.register_builtin("echo", Arc::new(ExecutionCounterTool(executions.clone())));
-        let mut behavior = DefaultAgentBehavior::new(provider.clone(), simple_counter())
-            .with_tool_executor(Arc::new(executor));
-        behavior.on_start(&AgentConfig::default()).await.unwrap();
-
-        let error = behavior
-            .execute(AgentInput::text("many non-tool JSON candidates"))
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(error, AgentError::Provider(message) if message.contains("256 top-level JSON candidates"))
-        );
-        assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let usage = behavior.cumulative_token_usage_snapshot();
-        assert_eq!(usage.input_tokens, 19);
-        assert_eq!(usage.output_tokens, 7);
-        assert_eq!(usage.reasoning_tokens, Some(2));
     }
 
     #[tokio::test]
@@ -7372,15 +7278,8 @@ mod tests {
         config.id = agent_id.clone();
         config.sampling.max_tokens = Some(20);
 
-        let content = (0..=MAX_PROVIDER_TOOL_CALLS)
-            .map(|_| r#"{"echo":{}}"#)
-            .collect::<Vec<_>>()
-            .join(" ");
-        let failing_provider = Arc::new(TextJsonOnlyLlm {
-            provider: "ollama",
-            content,
-            reported_usage: Some(TokenUsageStats::new(17, 5).with_reasoning(3)),
-            calls: std::sync::atomic::AtomicUsize::new(0),
+        let failing_provider = Arc::new(RefusedAfterUsageLlm {
+            usage: TokenUsageStats::new(17, 5).with_reasoning(3),
         });
         let mut executor = ToolExecutor::new();
         executor.register_builtin("echo", Arc::new(EchoTool));
@@ -7395,10 +7294,10 @@ mod tests {
         .await
         .unwrap();
 
-        let error = execute_agent(&actor, AgentInput::text("trigger recovery overflow"))
+        let error = execute_agent(&actor, AgentInput::text("trigger a refused response"))
             .await
             .unwrap_err();
-        assert!(error.contains("128-call"));
+        assert!(error.contains("refused"), "{error}");
         let _ = handle.await;
 
         let checkpoint = store.load_latest(&agent_id).await.unwrap().unwrap();

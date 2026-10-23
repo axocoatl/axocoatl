@@ -1221,6 +1221,8 @@ fn partial_output_text(chunk: &axocoatl_actor::AgentStreamChunk) -> Option<&str>
     }
 }
 
+/// The live frame a stream chunk shows, if any: how a provider response
+/// ended is recorded, not shown live.
 pub(crate) fn agent_chunk_stream_frame(
     chunk: &axocoatl_actor::AgentStreamChunk,
     workflow: &str,
@@ -1228,11 +1230,11 @@ pub(crate) fn agent_chunk_stream_frame(
     turn_id: Option<&str>,
     tool_occurrence: Option<u64>,
     coordination_generation: Option<u32>,
-) -> crate::stream::StreamFrame {
+) -> Option<crate::stream::StreamFrame> {
     use crate::stream::StreamFrame;
     use axocoatl_actor::AgentStreamChunk;
 
-    match chunk {
+    Some(match chunk {
         AgentStreamChunk::Text(delta) => StreamFrame::Token {
             workflow: workflow.to_string(),
             agent: outer_agent.to_string(),
@@ -1291,7 +1293,8 @@ pub(crate) fn agent_chunk_stream_frame(
             result: Some(result.clone()),
             is_error: *is_error,
         },
-    }
+        AgentStreamChunk::ProviderResponse { .. } => return None,
+    })
 }
 
 fn coordinator_worker_runtime_id(worker_scope: Option<&str>, worker_id: &str) -> AgentId {
@@ -22292,7 +22295,8 @@ trap - 0 1 2 15
                     }
                     AgentStreamChunk::Text(_)
                     | AgentStreamChunk::Reasoning(_)
-                    | AgentStreamChunk::ProviderRetry { .. } => None,
+                    | AgentStreamChunk::ProviderRetry { .. }
+                    | AgentStreamChunk::ProviderResponse { .. } => None,
                 };
                 match &chunk {
                     AgentStreamChunk::ToolCallStarted {
@@ -22384,7 +22388,8 @@ trap - 0 1 2 15
                     )),
                     AgentStreamChunk::Text(_)
                     | AgentStreamChunk::Reasoning(_)
-                    | AgentStreamChunk::ProviderRetry { .. } => None,
+                    | AgentStreamChunk::ProviderRetry { .. }
+                    | AgentStreamChunk::ProviderResponse { .. } => None,
                 };
                 let persisted = if let Some((operation, event)) = tool_event {
                     ledger
@@ -22411,15 +22416,16 @@ trap - 0 1 2 15
                     cancel_on_error.cancel();
                     continue;
                 }
-                let frame = agent_chunk_stream_frame(
+                if let Some(frame) = agent_chunk_stream_frame(
                     &chunk,
                     &run_id,
                     &agent_id,
                     Some(&turn_id),
                     tool_occurrence,
                     None,
-                );
-                let _ = bus.send(frame);
+                ) {
+                    let _ = bus.send(frame);
+                }
                 drop(stream_commit);
                 let _ = caller_sink.send(chunk);
             }
@@ -22793,7 +22799,10 @@ trap - 0 1 2 15
                     let tool_occurrence = match &chunk {
                         C::ToolCallStarted { id, .. } => Some(tool_occurrences.start(id)),
                         C::ToolCallResult { id, .. } => Some(tool_occurrences.finish(id)),
-                        C::Text(_) | C::Reasoning(_) | C::ProviderRetry { .. } => None,
+                        C::Text(_)
+                        | C::Reasoning(_)
+                        | C::ProviderRetry { .. }
+                        | C::ProviderResponse { .. } => None,
                     };
                     if let Some(t) = &trace {
                         match &chunk {
@@ -22921,7 +22930,7 @@ trap - 0 1 2 15
                                     .record_execution(turn_id, operation, event)
                                     .map(|_| ())
                             }
-                            C::Reasoning(_) => Ok(()),
+                            C::Reasoning(_) | C::ProviderResponse { .. } => Ok(()),
                         }
                     } else {
                         Ok(())
@@ -22936,15 +22945,16 @@ trap - 0 1 2 15
                         }
                         continue;
                     }
-                    let frame = agent_chunk_stream_frame(
+                    if let Some(frame) = agent_chunk_stream_frame(
                         &chunk,
                         &rid,
                         &aid,
                         turn_id.as_deref(),
                         tool_occurrence,
                         None,
-                    );
-                    let _ = bus.send(frame);
+                    ) {
+                        let _ = bus.send(frame);
+                    }
                     drop(stream_commit);
                 }
             });
@@ -27205,7 +27215,8 @@ agents:
             Some("turn-a"),
             Some(0),
             Some(2),
-        );
+        )
+        .unwrap();
         let coordinated = serde_json::to_value(coordinated).unwrap();
         assert_eq!(coordinated["kind"], "tool-call");
         assert_eq!(coordinated["call_id"], "call_0");
@@ -27219,7 +27230,8 @@ agents:
             Some("turn-b"),
             Some(0),
             None,
-        );
+        )
+        .unwrap();
         assert!(serde_json::to_value(direct)
             .unwrap()
             .get("coordination_generation")

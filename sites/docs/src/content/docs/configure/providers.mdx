@@ -327,12 +327,28 @@ runs Ollama (the Homebrew service or an `ollama serve` you run), the app's Setti
 as the user `ollama`; then it restarts the server. See
 [Set up Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
-Some Ollama-served models return a requested tool call as response text instead
-of the structured field. Axocoatl recovers only complete, bounded calls whose
-names were actually offered in that Ollama request. The selected effective
-route must still be Ollama; response text from other providers remains text
-because Axocoatl cannot safely invent their native call ids, signatures, or
-content-block sequence.
+Qwen3-Coder on Ollama sometimes writes a tool call as answer text instead of
+Ollama's structured `tool_calls` (it leaves out the opening `<tool_call>`).
+Both Ollama providers, native and OpenAI-compatible, run such calls only when
+they end the answer in Qwen3-Coder's own `<function=NAME>` format: the first
+line that starts with a call tag, outside a code fence or an HTML block such
+as `<pre>` or `<!--`, starts a run of complete call blocks that goes to the end
+of the answer; every call names a tool the request offered; and its values fit
+that tool's parameters (types, required parameters, `enum`). A recovered call
+gets an id unique in the Session. JSON in an answer is never run as a call.
+When the answer also holds a call Ollama returned structured, only the
+structured calls run and the markup stays text. Nothing is read from text when
+the request set stop sequences or asked for JSON output.
+
+An answer that calls an offered tool in a way that cannot run (prose after the
+calls, a malformed block, a tool the request did not offer, values that do not
+fit, a call written as JSON, or a response cut at its output limit inside a
+call) is refused instead of ending the turn having run nothing: the
+activation fails with the reason, the done reason and the number of tools
+offered, and the turn needs attention. Text from a line that starts a call is
+shown only when the response ends. Response text from other providers stays
+text, because Axocoatl cannot safely invent their native call ids, signatures
+or content-block sequence.
 
 ## Use a compatibility endpoint
 
