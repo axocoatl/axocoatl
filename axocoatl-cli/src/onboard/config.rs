@@ -454,10 +454,13 @@ pub(crate) fn read_existing(text: &str) -> Result<Existing, String> {
 /// Assistant.
 const TEAM_IDS: [&str; 4] = ["lead", "scout", "reviewer", "assistant"];
 
-/// The prompts onboarding wrote in earlier releases (1.4.0 and the 1.5.0
-/// candidates), which a configuration written then still holds: such an
-/// Agent is onboarding's, not one edited by hand.
-const EARLIER_PROMPTS: [(&str, &str); 3] = [
+/// The prompts onboarding wrote in earlier releases, which a configuration
+/// written then still holds: such an Agent is onboarding's, not one edited
+/// by hand. The team's are those of 1.1.0 to 1.4.0 and the 1.5.0
+/// candidates; the Assistant's is the one local setups had in 1.1.0 to
+/// 1.4.0 (an OpenRouter setup's was today's). 1.0's Assistant, which had no
+/// tools, differs from what onboarding writes and stays as it is.
+const EARLIER_PROMPTS: [(&str, &str); 4] = [
     (
         "lead",
         "You own this change. 1. Look first: find the relevant files and tests for code you do \
@@ -476,6 +479,10 @@ const EARLIER_PROMPTS: [(&str, &str); 3] = [
         "Review the described change. Check it against the task and against every contract and \
          edge case the docs, comments and tests describe, one by one. Report each defect with \
          file:line, or say you found none. Change nothing.",
+    ),
+    (
+        "assistant",
+        "You are a helpful assistant powered by Axocoatl.",
     ),
 ];
 
@@ -578,7 +585,8 @@ impl<'a> Written<'a> {
     }
 
     /// The Agents "Update this setup" keeps as they are: the person's own,
-    /// and onboarding's that were edited by hand.
+    /// and onboarding's that differ from what it writes (edited by hand, or
+    /// 1.0's Assistant).
     fn kept(&self) -> Vec<&'a serde_json::Value> {
         self.agents
             .iter()
@@ -635,9 +643,10 @@ fn as_written(agent: &serde_json::Value) -> bool {
 }
 
 /// The Ollama models run by the Agents "Update this setup" keeps as they
-/// are, the person's own and onboarding's edited by hand, as doctor reads
-/// them (an Agent without a model runs `providers.ollama.model`, else
-/// llama3.2); `None` without any Agents (onboarding writes its team).
+/// are (the person's own, and onboarding's that differ from what it writes), as
+/// doctor reads them (an Agent without a model runs
+/// `providers.ollama.model`, else llama3.2); `None` without any Agents
+/// (onboarding writes its team).
 pub(crate) fn kept_agent_models(existing: &Existing, text: &str) -> Option<Vec<String>> {
     if existing.agents.is_empty() {
         return None;
@@ -691,13 +700,16 @@ fn agent_lines(lines: &[String], range: (usize, usize), id: &str) -> Option<(usi
 }
 
 /// "Update this setup": the new text, and the Agents of onboarding's team it
-/// kept as they are because they were edited by hand, though the models
-/// chosen now differ from theirs.
+/// kept as they are because they differ from what onboarding writes (edited
+/// by hand, or 1.0's Assistant), though the models chosen now differ from
+/// theirs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Updated {
     pub(crate) text: String,
     /// `(id, provider:model)` of each such Agent.
     pub(crate) kept: Vec<(String, String)>,
+    /// Whether an Agent of onboarding's team moved to the models chosen.
+    pub(crate) moved: bool,
 }
 
 /// The top-level block `key:` in `lines`: its first line and the line after
@@ -771,6 +783,7 @@ pub(crate) fn update(
     })?;
     let mut lines = to_lines(old);
     let mut kept = Vec::new();
+    let mut moved = false;
 
     // Agents: the team when there are none (no `agents:`, or an empty one
     // such as `agents: []`, which the team replaces); else the Agents
@@ -812,6 +825,7 @@ pub(crate) fn update(
             match (block, new) {
                 (Some((start, end)), Some((from, to))) => {
                     lines.splice(start..end, team[from..to].iter().cloned());
+                    moved = true;
                 }
                 _ => {
                     let current = agent_model(agent)
@@ -1002,7 +1016,7 @@ pub(crate) fn update(
     }
     axocoatl_config::parse_config(&text, path)
         .map_err(|error| format!("the updated configuration would not load: {error}"))?;
-    Ok(Updated { text, kept })
+    Ok(Updated { text, kept, moved })
 }
 
 /// The OpenRouter key written in configuration `text` (`api_key`, not a
@@ -1700,24 +1714,56 @@ mod tests {
         assert_eq!(agent(&config, "scout").sampling.max_tokens, Some(4096));
     }
 
-    /// A team written by 1.4.0 (the same Agents, with no `# Writer:` line
-    /// or run defaults) is onboarding's, and moves; an Agent with a field
-    /// onboarding never writes is the person's.
+    /// The configurations earlier releases' onboarding wrote, byte for byte
+    /// (rendered from each release's own template; see the README beside
+    /// them).
+    const WRITTEN_BY_1_4_OLLAMA: &str =
+        include_str!("../../tests/fixtures/onboard/config-1.4.0-ollama.yaml");
+    const WRITTEN_BY_1_4_OPENROUTER: &str =
+        include_str!("../../tests/fixtures/onboard/config-1.4.0-openrouter.yaml");
+    const WRITTEN_BY_1_0_OLLAMA: &str =
+        include_str!("../../tests/fixtures/onboard/config-1.0.0-ollama.yaml");
+
+    /// The local team 1.4.0 wrote (1.1.0 to 1.3.2 wrote the same text): no
+    /// `# Writer:` line or run defaults, and an Assistant with the prompt
+    /// local setups had then. Every Agent is onboarding's and moves to the
+    /// models chosen, with today's prompt; none is kept, so doctor names no
+    /// kept Agent's model. An Agent with a field onboarding never writes is
+    /// the person's.
     #[test]
     fn a_team_written_by_1_4_moves_and_an_extra_field_is_an_edit() {
-        let old = render(&local_plan());
-        let start = old.find("# Defaults for `axocoatl run`").unwrap();
-        let end = old.find("server:").unwrap();
-        let earlier = format!("{}{}", &old[..start], &old[end..]);
-        assert_eq!(writer_marker(&earlier), None);
+        let old = WRITTEN_BY_1_4_OLLAMA;
+        assert_eq!(writer_marker(old), None);
+        assert!(old.contains("\"You are a helpful assistant powered by Axocoatl.\""));
+        assert_eq!(
+            kept_agent_models(&read_existing(old).unwrap(), old),
+            Some(Vec::new())
+        );
         let mut plan = local_plan();
         plan.lead = ModelRef::new(Provider::Ollama, "devstral:24b");
-        let updated = update(&earlier, &plan, Path::new("c.yaml")).unwrap();
+        plan.reviewer = ModelRef::new(Provider::Ollama, "qwen3:8b");
+        plan.run_writer = Some(plan.lead.clone());
+        plan.run_reviewer = Some(plan.reviewer.clone());
+        let updated = update(old, &plan, Path::new("c.yaml")).unwrap();
         assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        assert!(updated.moved);
         let config = axocoatl_config::parse_config(&updated.text, Path::new("c.yaml")).unwrap();
-        assert_eq!(agent(&config, "lead").model, "devstral:24b");
-        assert_eq!(agent(&config, "scout").model, "devstral:24b");
-        let extra = earlier.replace(
+        for id in ["lead", "scout", "assistant"] {
+            assert_eq!(agent(&config, id).model, "devstral:24b", "{id}");
+        }
+        assert_eq!(agent(&config, "reviewer").model, "qwen3:8b");
+        assert_eq!(
+            agent(&config, "assistant").system_prompt.as_deref(),
+            Some("You are a helpful assistant.")
+        );
+        assert!(
+            !updated.text.contains("qwen3-coder:30b"),
+            "{}",
+            updated.text
+        );
+        assert!(!updated.text.contains("gpt-oss:20b"), "{}", updated.text);
+
+        let extra = old.replace(
             "    role: autonomous\n",
             "    role: autonomous\n    description: \"mine\"\n",
         );
@@ -1725,6 +1771,137 @@ mod tests {
         assert_eq!(
             updated.kept,
             [("lead".to_string(), "ollama:qwen3-coder:30b".to_string())]
+        );
+        assert!(updated.moved);
+        assert_eq!(
+            kept_agent_models(&read_existing(&extra).unwrap(), &extra),
+            Some(vec!["qwen3-coder:30b".to_string()])
+        );
+    }
+
+    /// An Agent with a prompt an earlier release wrote is onboarding's: even
+    /// when the models stay (`--update --port`), its prompt becomes this
+    /// release's, shown in the diff, so a Lead written before this release's
+    /// prompt changed gets the new one. A prompt that is neither an earlier
+    /// one nor today's is the person's and stays as it is.
+    #[test]
+    fn an_earlier_prompt_is_onboardings_and_becomes_todays_in_the_diff() {
+        let old = WRITTEN_BY_1_4_OLLAMA;
+        let mut plan = local_plan();
+        plan.port = 8081;
+        let updated = update(old, &plan, Path::new("c.yaml")).unwrap();
+        assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        let before = read_existing(old).unwrap();
+        let after = read_existing(&updated.text).unwrap();
+        let prompt = |existing: &Existing, id: &str| -> String {
+            existing
+                .agents
+                .iter()
+                .find(|agent| agent.get("id").and_then(serde_json::Value::as_str) == Some(id))
+                .and_then(|agent| agent.get("system_prompt"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string()
+        };
+        let changes = diff_redacted(old, &updated.text);
+        let mut changed = 0;
+        for id in TEAM_IDS {
+            let today = template_agent(id).unwrap()["system_prompt"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let earlier = prompt(&before, id);
+            assert!(
+                EARLIER_PROMPTS.contains(&(id, earlier.as_str())),
+                "{id}: {earlier}"
+            );
+            assert_eq!(prompt(&after, id), today, "{id}");
+            if earlier != today {
+                changed += 1;
+                for line in [
+                    format!("-     system_prompt: {}", yaml_string(&earlier)),
+                    format!("+     system_prompt: {}", yaml_string(&today)),
+                ] {
+                    assert!(changes.contains(&line), "{id}: {line}\n{changes:#?}");
+                }
+            }
+        }
+        // At least the Assistant's ("… powered by Axocoatl." then); the
+        // Lead's too once its prompt differs from 1.4.0's.
+        assert!(changed >= 1, "{changes:#?}");
+        assert_eq!(
+            prompt(&before, "lead") != LEAD_PROMPT,
+            changes
+                .iter()
+                .any(|line| line.starts_with("+     system_prompt: ") && line.contains(LEAD_PROMPT)),
+            "{changes:#?}"
+        );
+        assert!(
+            changes.contains(&"+   port: 8081".to_string()),
+            "{changes:#?}"
+        );
+
+        // The Lead's prompt neither an earlier nor today's: left alone,
+        // and not said kept, since its model is the one chosen.
+        let lead = EARLIER_PROMPTS[0].1;
+        let own = old.replace(lead, &format!("{lead} Be brief."));
+        let updated = update(&own, &plan, Path::new("c.yaml")).unwrap();
+        assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        assert_eq!(
+            prompt(&read_existing(&updated.text).unwrap(), "lead"),
+            format!("{lead} Be brief.")
+        );
+        assert!(
+            !diff(&own, &updated.text)
+                .iter()
+                .any(|line| line.contains("You own this change")),
+            "{}",
+            updated.text
+        );
+    }
+
+    /// The OpenRouter team 1.4.0 wrote, every Agent on one model with
+    /// 2048-token limits, moves too: to the writer and reviewer chosen, with
+    /// today's limits.
+    #[test]
+    fn an_openrouter_team_written_by_1_4_moves() {
+        let old = WRITTEN_BY_1_4_OPENROUTER;
+        let updated = update(old, &openrouter_plan(), Path::new("c.yaml")).unwrap();
+        assert!(updated.kept.is_empty(), "{:?}", updated.kept);
+        assert!(updated.moved);
+        let config = axocoatl_config::parse_config(&updated.text, Path::new("c.yaml")).unwrap();
+        for id in ["lead", "scout", "assistant"] {
+            assert_eq!(agent(&config, id).model, "qwen/qwen3-coder", "{id}");
+        }
+        assert_eq!(agent(&config, "reviewer").model, "openai/gpt-oss-120b");
+        assert_eq!(agent(&config, "lead").sampling.max_tokens, Some(4096));
+        assert_eq!(agent(&config, "reviewer").sampling.max_tokens, Some(2048));
+        assert!(
+            updated
+                .text
+                .contains("    api_key: \"${OPENROUTER_API_KEY}\"\n"),
+            "{}",
+            updated.text
+        );
+    }
+
+    /// 1.0.0's Assistant had no tools, so it differs from what onboarding writes:
+    /// it stays as it is and is reported kept, and nothing moves.
+    #[test]
+    fn the_assistant_1_0_wrote_is_kept() {
+        let old = WRITTEN_BY_1_0_OLLAMA;
+        let updated = update(old, &local_plan(), Path::new("c.yaml")).unwrap();
+        assert_eq!(
+            updated.kept,
+            [("assistant".to_string(), "ollama:llama3.2".to_string())]
+        );
+        assert!(!updated.moved);
+        let config = axocoatl_config::parse_config(&updated.text, Path::new("c.yaml")).unwrap();
+        assert_eq!(agent(&config, "assistant").model, "llama3.2");
+        // With 1.0's Researcher and Summarizer, the person's own now.
+        assert_eq!(
+            kept_agent_models(&read_existing(old).unwrap(), old),
+            Some(vec!["llama3.2".to_string(); 3])
         );
     }
 

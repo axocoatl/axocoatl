@@ -1041,8 +1041,8 @@ impl ModelChange {
             (
                 "--replace",
                 format!(
-                    " (`--update` would keep the Agents you edited, which run {model}; \
-                     `--replace` backs this configuration up first)"
+                    " (`--update` would keep the Agents that differ from what onboarding \
+                     writes, which run {model}; `--replace` backs this configuration up first)"
                 ),
             )
         } else {
@@ -2694,8 +2694,9 @@ mod tests {
             "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer ollama \
              --writer-model ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`), or \
              choose a smaller reviewer (`axocoatl onboard --replace --writer ollama --writer-model \
-             ollama:qwen3-coder:30b`) (`--update` would keep the Agents you edited, which run \
-             gpt-oss:20b; `--replace` backs this configuration up first)"
+             ollama:qwen3-coder:30b`) (`--update` would keep the Agents that differ from what \
+             onboarding writes, which run gpt-oss:20b; `--replace` backs this configuration up \
+             first)"
         );
     }
 
@@ -2741,8 +2742,9 @@ mod tests {
         assert_eq!(
             fix,
             "Use OpenRouter for it (`axocoatl onboard --replace --writer openrouter \
-             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents you \
-             edited, which run gpt-oss:20b; `--replace` backs this configuration up first)"
+             --writer-model openrouter:qwen/qwen3-coder`) (`--update` would keep the Agents that \
+             differ from what onboarding writes, which run gpt-oss:20b; `--replace` backs this \
+             configuration up first)"
         );
         // That command writes the team on OpenRouter: no Ollama model is left.
         let (config, _, run) = parsed(&onboard_config::render(&plan(
@@ -2871,8 +2873,9 @@ mod tests {
             too_large_fix("qwen3-coder:30b", &kept, &run, Some("claude-code"), None),
             "Choose a smaller model (`axocoatl onboard --replace --writer claude-code`), or use \
              OpenRouter for it (`axocoatl onboard --replace --writer claude-code --reviewer \
-             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents you edited, which \
-             run qwen3-coder:30b; `--replace` backs this configuration up first)"
+             openrouter:openai/gpt-oss-120b`) (`--update` would keep the Agents that differ from \
+             what onboarding writes, which run qwen3-coder:30b; `--replace` backs this \
+             configuration up first)"
         );
     }
 

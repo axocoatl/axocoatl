@@ -273,7 +273,8 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    `--reviewer openrouter:openai/gpt-oss-120b`. `--update` moves the Agents onboarding
    wrote, and `run.models`, to the new models. It says `--replace`, which backs the
    configuration up and writes the team for the new models, when an Agent that `--update`
-   keeps as it is (one you edited, or your own) runs the model. With
+   keeps as it is (one that differs from what onboarding writes, or your own) runs the
+   model. With
    `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
    step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
@@ -538,16 +539,19 @@ With a configuration already there, onboarding offers:
 - **Update this setup** (the default, and what `--yes` does): keep the file, back it
   up, and change only what is missing or what this run chose: a provider section it
   needs, the OpenRouter key when you chose another, `run`, `server.port`, and the
-  models of the Agents onboarding wrote. The writer, the run models, the Codex
-  credential and the OpenRouter key the setup has are kept unless a flag names others
-  (a key connected in the browser is used without asking); `axocoatl onboard --update
-  --port 8081` changes only the port. When the models change, the Agents onboarding
-  wrote (Lead, Scout, Reviewer and the Assistant, as it writes them) move to them, each
-  where it is in the file. An Agent you edited (its prompt, tools or another field, or
-  a model that is not the one onboarding gave it), and an Agent of your own, stay as
-  they are, and onboarding names the Agents of its team it kept. Everything else,
-  comments included, stays as it was, and the change is shown as a diff first, with
-  every secret value hidden.
+  Agents onboarding wrote. The writer, the run models, the Codex credential and the
+  OpenRouter key the setup has are kept unless a flag names others (a key connected in
+  the browser is used without asking); `axocoatl onboard --update --port 8081` changes
+  only the port of a setup this release wrote. The Agents onboarding wrote (Lead,
+  Scout, Reviewer and the Assistant, as this release or 1.1.0 to 1.4.0 wrote them) are
+  written as this release writes them, each where it is in the file: on the models
+  chosen, and with this release's prompts (a Lead from an earlier release gets this
+  release's Lead prompt). An Agent that differs from what onboarding writes (one you
+  edited: its prompt, tools or another field, or a model that is not the one onboarding
+  gave it; or 1.0's Assistant, which had no tools), and an Agent of your own, stay as
+  they are, and onboarding names the Agents of its team it kept on other models.
+  Everything else, comments included, stays as it was, and the change is shown as a
+  diff first, with every secret value hidden.
 - **Replace it**: write a new configuration; the old file is backed up first and is
   not shown (only the new file is, with its key hidden).
 - **Leave it unchanged**: check the file as it is (Step 5) and stop: exit 0 when it is
