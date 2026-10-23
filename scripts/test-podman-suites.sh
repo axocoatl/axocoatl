@@ -34,8 +34,8 @@
 # makes is labelled and removed by the suite itself.
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 cd "$repo_root"
 
 fail() {
@@ -215,7 +215,7 @@ serve_ollama() {
 }
 
 run() {
-  local group=$1 mode=${2:-run} crate args log count expected=0 passed=0 failed=0 name
+  local group=$1 mode=${2:-run} crate args log count expected=0 passed=0 failed=0 unfinished name
   local filters=()
   umask 022
   export AXO_SUPERVISOR_TEST_IMAGE=$supervisor_root
@@ -272,7 +272,10 @@ run() {
   done
   rm -rf -- "$work"
   [[ $mode == run ]] || return 0
-  echo "Podman suites ($group): $passed of $expected ignored tests passed, $failed failed"
+  # A test whose binary did not build or crashed has no result line.
+  unfinished=$((expected - passed - failed))
+  ((unfinished > 0)) || unfinished=0
+  echo "Podman suites ($group): $passed of $expected ignored tests passed, $failed failed, $unfinished without a result"
   [[ $expected -gt 0 && $passed -eq $expected && $failed -eq 0 ]]
 }
 
@@ -280,7 +283,6 @@ run() {
 tally() {
   passed=$((passed + $(sed -n 's/^test result: [a-zA-Z]*\. \([0-9]*\) passed.*/\1/p' "$1" | awk '{ s += $1 } END { print s + 0 }')))
   failed=$((failed + $(sed -n 's/^test result: .* \([0-9]*\) failed;.*/\1/p' "$1" | awk '{ s += $1 } END { print s + 0 }')))
-  failed=$((failed + $(grep -c '^error: .*test failed\|^error: could not compile' "$1" || true)))
 }
 
 # Every #[ignore]d test in the tree, as "crate file name" lines.
