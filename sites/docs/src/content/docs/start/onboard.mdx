@@ -348,11 +348,12 @@ The key, in this order:
      showing it. The configuration gets `api_key_secret: openrouter` and
      `openrouter_billing: credits`, never the key. The callback is a loopback port,
      so from a VM, open the link in a browser that can reach that port: Lima
-     forwards a guest's loopback ports to the host's unless the VM runs in plain mode
-     (`limactl create --plain`, or `plain: true`), which turns forwarding off; in
-     plain mode or on a cloud VM, forward the port first with
-     `ssh -L PORT:127.0.0.1:PORT`. Cancelling in the browser or running out of time stores nothing, and
-     the step left says to run onboarding again.
+     forwards a guest's loopback ports to the host unless the VM is plain
+     (`limactl create --plain`, or `plain: true`), which turns forwarding off. In a
+     plain or cloud VM, forward the port first from the computer with the browser,
+     with `ssh -L PORT:127.0.0.1:PORT` and the VM's address, as onboarding says when
+     it cannot open a browser itself. Cancelling in the browser or running out of
+     time stores nothing, and the step left says to run onboarding again.
    - **Read it from an environment variable**: you name it (default
      `OPENROUTER_API_KEY`); the configuration names the variable, not the key.
    - **Enter it at a hidden prompt**: the key is then stored in the owner-only

@@ -168,6 +168,10 @@ function marketingRelativePath(path, label) {
 function destinationExists(url) {
   const clean = url.split(/[?#]/)[0];
   if (!clean.startsWith('/')) return true;
+  // The installer is written beside the built pages by verify-marketing-gate.sh
+  // (the release tag's scripts/install.sh when it deploys); the source tree has
+  // the repository's.
+  if (!builtRoot && clean === '/install.sh') return existsSync(resolve(repositoryRoot, 'scripts/install.sh'));
   const relative = clean.slice(1);
   if (!relative) return existsSync(join(root, 'index.html'));
   const exact = join(root, relative);

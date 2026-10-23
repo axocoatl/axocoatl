@@ -276,28 +276,46 @@
         <h3>Verified</h3>
         <ul>
           <li>The release gate requires the release commit to go from the published
-              install command to passing, signed runs, every receipt verified, and the
-              release workflow publishes nothing without that evidence. On a 48 GB Mac
-              on Apple silicon, on an account that starts without Axocoatl, its data or
-              stored credentials, Podman or Ollama (Ollama's downloaded models may
-              stay), <code>axocoatl onboard</code> installs Podman and Ollama with
-              Homebrew; <code>fix</code> with local models on Node.js, Python, Rust and
-              Go repositories, and <code>fix-claude-code</code>, <code>fix-codex</code>
-              and <code>fix</code> with OpenRouter models on Node.js and Python, after
-              <code>connect claude-code</code> and <code>connect codex</code> sign in
-              through the browser and onboarding connects OpenRouter through its own
-              browser sign-in. The workbench in Safari, from the sign-in link to a
-              commit.</li>
-          <li>On Ubuntu 24.04 on arm64, in a VM, as a new user made with
-              <code>adduser</code>: onboarding installs Podman with apt, with
-              <code>sudo</code> after asking, and connects OpenRouter through its own
-              browser sign-in; <code>fix</code> with those OpenRouter models on Node.js,
-              Python, Rust and Go. In CI, on Ubuntu 24.04 on x86_64 and arm64: the same
-              install command, then onboarding with no terminal against a scripted
-              model server (Podman already on the runner, no first-run sample), and
-              <code>fix</code> on the same repositories.</li>
-          <li>Each path's transcript, times, downloads and tool versions go into the
-              signed evidence bundle under <code>release-evidence/1.5.0/</code> in the
+              install command to passing, signed runs on each path below, every receipt
+              and record verified. The release workflow publishes nothing until the
+              signed evidence shows every step each path lists; the only way past it is
+              a logged override that only maintainers listed in the repository can
+              start, and the release notes must then name the paths not run.</li>
+          <li>On a 48 GB Mac on Apple silicon, with a person answering onboarding, on an
+              account that starts without Axocoatl, its data or stored credentials,
+              without Podman or a Podman machine, and without Ollama or its settings
+              (Ollama's downloaded models may stay): <code>axocoatl onboard</code>
+              installs Podman and Ollama with Homebrew, creates the Podman machine,
+              turns Ollama's cloud models off and ends ready with a passing first run,
+              and <code>fix</code> with local models passes on Node.js, Python, Rust and
+              Go repositories. Onboarding signs in Claude Code, and Codex with a ChatGPT
+              plan, in the browser, and connects OpenRouter through its browser
+              sign-in; <code>fix-claude-code</code>, <code>fix-codex</code> and
+              <code>fix</code> with OpenRouter models pass on Node.js and Python, and
+              <code>fix-claude-code</code> with <code>--keep pr</code> opens a pull
+              request whose receipt the verify-receipt Action verifies.</li>
+          <li>Also on the Mac: the Always-On Service, chosen in onboarding, runs a
+              passing fix, restarts when <code>onboard --update</code> changes the
+              configuration, then stops and uninstalls; a run with the Podman machine
+              stopped starts it and passes; timed runs on real repositories each end
+              with a verdict; the workbench in Safari goes from the sign-in link to a
+              commit, shows a Session's Preview inside the workbench only, and stays as
+              the docs say when another page floods <code>localhost</code> with
+              cookies.</li>
+          <li>On Ubuntu 24.04 on arm64, in a Lima VM, as a new user who starts without
+              Axocoatl, its data or stored credentials, or Podman, and whose subordinate
+              ids the gate removes first: onboarding installs Podman with apt and adds a
+              range of subordinate ids that overlaps no other user's, with
+              <code>sudo</code> after asking, and connects OpenRouter through its
+              browser sign-in; <code>fix</code> with those OpenRouter models passes on
+              Node.js, Python, Rust and Go, and the Always-On Service runs as a systemd
+              user unit through to its uninstall. In CI, on Ubuntu 24.04 on x86_64 and
+              arm64: the same install command, then onboarding with no terminal against
+              a scripted model server (Podman already on the runner, no first-run
+              sample), and <code>fix</code> passes on the same repositories.</li>
+          <li>Each path's transcript, times, downloads and tool versions, the models, the
+              machine and account, and who answered each question go into the signed
+              evidence bundle under <code>release-evidence/1.5.0/</code> in the
               repository.</li>
         </ul>
       </article>

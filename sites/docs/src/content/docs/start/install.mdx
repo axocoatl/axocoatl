@@ -11,17 +11,20 @@ distribution, not in PowerShell; there is no native Windows binary.
 The Linux archives target GNU libc 2.35 or newer. They do not run on
 musl-based distributions such as Alpine; use the Cargo or source path there.
 
-The 1.5.0 release gate requires each of these paths to pass on the release commit, from
-the published install command, every receipt verified; the release workflow publishes
-nothing without their signed evidence:
+The 1.5.0 release gate requires each of these paths to pass on the release commit,
+starting from the published install command, and lists the steps each must show. The
+release workflow publishes nothing until the signed evidence holds every one of them;
+the only way past it is a logged override that only maintainers listed in the
+repository can start, and the release notes must then name the paths not run.
 
 | | |
 | --- | --- |
-| macOS, end to end | Apple silicon (48 GB), on an account that starts without Axocoatl, its data or stored credentials, Podman and its machines, or Ollama (Ollama's downloaded models may stay): onboarding installs Podman and Ollama with Homebrew after asking and sets up local models, Claude Code, Codex and OpenRouter in turn, each signed in through the browser (OpenRouter through onboarding's own sign-in) |
-| Linux, end to end | Ubuntu 24.04 on arm64, in a VM, as a new user made with `adduser`: onboarding installs Podman with apt and adds a range of subordinate ids if the user has none, each with `sudo` after asking, and connects OpenRouter through its own browser sign-in for the OpenRouter models the runs use |
+| macOS, end to end | Apple silicon (48 GB), with a person answering onboarding at the Mac, on an account that starts without Axocoatl, its data or stored credentials, without Podman or a Podman machine, and without Ollama or its settings (Ollama's downloaded models may stay): onboarding installs Podman and Ollama with Homebrew, creates the Podman machine, turns Ollama's cloud models off and ends ready with a passing first run. It signs in Claude Code, and Codex with a ChatGPT plan, in the browser, and connects OpenRouter through its browser sign-in without writing the key to the configuration |
+| Linux, end to end | Ubuntu 24.04 on arm64, in a Lima VM, as a new user who starts without Axocoatl, its data or stored credentials, or Podman, and whose subordinate ids the gate removes first: onboarding installs Podman with apt and adds a range of subordinate ids that overlaps no other user's, each with `sudo` after asking, connects OpenRouter through its browser sign-in for the OpenRouter models the runs use, and installs no Ollama |
 | Linux, in CI | Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with no terminal against a scripted model server (Podman already on the runner, no first-run sample), and `axocoatl run fix` |
-| Repositories | `fix` on Node.js (with and without dependencies), Python (pytest), Rust and Go repositories on each, with local models on the Mac; on the Mac, `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models on Node.js and Python ([how toolchains work](/configure/toolchains/)) |
-| Evidence | Each path's transcript, times, downloads and tool versions, in the signed bundle under `release-evidence/1.5.0/` in the repository ([the gate](https://github.com/axocoatl/axocoatl/blob/main/docs/RELEASE_GATE.md)) |
+| Repositories | `fix` passes on Node.js (with and without dependencies), Python (pytest), Rust and Go repositories on each, with local models on the Mac; on the Mac, `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models pass on Node.js and Python, and `fix-claude-code` with `--keep pr` opens a pull request whose receipt the [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions) verifies ([how toolchains work](/configure/toolchains/)) |
+| Also on the Mac | The [Always-On Service](/operate/service/), chosen in onboarding, runs a passing fix, restarts when `onboard --update` changes the configuration, then stops and uninstalls (on Ubuntu, as a systemd user unit); a run with the Podman machine stopped starts it and passes; timed runs on real repositories each end with a verdict; the workbench in Safari goes from the sign-in link to a commit, shows a Session's Preview inside the workbench only (a Preview address opened in a tab, reached by a redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say when another page floods `localhost` with cookies |
+| Evidence | Every receipt and record verified; each path's transcript, times, downloads and tool versions, the models, the machine and account, and who answered each question (the person, or for the workbench's questions up to the commit, a WebDriver driver in Safari), in the signed bundle under `release-evidence/1.5.0/` in the repository ([the gate](https://github.com/axocoatl/axocoatl/blob/main/docs/RELEASE_GATE.md)) |
 | Not yet verified | Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows |
 
 ## Install the binary
@@ -160,13 +163,15 @@ A run's sandbox also pulls its base image and packages the first time it starts.
 Axocoatl 1.5.0 does not support an HTTP proxy (`HTTPS_PROXY`, `HTTP_PROXY`,
 `ALL_PROXY`) for Sessions and runs:
 
-- A Session's network, which a run uses for its dependency install, web tools, and
-  Claude Code's and Codex's model calls, goes through Axocoatl's egress broker on this
-  computer, which connects to each allowed host directly. It never
-  reads the proxy variables, and the containers do not get them. On a network that
-  reaches the internet only through a proxy, a run cannot install its dependencies or
-  reach a model API from the sandbox. `axocoatl doctor` and `axocoatl onboard` warn
-  when `HTTPS_PROXY` or `HTTP_PROXY` is set.
+- A run's network, which it uses for its dependency install, web tools, and Claude
+  Code's and Codex's model calls, goes through Axocoatl's egress broker on this
+  computer, which connects to each allowed host directly; a workbench Session with
+  `sandbox.network: bridge` reaches the internet through Podman's network, also
+  directly. Neither reads the proxy variables, and the containers do not get them
+  ([Sandboxes](/configure/sandboxes/)). On a network that reaches the internet only
+  through a proxy, a run cannot install its dependencies or reach a model API from the
+  sandbox. `axocoatl doctor` and `axocoatl onboard` warn when `HTTPS_PROXY`,
+  `HTTP_PROXY` or `ALL_PROXY` is set.
 - Requests to this computer (from `axocoatl run` and the other commands to the daemon,
   and to Ollama and a Session's Preview) never use a proxy, whatever the variables say,
   so the daemon's API token never reaches one.

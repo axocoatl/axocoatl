@@ -158,7 +158,8 @@ quality or performance claims about them.
 - Any reviewer or Agent through OpenRouter.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and
   onboarding offers on a 48 GB Mac. It is smaller than its writer. How well it reviews has
-  not been measured, and the pages that name it as a reviewer say so.
+  not been measured, and the pages that present it as the reviewer onboarding offers say
+  so (reference pages that show it in an example command or configuration do not).
   The 1.5.0 release gate requires the local pair (`qwen3-coder:30b` and `gpt-oss:20b`) to
   pass end to end on a 48 GB Mac (path `C1-local` in `docs/RELEASE_GATE.md`; the signed
   evidence bundle goes under `release-evidence/1.5.0/`). That shows the pair runs there,
