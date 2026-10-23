@@ -3511,7 +3511,7 @@ impl SessionSandbox {
                 "Axocoatl runtime authority is not a full SHA-256 identity".to_string(),
             ));
         }
-        match podman::detect().await {
+        match podman::detect_answering().await? {
             podman::PodmanReadiness::Ready => {}
             podman::PodmanReadiness::NotInstalled
             | podman::PodmanReadiness::MachineMissing
@@ -3535,7 +3535,10 @@ impl SessionSandbox {
         list.args(Self::data_root_exposure_list_args());
         let listed = Self::run_bounded_command(list, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
         if listed.timed_out {
-            return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+            return Err(IsolationError::podman_not_answering(
+                "ps",
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+            ));
         }
         if !listed.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -3555,7 +3558,10 @@ impl SessionSandbox {
             let inspected =
                 Self::run_bounded_command(inspect, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
             if inspected.timed_out {
-                return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+                return Err(IsolationError::podman_not_answering(
+                    "inspect",
+                    NAMED_REMOVE_COMMAND_TIMEOUT,
+                ));
             }
             if inspected.status.success() {
                 break inspected;
@@ -3612,7 +3618,7 @@ impl SessionSandbox {
                 "Axocoatl runtime authority is not a full SHA-256 identity".to_string(),
             ));
         }
-        match podman::detect().await {
+        match podman::detect_answering().await? {
             podman::PodmanReadiness::Ready => {}
             podman::PodmanReadiness::NotInstalled
             | podman::PodmanReadiness::MachineMissing
@@ -3629,7 +3635,10 @@ impl SessionSandbox {
         list.args(Self::owned_container_list_args(runtime_authority));
         let listed = Self::run_bounded_command(list, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
         if listed.timed_out {
-            return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+            return Err(IsolationError::podman_not_answering(
+                "ps",
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+            ));
         }
         if !listed.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -5044,10 +5053,7 @@ impl SessionSandbox {
         command.args(["ps", "-a", "--format", "{{.Names}}"]);
         let output = Self::run_bounded_command(command, timeout).await?;
         if output.timed_out {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "listing Podman containers timed out after {} seconds",
-                timeout.as_secs_f64()
-            )));
+            return Err(IsolationError::podman_not_answering("ps", timeout));
         }
         if !output.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -5175,10 +5181,10 @@ impl SessionSandbox {
         command.args(["container", "exists", container_id]);
         let output = Self::run_bounded_command(command, timeout).await?;
         if output.timed_out {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "checking exact Podman container identity timed out after {} seconds",
-                timeout.as_secs_f64()
-            )));
+            return Err(IsolationError::podman_not_answering(
+                "container exists",
+                timeout,
+            ));
         }
         match output.status.code() {
             Some(0) => Ok(true),

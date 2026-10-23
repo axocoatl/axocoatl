@@ -30,6 +30,8 @@ pub(crate) mod session_migration;
 mod session_history;
 use session_history::HistoryMutation;
 
+#[path = "bootstrap_podman_wait.rs"]
+mod podman_wait;
 #[path = "bootstrap_runtime_volumes.rs"]
 mod runtime_volumes;
 #[path = "bootstrap_session_dispatch.rs"]
@@ -4113,29 +4115,35 @@ impl AxocoatlDaemon {
                     "starting Podman for deferred local runtime cleanup: {error}"
                 ))
             })?;
+        let patience = podman_wait::PodmanPatience::new(podman_wait::PODMAN_ANSWER_WAIT);
         for protected_root in [
             &self.data_root,
             self._data_dir_lease.external_root(),
             &self.ipc_root,
         ] {
-            SessionSandbox::remove_data_root_exposing_containers(
-                protected_root.path(),
-                &self.local_runtime_authority,
-            )
-            .await
-            .map_err(|error| {
-                DaemonError::Session(format!(
-                    "first local start could not prove containers exposing control-plane root '{}' absent: {error}",
-                    protected_root.path().display()
-                ))
-            })?;
+            patience
+                .ask(|| {
+                    SessionSandbox::remove_data_root_exposing_containers(
+                        protected_root.path(),
+                        &self.local_runtime_authority,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    patience.failure(|| format!(
+                        "first local start could not prove containers exposing control-plane root '{}' absent",
+                        protected_root.path().display()
+                    ), error)
+                })?;
         }
-        SessionSandbox::remove_owned_containers(&self.local_runtime_authority)
+        patience
+            .ask(|| SessionSandbox::remove_owned_containers(&self.local_runtime_authority))
             .await
             .map_err(|error| {
-                DaemonError::Session(format!(
-                    "first local start could not prove authority-owned Session containers absent: {error}"
-                ))
+                patience.failure(
+                    || "first local start could not prove authority-owned Session containers absent".to_string(),
+                    error,
+                )
             })?;
         self.verify_control_plane_roots()?;
         // No container of this authority exists and no Session has started
@@ -4156,20 +4164,26 @@ impl AxocoatlDaemon {
         // Released v0.1 containers are identified by their immutable Podman id
         // and proven bind source, so a deleted or corrupt Session JSON cannot
         // hide a process that still has the control-plane root mounted.
+        // A slow Podman is asked again (`podman_wait`); any other answer
+        // that does not prove absence stops the start.
+        let patience = podman_wait::PodmanPatience::new(podman_wait::PODMAN_ANSWER_WAIT);
         let mut removed_untracked = Vec::new();
         for protected_root in [data_root, lease_root, ipc_root] {
             removed_untracked.extend(
-                SessionSandbox::remove_data_root_exposing_containers(
-                    protected_root.path(),
-                    runtime_authority,
-                )
-                .await
-                .map_err(|error| {
-                    DaemonError::Session(format!(
-                        "early bootstrap could not prove containers exposing control-plane root '{}' absent: {error}",
-                        protected_root.path().display()
-                    ))
-                })?,
+                patience
+                    .ask(|| {
+                        SessionSandbox::remove_data_root_exposing_containers(
+                            protected_root.path(),
+                            runtime_authority,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        patience.failure(|| format!(
+                            "early bootstrap could not prove containers exposing control-plane root '{}' absent",
+                            protected_root.path().display()
+                        ), error)
+                    })?,
             );
         }
         removed_untracked.sort();
@@ -4180,14 +4194,18 @@ impl AxocoatlDaemon {
                 "removed legacy Session containers exposing the control-plane data root"
             );
         }
-        let removed_owned =
-            SessionSandbox::remove_owned_containers(runtime_authority)
-                .await
-                .map_err(|error| {
-                    DaemonError::Session(format!(
-                        "early bootstrap could not prove authority-owned Session containers absent: {error}"
-                    ))
-                })?;
+        let removed_owned = patience
+            .ask(|| SessionSandbox::remove_owned_containers(runtime_authority))
+            .await
+            .map_err(|error| {
+                patience.failure(
+                    || {
+                        "early bootstrap could not prove authority-owned Session containers absent"
+                            .to_string()
+                    },
+                    error,
+                )
+            })?;
         if !removed_owned.is_empty() {
             tracing::warn!(
                 containers = ?removed_owned,
@@ -4203,15 +4221,26 @@ impl AxocoatlDaemon {
             })?;
         }
 
-        Self::reconcile_persisted_session_records(config, data_root).await
+        // The same wait: a start waits for Podman at most that long in all.
+        Self::reconcile_persisted_session_records_with_podman_readiness(
+            config, data_root, None, &patience,
+        )
+        .await
     }
 
+    /// The persisted-records stage alone, with a wait of its own.
+    #[cfg(test)]
     async fn reconcile_persisted_session_records(
         config: &AxocoatlConfig,
         data_root: &SecureDir,
     ) -> Result<(), DaemonError> {
-        Self::reconcile_persisted_session_records_with_podman_readiness(config, data_root, None)
-            .await
+        Self::reconcile_persisted_session_records_with_podman_readiness(
+            config,
+            data_root,
+            None,
+            &podman_wait::PodmanPatience::new(podman_wait::PODMAN_ANSWER_WAIT),
+        )
+        .await
     }
 
     async fn reconcile_unloaded_session_runtime_authority(
@@ -4401,6 +4430,7 @@ impl AxocoatlDaemon {
         config: &AxocoatlConfig,
         data_root: &SecureDir,
         podman_readiness: Option<axocoatl_isolation::podman::PodmanReadiness>,
+        patience: &podman_wait::PodmanPatience,
     ) -> Result<(), DaemonError> {
         let mut sessions = SessionStore::new_in_secure(data_root, "sessions")
             .map_err(|error| DaemonError::Session(error.to_string()))?;
@@ -4461,22 +4491,41 @@ impl AxocoatlDaemon {
         local_container_ids.sort();
         local_container_ids.dedup();
         if !local_container_ids.is_empty() {
+            // A slow Podman is asked again here too (`podman_wait`).
             let readiness = match podman_readiness {
                 Some(readiness) => readiness,
-                None => axocoatl_isolation::podman::detect().await,
+                None => patience
+                    .ask(axocoatl_isolation::podman::detect_answering)
+                    .await
+                    .map_err(|error| {
+                        patience.failure(
+                            || {
+                                "early bootstrap could not determine whether deterministic Podman Session containers are absent"
+                                    .to_string()
+                            },
+                            error,
+                        )
+                    })?,
             };
             match readiness {
                 axocoatl_isolation::podman::PodmanReadiness::Ready => {
-                    SessionSandbox::remove_named_many(
-                        &local_container_ids,
-                        Duration::from_secs(30),
-                    )
-                    .await
-                    .map_err(|error| {
-                        DaemonError::Session(format!(
-                            "early bootstrap could not prove deterministic Podman Session containers absent: {error}"
-                        ))
-                    })?;
+                    patience
+                        .ask(|| {
+                            SessionSandbox::remove_named_many(
+                                &local_container_ids,
+                                Duration::from_secs(30),
+                            )
+                        })
+                        .await
+                        .map_err(|error| {
+                            patience.failure(
+                                || {
+                                    "early bootstrap could not prove deterministic Podman Session containers absent"
+                                        .to_string()
+                                },
+                                error,
+                            )
+                        })?;
                     local_cleanup_confirmed = true;
                 }
                 axocoatl_isolation::podman::PodmanReadiness::NotInstalled
@@ -30230,6 +30279,7 @@ providers:
                 &test_config(),
                 &SecureDir::open(data.path()).unwrap(),
                 Some(readiness.clone()),
+                &podman_wait::PodmanPatience::new(podman_wait::PODMAN_ANSWER_WAIT),
             )
             .await
             .unwrap_or_else(|error| {
@@ -31589,6 +31639,89 @@ esac
                 .count(),
             1,
             "early bootstrap must inspect exact authority-owned containers: {calls}"
+        );
+    }
+
+    /// A Podman that is only slow does not stop the start: early bootstrap's
+    /// first `podman ps` does not answer within its 10 s bound (the machine is
+    /// busy), and the proof asks again instead of failing with "Tool
+    /// execution timed out after 10s"; the start then goes on to the
+    /// configuration's own error.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_slow_podman_at_the_start_is_asked_again() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "AXOCOATL_TEST_SLOW_PODMAN_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let err = AxocoatlDaemon::bootstrap(test_config())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("mock"), "the start went on: {err}");
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        // The first listing takes longer than its bound; later ones answer.
+        std::fs::write(
+            &podman,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$AXOCOATL_TEST_PODMAN_CALLS"
+case "$*" in
+  --version) printf 'podman version 5.0.0\n' ;;
+  'machine list --format json') printf '[{"Running":true}]\n' ;;
+  'info --format json') printf '{}\n' ;;
+  'ps '*)
+    if [ ! -e "$AXOCOATL_TEST_PODMAN_CALLS.slow" ]; then
+      : > "$AXOCOATL_TEST_PODMAN_CALLS.slow"
+      exec /bin/sleep 12
+    fi ;;
+  *) printf 'unexpected Podman command: %s\n' "$*" >&2; exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let calls_path = root.path().join("podman-calls");
+        let started = std::time::Instant::now();
+        let output = tokio::time::timeout(
+            Duration::from_secs(300),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "bootstrap::tests::a_slow_podman_at_the_start_is_asked_again",
+                    "--nocapture",
+                ])
+                .current_dir(root.path())
+                .env(CHILD, "1")
+                .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
+                .env("AXOCOATL_TEST_PODMAN_CALLS", &calls_path)
+                .env("PATH", &bin)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("isolated bootstrap test timed out")
+        .expect("starting isolated bootstrap test");
+        assert!(
+            output.status.success(),
+            "isolated bootstrap test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(started.elapsed() >= Duration::from_secs(10));
+        let calls = std::fs::read_to_string(calls_path).unwrap();
+        // The first root's listing twice, then the two other roots' and the
+        // owned containers' once each.
+        assert_eq!(
+            calls.lines().filter(|line| line.starts_with("ps ")).count(),
+            5,
+            "{calls}"
         );
     }
 
@@ -33119,6 +33252,7 @@ esac
             &config,
             &SecureDir::open(data.path()).unwrap(),
             Some(axocoatl_isolation::podman::PodmanReadiness::MachineStopped),
+            &podman_wait::PodmanPatience::new(podman_wait::PODMAN_ANSWER_WAIT),
         )
         .await
         .unwrap();
