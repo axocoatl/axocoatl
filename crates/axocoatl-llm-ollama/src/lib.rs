@@ -205,69 +205,8 @@ fn parse_text_tool_calls(
     content: &str,
     tool_names: &[String],
 ) -> Result<Vec<axocoatl_llm::ToolCall>, ProviderError> {
-    let mut candidate_count = 0usize;
-    let mut calls = markup_tool_calls(content, tool_names, &mut candidate_count)?;
-    let known = |name: &str| tool_names.iter().any(|t| t == name);
-
-    // Shape 3: a bare JSON object, no wrapper at all —
-    //   {"name":"NAME","arguments":{…}}
-    // qwen2.5-coder emits exactly this. Ollama's template for it does not lift
-    // the call into `tool_calls`, so without this the model appears to do
-    // nothing: it answers in a few tokens, edits no files, and every check then
-    // passes because there is nothing to check. The name gate below is what
-    // keeps this safe — prose is only ever read as a call when it names a tool
-    // that was actually offered.
-    if calls.is_empty() {
-        for candidate in bare_json_objects(content) {
-            note_text_tool_candidate(&mut candidate_count)?;
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
-                continue;
-            };
-            // Accept `arguments` (OpenAI/Hermes) or `parameters` (some Qwen builds).
-            let Some(name) = v["name"].as_str() else {
-                continue;
-            };
-            if !known(name) {
-                continue;
-            }
-            let args = v
-                .get("arguments")
-                .or_else(|| v.get("parameters"))
-                .filter(|value| value.is_object());
-            let Some(args) = args else {
-                continue;
-            };
-            let call = axocoatl_llm::ToolCall {
-                id: format!("call_{}", calls.len()),
-                name: name.to_string(),
-                arguments: args.clone(),
-                provider_metadata: provider_tool_metadata("ollama"),
-            };
-            push_recovered_tool_call(&mut calls, call)?;
-        }
-    }
-
-    Ok(calls)
-}
-
-/// The `<function=…>` and `<tool_call>` shapes of [`parse_text_tool_calls`],
-/// never a bare JSON object. The native provider recovers these alone: a final
-/// answer that quotes `{"name":"bash",…}` must not run it.
-fn parse_markup_tool_calls(
-    content: &str,
-    tool_names: &[String],
-) -> Result<Vec<axocoatl_llm::ToolCall>, ProviderError> {
-    markup_tool_calls(content, tool_names, &mut 0)
-}
-
-/// [`parse_markup_tool_calls`], counting its candidates toward the scan bound
-/// the bare JSON pass after it shares.
-fn markup_tool_calls(
-    content: &str,
-    tool_names: &[String],
-    candidate_count: &mut usize,
-) -> Result<Vec<axocoatl_llm::ToolCall>, ProviderError> {
     let mut calls: Vec<axocoatl_llm::ToolCall> = Vec::new();
+    let mut candidate_count = 0usize;
     let known = |name: &str| tool_names.iter().any(|t| t == name);
 
     // Shape 1: <function=NAME> … <parameter=KEY>VALUE</parameter> … </function>
@@ -284,7 +223,7 @@ fn markup_tool_calls(
         let Some(close) = after[body_start..].find("</function>") else {
             break;
         };
-        note_text_tool_candidate(candidate_count)?;
+        note_text_tool_candidate(&mut candidate_count)?;
         let body = &after[body_start..body_start + close];
         let next = &after[body_start + close + "</function>".len()..];
         if known(&name) {
@@ -325,7 +264,7 @@ fn markup_tool_calls(
         let Some(close) = after.find("</tool_call>") else {
             break;
         };
-        note_text_tool_candidate(candidate_count)?;
+        note_text_tool_candidate(&mut candidate_count)?;
         let inner = &after[..close];
         let next = &after[close + "</tool_call>".len()..];
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(inner.trim()) {
@@ -347,6 +286,44 @@ fn markup_tool_calls(
             }
         }
         rest = next;
+    }
+
+    // Shape 3: a bare JSON object, no wrapper at all —
+    //   {"name":"NAME","arguments":{…}}
+    // qwen2.5-coder emits exactly this. Ollama's template for it does not lift
+    // the call into `tool_calls`, so without this the model appears to do
+    // nothing: it answers in a few tokens, edits no files, and every check then
+    // passes because there is nothing to check. The name gate below is what
+    // keeps this safe — prose is only ever read as a call when it names a tool
+    // that was actually offered.
+    if calls.is_empty() {
+        for candidate in bare_json_objects(content) {
+            note_text_tool_candidate(&mut candidate_count)?;
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(candidate) else {
+                continue;
+            };
+            // Accept `arguments` (OpenAI/Hermes) or `parameters` (some Qwen builds).
+            let Some(name) = v["name"].as_str() else {
+                continue;
+            };
+            if !known(name) {
+                continue;
+            }
+            let args = v
+                .get("arguments")
+                .or_else(|| v.get("parameters"))
+                .filter(|value| value.is_object());
+            let Some(args) = args else {
+                continue;
+            };
+            let call = axocoatl_llm::ToolCall {
+                id: format!("call_{}", calls.len()),
+                name: name.to_string(),
+                arguments: args.clone(),
+                provider_metadata: provider_tool_metadata("ollama"),
+            };
+            push_recovered_tool_call(&mut calls, call)?;
+        }
     }
 
     Ok(calls)

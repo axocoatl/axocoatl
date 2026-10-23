@@ -1298,6 +1298,21 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
             workbench_request(),
         ),
         (many_calls.as_str(), workbench_request()),
+        (
+            "Run.\n<function=delete_all>\n<parameter=path>\n/\n</parameter>\n</function>\n\
+             <function=glob>\n<parameter=pattern>\n*\n</parameter>\n</function>\n</tool_call>",
+            workbench_request(),
+        ),
+        (
+            "Example:\n~~~\n<function=bash>\n<parameter=command>\nrm -rf build\n</parameter>\n\
+             </function>\n",
+            workbench_request(),
+        ),
+        (
+            "Example:\n\n    <function=bash>\n    <parameter=command>\n    rm -rf build\n    \
+             </parameter>\n    </function>\n",
+            workbench_request(),
+        ),
     ] {
         let server = MockServer::start().await;
         valid_profile(&server).await;
@@ -1346,6 +1361,91 @@ async fn only_the_call_markup_ending_the_answer_is_recovered() {
     assert_eq!(response.tool_calls.len(), 1);
     assert_eq!(response.tool_calls[0].name, "glob");
     assert_eq!(response.content, prose);
+}
+
+/// A call quoted inside a parameter is part of that value, and a tag
+/// mentioned inline is prose: only the call blocks themselves run.
+#[tokio::test]
+async fn markup_inside_a_value_or_a_sentence_is_not_a_call() {
+    let command = "echo 'Hermes: <tool_call>{\"name\":\"bash\",\"arguments\":{\"command\":\
+                   \"rm -rf build\"}}</tool_call> or <function=bash>rm</function>' >> docs/format.md";
+    let nested = format!(
+        "I'll add the example to the docs.\n<function=bash>\n<parameter=command>\n{command}\n\
+         </parameter>\n</function>\n</tool_call>"
+    );
+    let prose =
+        "I'll use `<function=bash>` for commands later, but first I need the file list.\n\n";
+    let mentioned = format!(
+        "{prose}<function=glob>\n<parameter=pattern>\nsrc/*.js\n</parameter>\n</function>\n\
+         </tool_call>"
+    );
+    for (content, name, arguments, text) in [
+        (
+            nested.as_str(),
+            "bash",
+            json!({"command": command}),
+            "I'll add the example to the docs.\n",
+        ),
+        (
+            mentioned.as_str(),
+            "glob",
+            json!({"pattern":"src/*.js"}),
+            prose,
+        ),
+    ] {
+        let server = MockServer::start().await;
+        valid_profile(&server).await;
+        response(
+            &server,
+            &[
+                record(content, false),
+                counted(record("", true), json!(2054), json!(55)),
+            ],
+        )
+        .await;
+        let provider = NativeOllamaProvider::connect(workbench_config(&server))
+            .await
+            .unwrap();
+        let response = provider.chat(workbench_request()).await.unwrap();
+        assert_eq!(response.finish_reason, FinishReason::ToolUse, "{content}");
+        assert_eq!(response.tool_calls.len(), 1, "{content}");
+        assert_eq!(response.tool_calls[0].name, name);
+        assert_eq!(response.tool_calls[0].arguments, arguments);
+        assert_eq!(response.content, text);
+    }
+}
+
+/// Several calls ending the answer run in the order written.
+#[tokio::test]
+async fn trailing_calls_keep_their_order() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(
+                "Two reads.\n<function=read_file>\n<parameter=path>\nb.js\n</parameter>\n\
+                 </function>\n</tool_call>\n<tool_call>\n<function=glob>\n<parameter=pattern>\n\
+                 a*\n</parameter>\n</function>\n</tool_call>",
+                false,
+            ),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let response = provider.chat(workbench_request()).await.unwrap();
+    let names: Vec<&str> = response
+        .tool_calls
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect();
+    assert_eq!(names, ["read_file", "glob"]);
+    assert_eq!(response.tool_calls[0].arguments, json!({"path":"b.js"}));
+    assert_ne!(response.tool_calls[0].id, response.tool_calls[1].id);
+    assert_eq!(response.content, "Two reads.\n");
 }
 
 #[tokio::test]

@@ -1122,60 +1122,106 @@ fn typed_text(text: &str, declared: &[&str]) -> Option<Value> {
     None
 }
 
-/// Where the call markup that ends `content` starts: the first marker, not
-/// inside an open code fence, after which there is nothing but call blocks,
-/// `<tool_call>` tags and whitespace. A call quoted in an answer, or one with
-/// prose after it, is not a call the model made.
-fn trailing_call_markup(content: &str) -> Option<usize> {
-    let mut from = 0;
-    while let Some(at) = TEXT_CALL_MARKERS
-        .iter()
-        .filter_map(|marker| content[from..].find(marker))
-        .min()
-    {
-        let start = from + at;
-        if content[..start].matches("```").count().is_multiple_of(2)
-            && only_call_markup(&content[start..])
-        {
-            return Some(start);
-        }
-        from = start + 1;
+/// Calls checked per answer and per run, and the longest answer read for
+/// them: bounds on work done inside the stream.
+const TEXT_CALL_LIMIT: usize = 128;
+const TEXT_CALL_CONTENT_LIMIT: usize = 256 * 1024;
+
+/// A call block's tool name and its parameters, as written.
+type TextCall<'a> = (&'a str, Vec<(&'a str, &'a str)>);
+
+/// One `<function=NAME>` block of Qwen3-Coder's call format at the start of
+/// `text`: its name, its `<parameter=KEY>VALUE</parameter>` pairs and its
+/// length. `None` unless only whitespace and parameter pairs come between the
+/// opening tag and `</function>`. A value is text up to `</parameter>`, never
+/// read for further calls; one newline on each side is the format's own.
+fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
+    let rest = text.strip_prefix("<function=")?;
+    let (name, mut body) = rest.split_once('>')?;
+    if !plain_tag_word(name) {
+        return None;
     }
-    None
+    let mut parameters: Vec<(&str, &str)> = Vec::new();
+    loop {
+        body = body.trim_start();
+        if let Some(after) = body.strip_prefix("</function>") {
+            return Some(((name, parameters), text.len() - after.len()));
+        }
+        let (key, after) = body.strip_prefix("<parameter=")?.split_once('>')?;
+        let (value, after) = after.split_once("</parameter>")?;
+        if !plain_tag_word(key) || parameters.iter().any(|(seen, _)| *seen == key) {
+            return None;
+        }
+        let value = value.strip_prefix('\n').unwrap_or(value);
+        parameters.push((key, value.strip_suffix('\n').unwrap_or(value)));
+        body = after;
+    }
 }
 
-/// Whether `rest` is one or more call blocks with only `<tool_call>` tags and
-/// whitespace around them.
-fn only_call_markup(mut rest: &str) -> bool {
-    let mut calls = 0usize;
+/// A tool or parameter name inside a tag: no whitespace or markup.
+fn plain_tag_word(word: &str) -> bool {
+    !word.is_empty()
+        && !word
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '`'))
+}
+
+/// The `<function=…>` blocks `text` consists of, with only whitespace and
+/// `<tool_call>` tags around them; `None` if anything else is in it.
+fn call_run(mut text: &str) -> Option<Vec<TextCall<'_>>> {
+    let mut blocks = Vec::new();
     loop {
-        rest = rest.trim_start();
-        if rest.is_empty() {
-            return calls > 0;
+        text = text.trim_start();
+        if text.is_empty() {
+            return (!blocks.is_empty()).then_some(blocks);
         }
-        if let Some(after) = rest.strip_prefix("</tool_call>") {
-            rest = after;
-        } else if let Some(after) = rest.strip_prefix("<tool_call>") {
-            let body = after.trim_start();
-            if body.starts_with('{') {
-                let Some(end) = body.find("</tool_call>") else {
-                    return false;
-                };
-                rest = &body[end + "</tool_call>".len()..];
-                calls += 1;
-            } else {
-                rest = after;
-            }
-        } else if rest.starts_with("<function=") {
-            let Some(end) = rest.find("</function>") else {
-                return false;
-            };
-            rest = &rest[end + "</function>".len()..];
-            calls += 1;
-        } else {
-            return false;
+        if let Some(after) = text
+            .strip_prefix("<tool_call>")
+            .or_else(|| text.strip_prefix("</tool_call>"))
+        {
+            text = after;
+            continue;
+        }
+        let (block, used) = function_block(text)?;
+        blocks.push(block);
+        if blocks.len() > TEXT_CALL_LIMIT {
+            return None;
+        }
+        text = &text[used..];
+    }
+}
+
+/// The calls that end `content`, and where they start: a run of
+/// `<function=…>` blocks ([`call_run`]) that begins a line outside a code
+/// fence (three backticks or tildes) and goes to the end. A call quoted in an answer (fenced,
+/// indented, inline, or with prose after it) is not one the model made.
+fn trailing_call_run(content: &str) -> Option<(usize, Vec<TextCall<'_>>)> {
+    if content.len() > TEXT_CALL_CONTENT_LIMIT {
+        return None;
+    }
+    let mut fenced = false;
+    let mut tried = 0usize;
+    let mut at = 0usize;
+    for line in content.split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced || !(line.starts_with("<function=") || line.starts_with("<tool_call>")) {
+            continue;
+        }
+        tried += 1;
+        if tried > TEXT_CALL_LIMIT {
+            return None;
+        }
+        if let Some(run) = call_run(&content[start..]) {
+            return Some((start, run));
         }
     }
+    None
 }
 
 struct NativeResponse {
@@ -1248,20 +1294,14 @@ impl NativeResponse {
     }
     /// Calls Qwen3-Coder wrote as text after sampling a plain `<` instead of
     /// its `<tool_call>` token: Ollama's parser lifts only calls that open with
-    /// that token and returns the rest as content, ended by `stop`. Only call
-    /// markup that ends the answer is read ([`trailing_call_markup`]), only for
-    /// offered tools, never bare JSON. Each call gets an id no call in the
-    /// history has, and its text values the types the tool's schema declares,
-    /// as Ollama's own parser gives them. `None` (the text stays the answer)
-    /// when there is no such markup or a call in it does not validate.
+    /// that token and returns the rest as content, ended by `stop`. Only the
+    /// run of call blocks that ends the answer is read ([`trailing_call_run`]),
+    /// and only when every block names an offered tool; never bare JSON. Each
+    /// call gets an id no call in the history has, and its text values the
+    /// types the tool's schema declares, as Ollama's own parser gives them.
+    /// `None` (the text stays the answer) otherwise.
     fn recover_text_calls(&self) -> Option<(usize, Vec<ToolCall>)> {
-        let start = trailing_call_markup(&self.content)?;
-        let names: Vec<String> = self
-            .request
-            .tools
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect();
+        let (start, run) = trailing_call_run(&self.content)?;
         let used: HashSet<&str> = self
             .request
             .messages
@@ -1270,28 +1310,30 @@ impl NativeResponse {
             .map(|call| call.id.as_str())
             .collect();
         let mut next = 0usize;
-        let mut calls = super::parse_markup_tool_calls(&self.content[start..], &names).ok()?;
-        if calls.is_empty() {
-            return None;
-        }
-        for call in &mut calls {
-            call.id = loop {
+        let mut calls = Vec::with_capacity(run.len());
+        for (name, parameters) in run {
+            let tool = self.request.tools.iter().find(|tool| tool.name == name)?;
+            let mut arguments = Value::Object(
+                parameters
+                    .into_iter()
+                    .map(|(key, value)| (key.to_owned(), Value::String(value.to_owned())))
+                    .collect(),
+            );
+            coerce_text_arguments(&mut arguments, &tool.parameters);
+            validate_response_tool_call(PROVIDER, name, &arguments, &self.request.tools).ok()?;
+            let id = loop {
                 let id = format!("call_text_{next}");
                 next += 1;
                 if !used.contains(id.as_str()) {
                     break id;
                 }
             };
-            if let Some(tool) = self
-                .request
-                .tools
-                .iter()
-                .find(|tool| tool.name == call.name)
-            {
-                coerce_text_arguments(&mut call.arguments, &tool.parameters);
-            }
-            validate_response_tool_call(PROVIDER, &call.name, &call.arguments, &self.request.tools)
-                .ok()?;
+            calls.push(ToolCall {
+                id,
+                name: name.to_owned(),
+                arguments,
+                provider_metadata: provider_tool_metadata(PROVIDER),
+            });
         }
         Some((start, calls))
     }
