@@ -105,6 +105,16 @@ and the daemon serves it as WebKit on Linux. Whether the browser keeps a
 `Domain=localhost` cookie is the engine's own: WebKit on macOS keeps it,
 WebKit on Linux refuses it, and the journeys assert each.
 
+WebKit browsers on Linux (GNOME Web, WebKitGTK, WPE) send WebKit's own
+`X11; Linux <machine>` user agent, which neither the daemon nor the
+workbench takes for Safari. So in WebKit on Linux `preview-cookies.test.mjs`
+runs its journeys a second time in contexts with that user agent (named
+"WebKit on Linux (X11 user agent): …"): Open full preview and the Preview's
+own `window.open` open the Preview in a tab, a top-level Preview runs through
+the real proxy with its cookies and its WebSocket upgrade, and the app
+receives the X11 user agent, on the engine those browsers use. They do not
+run on macOS, where WebKit's cookie jar is Safari's.
+
 On Linux, Playwright's WebKit loads everything through one network process
 that uses the system's libsoup, and that process sometimes crashes when a
 reload or a navigation cancels requests that are still in flight: libsoup
@@ -453,7 +463,12 @@ the Preview and failure paths called out below.
   loop. Its third journey shows the real Preview in the workbench: in WebKit
   Open full preview has no address, the frame has no
   `allow-popups`, and the Preview's `window.open` of its address returns null
-  and opens nothing. A real Command-click (Control-click on Linux) on a link
+  and opens nothing; elsewhere Open full preview opens the Preview's address
+  in a tab with no opener, and the Preview's own `window.open`, on a real
+  click in its frame, opens one too, both served by the app through the
+  proxy. In WebKit on Linux every journey of this file runs again with
+  WebKit's own `X11; Linux` user agent ("WebKit (Safari)" above), which takes
+  that path. A real Command-click (Control-click on Linux) on a link
   inside the Preview's frame, and inside the Files view's frame for an HTML
   file, opens a tab: in WebKit on macOS the daemon's refusal page (403, no
   script, a link to the workbench), with no request to the app and no cookie
@@ -466,7 +481,8 @@ the Preview and failure paths called out below.
   engine the app received no token cookie and the workbench stays signed in.
   Its last journey opens a Preview address typed into a tab and one reached
   by a redirect from another site: in WebKit both get the refusal
-  page and the app none of the requests; in Chromium the app. In every engine a
+  page and the app none of the requests; elsewhere (Chromium, and WebKit
+  with the X11 user agent) the app. In every engine a
   page on the legacy `/api/sessions/<id>/proxy/<port>` path, signed in, gets
   403 and a line of text and the app is not asked, while `fetch()` from the
   workbench and a program with the token still reach it and its
