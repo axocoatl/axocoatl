@@ -215,10 +215,12 @@ From every other upstream `Set-Cookie` they remove the `Domain` attribute, so
 the browser keeps an app's cookies host-only on its own Preview origin.
 
 The workbench itself has one address: `127.0.0.1` on the listener port. The
-sign-in link names it, and the exact root document opened at `localhost` or
-another loopback address (`[::1]`, for example) redirects there on the same
-listener, query included, without redirecting API, health, asset, or
-non-loopback operator requests. A cookie set for a domain such as
+sign-in link names it, and with the local token the exact root document opened
+at `localhost` or another loopback address (`[::1]`, for example) redirects
+there on the same listener, query included, without redirecting API, health,
+asset, or non-loopback operator requests. (With configured credentials or
+`allow_unauthenticated` the browser holds no sign-in cookie, and the workbench
+is served at the loopback name the request used.) A cookie set for a domain such as
 `Domain=localhost` never matches an IP address, so cookies that pages on
 `localhost` and `*.localhost` addresses set never reach the workbench
 ([see below](#safari-shares-domainlocalhost-cookies)). The redirect from

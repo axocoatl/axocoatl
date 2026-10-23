@@ -93,12 +93,16 @@ so in Safari a Preview never runs top-level: the daemon answers a request for
 a Preview page Safari would show in a tab or window of its own with `403` and a
 page that says why, and the workbench keeps Previews embedded and offers no
 **Open full preview**
-([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
-for the exact `/` workbench document on `localhost` or a loopback IP literal
-other than `127.0.0.1` answers `307 Temporary Redirect` to `127.0.0.1` on the
-same listener and preserves the query; from `localhost` it also removes this
-daemon's two sign-in cookies there (`Max-Age=0`), where sign-in links before
-1.5.0 stored them. API, health, and asset URLs do not redirect.
+([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). With the local
+token, a browser GET or HEAD for the exact `/` workbench document on
+`localhost` or a loopback IP literal other than `127.0.0.1` answers
+`307 Temporary Redirect` to `127.0.0.1` on the same listener and preserves the
+query; from `localhost` it also removes this daemon's two sign-in cookies there
+(`Max-Age=0`), where sign-in links before 1.5.0 stored them. API, health, and
+asset URLs do not redirect. With configured credentials or
+`allow_unauthenticated` there is no sign-in cookie and no redirect: `/` is
+served at the loopback name the request used, so a proxy on the same host may
+send `Host: localhost` or `Host: 127.0.0.1`.
 
 ## App, assets, and health
 

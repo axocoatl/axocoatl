@@ -675,10 +675,11 @@ async fn local_dashboard(
     // `localhost` and other loopback addresses first move to `127.0.0.1`
     // (query included), so the cookie is set for the one host the workbench
     // uses, which a `Domain=localhost` cookie never reaches.
-    if crate::routes::canonical_workbench_location(request.headers(), request.uri()).is_some() {
-        let stale = stale_localhost_cookies(local, request.headers());
-        let mut response = next.run(request).await;
-        for clear in stale {
+    if let Some(location) =
+        crate::routes::canonical_workbench_location(request.headers(), request.uri())
+    {
+        let mut response = crate::routes::workbench_address_redirect(location);
+        for clear in stale_localhost_cookies(local, request.headers()) {
             response.headers_mut().append(header::SET_COOKIE, clear);
         }
         return response;
@@ -1887,6 +1888,29 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
         assert!(set_cookies(&response).is_empty());
+    }
+
+    /// Without the local token no sign-in cookie exists for a page to
+    /// shadow, and a proxy on the same host (`allow_unauthenticated`) may
+    /// send any loopback name: the documented `Host: localhost` keeps
+    /// getting the workbench, not a redirect to an address the proxy's
+    /// browser cannot reach.
+    #[tokio::test]
+    async fn without_the_local_token_the_workbench_is_served_at_any_loopback_name() {
+        let configured = AuthConfig::new(vec!["operator-key".into()], vec![]);
+        for (config, credential) in [
+            (AuthConfig::default(), None),
+            (configured, Some(("x-api-key", "operator-key"))),
+        ] {
+            for host in ["localhost:18080", "127.0.0.1:18080", "[::1]:18080"] {
+                let mut headers = vec![("host", host)];
+                headers.extend(credential);
+                let response = send(&config, Method::GET, "/?session=s1", &headers).await;
+                assert_eq!(response.status(), StatusCode::OK, "{host}");
+                assert!(response.headers().get(header::LOCATION).is_none());
+                assert!(body_text(response).await.contains("<html"), "{host}");
+            }
+        }
     }
 
     #[tokio::test]

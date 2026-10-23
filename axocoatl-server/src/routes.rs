@@ -5,7 +5,7 @@ pub use session_knowledge_routes::*;
 use axum::{
     extract::{
         ws::{Message as AxumWsMessage, WebSocket as AxumWebSocket},
-        ConnectInfo, FromRequestParts, OriginalUri, Path, Query, State, WebSocketUpgrade,
+        ConnectInfo, FromRequestParts, Path, Query, State, WebSocketUpgrade,
     },
     http::{header, uri::Authority, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::Next,
@@ -27,26 +27,30 @@ use crate::AppState;
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 
 /// The app. One route, because there is one product: a session, its chat, and
-/// modules that open around it.
-pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Response {
-    if let Some(location) = canonical_workbench_location(&headers, &uri) {
-        let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
-        let response_headers = response.headers_mut();
-        response_headers.insert(header::LOCATION, location);
-        // The query may hold a sign-in token; keep it out of Referer and
-        // caches on the way to the canonical host.
-        response_headers.insert(
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("no-referrer"),
-        );
-        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return response;
-    }
+/// modules that open around it. With the local API token, the token check
+/// in front of it first moves other loopback names to [`WORKBENCH_HOST`]
+/// ([`workbench_address_redirect`]).
+pub async fn dashboard() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         DASHBOARD_HTML,
     )
         .into_response()
+}
+
+/// The redirect to [`canonical_workbench_location`].
+pub(crate) fn workbench_address_redirect(location: HeaderValue) -> Response {
+    let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::LOCATION, location);
+    // The query may hold a sign-in token; keep it out of Referer and caches
+    // on the way to the canonical host.
+    response_headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// The one address the browser workbench is served at.
@@ -59,10 +63,13 @@ pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Res
 pub(crate) const WORKBENCH_HOST: &str = "127.0.0.1";
 
 /// Move a workbench opened at `localhost` or another loopback address to
-/// [`WORKBENCH_HOST`] on the same listener port, query included. Only the
-/// exact dashboard route calls this helper: API, health, asset, CLI, and
-/// non-loopback operator hosts never redirect. Local token auth calls it too,
-/// so sign-in always happens on the canonical host.
+/// [`WORKBENCH_HOST`] on the same listener port, query included. Only local
+/// token auth calls this, for the exact dashboard route, so sign-in always
+/// happens on the canonical host: API, health, asset, CLI, and non-loopback
+/// operator hosts never redirect. Configured credentials and
+/// `allow_unauthenticated` set no cookie for a page to shadow, and a proxy
+/// on the same host may send any loopback name, `Host: localhost` included,
+/// so the workbench is served at the name the request used.
 pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
     let authority = headers
         .get(header::HOST)
@@ -9301,12 +9308,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn dashboard_canonical_redirect_sends_no_referrer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "localhost:18080".parse().unwrap());
-        let response = dashboard(headers, OriginalUri("/?token=abc".parse().unwrap())).await;
+    #[test]
+    fn workbench_address_redirect_sends_no_referrer() {
+        let response =
+            workbench_address_redirect(HeaderValue::from_static("http://127.0.0.1:18080/"));
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("http://127.0.0.1:18080/")
+        );
         assert_eq!(
             response
                 .headers()
