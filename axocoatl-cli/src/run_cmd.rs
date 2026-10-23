@@ -943,7 +943,7 @@ async fn run(
     // A missing toolchain image is built here, its progress on stderr, once
     // the daemon found nothing else that stops the run.
     toolchain::prepare_image(&daemon, &plan, &request, &args.config, console).await?;
-    let accepted = admit(&daemon, &request, console, note_after).await?;
+    let accepted = admit(&daemon, &request, console, note_after, ctrl_c_pressed()).await?;
     *admitted = true;
     // Only an admitted run starts: a refused one prints its reason and
     // nothing that says otherwise.
@@ -1067,21 +1067,50 @@ async fn run(
 /// `POST /api/runs`. The daemon prepares the Session's environment before
 /// it answers, which can take minutes (an image pull, the setup command);
 /// when it takes longer than `note_after`, say that the command is waiting,
-/// without saying that the run started.
+/// without saying that the run started. `interrupt` (Ctrl-C) ends the wait
+/// at once as an interrupted run: the request goes, and the daemon, which
+/// finishes the admission on its own, stops a run it admits that way
+/// before its first turn.
 async fn admit(
     daemon: &Daemon,
     request: &serde_json::Value,
     console: &mut Console,
     note_after: Duration,
+    interrupt: impl std::future::Future<Output = ()>,
 ) -> Result<RunAccepted, Failure> {
     let admission = daemon.post_json::<RunAccepted>("/api/runs", request);
     tokio::pin!(admission);
+    tokio::pin!(interrupt);
     tokio::select! {
         accepted = &mut admission => return accepted.map_err(plain_refusal),
+        () = &mut interrupt => return Err(interrupted_admission()),
         () = tokio::time::sleep(note_after) => {}
     }
     console.note(ADMISSION_NOTE);
-    admission.await.map_err(plain_refusal)
+    tokio::select! {
+        accepted = admission => accepted.map_err(plain_refusal),
+        () = interrupt => Err(interrupted_admission()),
+    }
+}
+
+/// Ctrl-C, once it is pressed. Never, when its handler cannot be installed:
+/// Ctrl-C then ends the process as it would without one.
+async fn ctrl_c_pressed() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Ctrl-C while the daemon was still admitting the run (exit code 6).
+fn interrupted_admission() -> Failure {
+    Failure {
+        code: exit_code::INTERRUPTED,
+        message: "interrupted (Ctrl-C) while the daemon was admitting the run. The daemon \
+                  finishes the admission on its own: a run it admits stops before its first \
+                  turn, as interrupted, and its Session's containers stop with it; `GET \
+                  /api/runs` lists it"
+            .into(),
+    }
 }
 
 /// An admission refusal in the daemon's own words: an infrastructure
@@ -2570,6 +2599,67 @@ mod tests {
         .await;
         assert_eq!(code, exit_code::USAGE);
         assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
+    }
+
+    /// Ctrl-C while the daemon admits the run ends the command at once with
+    /// exit code 6 and says what the daemon does with the run; the request
+    /// was sent, and its answer is not waited for.
+    #[tokio::test]
+    async fn ctrl_c_during_admission_ends_the_command_as_interrupted() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(
+                ResponseTemplate::new(202)
+                    .set_body_json(serde_json::json!({"run_id": "run-1", "session_id": "ses-1",
+                        "workspace_id": "wsp-1", "warnings": []}))
+                    .set_delay(Duration::from_secs(60)),
+            )
+            .mount(&server)
+            .await;
+        let daemon = Daemon {
+            base: server.uri(),
+            token: None,
+            client: reqwest::Client::new(),
+        };
+        let started = std::time::Instant::now();
+        let (mut console, out, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_millis(20),
+            tokio::time::sleep(Duration::from_millis(300)),
+        )
+        .await
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert_eq!(failure.code, exit_code::INTERRUPTED, "{}", failure.message);
+        assert!(
+            failure
+                .message
+                .contains("a run it admits stops before its first turn, as interrupted"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(out.text(), "");
+        assert_eq!(err.text(), format!("{ADMISSION_NOTE}\n"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        // Pressed before the waiting note is due, the note is never printed.
+        let (mut console, _, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_secs(60),
+            std::future::ready(()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, exit_code::INTERRUPTED);
+        assert_eq!(err.text(), "");
     }
 
     /// A run the daemon refused at admission (or could not admit) has no

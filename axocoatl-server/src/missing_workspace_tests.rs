@@ -21,7 +21,7 @@ use tower::ServiceExt;
 const CHILD: &str = "AXOCOATL_MISSING_WORKSPACE_ROUTE_CHILD";
 
 /// One writer that may only read files, no checks and no review.
-const LOADOUT: &str = r#"
+pub(crate) const LOADOUT: &str = r#"
 schema: axocoatl.loadout/1
 id: folder
 version: 1
@@ -64,7 +64,7 @@ esac
     format!("{}:/usr/bin:/bin", bin.display())
 }
 
-async fn call(
+pub(crate) async fn call(
     router: &Router,
     method: Method,
     uri: &str,
@@ -101,7 +101,7 @@ const MODEL: &str = "folder-model:latest";
 /// [`MODEL`] (version, cloud mode, model, a generation-free load, its
 /// loaded context, and the two contract probes). No turn ever runs: every
 /// run's environment fails under the fake Podman. Returns its base URL.
-async fn ollama() -> String {
+pub(crate) async fn ollama() -> String {
     use axum::routing::{get, post};
     use axum::Json;
     use serde_json::{json, Value};
@@ -167,7 +167,7 @@ async fn ollama() -> String {
     format!("http://{address}")
 }
 
-fn run(repo: &Path, id: &str) -> serde_json::Value {
+pub(crate) fn run(repo: &Path, id: &str) -> serde_json::Value {
     serde_json::json!({
         "loadout": "folder",
         "task": "Say done.",

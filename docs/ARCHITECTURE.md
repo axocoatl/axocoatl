@@ -697,14 +697,22 @@ Workspace, which Open workspace… registers only after the person confirms it),
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
-repository HEAD and the paths that were dirty. It is idempotent on `request_id`. Any
-failure after the Session exists closes it again (`close_refused_run_session`). A run
+repository HEAD and the paths that were dirty. It is idempotent on `request_id`; a repeat
+while the first is being admitted is a conflict (`LoadoutRuns::admitting`, cleared by a drop
+guard however admission ends). Any failure after the Session exists closes it again
+(`close_refused_run_session`), and a run record made before a later write failed is ended
+with the refusal (`end_refused_run_record`). The server runs admission in a task of its
+own (`admit_run` in `routes_loadouts.rs`) and waits for its answer, so a client that goes
+away (Ctrl-C in `axocoatl run`) drops only the wait: admission and its clean-up run to
+their end, and a run admitted with nobody to answer is stopped before its first turn
+(`stop_unanswered_loadout_run`), which ends it as interrupted and stops its runtime. A run
 stops its Session's runtime when it ends (`RunHost::stop_session_runtime`, before the
 network summary, the receipt and the `Ended` event; `stop_loadout_run_runtime` on the
 daemon, under the Workspace operation and the Session's start lock, refused while a turn
-of it runs), and so do the environment-failure path and a driver error (`fail_run`): the
-containers go as at a daemon stop, the Session stays open, and `ensure_sandbox` starts it
-again on demand. A stop that fails is the warning `session_runtime_not_stopped`.
+of it runs), and so do the environment-failure path (`end_run_at_environment`) and a
+driver error (`fail_run`): the containers go as at a daemon stop, the Session stays open,
+and `ensure_sandbox` starts it again on demand. A stop that fails is the warning
+`session_runtime_not_stopped`.
 
 **Per-Session sandbox.** Every place the daemon reads the network mode or the workload plan
 for a Session goes through `session_sandbox_policy`: an unbound Session gets the global

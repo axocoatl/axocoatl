@@ -1005,6 +1005,9 @@ async fn wait_for_shutdown_request(state: AppState) {
 mod missing_workspace_tests;
 
 #[cfg(all(test, unix))]
+mod run_admission_tests;
+
+#[cfg(all(test, unix))]
 mod workspace_scope_tests;
 
 #[cfg(test)]

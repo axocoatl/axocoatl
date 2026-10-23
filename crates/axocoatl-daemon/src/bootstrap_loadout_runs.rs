@@ -75,6 +75,22 @@ pub(crate) struct LoadoutRuns {
     pub(crate) openrouter_catalog: StdMutex<Option<String>>,
 }
 
+/// A request id being admitted, until the admission ends however it ends.
+struct Admitting<'a> {
+    runs: &'a LoadoutRuns,
+    request_id: &'a str,
+}
+
+impl Drop for Admitting<'_> {
+    fn drop(&mut self) {
+        self.runs
+            .admitting
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(self.request_id);
+    }
+}
+
 impl LoadoutRuns {
     pub(crate) fn open(data_root: &SecureDir) -> Self {
         Self {
@@ -2449,44 +2465,13 @@ impl AxocoatlDaemon {
                         detail
                     }
                 };
-                let mut outcome =
-                    ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
-                outcome.notes = resolved.notes.clone();
-                // The run ends here, so its Session's runtime stops; then what
-                // the Session's record holds, setup included, is summed up.
-                if let Err(error) = self.stop_loadout_run_runtime(&session.id).await {
-                    let warning = crate::loadout::driver::session_runtime_not_stopped(
-                        &session.id,
-                        &error.to_string(),
-                    );
-                    let _ = store.append(
-                        &run_id,
-                        &RunEvent::Warning {
-                            at_ms: now_ms(),
-                            warning: warning.clone(),
-                        },
-                    );
-                    outcome.warnings.push(warning);
-                }
-                outcome.network = self.loadout_network_summary(&session.id).await;
-                if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
-                    let _ = store.append(
-                        &run_id,
-                        &RunEvent::Warning {
-                            at_ms: now_ms(),
-                            warning: warning.clone(),
-                        },
-                    );
-                    outcome.warnings.push(warning);
-                }
-                let _ = store.append(
-                    &run_id,
-                    &RunEvent::Ended {
-                        at_ms: now_ms(),
-                        outcome: Box::new(outcome.clone()),
-                    },
-                );
-                store.finish(&run_id, &outcome).map_err(record_error)?;
+                self.end_run_at_environment(
+                    &manifest,
+                    &detail,
+                    warnings.clone(),
+                    resolved.notes.clone(),
+                )
+                .await?;
             }
             let wall_clock =
                 crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
@@ -2510,7 +2495,8 @@ impl AxocoatlDaemon {
             ))
         }
         .await;
-        if admitted.is_err() {
+        if let Err(error) = &admitted {
+            self.end_refused_run_record(&refused_run, error);
             self.close_refused_run_session(&session_id, &refused_run)
                 .await;
         }
@@ -2521,7 +2507,10 @@ impl AxocoatlDaemon {
     /// Workspace, create the Session bound to the loadout, approve exactly
     /// the loadout's environment, write the run manifest. The server then
     /// starts the driver task. A repeat of the same `request_id` returns the
-    /// same run; the same id with another request is refused.
+    /// same run; the same id with another request is refused, and so is a
+    /// repeat while the first is being admitted. Admission cleans up what it
+    /// made only when it runs to its end, so the server runs it in a task of
+    /// its own that a client going away does not drop.
     pub async fn admit_loadout_run(
         &self,
         request: RunRequest,
@@ -2565,13 +2554,13 @@ impl AxocoatlDaemon {
                 )));
             }
         }
-        let result = self.admit_loadout_run_inner(&request).await;
-        self.loadout_runs
-            .admitting
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&request.request_id);
-        let (accepted, context) = result?;
+        // The request id is no longer being admitted once this ends, however
+        // it ends; an admitted one is recorded as admitted first.
+        let _admitting = Admitting {
+            runs: &self.loadout_runs,
+            request_id: &request.request_id,
+        };
+        let (accepted, context) = self.admit_loadout_run_inner(&request).await?;
         self.loadout_runs
             .admitted
             .lock()
@@ -2815,6 +2804,26 @@ impl AxocoatlDaemon {
     /// Record that a person asked to stop `run_id`, and stop its Session's
     /// active turn.
     pub async fn request_loadout_run_stop(&self, run_id: &str) -> Result<(), DaemonError> {
+        self.stop_loadout_run_because(run_id, "a person asked to stop the run")
+            .await
+    }
+
+    /// Stop `run_id`, which admission accepted after the client that asked
+    /// for it went away (Ctrl-C while `axocoatl run` waited for admission):
+    /// nobody follows the run, so it stops before its first turn, as Ctrl-C
+    /// after admission stops it, and its Session's runtime stops with it.
+    pub async fn stop_unanswered_loadout_run(&self, run_id: &str) -> Result<(), DaemonError> {
+        self.stop_loadout_run_because(
+            run_id,
+            "the client that asked for the run went away before admission answered, so \
+             the run stops before its first turn",
+        )
+        .await
+    }
+
+    /// Record that `run_id` is to stop, and why, and stop its Session's
+    /// active turn.
+    async fn stop_loadout_run_because(&self, run_id: &str, why: &str) -> Result<(), DaemonError> {
         let store = self.loadout_runs.store()?;
         let manifest = store.manifest(run_id).map_err(record_error)?;
         if store.is_finished(run_id).map_err(record_error)? {
@@ -2830,7 +2839,7 @@ impl AxocoatlDaemon {
             &RunEvent::Phase {
                 at_ms: now_ms(),
                 phase: "stopping".into(),
-                detail: "a person asked to stop the run".into(),
+                detail: why.into(),
             },
         );
         if let Some(active) = self.active_session_turn(&manifest.session_id).await? {
@@ -2908,6 +2917,90 @@ impl AxocoatlDaemon {
         }
         self.stop_session_actors_checked(session_id).await?;
         self.stop_session_sandbox_checked(session_id).await
+    }
+
+    /// End `manifest`'s run at its environment, before any turn, with
+    /// `detail` (what the setup printed, or why the environment cannot run
+    /// it): the Session's runtime stops, as at the end of every run, since
+    /// a toolchain setup or a helper check may have left its container and
+    /// egress sidecar running; then what the Session's record holds, setup
+    /// included, is summed up and the Outcome sealed and written. A stop
+    /// that fails is the warning `session_runtime_not_stopped`.
+    async fn end_run_at_environment(
+        &self,
+        manifest: &RunManifest,
+        detail: &str,
+        warnings: Vec<RunWarning>,
+        notes: Vec<String>,
+    ) -> Result<RunOutcome, DaemonError> {
+        let store = self.loadout_runs.store()?;
+        let (run_id, session_id) = (&manifest.run_id, &manifest.session_id);
+        let mut outcome = ended_outcome(manifest, head(detail, 16 * 1024), warnings);
+        outcome.notes = notes;
+        if let Err(error) = self.stop_loadout_run_runtime(session_id).await {
+            let warning =
+                crate::loadout::driver::session_runtime_not_stopped(session_id, &error.to_string());
+            let _ = store.append(
+                run_id,
+                &RunEvent::Warning {
+                    at_ms: now_ms(),
+                    warning: warning.clone(),
+                },
+            );
+            outcome.warnings.push(warning);
+        }
+        outcome.network = self.loadout_network_summary(session_id).await;
+        if let Some(warning) = self.seal_or_warn(run_id, &outcome).await {
+            let _ = store.append(
+                run_id,
+                &RunEvent::Warning {
+                    at_ms: now_ms(),
+                    warning: warning.clone(),
+                },
+            );
+            outcome.warnings.push(warning);
+        }
+        let _ = store.append(
+            run_id,
+            &RunEvent::Ended {
+                at_ms: now_ms(),
+                outcome: Box::new(outcome.clone()),
+            },
+        );
+        store.finish(run_id, &outcome).map_err(record_error)?;
+        Ok(outcome)
+    }
+
+    /// End the record of `run_id`, which admission refused with `error`
+    /// after the record was made (a later write failed), so the run is
+    /// listed as failed with that reason instead of preparing until the
+    /// daemon restarts. A run with no record, or one that already ended, is
+    /// left; a record that cannot be written now is logged.
+    fn end_refused_run_record(&self, run_id: &str, error: &DaemonError) {
+        let Ok(store) = self.loadout_runs.store() else {
+            return;
+        };
+        let Ok(manifest) = store.manifest(run_id) else {
+            return;
+        };
+        if !matches!(store.outcome(run_id), Ok(None)) {
+            return;
+        }
+        let outcome = ended_outcome(
+            &manifest,
+            format!("the run was refused after its record was made: {error}"),
+            Vec::new(),
+        );
+        let _ = store.append(
+            run_id,
+            &RunEvent::Ended {
+                at_ms: now_ms(),
+                outcome: Box::new(outcome.clone()),
+            },
+        );
+        if let Err(error) = store.finish(run_id, &outcome) {
+            tracing::warn!(run = %run_id, %error, "ending a refused run's record failed");
+        }
     }
 
     /// Close the Session of a run that admission refused after creating it
