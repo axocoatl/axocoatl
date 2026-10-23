@@ -607,6 +607,24 @@ if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- "$expected"; then
 else
   fail "newuser-mac-ci.sh refusal (exit $status): $out"
 fi
+out=$("$script_dir/browser-webkit-mac.sh" --help 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- 'C1-browser-webkit'; then
+  pass "browser-webkit-mac.sh --help"
+else
+  fail "browser-webkit-mac.sh --help (exit $status)"
+fi
+case "$(uname -s)" in
+  Darwin) expected="--tarball must be the candidate's macOS release archive" ;;
+  *) expected='runs the WebKit journeys on a Mac' ;;
+esac
+out=$("$script_dir/browser-webkit-mac.sh" --tarball "$work/nonexistent.tar.gz" 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- "$expected"; then
+  pass "browser-webkit-mac.sh refuses before doing anything ($expected)"
+else
+  fail "browser-webkit-mac.sh refusal (exit $status): $out"
+fi
 
 # --- newuser-linux.sh end to end against a stand-in axocoatl (it follows
 # the shared onboard/doctor/run contract) and the real stub model server.

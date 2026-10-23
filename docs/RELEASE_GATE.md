@@ -305,7 +305,8 @@ runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
   suites, and the `sandbox-session` example), `daemon` (`axocoatl-daemon`:
   native activations, egress routes, loadout and audit runs, the pinned Claude
   Code and Codex from their recipe images, the browser tools, live web search
-  and the live `npm`, `crates`, `alpine` and `debian` presets), `cli`
+  and the live `npm`, `crates`, `github`, `alpine`, `debian` and `ubuntu`
+  presets), `cli`
   (`axocoatl-cli`) and `other` (`axocoatl-memory` and `axocoatl-session`).
   `prepare` pulls the images pinned by digest and builds the supervisor test
   images, the browser image and the recipe images with this commit's CLI;
@@ -484,7 +485,9 @@ succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
 candidate's macOS archive (checked against its `.sha256`, so nothing is
 built) on the Mac's running Podman machine, with the Preview's Session image
 (`node:20-slim`, pulled by the digest CI pins) required, so no Preview
-journey is skipped. Safari's own cookie behaviour exists only in WebKit on
+journey is skipped, and `rust:bookworm` (pulled by the digest CI pins) for
+the native turn and coordination reference journeys, which run real
+Sessions as on CI's Linux legs. Safari's own cookie behaviour exists only in WebKit on
 macOS, and the journeys that assert it with a real Preview need a Session on
 Podman: CI's macOS WebKit leg has no Podman, and its Linux legs have Linux
 WebKit. The suite's log is the path's evidence. It does not need the gate

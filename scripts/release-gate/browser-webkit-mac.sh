@@ -8,7 +8,8 @@
 # have Podman but Linux WebKit. This runs scripts/verify-product-browser-gate.sh
 # in WebKit with the candidate's own macOS binary (from its release archive,
 # checked against its .sha256) on this Mac's running Podman machine, with
-# the Preview's Session image required, so no Preview journey is skipped.
+# the Preview's Session image required, so no Preview journey is skipped,
+# and the image the native turn and coordination reference journeys run.
 # Run it in any account of the gate Mac with Node 22 and a running Podman
 # machine, after the candidate's archives are built. Evidence goes to
 # <evidence-root>/<version>/<commit>/<label>.json and its folder.
@@ -33,8 +34,10 @@ usage() {
   exit 2
 }
 
-# The Preview journeys' Session image, pinned as CI pins it (ci.yml).
+# The Session images the journeys run, pinned as CI pins them (ci.yml): the
+# Preview journeys' and the native turn and coordination reference ones'.
 node_image=docker.io/library/node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+rust_image=docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 tarball='' label=C1-browser-webkit commit='' evidence_root="$gate_repo/release-evidence"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -89,19 +92,25 @@ export GATE_AXOCOATL_VERSION
 gate_check "the binary is $version" "$("$binary" --version 2>&1 | head -n 1)" -- \
   sh -c '"$1" --version | grep -Fq -- "$2"' gate-version "$binary" "$version"
 
-# 2. Podman answers, and the Preview's Session image is there (pulled by
+# 2. Podman answers, and the Session images are there (each pulled by
 # digest and named as the journeys look it up when it is not).
 gate_step "Podman answers" -- podman info --format '{{.Host.Arch}} {{.Version.Version}}'
 if ! podman image exists docker.io/library/node:20-slim; then
   gate_step "pull the Preview's Session image" -- /bin/bash -c \
     'podman pull "$1" && podman tag "$1" docker.io/library/node:20-slim' gate-pull "$node_image"
 fi
+if ! podman image exists docker.io/library/rust:bookworm; then
+  gate_step "pull the native turn and reference journeys' Session image" -- /bin/bash -c \
+    'podman pull "$1" && podman tag "$1" docker.io/library/rust:bookworm' gate-pull "$rust_image"
+fi
 
 # 3. Every journey in WebKit with this binary; a missing Session image fails
-# the Preview journeys instead of skipping them.
+# the Preview journeys instead of skipping them, and the coordination
+# reference journey runs a real Session as on CI's Linux legs.
 gate_step "product browser journeys in WebKit on macOS with Podman" -- env \
   AXO_BROWSER_ENGINE=webkit AXO_BROWSER_PROFILE=release AXO_BROWSER_BINARY="$binary" \
-  AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1 "$gate_repo/scripts/verify-product-browser-gate.sh"
+  AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1 AXOCOATL_REFERENCE_RUNTIME_IMAGE=docker.io/library/rust:bookworm \
+  "$gate_repo/scripts/verify-product-browser-gate.sh"
 summary=$(grep -E '^Browser regressions \(webkit\):' "$GATE_ATTACH/logs/$(gate_slug "product browser journeys in WebKit on macOS with Podman").log" | tail -n 1)
 gate_record "the run's summary" "$([ -n "$summary" ] && echo pass || echo fail)" '' '' '' "${summary:-no summary line}"
 
