@@ -296,7 +296,9 @@ pub fn ollama_model_problem(
         ProviderError::InvalidRequest { message, .. } => {
             let mut reason = message.clone();
             let lower = message.to_ascii_lowercase();
-            if lower.contains("gguf") || lower.contains("mlx") || lower.contains("safetensors") {
+            if (lower.contains("gguf") || lower.contains("mlx") || lower.contains("safetensors"))
+                && !lower.contains("--runner llamacpp")
+            {
                 reason.push_str(&format!(
                     ". Pull its GGUF variant with `ollama pull --runner llamacpp {}` (an \
                      undocumented Ollama flag), or choose another model",
@@ -766,6 +768,27 @@ mod tests {
         assert!(
             ollama_model_problem(&["Agent writer".to_string()], &spec("ollama:x"), url, &mlx)
                 .contains("ollama pull --runner llamacpp x")
+        );
+        // Native execution's own MLX refusal names the fix already: once.
+        let shown = serde_json::json!({"details": {"format": "safetensors", "runner": "mlx"},
+            "capabilities": ["completion", "tools"]});
+        let mlx = axocoatl_llm_ollama::check_shown_model("qwen3.5:0.8b", &shown).unwrap_err();
+        let problem = ollama_model_problem(
+            &["Agent writer".to_string()],
+            &spec("ollama:qwen3.5:0.8b"),
+            url,
+            &mlx,
+        );
+        assert!(
+            problem.contains("cannot serve: The model qwen3.5:0.8b is run by Ollama's MLX runner;"),
+            "{problem}"
+        );
+        assert_eq!(
+            problem
+                .matches("`ollama pull --runner llamacpp qwen3.5:0.8b`")
+                .count(),
+            1,
+            "{problem}"
         );
         let down = ProviderError::Network("connection refused".into());
         assert!(ollama_unreachable(url, &down).contains("ollama serve"));

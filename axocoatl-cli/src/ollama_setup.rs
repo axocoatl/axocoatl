@@ -10,6 +10,7 @@
 //! memory, and what to do about each finding depends on how Ollama runs here
 //! ([`OllamaService`]).
 
+use axocoatl_llm::ProviderError;
 use axocoatl_llm_ollama::{
     check_native_ollama_server, check_shown_model, ollama_version_note, ollama_version_refusal,
     show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaServerCheck,
@@ -898,12 +899,22 @@ pub async fn model_finding(base_url: &str, model: &str, needs_tools: bool) -> Fi
 pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Finding {
     match check_shown_model(model, shown) {
         Err(error) => {
-            let mut hint = vec![error.to_string()];
-            if !matches!(
+            // Native execution's own refusal is already in words: shown as a
+            // sentence, without the error kind, so the fix reads after it.
+            let mut why = match &error {
+                ProviderError::InvalidRequest { message, .. } => message.clone(),
+                other => other.to_string(),
+            };
+            if !why.ends_with('.') {
+                why.push('.');
+            }
+            let refused_format = !matches!(
                 shown.pointer("/details/format").and_then(Value::as_str),
                 Some("gguf")
-            ) || shown.pointer("/details/runner").and_then(Value::as_str) == Some("mlx")
-            {
+            ) || shown.pointer("/details/runner").and_then(Value::as_str) == Some("mlx");
+            let fix_named = why.contains(LLAMACPP_PULL_FLAG);
+            let mut hint = vec![why];
+            if refused_format && !fix_named {
                 hint.push(format!(
                     "Pull its GGUF variant with `ollama pull {LLAMACPP_PULL_FLAG} {model}` (an undocumented Ollama flag), or choose another model."
                 ));
@@ -1132,17 +1143,30 @@ mod tests {
             "capabilities":["completion","tools"]});
         let finding = shown_model_finding("qwen3.5:27b", &mlx, false);
         assert!(!finding.ok);
-        let hint = finding.hint.join("\n");
-        assert!(hint.contains("MLX"), "{hint}");
+        // As doctor prints it: native execution's refusal as a sentence,
+        // with the fix named once.
+        let hint = finding.hint.join(" ");
         assert!(
-            hint.contains("ollama pull --runner llamacpp qwen3.5:27b"),
+            hint.starts_with("The model qwen3.5:27b is run by Ollama's MLX runner;"),
             "{hint}"
         );
+        assert!(
+            hint.ends_with(
+                "by default: pull its GGUF variant with `ollama pull --runner llamacpp \
+                 qwen3.5:27b` (an undocumented Ollama flag), or choose another model."
+            ),
+            "{hint}"
+        );
+        assert_eq!(hint.matches("--runner llamacpp").count(), 1, "{hint}");
         let remote = json!({"details":{"format":"gguf"},"capabilities":["completion"],
             "remote_host":"https://ollama.com:443"});
         let finding = shown_model_finding("gpt-oss:20b-cloud", &remote, false);
         assert!(!finding.ok);
-        assert!(finding.hint[0].contains("cloud model"), "{finding:?}");
+        assert!(
+            finding.hint[0].starts_with("The model gpt-oss:20b-cloud is a cloud model")
+                && finding.hint[0].ends_with("runs only local models."),
+            "{finding:?}"
+        );
         assert!(!finding.hint.join(" ").contains("--runner"), "{finding:?}");
     }
 

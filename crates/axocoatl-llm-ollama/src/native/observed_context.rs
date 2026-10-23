@@ -162,8 +162,9 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
             return Err(invalid(format!(
                 "Ollama loaded {} with its MLX runner, which holds the model's own maximum \
                  context, not num_ctx, as its limit; native execution accepts only GGUF models \
-                 that Ollama runs in llama.cpp's llama-server",
-                shown_name(&expected.name)
+                 that Ollama runs in llama.cpp's llama-server: {}",
+                shown_name(&expected.name),
+                super::gguf_fix(&shown_name(&expected.name))
             )))
         }
         runner => {

@@ -827,7 +827,9 @@ pub async fn delete_session_ways_decision(
 }
 /// A Team and budget refusal as the person reads it: a native provider
 /// check's own message, without the layers it passed through
-/// ("Provider setup failed: Session dispatch: Invalid request for ollama: ").
+/// ("Provider setup failed: Session dispatch: Invalid request for ollama: "),
+/// starting with a capital when its first word is a plain word. A first word
+/// such as a model name (`qwen3.5:0.8b`) is kept as it is.
 fn person_facing_team_message(message: &str) -> String {
     let mut text = message
         .strip_prefix("Provider setup failed: Session dispatch: ")
@@ -843,9 +845,14 @@ fn person_facing_team_message(message: &str) -> String {
             }
         }
     }
+    let plain_word = text
+        .split(' ')
+        .next()
+        .is_some_and(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_alphabetic()));
     let mut chars = text.chars();
     match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
+        Some(first) if plain_word => first.to_uppercase().chain(chars).collect(),
+        Some(_) => text.to_string(),
         None => message.to_string(),
     }
 }
@@ -8382,6 +8389,19 @@ mod tests {
         assert_eq!(
             person_facing_team_message("Lead's token limit of 10,000 is too small"),
             "Lead's token limit of 10,000 is too small"
+        );
+        // A model name that starts a refusal is never changed.
+        assert_eq!(
+            person_facing_team_message(
+                "Provider setup failed: Session dispatch: Invalid request for ollama: qwen3.5:0.8b is run by Ollama's MLX runner"
+            ),
+            "qwen3.5:0.8b is run by Ollama's MLX runner"
+        );
+        assert_eq!(
+            person_facing_team_message(
+                "Invalid request for ollama: The model qwen3.5:0.8b is run by Ollama's MLX runner"
+            ),
+            "The model qwen3.5:0.8b is run by Ollama's MLX runner"
         );
     }
 

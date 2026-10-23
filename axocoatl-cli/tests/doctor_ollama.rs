@@ -375,11 +375,25 @@ async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
         stdout.contains("[FAIL] Model 'qwen3-coder:30b' cannot run in native Sessions"),
         "{stdout}"
     );
-    assert!(stdout.contains("MLX runner"), "{stdout}");
+    // The refusal reads as a sentence that names the fix once (Ollama 0.40.8
+    // showed qwen3.5:0.8b, an MLX model, this way live).
     assert!(
-        stdout.contains("ollama pull --runner llamacpp qwen3-coder:30b"),
+        stdout.contains("→ The model qwen3-coder:30b is run by Ollama's MLX runner;"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(
+            "by default: pull its GGUF variant with `ollama pull --runner llamacpp \
+             qwen3-coder:30b` (an undocumented Ollama flag), or choose another model.\n"
+        ),
+        "{stdout}"
+    );
+    let fix = stdout
+        .lines()
+        .find(|line| line.contains("→ The model qwen3-coder:30b"))
+        .unwrap();
+    assert_eq!(fix.matches("--runner llamacpp").count(), 1, "{fix}");
+    assert!(!stdout.contains("Invalid request for ollama"), "{stdout}");
 }
 
 #[tokio::test]

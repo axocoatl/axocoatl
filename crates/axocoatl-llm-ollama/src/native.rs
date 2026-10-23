@@ -149,6 +149,14 @@ fn shown_name(model: &str) -> String {
         .collect()
 }
 
+/// What to do about a model Ollama runs with MLX or that is not GGUF.
+pub(crate) fn gguf_fix(name: &str) -> String {
+    format!(
+        "pull its GGUF variant with `ollama pull --runner llamacpp {name}` (an undocumented \
+         Ollama flag), or choose another model"
+    )
+}
+
 /// Refuse a model native execution cannot bound: a cloud model, a model that
 /// is not GGUF or that Ollama runs with MLX (MLX holds the model's own maximum
 /// context, not `num_ctx`, as its limit), one that does not complete text, and
@@ -163,7 +171,8 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
     });
     if remote {
         return Err(invalid(format!(
-            "{name} is a cloud model that Ollama runs remotely; native execution runs only local models"
+            "The model {name} is a cloud model that Ollama runs remotely; native execution runs \
+             only local models"
         )));
     }
     let format = shown
@@ -176,17 +185,18 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
         .unwrap_or_default();
     if runner.eq_ignore_ascii_case("mlx") || format != "gguf" {
         return Err(invalid(format!(
-            "{name} is {}; native execution accepts only GGUF models, which Ollama runs in \
-             llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum context, \
-             not num_ctx, as its limit, so it cannot bound a call. On Apple silicon, Ollama pulls \
-             the MLX variant of some models by default",
+            "The model {name} is {}; native execution accepts only GGUF models, which Ollama \
+             runs in llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum \
+             context, not num_ctx, as its limit, so it cannot bound a call. On Apple silicon, \
+             Ollama pulls the MLX variant of some models by default: {}",
             if runner.eq_ignore_ascii_case("mlx") {
                 "run by Ollama's MLX runner".to_string()
             } else if format.is_empty() {
                 "of an unreported format".to_string()
             } else {
                 format!("a {} model", shown_name(format))
-            }
+            },
+            gguf_fix(&name)
         )));
     }
     let caps = shown
@@ -196,13 +206,14 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
     let has = |capability: &str| caps.iter().any(|v| v.as_str() == Some(capability));
     if !has("completion") {
         return Err(invalid(format!(
-            "{name} does not report text completion; native execution needs a local GGUF \
-             completion model"
+            "The model {name} does not report text completion; native execution needs a local \
+             GGUF completion model"
         )));
     }
     if has("image") {
         return Err(invalid(format!(
-            "{name} is an image-generation model; native execution needs a local GGUF completion model"
+            "The model {name} is an image-generation model; native execution needs a local GGUF \
+             completion model"
         )));
     }
     Ok(ShownModel {
