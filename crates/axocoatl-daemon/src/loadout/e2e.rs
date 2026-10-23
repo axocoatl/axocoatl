@@ -221,7 +221,7 @@ pub fn resolve_e2e_model(check: &E2eCheck, resolved: &ResolvedLoadout) -> Result
         ParamOr::Value(model) => model.clone(),
         ParamOr::Param { param } => resolved.params.get(param).cloned().ok_or_else(|| {
             usage(format!(
-                "the e2e check's model parameter {param} has no value: pass --param {param}=<model>"
+                "the e2e check's model parameter {param} has no value: pass --param {param}=MODEL"
             ))
         })?,
     };

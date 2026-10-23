@@ -81,7 +81,9 @@ pub(crate) fn list_lines(images: &[recipe_images::RecipeImageRecord]) -> Vec<Str
     }
     if images.is_empty() {
         lines.push(
-            "No recipe images built. Build one with: axocoatl recipe build <recipe>...".into(),
+            "No recipe images built. Build one with: axocoatl recipe build RECIPE, naming one or \
+             more of the recipes above (such as claude-code python)"
+                .into(),
         );
         return lines;
     }

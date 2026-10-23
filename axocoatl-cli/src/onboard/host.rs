@@ -27,8 +27,13 @@ pub(crate) struct Log {
 impl Log {
     /// Create `onboard-<timestamp>.log` in `directory` (owner-only).
     pub(crate) fn create(directory: &Path, stamp: &str) -> std::io::Result<Self> {
+        Self::create_named(directory, "onboard", stamp)
+    }
+
+    /// Create `<name>-<timestamp>.log` in `directory` (owner-only).
+    pub(crate) fn create_named(directory: &Path, name: &str, stamp: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(directory)?;
-        let path = directory.join(format!("onboard-{stamp}.log"));
+        let path = directory.join(format!("{name}-{stamp}.log"));
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]

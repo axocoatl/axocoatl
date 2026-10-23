@@ -122,7 +122,9 @@ impl WriterChoice {
 pub enum PodmanChoice {
     /// Set up a missing Podman: on a Mac, install it with Homebrew (Apple
     /// silicon) and create and start its machine; on Linux, install it with
-    /// apt-get, dnf, pacman or zypper (with sudo); elsewhere, say how
+    /// apt-get, dnf, pacman or zypper (with sudo), except on Ubuntu 22.04,
+    /// whose Podman 3.4.4 is too old (onboarding refuses it and says to use
+    /// Ubuntu 24.04 or newer); elsewhere, say how
     Create,
     /// Leave Podman as it is
     Skip,
@@ -167,8 +169,8 @@ pub struct OnboardArgs {
     pub ollama_url: Option<String>,
     /// create (the default): set up a missing Podman where onboarding can
     /// (Mac: Homebrew on Apple silicon, then the machine; Linux: the
-    /// distribution's package manager, with sudo); skip: leave Podman as it
-    /// is
+    /// distribution's package manager, with sudo; Ubuntu 22.04 is refused,
+    /// its Podman 3.4.4 is too old); skip: leave Podman as it is
     #[arg(long, value_enum)]
     pub podman: Option<PodmanChoice>,
     /// CPUs for a new Podman machine (default: min(6, half the cores))
@@ -412,10 +414,11 @@ pub(crate) struct Kept {
     /// onboarding's browser sign-in, stores it). It takes the place of
     /// `api_key`.
     pub(crate) openrouter_key_secret: Option<String>,
-    /// The Ollama models the existing configuration's Agents run, which
-    /// "Update this setup" keeps (`config::update` writes onboarding's team
-    /// only where there are no Agents). `None` when this run writes that
-    /// team: no configuration, Replace, or one without Agents.
+    /// The Ollama models run by the existing configuration's Agents that
+    /// "Update this setup" keeps as they are: the person's own and those of
+    /// onboarding's team edited by hand (`config::update` moves onboarding's
+    /// own to the models chosen). `None` when this run writes the team: no
+    /// configuration, Replace, or one without Agents.
     pub(crate) agent_models: Option<Vec<String>>,
 }
 
@@ -439,32 +442,7 @@ impl Kept {
         let existing = config::read_existing(text).ok();
         let agent_models = existing
             .as_ref()
-            .filter(|existing| !existing.agents.is_empty())
-            .map(|existing| {
-                // As doctor reads them: an Agent without a model runs
-                // providers.ollama.model, else llama3.2.
-                let default_model = existing
-                    .providers
-                    .as_ref()
-                    .and_then(|providers| providers.ollama.as_ref())
-                    .and_then(|ollama| ollama.model.clone())
-                    .unwrap_or_else(|| "llama3.2".to_string());
-                existing
-                    .agents
-                    .iter()
-                    .filter(|agent| {
-                        agent.get("provider").and_then(serde_json::Value::as_str) == Some("ollama")
-                    })
-                    .map(|agent| {
-                        agent
-                            .get("model")
-                            .and_then(serde_json::Value::as_str)
-                            .filter(|model| !model.is_empty())
-                            .map(str::to_string)
-                            .unwrap_or_else(|| default_model.clone())
-                    })
-                    .collect()
-            });
+            .and_then(|existing| config::kept_agent_models(existing, text));
         let openrouter = existing.and_then(|existing| existing.providers?.openrouter);
         let openrouter_key_secret = openrouter
             .as_ref()
@@ -498,23 +476,22 @@ impl Kept {
 
 impl Onboarding {
     /// How `axocoatl onboard` runs again to put other models in place of
-    /// `models`, and why: `--replace` when the configuration this run
-    /// writes has an Agent on one of them (onboarding's own team, or an
-    /// Agent "Update this setup" keeps), since `--update` keeps the Agents
-    /// and changes only `run.models`; else `--update`.
+    /// `models`, and why: `--replace` when an Agent "Update this setup"
+    /// keeps as it is (one edited by hand, or the person's own) runs one of
+    /// them; else `--update`, which moves onboarding's team and `run.models`
+    /// to the new models.
     pub(crate) fn model_change(&self, models: &[&str]) -> (&'static str, String) {
-        let agents_run = match &self.kept.agent_models {
-            None => true,
-            Some(kept) => models
+        let agents_run = self.kept.agent_models.as_ref().is_some_and(|kept| {
+            models
                 .iter()
-                .any(|model| kept.iter().any(|kept| kept == model)),
-        };
+                .any(|model| kept.iter().any(|kept| kept == model))
+        });
         if agents_run {
             (
                 "--replace",
                 format!(
                     " (--replace backs up the configuration and writes the team for the new \
-                     models; --update would keep the Agents that run {})",
+                     models; --update would keep the Agents you edited, which run {})",
                     models.join(" and ")
                 ),
             )
@@ -584,10 +561,45 @@ impl Onboarding {
             id_root: self.host.root.clone(),
             data_dir: self.data_dir_override.clone(),
             landlock_abi: self.facts.landlock_abi,
+            user_systemd: self.facts.user_systemd.clone(),
+            selinux_enforcing: self.facts.selinux_enforcing,
+            git: self.facts.git.clone(),
+            proxy_variables: self.facts.proxy_variables.clone(),
+            // Said as Step 3 says it, and logged.
+            on_load: Some({
+                let log = self.ui.log.clone();
+                std::sync::Arc::new(move |model: &str| {
+                    let line = format!(
+                        "  Loading {model} once to read its context (your configuration runs \
+                         it)…"
+                    );
+                    println!("{line}");
+                    if let Some(log) = &log {
+                        log.line(&line);
+                    }
+                })
+            }),
             // The configuration onboarding writes is the default one.
             default_config: self.paths.config_path.clone(),
         }
     }
+}
+
+/// The secrets Axocoatl's store under `data_dir` holds, by name. With
+/// `--plan` they are read without the store, which makes its directory
+/// owner-only before it reads: `--plan` changes nothing.
+pub(crate) fn stored_secret_names(o: &Onboarding) -> Vec<String> {
+    let data_dir = o.data_dir();
+    if !o.ui.plan() {
+        return axocoatl_daemon::secret_store::list_secrets(&data_dir).unwrap_or_default();
+    }
+    std::fs::read_dir(data_dir.join(axocoatl_daemon::secret_store::SECRETS_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
 }
 
 /// The setup chosen in Step 3.
@@ -692,6 +704,12 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
     for line in detect::summary(&facts) {
         ui.say(line);
     }
+    for item in step_0_notes(&facts) {
+        ui.warn(item.line());
+        if let Some(fix) = &item.fix {
+            ui.say(format!("    {fix}"));
+        }
+    }
     let mut onboarding = Onboarding {
         ui,
         host,
@@ -709,6 +727,20 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
     run(&mut onboarding).await
 }
 
+/// What Step 0 says beyond what it found: a platform not verified yet, and
+/// a proxy that a Session's network does not use (Step 5's check names them
+/// again only as part of doctor's report, so it leaves them out).
+pub(crate) fn step_0_notes(facts: &Facts) -> Vec<crate::doctor::Item> {
+    crate::doctor::platform_items(&facts.os, facts.selinux_enforcing, None, false)
+        .into_iter()
+        .chain(crate::doctor::proxy_item(&facts.proxy_variables))
+        .filter(|item| item.status != crate::doctor::Status::Ok)
+        .collect()
+}
+
+/// Items of Step 5's check that Step 0 or Step 3 already said.
+const SAID_BEFORE: [&str; 2] = ["Platform", "Proxy"];
+
 /// Steps 0 to 7 after detection.
 pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     // Stops before anything else.
@@ -718,8 +750,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> i32 {
     }
     if o.facts.os.wsl() == Some(Wsl::One) {
         o.ui.fail(
-            "This is WSL 1, which cannot run Podman. In PowerShell run `wsl --set-version <distro> \
-             2` (wsl -l -v names the distro), then run axocoatl onboard again.",
+            "This is WSL 1, which cannot run Podman. In PowerShell run `wsl --set-version DISTRO \
+             2`, where DISTRO is the name `wsl -l -v` lists for this distribution, then run \
+             axocoatl onboard again.",
         );
         return exit::NOT_READY;
     }
@@ -1199,11 +1232,15 @@ fn config_plan(
 /// its replacement, after showing the change and backing the old file up.
 fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig) -> bool {
     let path = o.paths.config_path.clone();
+    let mut kept = Vec::new();
     let (old, new) = match existing {
         ExistingConfig::None => (None, config::render(plan)),
         ExistingConfig::Replace(old) => (Some(old.clone()), config::render(plan)),
         ExistingConfig::Update(old) => match config::update(old, plan, &path) {
-            Ok(new) => (Some(old.clone()), new),
+            Ok(updated) => {
+                kept = updated.kept;
+                (Some(old.clone()), updated.text)
+            }
             Err(error) => {
                 o.step_left(format!(
                     "{error}: run `axocoatl onboard --replace` (the old file is backed up first)"
@@ -1212,6 +1249,19 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             }
         },
     };
+    // Agents of onboarding's team edited by hand stay as they are.
+    if !kept.is_empty() {
+        let agents: Vec<String> = kept
+            .iter()
+            .map(|(id, model)| format!("{id} on {model}"))
+            .collect();
+        o.ui.say(format!(
+            "  Kept as you edited {}: {} (the rest of onboarding's team moves to the models \
+             chosen; `axocoatl onboard --replace` writes the whole team again)",
+            if kept.len() == 1 { "it" } else { "them" },
+            agents.join(", ")
+        ));
+    }
     if let Some(old) = &old {
         if config::diff(old, &new).is_empty() {
             o.ui.ok(format!("{} already has this setup", path.display()));
@@ -1248,7 +1298,10 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             ));
             return false;
         }
-        if let Err(error) = write_backup(&o.paths, &backup, old) {
+        // A key written in the file that the new one no longer holds is
+        // left out of the backup: nothing uses it any more.
+        let kept_back = config::backup_without_moved_key(old, &new);
+        if let Err(error) = write_backup(&o.paths, &backup, kept_back.as_deref().unwrap_or(old)) {
             o.step_left(format!("Could not back up the configuration: {error}"));
             return false;
         }
@@ -1256,6 +1309,21 @@ fn write_config(o: &mut Onboarding, plan: &ConfigPlan, existing: &ExistingConfig
             "Backed up to {}",
             o.paths.config_dir.join(&backup).display()
         ));
+        if kept_back.is_some() {
+            o.ui.say(format!(
+                "  The backup leaves out the OpenRouter key that was written in the file: \
+                 nothing uses it now. It still works in your OpenRouter account until you delete \
+                 it at {}",
+                openrouter::KEYS_PAGE
+            ));
+        } else if config::moved_openrouter_key(old, &new) {
+            o.ui.warn(format!(
+                "The backup {backup} still holds the OpenRouter key that was written in the file, \
+                 which nothing uses now: delete the backup once you no longer need it, and the key \
+                 at {}",
+                openrouter::KEYS_PAGE
+            ));
+        }
     } else if o.ui.plan() {
         o.ui.say(format!("  would write {}:", path.display()));
         for line in config::redacted_lines(&new) {
@@ -1356,6 +1424,7 @@ async fn check(o: &mut Onboarding, contexts: &std::collections::BTreeMap<String,
         for item in items {
             match item.status {
                 crate::doctor::Status::Ok => {}
+                crate::doctor::Status::Warn if SAID_BEFORE.contains(&item.name.as_str()) => {}
                 crate::doctor::Status::Warn => o.ui.warn(item.line()),
                 crate::doctor::Status::Fail => {
                     o.ui.fail(item.line());
@@ -1389,20 +1458,54 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
         return StartChoice::None;
     }
     o.ui.heading("Step 6 · Start Axocoatl");
-    let service = if matches!(o.facts.os, Os::Linux { systemd: false, .. }) {
-        "Always on, starting at login (not available: this Linux runs without systemd)"
-    } else {
-        "Always on, starting at login (a launchd or systemd service)"
+    let unavailable = service_unavailable(o);
+    let service = match &unavailable {
+        Some((why, _)) => format!("Always on, starting at login (not available: {why})"),
+        None => "Always on, starting at login (a launchd or systemd service)".to_string(),
     };
     let items = vec![
         "In this terminal now (axocoatl dev)".to_string(),
-        service.to_string(),
+        service,
         "I'll start it later".to_string(),
     ];
     match o.ui.select("How should Axocoatl run?", &items, 0) {
         0 => StartChoice::Dev,
-        1 if !service.contains("not available") => StartChoice::Service,
+        1 if unavailable.is_none() => StartChoice::Service,
+        1 => {
+            if let Some((_, fix)) = unavailable {
+                o.ui.say(format!("  {fix}"));
+            }
+            StartChoice::None
+        }
         _ => StartChoice::None,
+    }
+}
+
+/// Why the Always-On Service cannot run for this login, and what to do:
+/// a Linux without systemd, or a login without a systemd user session
+/// (`su -`, `sudo -iu`, or an SSH login that started none), where `systemctl
+/// --user` reaches no manager.
+fn service_unavailable(o: &Onboarding) -> Option<(String, String)> {
+    match &o.facts.os {
+        Os::Linux { systemd: false, .. } => Some((
+            "this Linux runs without systemd".to_string(),
+            "Start Axocoatl with `axocoatl dev` instead".to_string(),
+        )),
+        Os::Linux { .. } => {
+            let systemd = o.facts.user_systemd.as_ref()?;
+            if systemd.reachable {
+                return None;
+            }
+            let item = crate::doctor::user_systemd_item(systemd, &o.facts.user, false);
+            Some((
+                "this login has no systemd user session".to_string(),
+                format!(
+                    "{}. Until then, start Axocoatl with `axocoatl dev`",
+                    item.fix.unwrap_or_default()
+                ),
+            ))
+        }
+        Os::MacOs { .. } => None,
     }
 }
 
@@ -1410,6 +1513,12 @@ fn choose_start(o: &mut Onboarding) -> StartChoice {
 /// `Some(true)` when it was started, `Some(false)` when that was declined,
 /// `None` (with the step left) when it failed.
 async fn start_service(o: &mut Onboarding) -> Option<bool> {
+    if let Some((why, fix)) = service_unavailable(o) {
+        o.step_left(format!(
+            "The Always-On Service cannot run here: {why}. {fix}"
+        ));
+        return None;
+    }
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();
     if let Err(error) = crate::reject_uninherited_service_environment(&config) {
         o.step_left(format!("Cannot install the Always-On Service: {error}"));

@@ -25,7 +25,7 @@ pub(crate) const TOOLCHAIN_NOTE: &str =
      (https://docs.axocoatl.ai/configure/toolchains/)";
 
 fn stored(o: &Onboarding, names: &[&str]) -> Option<String> {
-    let secrets = axocoatl_daemon::secret_store::list_secrets(&o.data_dir()).unwrap_or_default();
+    let secrets = super::stored_secret_names(o);
     names
         .iter()
         .find(|name| secrets.iter().any(|secret| secret == **name))

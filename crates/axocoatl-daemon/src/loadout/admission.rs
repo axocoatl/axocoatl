@@ -167,9 +167,9 @@ pub fn run_by(who: &[String]) -> String {
 /// reviewers run on Ollama or OpenRouter only.
 pub fn unsupported_provider(who: &str, param: Option<&str>, model: &ModelSpec) -> String {
     let flag = match param.and_then(|param| param.strip_suffix("_model")) {
-        Some(role) => format!(
-            "pass --model {role}=ollama:<model> or --model {role}=openrouter:<vendor>/<model>"
-        ),
+        Some(role) => {
+            format!("pass --model {role}=ollama:MODEL or --model {role}=openrouter:VENDOR/MODEL")
+        }
         None => "give it an ollama: or openrouter: model".into(),
     };
     let external = matches!(
@@ -479,7 +479,7 @@ pub fn context_floor_problem(
     } else {
         let flags: Vec<String> = roles
             .iter()
-            .map(|role| format!("--model {role}=openrouter:<vendor>/<model>"))
+            .map(|role| format!("--model {role}=openrouter:VENDOR/MODEL"))
             .collect();
         format!(
             "run the {} on OpenRouter instead ({})",
@@ -612,7 +612,7 @@ mod tests {
             "the reviewer runs anthropic:opus, on the provider anthropic, and a native Agent or \
              reviewer runs only on Ollama or OpenRouter (Claude Code and Codex can write, in \
              fix-claude-code and fix-codex, but cannot review): pass --model \
-             reviewer=ollama:<model> or --model reviewer=openrouter:<vendor>/<model>"
+             reviewer=ollama:MODEL or --model reviewer=openrouter:VENDOR/MODEL"
         );
         assert!(
             !unsupported_provider("Agent writer", None, &spec("gemini:gemini-3"))
@@ -649,7 +649,7 @@ mod tests {
              ~/.homebrew/services/ollama.env and run `brew services restart ollama` (`axocoatl \
              onboard` does this after asking), then run again. A larger context uses more \
              memory; on a computer that cannot spare it, run the writer on OpenRouter instead \
-             (--model writer=openrouter:<vendor>/<model>)"
+             (--model writer=openrouter:VENDOR/MODEL)"
         );
         // Two models: one sentence names both, the fix and both roles once.
         let reviewer = small("the reviewer", &["reviewer"], "ollama:gpt-oss:20b", 8192);
@@ -668,7 +668,7 @@ mod tests {
         assert!(
             problem.ends_with(
                 "run the writer and reviewer on OpenRouter instead (--model \
-                 writer=openrouter:<vendor>/<model> --model reviewer=openrouter:<vendor>/<model>)"
+                 writer=openrouter:VENDOR/MODEL --model reviewer=openrouter:VENDOR/MODEL)"
             ),
             "{problem}"
         );

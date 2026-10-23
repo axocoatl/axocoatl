@@ -126,8 +126,11 @@ pub(crate) async fn writer_and_reviewer(
         .and_then(|spec| ModelRef::parse(spec).ok());
     let memory = o.facts.memory_bytes;
     let tested_tier = memory.and_then(ollama_setup::recommended_pair);
+    // What the server had when Step 0 asked: the models chosen from below
+    // even when the server is not ready after setup.
+    let found = o.facts.ollama_server.models().to_vec();
     let installed_pair = memory.and_then(|memory| {
-        ollama_setup::suggest_fitting_team_models(o.facts.ollama_server.models(), memory)
+        ollama_setup::suggest_fitting_team_models(&found, memory)
             .filter(|team| team.lead != team.reviewer)
     });
     let mut local_reviewer =
@@ -179,7 +182,8 @@ pub(crate) async fn writer_and_reviewer(
     }
     let base_url = server(o).await;
     choice.ollama_base_url = Some(o.facts.ollama_url.clone());
-    let (writer, reviewer) = choose_models(o, base_url.is_some(), true, local_reviewer).await;
+    let (writer, reviewer) =
+        choose_models(o, &found, base_url.is_some(), true, local_reviewer).await;
     choice.writer_model = writer.map(|model| ModelRef::new(Provider::Ollama, &model));
     if local_reviewer {
         choice.reviewer_model = reviewer.map(|model| ModelRef::new(Provider::Ollama, &model));
@@ -196,11 +200,27 @@ pub(crate) async fn writer_and_reviewer(
     models.dedup();
     if let Some(base_url) = base_url {
         if pull(o, &base_url, &models, WriterChoice::Ollama).await {
-            let read = context(o, &base_url, &models, WriterChoice::Ollama).await;
+            let writer_model = choice
+                .writer_model
+                .as_ref()
+                .filter(|model| model.provider == Provider::Ollama)
+                .map(|model| model.model.clone());
+            let read = context(
+                o,
+                &base_url,
+                &models,
+                WriterChoice::Ollama,
+                writer_model.as_deref(),
+            )
+            .await;
             choice.contexts.extend(read);
         }
     } else {
-        for model in &models {
+        // A model the server already had needs no pull once it is ready.
+        for model in models
+            .iter()
+            .filter(|model| !ollama_setup::is_installed(model, &found))
+        {
             let step = pull_step(o, model, " once Ollama is ready", WriterChoice::Ollama);
             o.steps.push(step);
         }
@@ -213,17 +233,22 @@ pub(crate) async fn writer_and_reviewer(
 pub(crate) async fn reviewer_only(o: &mut Onboarding, choice: &mut Choice) {
     // Claude Code or Codex, which `writers::run` recorded.
     let writer = choice.external_writer.unwrap_or(WriterChoice::ClaudeCode);
+    let found = o.facts.ollama_server.models().to_vec();
     let base_url = server(o).await;
     choice.ollama_base_url = Some(o.facts.ollama_url.clone());
-    let (_, reviewer) = choose_models(o, base_url.is_some(), false, true).await;
+    let (_, reviewer) = choose_models(o, &found, base_url.is_some(), false, true).await;
     choice.reviewer_model = reviewer.map(|model| ModelRef::new(Provider::Ollama, &model));
     if let (Some(base_url), Some(reviewer)) = (base_url, &choice.reviewer_model) {
         let models = vec![reviewer.model.clone()];
         if pull(o, &base_url, &models, writer).await {
-            let read = context(o, &base_url, &models, writer).await;
+            let read = context(o, &base_url, &models, writer, None).await;
             choice.contexts.extend(read);
         }
-    } else if let Some(reviewer) = &choice.reviewer_model {
+    } else if let Some(reviewer) = choice
+        .reviewer_model
+        .as_ref()
+        .filter(|reviewer| !ollama_setup::is_installed(&reviewer.model, &found))
+    {
         let step = pull_step(o, &reviewer.model, " once Ollama is ready", writer);
         o.steps.push(step);
     }
@@ -938,9 +963,12 @@ fn choose_one(
 /// installed models that fit this computer, else the pair recommended for
 /// its memory, each only when it fits this computer (`doctor` calls a larger
 /// one too large). The reviewer must differ from the writer. A role left
-/// without a model is a step left.
+/// without a model is a step left. The installed models are the server's
+/// now when it is ready, else those it had at Step 0 (`found`): a server
+/// that answered then and is not ready after setup still has them.
 async fn choose_models(
     o: &mut Onboarding,
+    found: &[ollama_setup::InstalledModel],
     server_ready: bool,
     want_writer: bool,
     want_reviewer: bool,
@@ -948,7 +976,7 @@ async fn choose_models(
     let installed: Vec<ollama_setup::InstalledModel> = if server_ready {
         o.facts.ollama_server.models().to_vec()
     } else {
-        Vec::new()
+        found.to_vec()
     };
     let candidates = ollama_setup::candidates(&installed);
     for (name, why) in ollama_setup::refused_models(&installed) {
@@ -1295,12 +1323,14 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String], writer: Wri
 /// Load each model once and read its context; give the service
 /// `OLLAMA_CONTEXT_LENGTH` when one is below [`MIN_CONTEXT_TOKENS`].
 /// Returns the models read with enough context and their context, which
-/// Step 5's check uses instead of loading them again.
+/// Step 5's check uses instead of loading them again. `writer_model`: the
+/// local writer's model, when one writes.
 async fn context(
     o: &mut Onboarding,
     base_url: &str,
     models: &[String],
     writer: WriterChoice,
+    writer_model: Option<&str>,
 ) -> Vec<(String, usize)> {
     let mut read = Vec::new();
     if o.ui.plan() {
@@ -1352,14 +1382,14 @@ async fn context(
         if still.is_empty() {
             return read;
         }
-        let hosted = hosted_instead(o, &low, writer);
+        let hosted = hosted_instead(o, &low, writer, writer_model);
         o.step_left(format!(
             "{}: Ollama may not have the memory for a {CONTEXT_FIX_TOKENS}-token context here; \
              use OpenRouter {hosted}",
             still.join("; ")
         ));
     } else {
-        let hosted = hosted_instead(o, &low, writer);
+        let hosted = hosted_instead(o, &low, writer, writer_model);
         o.step_left(format!(
             "{problem} Give Ollama a {CONTEXT_FIX_TOKENS}-token context: {}; or use OpenRouter \
              {hosted}",
@@ -1370,24 +1400,36 @@ async fn context(
 }
 
 /// `for these models (`axocoatl onboard … --writer openrouter`)`, or for
-/// the reviewer of Claude Code or Codex: the command that moves the models
-/// in `low` to OpenRouter and keeps `writer` ([`Onboarding::model_change`]).
+/// the reviewer alone (of Claude Code or Codex, or of a local writer,
+/// `writer_model`, whose own context is enough): the command that moves the
+/// models in `low` to OpenRouter and keeps `writer` and its model
+/// ([`Onboarding::model_change`]).
 pub(super) fn hosted_instead(
     o: &Onboarding,
     low: &[(String, usize)],
     writer: WriterChoice,
+    writer_model: Option<&str>,
 ) -> String {
     let models: Vec<&str> = low.iter().map(|(model, _)| model.as_str()).collect();
     let (mode, because) = o.model_change(&models);
+    let reviewer = super::openrouter::DEFAULT_REVIEWER;
     match writer {
         WriterChoice::ClaudeCode | WriterChoice::Codex => format!(
-            "for the reviewer (`axocoatl onboard {mode} --writer {} --reviewer openrouter:{}`){because}",
+            "for the reviewer (`axocoatl onboard {mode} --writer {} --reviewer openrouter:{reviewer}`){because}",
             writer.id(),
-            super::openrouter::DEFAULT_REVIEWER
         ),
-        WriterChoice::Ollama | WriterChoice::Openrouter => format!(
-            "for these models (`axocoatl onboard {mode} --writer openrouter`){because}"
-        ),
+        WriterChoice::Ollama | WriterChoice::Openrouter => {
+            match writer_model.filter(|model| !models.contains(model)) {
+                Some(model) => format!(
+                    "for the reviewer (`axocoatl onboard {mode} --writer ollama --writer-model \
+                     {} --reviewer openrouter:{reviewer}`){because}",
+                    super::host::shell_quote(&format!("ollama:{model}"))
+                ),
+                None => format!(
+                    "for these models (`axocoatl onboard {mode} --writer openrouter`){because}"
+                ),
+            }
+        }
     }
 }
 

@@ -863,8 +863,8 @@ async fn more_problems_child_body() {
              4096-token context",
             server.uri()
         )) && context[0].contains(
-            "--model writer=openrouter:<vendor>/<model> --model \
-             reviewer=openrouter:<vendor>/<model>"
+            "--model writer=openrouter:VENDOR/MODEL --model \
+             reviewer=openrouter:VENDOR/MODEL"
         ),
         "{}",
         context[0]

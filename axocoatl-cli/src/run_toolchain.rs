@@ -119,7 +119,7 @@ pub(super) async fn prepare_image(
              it again with `{}`",
             environment
                 .build_command()
-                .unwrap_or_else(|| "axocoatl recipe build <recipes>".into())
+                .unwrap_or_else(|| "axocoatl recipe build RECIPE".into())
         ),
             })?;
     recipe_images::record_image_at(&data_dir, record.clone()).map_err(|error| Failure {

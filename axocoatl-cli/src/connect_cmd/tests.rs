@@ -2252,7 +2252,7 @@ const DEVICE_PAGE: &str = "https://auth.openai.com/codex/device";
 /// Write an executable script, and run it with `probe` (which it answers
 /// at once, without doing anything) until it is not "text file busy",
 /// which it is while another test's fork still holds a file it was writing.
-fn install_script(path: &Path, contents: &str) {
+pub(crate) fn install_script(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     for _ in 0..100 {
@@ -2273,7 +2273,7 @@ fn install_script(path: &Path, contents: &str) {
 /// alone in a directory: it appends how many arguments it got and each one
 /// to `opened` beside it, and exits with `status`. Its directory, to use as
 /// `PATH`, and the `opened` file.
-fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
+pub(crate) fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
     let directory = root.join("opener-bin");
     std::fs::create_dir_all(&directory).unwrap();
     let opened = root.join("opened");
@@ -2449,6 +2449,32 @@ fn the_opener_gets_the_address_as_its_one_argument_without_a_shell() {
     let empty = tempfile::tempdir().unwrap();
     assert!(browser::Opener::find(Some(empty.path().as_os_str())).is_none());
     assert!(browser::Opener::find(None).is_none());
+}
+
+/// In WSL the opener is `wslview` (Windows' browser) when it is on PATH,
+/// else the usual one; outside WSL `wslview` is never used.
+#[test]
+fn in_wsl_the_page_opens_in_windows_browser_with_wslview() {
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(directory.path(), 0);
+    let usual = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(usual.open(DEVICE_PAGE)));
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+    let wslview_log = directory.path().join("wslview-opened");
+    install_script(
+        &bin.join("wslview"),
+        &format!(
+            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\nprintf 'arg=%s\\n' \"$1\" >> '{}'\n",
+            wslview_log.display()
+        ),
+    );
+    let wsl = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(wsl.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log), format!("arg={DEVICE_PAGE}\n"));
+    let elsewhere = browser::Opener::find_for(Some(bin.as_os_str()), false).unwrap();
+    assert!(opener_answer(elsewhere.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log).lines().count(), 1);
+    assert_eq!(opened(&log).lines().count(), 4);
 }
 
 /// A private directory for one login-container test: `bin/podman` (the

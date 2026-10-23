@@ -189,12 +189,25 @@ impl Ui {
                         .push(format!("? {prompt} → {}", items[index]));
                     return index;
                 }
+                let term = dialoguer::console::Term::stderr();
+                let columns = term.size_checked().map(|(_, columns)| usize::from(columns));
+                let (listed, shown) = fit_items(items, columns);
+                let cut = !listed.is_empty();
+                for row in listed {
+                    let _ = term.write_line(&row);
+                }
                 let index = dialoguer::Select::new()
                     .with_prompt(fit_prompt(prompt, 1))
-                    .items(items)
+                    .items(&shown)
                     .default(default)
+                    .report(!cut)
                     .interact()
                     .unwrap_or(default);
+                // The menu showed the items cut to fit: the answer is said
+                // whole, once the menu is gone.
+                if cut {
+                    let _ = term.write_line(&format!("{prompt}: {}", items[index]));
+                }
                 if let Some(log) = &self.log {
                     log.line(&format!("? {prompt} → {}", items[index]));
                 }
@@ -365,6 +378,48 @@ fn fit_prompt(prompt: &str, reserve: usize) -> String {
     last
 }
 
+/// The items of a menu as a terminal `columns` wide shows them, and the
+/// rows to print before it. dialoguer redraws a menu by clearing the rows
+/// it counts, one per item (it counts a wrapped item short), so an item
+/// wider than the terminal left stale rows above the answer. When every
+/// item fits, they are shown as they are; else each is printed whole,
+/// numbered and wrapped, and the menu shows the numbered items cut to fit.
+/// Without a terminal size the items are shown whole.
+pub(crate) fn fit_items(items: &[String], columns: Option<usize>) -> (Vec<String>, Vec<String>) {
+    let Some(columns) = columns else {
+        return (Vec::new(), items.to_vec());
+    };
+    // "> " before an item, and the last column left free.
+    let room = columns.saturating_sub(3).max(20);
+    if items.iter().all(|item| item.chars().count() <= room) {
+        return (Vec::new(), items.to_vec());
+    }
+    let mut listed = Vec::new();
+    let mut shown = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        let number = format!("{}. ", index + 1);
+        for (row, text) in wrap_rows(item, columns.saturating_sub(number.len() + 3))
+            .into_iter()
+            .enumerate()
+        {
+            let lead = if row == 0 {
+                number.clone()
+            } else {
+                " ".repeat(number.len())
+            };
+            listed.push(format!("  {lead}{text}"));
+        }
+        let whole = format!("{number}{item}");
+        shown.push(if whole.chars().count() <= room {
+            whole
+        } else {
+            let cut: String = whole.chars().take(room.saturating_sub(1)).collect();
+            format!("{}…", cut.trim_end())
+        });
+    }
+    (listed, shown)
+}
+
 /// `text` in rows of at most `width` characters (at least 20), broken
 /// between words; a word longer than a row is split.
 pub(crate) fn wrap_rows(text: &str, width: usize) -> Vec<String> {
@@ -450,6 +505,56 @@ mod tests {
         let rows = wrap_rows(&path, 30);
         assert!(rows.iter().all(|row| row.chars().count() <= 30), "{rows:?}");
         assert_eq!(rows.concat().replace(' ', ""), path.replace(' ', ""));
+    }
+
+    /// A menu whose items are wider than the terminal shows each in full,
+    /// numbered and wrapped, then a menu of the numbered items cut to fit,
+    /// so dialoguer, which counts one row per item, never leaves a stale
+    /// row; one that fits is shown as it is.
+    #[test]
+    fn menu_items_wider_than_the_terminal_are_listed_and_cut_to_fit() {
+        let items: Vec<String> = [
+            "Claude Code (your Claude Pro or Max plan; claude found at \
+             /Users/alex/.local/bin/claude)",
+            "Codex (your ChatGPT plan, or an OpenAI API key)",
+            "A hosted model (OpenRouter credits)",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (listed, shown) = fit_items(&items, Some(60));
+        assert!(
+            listed.iter().all(|row| row.chars().count() <= 60),
+            "{listed:?}"
+        );
+        assert!(
+            shown.iter().all(|item| item.chars().count() <= 57),
+            "{shown:?}"
+        );
+        assert_eq!(
+            listed[0],
+            "  1. Claude Code (your Claude Pro or Max plan; claude found"
+        );
+        assert_eq!(
+            listed
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+            "1. Claude Code (your Claude Pro or Max plan; claude found at \
+             /Users/alex/.local/bin/claude) 2. Codex (your ChatGPT plan, or an OpenAI API \
+             key) 3. A hosted model (OpenRouter credits)"
+        );
+        assert_eq!(
+            shown,
+            [
+                "1. Claude Code (your Claude Pro or Max plan; claude foun…",
+                "2. Codex (your ChatGPT plan, or an OpenAI API key)",
+                "3. A hosted model (OpenRouter credits)",
+            ]
+        );
+        // Wide enough, or no terminal size: as they are, nothing listed.
+        assert_eq!(fit_items(&items, Some(160)), (Vec::new(), items.clone()));
+        assert_eq!(fit_items(&items, None), (Vec::new(), items));
     }
 
     #[tokio::test]

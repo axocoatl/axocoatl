@@ -1,0 +1,175 @@
+{
+  "data": {
+    "id": "qwen/qwen3-coder",
+    "name": "Qwen: Qwen3 Coder 480B A35B",
+    "created": 1753230546,
+    "description": "Qwen3-Coder-480B-A35B-Instruct is a Mixture-of-Experts (MoE) code generation model developed by the Qwen team. It is optimized for agentic coding tasks such as function calling, tool use, and long-context reasoning over...",
+    "architecture": {
+      "tokenizer": "Qwen3",
+      "instruct_type": null,
+      "modality": "text->text",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    "endpoints": [
+      {
+        "name": "Google | qwen/qwen3-coder-480b-a35b-07-25",
+        "model_id": "qwen/qwen3-coder",
+        "model_name": "Qwen: Qwen3 Coder 480B A35B",
+        "context_length": 262144,
+        "pricing": {
+          "prompt": "0.00000022",
+          "completion": "0.0000018",
+          "discount": 0
+        },
+        "provider_name": "Google",
+        "tag": "google-vertex/us-south1",
+        "service_tier": null,
+        "quantization": "unknown",
+        "max_completion_tokens": 65536,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "structured_outputs",
+          "response_format",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "seed",
+          "top_k",
+          "repetition_penalty",
+          "frequency_penalty",
+          "presence_penalty",
+          "stop",
+          "tools",
+          "tool_choice",
+          "logprobs",
+          "top_logprobs"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": true,
+          "function": true
+        },
+        "status": -5,
+        "uptime_last_30m": 0,
+        "uptime_last_5m": 0,
+        "uptime_last_1d": 0,
+        "supports_implicit_caching": false,
+        "native_tools": {},
+        "supports_voice_cloning": false,
+        "supports_multiple_audio_references": false,
+        "supports_image_reference": false,
+        "supports_diarization": false,
+        "latency_last_30m": null,
+        "throughput_last_30m": null
+      },
+      {
+        "name": "DeepInfra | qwen/qwen3-coder-480b-a35b-07-25",
+        "model_id": "qwen/qwen3-coder",
+        "model_name": "Qwen: Qwen3 Coder 480B A35B",
+        "context_length": 262144,
+        "pricing": {
+          "prompt": "0.0000003",
+          "completion": "0.000001",
+          "input_cache_read": "0.0000001",
+          "discount": 0
+        },
+        "provider_name": "DeepInfra",
+        "tag": "deepinfra/turbo",
+        "service_tier": null,
+        "quantization": "fp4",
+        "max_completion_tokens": 65536,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "repetition_penalty",
+          "top_k",
+          "seed",
+          "min_p",
+          "tools",
+          "tool_choice",
+          "logit_bias",
+          "structured_outputs",
+          "response_format"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": true,
+          "function": true
+        },
+        "status": 0,
+        "uptime_last_30m": 95.23809523809523,
+        "uptime_last_5m": null,
+        "uptime_last_1d": 95.64796905222437,
+        "supports_implicit_caching": true,
+        "native_tools": {},
+        "supports_voice_cloning": false,
+        "supports_multiple_audio_references": false,
+        "supports_image_reference": false,
+        "supports_diarization": false,
+        "latency_last_30m": null,
+        "throughput_last_30m": null
+      },
+      {
+        "name": "Venice | qwen/qwen3-coder-480b-a35b-07-25",
+        "model_id": "qwen/qwen3-coder",
+        "model_name": "Qwen: Qwen3 Coder 480B A35B",
+        "context_length": 256000,
+        "pricing": {
+          "prompt": "0.00000035",
+          "completion": "0.0000015",
+          "input_cache_read": "0.00000004",
+          "discount": 0
+        },
+        "provider_name": "Venice",
+        "tag": "venice/fp8",
+        "service_tier": null,
+        "quantization": "fp8",
+        "max_completion_tokens": 65536,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "top_k",
+          "response_format",
+          "structured_outputs",
+          "tools",
+          "tool_choice"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": false,
+          "function": false
+        },
+        "status": -5,
+        "uptime_last_30m": 54.54545454545454,
+        "uptime_last_5m": 0,
+        "uptime_last_1d": 77.8175313059034,
+        "supports_implicit_caching": true,
+        "native_tools": {},
+        "supports_voice_cloning": false,
+        "supports_multiple_audio_references": false,
+        "supports_image_reference": false,
+        "supports_diarization": false,
+        "latency_last_30m": null,
+        "throughput_last_30m": null
+      }
+    ]
+  }
+}

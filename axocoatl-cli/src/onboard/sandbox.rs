@@ -639,10 +639,8 @@ fn version(o: &mut Onboarding) -> bool {
         ));
         return false;
     }
-    if !o.facts.os.is_macos() && (major, minor) < TESTED_LINUX_PODMAN {
-        o.ui.warn(format!(
-            "Podman {version} has not been tested with Axocoatl (4.9 is)"
-        ));
+    if !o.facts.os.is_macos() && (major, minor) != TESTED_LINUX_PODMAN {
+        o.ui.warn(podman_report::linux_untested(&version));
     }
     true
 }

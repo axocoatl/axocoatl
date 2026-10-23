@@ -20,8 +20,9 @@ use super::{Choice, Onboarding};
 
 pub(crate) const OPENROUTER_API: &str = "https://openrouter.ai/api/v1";
 
-/// The writer onboarding suggests: a coding model.
-pub(crate) const DEFAULT_WRITER: &str = "qwen/qwen3-coder";
+/// The writer onboarding suggests: Qwen3-Coder 30B-A3B, the model the local
+/// default `qwen3-coder:30b` runs, which several OpenRouter providers serve.
+pub(crate) const DEFAULT_WRITER: &str = "qwen/qwen3-coder-30b-a3b-instruct";
 /// The reviewer onboarding suggests: another vendor's model, the family of
 /// the reviewer Axocoatl has measured (gpt-oss 120B).
 pub(crate) const DEFAULT_REVIEWER: &str = "openai/gpt-oss-120b";
@@ -102,9 +103,17 @@ pub(crate) struct Key {
 /// How OpenRouter's keys start: only such a value is sent to OpenRouter.
 const KEY_PREFIX: &str = "sk-or-";
 
-/// Whether Axocoatl's secret store under `data_dir` holds the OpenRouter
-/// key secret `name`: the check `axocoatl doctor` makes.
-fn stored(data_dir: &Path, name: &str) -> bool {
+/// Whether Axocoatl's secret store holds the OpenRouter key secret `name`:
+/// the check `axocoatl doctor` makes. With `--plan`, read
+/// without the store, which makes its directory owner-only before it reads.
+fn stored(o: &Onboarding, name: &str) -> bool {
+    if o.ui.plan() {
+        return axocoatl_daemon::provider_secrets::never_a_provider_key("openrouter", name)
+            .is_none()
+            && super::stored_secret_names(o)
+                .iter()
+                .any(|stored| stored == name);
+    }
     let credentials = axocoatl_config::ProviderCredentials {
         api_key: Default::default(),
         api_key_secret: Some(name.to_string()),
@@ -114,7 +123,7 @@ fn stored(data_dir: &Path, name: &str) -> bool {
         idle_timeout_secs: None,
     };
     matches!(
-        key_source("openrouter", &credentials, data_dir),
+        key_source("openrouter", &credentials, &o.data_dir()),
         KeySource::Secret { stored: true, .. }
     )
 }
@@ -144,13 +153,12 @@ fn read_stored(data_dir: &Path, name: &str) -> Result<zeroize::Zeroizing<String>
 /// names no key) the one `axocoatl connect openrouter` stores, when
 /// Axocoatl's secret store holds it.
 fn connected(o: &Onboarding) -> Option<String> {
-    let data_dir = o.data_dir();
     if let Some(name) = &o.kept.openrouter_key_secret {
-        if stored(&data_dir, name) {
+        if stored(o, name) {
             return Some(name.clone());
         }
     }
-    (o.kept.openrouter_key.is_none() && stored(&data_dir, OPENROUTER_SECRET))
+    (o.kept.openrouter_key.is_none() && stored(o, OPENROUTER_SECRET))
         .then(|| OPENROUTER_SECRET.to_string())
 }
 
@@ -165,8 +173,15 @@ fn connect_command(name: &str) -> String {
 }
 
 /// The connected key `name`, read to be checked (never shown), or, when it
-/// cannot be used, the step left.
-fn use_connected(o: &mut Onboarding, name: &str, again: &str) -> Option<Key> {
+/// cannot be used, at a terminal a new browser sign-in if the person
+/// agrees, else the step left.
+async fn use_connected(
+    o: &mut Onboarding,
+    name: &str,
+    again: &str,
+    writer: Option<&str>,
+    reviewer: &str,
+) -> Option<Key> {
     match read_stored(&o.data_dir(), name) {
         Ok(value) => {
             o.ui.say(format!(
@@ -178,14 +193,43 @@ fn use_connected(o: &mut Onboarding, name: &str, again: &str) -> Option<Key> {
             })
         }
         Err(why) => {
-            o.step_left(format!(
-                "The OpenRouter key secret {name} cannot be used ({why}): run `{}` to sign in \
-                 again (it replaces the stored key), then run `{again}`",
-                connect_command(name)
-            ));
-            None
+            let problem = format!("The OpenRouter key secret {name} cannot be used ({why})");
+            sign_in_again(o, &problem, name, again, writer, reviewer).await
         }
     }
+}
+
+/// A key that cannot be used (`problem`): at a terminal, sign in to
+/// OpenRouter in the browser again if the person agrees (the key it issues
+/// is stored as secret [`OPENROUTER_SECRET`], and the configuration reads it
+/// from there); else the step left, with the command that does it.
+async fn sign_in_again(
+    o: &mut Onboarding,
+    problem: &str,
+    name: &str,
+    again: &str,
+    writer: Option<&str>,
+    reviewer: &str,
+) -> Option<Key> {
+    if o.ui.interactive() {
+        o.ui.fail(problem);
+        if o.ui.consent(
+            &format!(
+                "Sign in to OpenRouter in your browser now? OpenRouter issues a new key, stored \
+                 as secret {OPENROUTER_SECRET} without being shown, and the configuration reads it \
+                 from there."
+            ),
+            true,
+            false,
+        ) {
+            return sign_in(o, again, writer, reviewer).await;
+        }
+    }
+    o.step_left(format!(
+        "{problem}: run `{}` to sign in again (it replaces the stored key), then run `{again}`",
+        connect_command(name)
+    ));
+    None
 }
 
 /// What "Update this setup" does with the key the configuration already
@@ -345,7 +389,7 @@ async fn key(o: &mut Onboarding, again: &str, writer: Option<&str>, reviewer: &s
             .kept
             .openrouter_key_secret
             .clone()
-            .filter(|name| !stored(&o.data_dir(), name))
+            .filter(|name| !stored(o, name))
         {
             o.ui.warn(format!(
                 "Your configuration reads the OpenRouter key from the secret {}, which is not \
@@ -354,7 +398,7 @@ async fn key(o: &mut Onboarding, again: &str, writer: Option<&str>, reviewer: &s
             ));
         }
         if let Some(name) = connected(o) {
-            return use_connected(o, &name, again);
+            return use_connected(o, &name, again, writer, reviewer).await;
         }
         if let Some(kept) = kept_key(o) {
             return kept;
@@ -439,12 +483,31 @@ async fn sign_in(
     reviewer: &str,
 ) -> Option<Key> {
     use crate::connect_cmd::openrouter::{
-        connected_lines, onboarding_sign_in, sign_in_for_onboarding, Connected,
+        connected_lines, onboarding_sign_in, sign_in_for_onboarding, Connected, Hooks,
     };
     let data_dir = o.data_dir();
     let given = o.openrouter_sign_in.take();
     let result = {
-        let mut out = Said::new(&o.ui);
+        // At a terminal, the end of the sign-in time asks whether to wait
+        // again; each connection to the sign-in's loopback server goes to
+        // the log.
+        let ui = &o.ui;
+        let host = &o.host;
+        let ask = |time: std::time::Duration| {
+            ui.consent(
+                &crate::connect_cmd::openrouter::keep_waiting_question(time),
+                true,
+                false,
+            )
+        };
+        let report = |line: &str| host.log(line);
+        let hooks = Hooks {
+            keep_waiting: ui
+                .interactive()
+                .then_some(&ask as &(dyn Fn(std::time::Duration) -> bool + Sync)),
+            report: Some(&report),
+        };
+        let mut out = Said::new(ui);
         match given {
             Some((browser, endpoints)) => {
                 onboarding_sign_in(
@@ -454,14 +517,23 @@ async fn sign_in(
                     browser,
                     endpoints,
                     again,
+                    hooks,
                     &mut out,
                     &crate::connect_cmd::Interrupt::default(),
                 )
                 .await
             }
             None => {
-                sign_in_for_onboarding(&data_dir, writer, Some(reviewer), false, again, &mut out)
-                    .await
+                sign_in_for_onboarding(
+                    &data_dir,
+                    writer,
+                    Some(reviewer),
+                    false,
+                    again,
+                    hooks,
+                    &mut out,
+                )
+                .await
             }
         }
     };
@@ -684,31 +756,53 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
     }
     again.push(format!("--reviewer openrouter:{reviewer}"));
     let again = again.join(" ");
-    let Some(key) = key(o, &again, writer.as_deref(), &reviewer).await else {
+    let Some(mut key) = key(o, &again, writer.as_deref(), &reviewer).await else {
         return;
     };
     // A sign-in checked the key and both models itself.
-    if let Some(value) = key.check.as_ref().filter(|_| !o.ui.plan()) {
-        match check_key(&o.openrouter_api, value).await {
+    if let Some(value) = key.check.clone().filter(|_| !o.ui.plan()) {
+        match check_key(&o.openrouter_api, &value).await {
             KeyCheck::Accepted => o.ui.ok("OpenRouter accepted the key"),
             KeyCheck::Refused(status) => {
-                o.step_left(match &key.reference {
-                    KeyRef::Secret(name) => format!(
-                        "OpenRouter refused the key you connected (secret {name}, HTTP \
-                         {status}): run `{}` to sign in again (it replaces the stored key), \
-                         then run `{again}`",
-                        connect_command(name)
+                let (problem, name) = match &key.reference {
+                    KeyRef::Secret(name) => (
+                        format!(
+                            "OpenRouter refused the key you connected (secret {name}, HTTP \
+                             {status})"
+                        ),
+                        name.clone(),
                     ),
-                    _ => format!(
-                        "OpenRouter refused the key ({status}): check it at {KEYS_PAGE}, then \
-                         run `{again}` in a terminal to enter another (or add \
-                         --openrouter-key-env VAR)"
+                    _ => (
+                        format!("OpenRouter refused the key (HTTP {status})"),
+                        OPENROUTER_SECRET.to_string(),
                     ),
-                });
-                return;
+                };
+                let signed_in = if o.ui.interactive() {
+                    sign_in_again(o, &problem, &name, &again, writer.as_deref(), &reviewer).await
+                } else {
+                    o.step_left(match &key.reference {
+                        KeyRef::Secret(name) => format!(
+                            "{problem}: run `{}` to sign in again (it replaces the stored key), \
+                             then run `{again}`",
+                            connect_command(name)
+                        ),
+                        _ => format!(
+                            "{problem}: check it at {KEYS_PAGE}, then run `{again}` in a terminal \
+                             to enter another or sign in in your browser (or add \
+                             --openrouter-key-env VAR)"
+                        ),
+                    });
+                    None
+                };
+                let Some(signed_in) = signed_in else {
+                    return;
+                };
+                key = signed_in;
             }
             KeyCheck::Unchecked(why) => o.ui.warn(format!("The key could not be checked: {why}")),
         }
+    }
+    if key.check.is_some() && !o.ui.plan() {
         match model_ids(&o.openrouter_api).await {
             Ok(ids) => {
                 let mut missing = false;
@@ -732,9 +826,158 @@ pub(crate) async fn run(o: &mut Onboarding, choice: &mut Choice, with_writer: bo
             }
         }
     }
+    // Each model's endpoints, as a run admits them: one OpenRouter reports
+    // unavailable right now, or none native Sessions can use, is said before
+    // anything is written (at a terminal another model can be chosen).
+    let value = key_value(o, &key);
+    let mut writer = writer;
+    if let Some(chosen) = writer.clone() {
+        match usable_model(o, "writer", chosen, Some(&reviewer), &value).await {
+            Some(model) => writer = Some(model),
+            None => return,
+        }
+    }
+    let avoid = writer.clone().or(writer_name);
+    let Some(reviewer) = usable_model(o, "reviewer", reviewer, avoid.as_deref(), &value).await
+    else {
+        return;
+    };
     choice.openrouter_key = Some(key.reference);
     if let Some(writer) = writer {
         choice.writer_model = Some(ModelRef::new(Provider::OpenRouter, &writer));
     }
     choice.reviewer_model = Some(ModelRef::new(Provider::OpenRouter, &reviewer));
+}
+
+/// The key a run would send, to read the endpoints as it does: the value
+/// checked, or the stored secret a sign-in wrote. OpenRouter serves the
+/// endpoint list without one too.
+fn key_value(o: &Onboarding, key: &Key) -> zeroize::Zeroizing<String> {
+    match (&key.check, &key.reference) {
+        (Some(value), _) => value.clone(),
+        (None, KeyRef::Secret(name)) if !o.ui.plan() => {
+            read_stored(&o.data_dir(), name).unwrap_or_default()
+        }
+        _ => zeroize::Zeroizing::new(String::new()),
+    }
+}
+
+/// Why `model` cannot run in native Sessions now, from its endpoints, read
+/// as a run reads them: `Ok(None)` when it can, `Ok(Some(why))` when it
+/// cannot (every endpoint that fits unavailable or degraded right now, or
+/// none fits), `Err(why)` when they could not be read.
+async fn endpoint_problem(api: &str, key: &str, model: &str) -> Result<Option<String>, String> {
+    match axocoatl_llm_openai::observe_native_openrouter_endpoints(api, key, model).await {
+        Ok(endpoints) => Ok(endpoints.refusal(model).map(|refusal| match refusal {
+            axocoatl_llm::ProviderError::ApiError { message, .. }
+            | axocoatl_llm::ProviderError::InvalidRequest { message, .. } => message,
+            other => other.to_string(),
+        })),
+        Err(axocoatl_llm::ProviderError::InvalidRequest { message, .. }) => Ok(Some(message)),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The OpenRouter models onboarding offers in place of one that cannot run
+/// now, the first in this order that can run now: the default writer, other
+/// coding models, and the default reviewer.
+pub(crate) const SUGGESTED: [&str; 5] = [
+    DEFAULT_WRITER,
+    "z-ai/glm-4.6",
+    "deepseek/deepseek-chat-v3.1",
+    "qwen/qwen3-coder",
+    DEFAULT_REVIEWER,
+];
+
+/// The first of [`SUGGESTED`] that is not `tried` nor `avoid` (the other
+/// role's model) and that native Sessions can use now, or `None`.
+async fn healthy_suggestion(
+    api: &str,
+    key: &str,
+    tried: &[String],
+    avoid: Option<&str>,
+) -> Option<&'static str> {
+    for candidate in SUGGESTED {
+        if tried.iter().any(|tried| tried == candidate) || Some(candidate) == avoid {
+            continue;
+        }
+        if matches!(endpoint_problem(api, key, candidate).await, Ok(None)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// `model` for `role`, once its endpoints show it can run in native
+/// Sessions now. When it cannot, at a terminal another model is asked for
+/// (Enter takes the first of [`SUGGESTED`] that can run now, never `avoid`,
+/// the other role's model); without one, or under `--yes`, the step left
+/// says why and names that model.
+async fn usable_model(
+    o: &mut Onboarding,
+    role: &str,
+    mut model: String,
+    avoid: Option<&str>,
+    key: &str,
+) -> Option<String> {
+    if o.ui.plan() {
+        o.ui.say(format!(
+            "  would check that OpenRouter has an endpoint for {model} ({role}) that native \
+             Sessions can use now"
+        ));
+        return Some(model);
+    }
+    let mut tried = vec![model.clone()];
+    loop {
+        let why = match endpoint_problem(&o.openrouter_api, key, &model).await {
+            Ok(None) => {
+                o.ui.ok(format!(
+                    "OpenRouter has an endpoint for {model} that native Sessions can use now"
+                ));
+                return Some(model);
+            }
+            Err(why) => {
+                o.ui.warn(format!(
+                    "The endpoints of {model} could not be read ({why}); a run checks them again"
+                ));
+                return Some(model);
+            }
+            Ok(Some(why)) => why,
+        };
+        let suggestion = healthy_suggestion(&o.openrouter_api, key, &tried, avoid)
+            .await
+            .unwrap_or_default();
+        if !o.ui.interactive() {
+            let flag = if role == "writer" {
+                "--writer-model openrouter:VENDOR/MODEL"
+            } else {
+                "--reviewer openrouter:VENDOR/MODEL"
+            };
+            o.step_left(format!(
+                "The {role} model cannot run now: {why} Run `axocoatl onboard` again later, or \
+                 with another {role} model ({flag}{})",
+                if suggestion.is_empty() {
+                    String::new()
+                } else {
+                    format!(", such as openrouter:{suggestion}")
+                }
+            ));
+            return None;
+        }
+        o.ui.fail(format!("The {role} model cannot run now: {why}"));
+        let next = o.ui.input(
+            &format!("Another model for the {role} (vendor/model; empty stops here)"),
+            suggestion,
+        );
+        let next = next.trim().trim_start_matches("openrouter:").to_string();
+        if next.is_empty() || Some(next.as_str()) == avoid || tried.contains(&next) {
+            o.step_left(format!(
+                "Choose another {role} model for OpenRouter, or run `axocoatl onboard` again \
+                 later: {why}"
+            ));
+            return None;
+        }
+        tried.push(next.clone());
+        model = next;
+    }
 }

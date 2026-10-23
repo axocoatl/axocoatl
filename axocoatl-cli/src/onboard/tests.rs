@@ -18,6 +18,7 @@ use super::detect::{Facts, OllamaServer, OllamaService, Os, OsRelease};
 use super::host::testing::Shims;
 use super::ui::{Answer, Mode, Ui};
 use super::*;
+use crate::connect_cmd::openrouter_tests::{catalog_row, mount_endpoints};
 
 const GIB: u64 = 1 << 30;
 
@@ -331,6 +332,9 @@ async fn facts(
         service_program: None,
         xdg_config_home: None,
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        proxy_variables: Vec::new(),
     }
 }
 
@@ -2377,9 +2381,9 @@ async fn doctor_looks_for_the_id_map_tools_on_path_only() {
 /// Step 3's steps left for a model too large for this computer, or whose
 /// context Ollama keeps too small, name `axocoatl onboard` with the writer
 /// (so Step 1 is not asked again, nor the writer switched), and
-/// `--replace` when the configuration this run writes has an Agent on the
-/// model: `--update` keeps a configuration's Agents and changes only
-/// `run.models`.
+/// `--replace` only when an Agent `--update` keeps as it is (the person's
+/// own, or one of onboarding's edited by hand) runs the model: `--update`
+/// moves onboarding's team and `run.models` to the new models.
 #[cfg(unix)]
 #[tokio::test]
 async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents() {
@@ -2399,38 +2403,76 @@ async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents()
         found,
         OnboardArgs::default(),
     );
-    let because = " (--replace backs up the configuration and writes the team for the new \
-                   models; --update would keep the Agents that run gpt-oss:20b)";
-    // No configuration yet: this run writes the team, which runs it.
+    // No configuration yet: this run writes the team, which `--update`
+    // moves.
     assert_eq!(o.kept.agent_models, None);
     assert_eq!(
         ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::ClaudeCode),
-        format!(
-            "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not \
-             pulled: choose a smaller reviewer with `axocoatl onboard --replace --writer \
-             claude-code`, or OpenRouter for the reviewer with `axocoatl onboard --replace \
-             --writer claude-code --reviewer openrouter:openai/gpt-oss-120b`{because}"
-        )
+        "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not pulled: \
+         choose a smaller reviewer with `axocoatl onboard --update --writer claude-code`, or \
+         OpenRouter for the reviewer with `axocoatl onboard --update --writer claude-code \
+         --reviewer openrouter:openai/gpt-oss-120b`"
     );
     assert_eq!(
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Ollama
+            WriterChoice::Ollama,
+            Some("gpt-oss:20b")
         ),
-        format!("for these models (`axocoatl onboard --replace --writer openrouter`){because}")
+        "for these models (`axocoatl onboard --update --writer openrouter`)"
+    );
+    // Only the reviewer's context is too small: the local writer stays.
+    assert_eq!(
+        ollama::hosted_instead(
+            &o,
+            &[("gpt-oss:20b".to_string(), 4096)],
+            WriterChoice::Ollama,
+            Some("qwen3-coder:30b")
+        ),
+        "for the reviewer (`axocoatl onboard --update --writer ollama --writer-model \
+         ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`)"
     );
     assert_eq!(
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Codex
+            WriterChoice::Codex,
+            None
         ),
-        format!(
-            "for the reviewer (`axocoatl onboard --replace --writer codex --reviewer \
-             openrouter:openai/gpt-oss-120b`){because}"
-        )
+        "for the reviewer (`axocoatl onboard --update --writer codex --reviewer \
+         openrouter:openai/gpt-oss-120b`)"
     );
+    // A Reviewer of onboarding's team edited by hand stays as it is with
+    // --update: --replace, which writes the team again.
+    let written = config::render(&config::ConfigPlan {
+        ollama_base_url: Some("http://localhost:11434".into()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: None,
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: 8080,
+        note: "Claude Code writes".into(),
+        writer: "claude-code",
+        codex_credential: None,
+    })
+    .replace("Report each defect", "List each defect");
+    o.kept = Kept::from_config(&written);
+    assert_eq!(o.kept.agent_models, Some(vec!["gpt-oss:20b".to_string()]));
+    assert_eq!(
+        ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::ClaudeCode),
+        "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not pulled: \
+         choose a smaller reviewer with `axocoatl onboard --replace --writer claude-code`, or \
+         OpenRouter for the reviewer with `axocoatl onboard --replace --writer claude-code \
+         --reviewer openrouter:openai/gpt-oss-120b` (--replace backs up the configuration and \
+         writes the team for the new models; --update would keep the Agents you edited, which \
+         run gpt-oss:20b)"
+    );
+    o.kept = Kept::default();
     // A model that fits is only pulled.
     assert_eq!(
         ollama::pull_step(
@@ -3035,10 +3077,11 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder-30b-a3b-instruct"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-test-onboard");
     podman_shim(&shims);
@@ -3088,7 +3131,7 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
             .model
             .clone()
     };
-    assert_eq!(model("lead"), "qwen/qwen3-coder");
+    assert_eq!(model("lead"), "qwen/qwen3-coder-30b-a3b-instruct");
     assert_eq!(model("reviewer"), "openai/gpt-oss-120b");
     assert_ne!(model("lead"), model("reviewer"));
     assert!(text.contains(&format!("api_key: \"${{{variable}}}\"")));
@@ -3415,10 +3458,11 @@ async fn an_interactive_reviewer_equal_to_the_writer_is_asked_again() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "z-ai/glm-4.6"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("z-ai/glm-4.6")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_I_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-interactive");
     let facts = facts(
@@ -3837,7 +3881,11 @@ async fn plan_shows_the_rootful_switch_the_service_and_the_first_run() {
          --rootful=false && podman machine start",
         "would ask: Install the Always-On Service",
         "would run: axocoatl service install && axocoatl service start",
-        "would copy the sample repository to a temporary directory and run: axocoatl run fix",
+        "would copy the sample repository to a temporary directory, SAMPLE, and run: axocoatl \
+         run fix --task",
+        "--repo SAMPLE/repo --receipt SAMPLE/receipt.json --record SAMPLE/record.jsonl",
+        "would then run: axocoatl receipt verify SAMPLE/receipt.json --key \"$(axocoatl receipt \
+         key)\" --repo SAMPLE/repo",
         "Plan only: nothing was changed.",
     ] {
         assert!(output.contains(expected), "{expected}\n{output}");
@@ -3933,6 +3981,107 @@ async fn update_keeps_the_writer_and_the_models_the_setup_has() {
     );
 }
 
+/// `--update --writer-model` moves the team onboarding wrote to the new
+/// writer model, shown in Step 4's changes, and keeps an Agent edited by
+/// hand on its model, saying so; nothing is left on the old model but it.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_moves_the_team_to_the_new_models_and_keeps_edited_agents() {
+    let shims = Shims::new();
+    shims.add("axocoatl", "exit 0");
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b", "qwen3:8b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            update: true,
+            writer_model: Some("ollama:qwen3:8b".into()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let old = config::render(&config::ConfigPlan {
+        ollama_base_url: Some(ollama.url()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "qwen3-coder:30b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: o.args.port.unwrap(),
+        note: "local Ollama setup".into(),
+        writer: "ollama",
+        codex_credential: None,
+    })
+    // Scout's tools edited by hand.
+    .replace(
+        "    tools: [read_file, list_dir, grep, glob, bash]\n    writes: []\n    system_prompt: \
+         \"Answer",
+        "    tools: [read_file, grep]\n    writes: []\n    system_prompt: \"Answer",
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    let new = config_text(&o);
+    let config = axocoatl_config::parse_config(&new, &o.paths.config_path).unwrap();
+    let model = |id: &str| {
+        config
+            .agents
+            .iter()
+            .find(|agent| agent.id == id)
+            .unwrap()
+            .model
+            .clone()
+    };
+    assert_eq!(model("lead"), "qwen3:8b");
+    assert_eq!(model("assistant"), "qwen3:8b");
+    assert_eq!(model("reviewer"), "gpt-oss:20b");
+    assert_eq!(model("scout"), "qwen3-coder:30b");
+    assert_eq!(new.matches("qwen3-coder:30b").count(), 1, "{new}");
+    assert!(
+        output.contains("+     model: \"qwen3:8b\"")
+            && output.contains("-     model: \"qwen3-coder:30b\""),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "Kept as you edited it: scout on ollama:qwen3-coder:30b (the rest of onboarding's \
+             team moves to the models chosen; `axocoatl onboard --replace` writes the whole team \
+             again)"
+        ),
+        "{output}"
+    );
+}
+
 /// Updating an OpenRouter setup uses the key it has: under --yes the
 /// `${VARIABLE}` it names, with nothing to change; at the terminal, "no"
 /// to keeping it asks how to give a key, and one entered at the hidden
@@ -3949,10 +4098,11 @@ async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_U_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-from-env");
     let old_port = free_port();
@@ -4535,13 +4685,13 @@ async fn doctor_moves_a_too_large_reviewer_not_the_claude_code_writer() {
         item.detail,
         "gpt-oss:20b is not pulled, and at 13.8 GB it is too large for this computer's 16 GB"
     );
+    // `--update` moves the Agents onboarding wrote with the reviewer.
     assert_eq!(
         item.fix.as_deref(),
         Some(
-            "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer claude-code \
+            "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer claude-code \
              --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller reviewer (`axocoatl \
-             onboard --replace --writer claude-code`) (`--update` would keep the Agents that run \
-             gpt-oss:20b; `--replace` backs this configuration up first)"
+             onboard --update --writer claude-code`)"
         )
     );
 }
@@ -4775,6 +4925,11 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         id_root: shims.root.path().to_path_buf(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        git: Some("2.39.5".to_string()),
+        proxy_variables: Vec::new(),
+        on_load: None,
         // Not the configuration a test checks (`home/config.yaml`), which
         // doctor then treats as one given with --config; a test of the
         // default one says so.
@@ -4831,5 +4986,145 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
     }
 }
 
+/// Below 48 GB, a server that answered at Step 0 with a pair that fits,
+/// and is not ready after setup (its cloud models stay on until it is
+/// restarted by hand): the pair it has is chosen, as at Step 0, never the
+/// built-in pair "not tested at this memory size", and no step says to pull
+/// a model it has.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_server_not_ready_after_setup_keeps_the_pair_it_had() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    let facts = facts(
+        mac("26.6"),
+        32,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Manual,
+    )
+    .await;
+    assert_eq!(facts.ollama_server.models().len(), 2);
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    assert_eq!(ollama::writer_and_reviewer(&mut o, &mut choice).await, None);
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b (from the models on this \
+             server that fit this computer)"
+        ),
+        "{output}"
+    );
+    assert!(
+        !output.contains("not tested at this memory size"),
+        "{output}"
+    );
+    assert_eq!(
+        choice.writer_model,
+        Some(ModelRef::new(Provider::Ollama, "qwen3-coder:30b"))
+    );
+    assert_eq!(
+        choice.reviewer_model,
+        Some(ModelRef::new(Provider::Ollama, "gpt-oss:20b"))
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].starts_with("Restart your Ollama server"),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !o.steps.iter().any(|step| step.contains("Pull")),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// A setup without run defaults: for the default configuration doctor's
+/// fix is onboarding's; for another one (`doctor --config PATH`), which no
+/// onboarding command changes, it is the line to set in that file.
+#[tokio::test]
+async fn the_missing_run_models_fix_follows_the_configuration() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let config_path = shims.home.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        "# Writer: ollama (axocoatl run fix)\nagents: []\nproviders:\n  ollama:\n    \
+         base_url: \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+    let detail = |report: &crate::doctor::Report| {
+        report
+            .ready_for
+            .iter()
+            .find(|path| path.command == "axocoatl run fix")
+            .map(|path| path.detail.clone())
+            .unwrap()
+    };
+    let other = crate::doctor::collect(&config_path, &doctor_env(&shims)).await;
+    let in_file = format!(
+        "in {} (`axocoatl onboard` writes only the default configuration, {})",
+        config_path.display(),
+        shims.home.path().join("default/config.yaml").display()
+    );
+    let detail_other = detail(&other);
+    assert!(
+        detail_other.contains(&format!(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or set run.models.writer \
+             {in_file}"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        detail_other.contains(&format!(
+            "no reviewer model: set run.models.reviewer {in_file}, or pass --model \
+             reviewer=PROVIDER:MODEL"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        !detail_other.contains("axocoatl onboard --update"),
+        "{detail_other}"
+    );
+    let default = crate::doctor::Environment {
+        default_config: config_path.clone(),
+        ..doctor_env(&shims)
+    };
+    let detail_default = detail(&crate::doctor::collect(&config_path, &default).await);
+    assert!(
+        detail_default.contains(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl onboard \
+             --update --writer ollama`"
+        ),
+        "{detail_default}"
+    );
+    assert!(
+        detail_default.contains(
+            "no reviewer model: run `axocoatl onboard`, or pass --model reviewer=PROVIDER:MODEL"
+        ),
+        "{detail_default}"
+    );
+}
+
 mod interactive;
 mod openrouter_sign_in;
+mod platform;

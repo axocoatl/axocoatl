@@ -41,7 +41,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// The oldest Podman Axocoatl runs work with: `keep-id` with `uid=` and
 /// `gid=` arrived in Podman 4.3.
 pub const MIN_PODMAN_VERSION: (u64, u64) = (4, 3);
-/// The Podman Axocoatl is tested with on Linux (Ubuntu 24.04's).
+/// The Podman minor release Axocoatl is tested with on Linux: Ubuntu
+/// 24.04's 4.9, what the release gate's Linux runs and CI use. Doctor and
+/// onboarding warn about any other (Fedora's 5.x and Arch's 6.x included),
+/// as they do on macOS.
 pub const TESTED_LINUX_PODMAN: (u64, u64) = (4, 9);
 /// The Podman minor releases Axocoatl is tested with on macOS: 6.1, what
 /// Homebrew installs for onboarding today and what the release gate's Mac runs
@@ -60,6 +63,12 @@ fn tested_macos_text() -> String {
         Some((last, rest)) => format!("{} and {last} are", rest.join(", ")),
         None => String::new(),
     }
+}
+
+/// The warning for a Podman on Linux other than [`TESTED_LINUX_PODMAN`].
+pub fn linux_untested(version: &str) -> String {
+    let (major, minor) = TESTED_LINUX_PODMAN;
+    format!("Podman {version} has not been tested with Axocoatl on Linux yet ({major}.{minor} is)")
 }
 
 /// What `podman info --format json` said.
@@ -1574,11 +1583,11 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
                         .to_string()
                 }),
             ));
-        } else if !platform.machine && (major, minor) < TESTED_LINUX_PODMAN {
+        } else if !platform.machine && (major, minor) != TESTED_LINUX_PODMAN {
             list.push(Finding::new(
                 Level::Warn,
                 "Podman version",
-                format!("Podman {version} has not been tested with Axocoatl (4.9 is)"),
+                linux_untested(&version),
                 None,
             ));
         } else if platform.machine && !TESTED_MACOS_PODMAN.contains(&(major, minor)) {
@@ -2192,6 +2201,32 @@ mod tests {
                  podman system migrate"
             )
         );
+    }
+
+    /// Only Ubuntu 24.04's Podman 4.9 is tested on Linux: an older or a
+    /// newer release (Fedora's 5.x, Arch's 6.x) warns, as any release
+    /// other than 6.1 does on macOS.
+    #[test]
+    fn a_linux_podman_other_than_4_9_is_not_tested() {
+        let ids = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let version_finding = |version: &str| {
+            let mut report = linux_report(LINUX_INFO, Some(ids.clone()));
+            report.client_version = Some(version.to_string());
+            findings(&report, &platform(false))
+                .into_iter()
+                .find(|finding| finding.name == "Podman version")
+        };
+        assert_eq!(version_finding("4.9.3"), None);
+        assert_eq!(version_finding("4.9.4-rhel"), None);
+        for version in ["4.6.2", "5.4.2", "6.0.1"] {
+            let finding = version_finding(version).unwrap();
+            assert_eq!(finding.level, Level::Warn, "{version}");
+            assert_eq!(
+                finding.detail,
+                format!("Podman {version} has not been tested with Axocoatl on Linux yet (4.9 is)")
+            );
+        }
+        assert_eq!(version_finding("4.2.0").unwrap().level, Level::Fail);
     }
 
     #[test]

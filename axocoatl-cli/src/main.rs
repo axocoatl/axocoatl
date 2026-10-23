@@ -853,7 +853,7 @@ fn service_install_summary(
 
 /// The service writes only an `axocoatl url` hint to its log, never the
 /// token, so service commands point at `axocoatl url` for the sign-in link.
-const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config <config>`, using the config the service was installed with.";
+const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.";
 
 fn cmd_service_start() {
     with_manager(
@@ -1295,7 +1295,7 @@ fn runtime_volume_doctor_line(
                 Err((
                     format!("{summary}; {} could not be removed", report.failed.len()),
                     format!(
-                        "{shown}{}\n           Remove each with `podman volume rm <name>` once no \
+                        "{shown}{}\n           Remove each with `podman volume rm NAME` once no \
                          container uses it, or restart the daemon to try again.",
                         if more == 0 {
                             String::new()
@@ -2473,7 +2473,7 @@ async fn cmd_session_list() {
         Ok(axocoatl_daemon::ipc::IpcResponse::Sessions { sessions }) => {
             if sessions.is_empty() {
                 println!("No directory sessions yet.");
-                println!("Create one:  axocoatl session new <directory>");
+                println!("Create one:  axocoatl session new DIRECTORY");
                 return;
             }
             println!(
@@ -2521,7 +2521,7 @@ fn display_environment_state(state: &str) -> &str {
 fn session_readiness_guidance(session: &axocoatl_daemon::ipc::IpcSessionInfo) -> String {
     match session.environment_state.as_str() {
         "ready" => format!(
-            "Send it work:  axocoatl session exec {} \"<instruction>\"",
+            "Send it work:  axocoatl session exec {} \"INSTRUCTION\"",
             session.id
         ),
         "preparing" => concat!(
@@ -3415,7 +3415,7 @@ mod tests {
             hint.starts_with("axo-egr-ses-9: volume is being used"),
             "{hint}"
         );
-        assert!(hint.contains("podman volume rm <name>"), "{hint}");
+        assert!(hint.contains("podman volume rm NAME"), "{hint}");
         assert!(
             runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred))
                 .unwrap()

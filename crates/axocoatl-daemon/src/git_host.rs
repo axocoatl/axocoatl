@@ -340,7 +340,7 @@ pub async fn remote_repo_spec(
     if !branch_out.status.success() {
         return Err(format!(
             "the repo at '{d}' is in detached-HEAD state (not on a branch). Check out a branch \
-             (git switch <branch>) so the remote sandbox can clone and track it."
+             (`git switch BRANCH`) so the remote sandbox can clone and track it."
         ));
     }
     let branch = out(&branch_out);
@@ -357,7 +357,7 @@ pub async fn remote_repo_spec(
         } else {
             format!(
                 "the repo at '{d}' has no 'origin' remote (found: {}). Add one with \
-                 `git remote add origin <https-url>`.",
+                 `git remote add origin URL`, with the https URL of the repository.",
                 others.replace('\n', ", ")
             )
         });

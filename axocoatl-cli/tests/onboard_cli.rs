@@ -226,14 +226,76 @@ fn doctor_without_a_configuration_points_to_onboard() {
         stdout.contains("[FAIL] Config missing: no configuration at"),
         "{stdout}"
     );
+    // No default configuration either: onboarding writes it, then a copy
+    // goes there, with a command that runs as printed.
     assert!(
-        stdout.contains(
-            "Write a configuration there, or check the default one with `axocoatl doctor` \
-             (`axocoatl onboard` writes only the default configuration, "
-        ),
+        stdout.contains("Write the default configuration with `axocoatl onboard` (it writes only "),
         "{stdout}"
     );
+    let copy = format!(
+        "`cp {} {}`",
+        shell_word(&default_config(home.path())),
+        shell_word(&home.path().join("missing.yaml"))
+    );
+    assert!(stdout.contains(&copy), "{copy}\n{stdout}");
     assert!(!stdout.contains("→ Run `axocoatl onboard`\n"), "{stdout}");
+
+    // With the default configuration: copy it, or check it.
+    std::fs::create_dir_all(default_config(home.path()).parent().unwrap()).unwrap();
+    std::fs::write(default_config(home.path()), "agents: []\n").unwrap();
+    let output = axocoatl(home.path())
+        .args(["doctor", "--config"])
+        .arg(home.path().join("missing.yaml"))
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "Copy the default configuration there and change what this one needs ({copy}), or \
+             check the default one with `axocoatl doctor`"
+        )),
+        "{stdout}"
+    );
+
+    // The default configuration named another way (a relative path) is
+    // the default one: its fix is onboarding's.
+    std::fs::remove_file(default_config(home.path())).unwrap();
+    let relative = default_config(home.path())
+        .strip_prefix(home.path())
+        .unwrap()
+        .to_path_buf();
+    let output = axocoatl(home.path())
+        .args(["doctor", "--config"])
+        .arg(&relative)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("→ Run `axocoatl onboard`\n"), "{stdout}");
+}
+
+/// `path` as one shell word, quoted as doctor quotes it when it needs it.
+fn shell_word(path: &Path) -> String {
+    let text = path.display().to_string();
+    if text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_./:=,@+".contains(c))
+    {
+        text
+    } else {
+        format!("'{text}'")
+    }
+}
+
+/// Where onboarding writes the configuration of the user whose home is
+/// `home` (no XDG variables: [`axocoatl`] removes them).
+fn default_config(home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/Axocoatl/config.yaml")
+    } else {
+        home.join(".config/axocoatl/config.yaml")
+    }
 }
 
 /// `dev` holds its port before it starts or prints that it runs: a taken

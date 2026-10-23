@@ -715,22 +715,23 @@ pub fn probe_refusal(
         ),
         ProbeMissing::Module(module) => fixes.push(format!(
             "{declare} (the package that provides {module}), or give its install with --setup \
-             \"pip install <package>\""
+             \"pip install PACKAGE\", where PACKAGE provides {module}"
         )),
         ProbeMissing::Program(program) if system_program(program) => fixes.push(format!(
-            "pass --check \"<command>\" for a check that does not need {program}, or --image \
-             <ref> of an image that has it ({program} is a system program no setup can install)"
+            "pass --check \"COMMAND\" for a check that does not need {program}, or --image \
+             IMAGE of an image that has it ({program} is a system program no setup can install)"
         )),
         ProbeMissing::Program(program) if plan.toolchain.is_some() => fixes.push(format!(
-            "{declare}, or give its install with --setup \"<command that installs {program}>\""
+            "{declare}, or give its install with --setup \"COMMAND\", where COMMAND installs \
+             {program}"
         )),
         ProbeMissing::NoTests { .. } => fixes.push(
-            "pass --check \"<command>\" (or write a `Check command:` line in AXOCOATL.md) \
+            "pass --check \"COMMAND\" (or write a `Check command:` line in AXOCOATL.md) \
              with the command that runs the repository's tests"
                 .into(),
         ),
         ProbeMissing::Sandbox(_) => fixes.push(
-            "pass --check \"<command>\" for a check that does not need it; on a Linux kernel \
+            "pass --check \"COMMAND\" for a check that does not need it; on a Linux kernel \
              before 5.19 (Landlock ABI 1) Axocoatl's sandbox refuses every rename into another \
              directory, a limit of the sandbox, not of the repository"
                 .into(),
@@ -747,17 +748,20 @@ pub fn probe_refusal(
                 // A placeholder with the choices in words: `node|python`
                 // pasted into a shell is a pipeline.
                 fixes.push(
-                    "pass --toolchain <language> for Axocoatl's image of the repository's \
-                     language, where <language> is node, python, rust or go"
+                    "pass --toolchain LANGUAGE for Axocoatl's image of the repository's \
+                     language, where LANGUAGE is node, python, rust or go"
                         .into(),
                 );
             }
         } else {
-            fixes
-                .push("pass --toolchain <another language> when the check runs another one".into());
+            fixes.push(
+                "pass --toolchain LANGUAGE when the check runs another language, where LANGUAGE \
+                 is node, python, rust or go"
+                    .into(),
+            );
         }
-        fixes.push("pass --image <ref> of an image that has it".into());
-        fixes.push("pass --check \"<command>\" for a check this image can run".into());
+        fixes.push("pass --image IMAGE of an image that has it".into());
+        fixes.push("pass --check \"COMMAND\" for a check this image can run".into());
         fixes.push("use a loadout whose environment provides it".into());
     }
     fixes.push("or pass --no-probe to run anyway when the probe is wrong about this check".into());
@@ -1035,7 +1039,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.contains("Pass --toolchain <language>, where <language> is node or go"),
+            error.contains("Pass --toolchain LANGUAGE, where LANGUAGE is node or go"),
             "{error}"
         );
     }
@@ -1406,9 +1410,16 @@ mod tests {
             "--image",
             "loadout",
             "--no-probe",
+            // Each value to fill in is a placeholder in capitals, which
+            // pastes as it is, never one in angle brackets.
+            "give its install with --setup \"COMMAND\", where COMMAND installs jest",
+            "pass --toolchain LANGUAGE when the check runs another language, where LANGUAGE is \
+             node, python, rust or go",
+            "pass --image IMAGE of an image that has it",
         ] {
             assert!(message.contains(expected), "{expected}: {message}");
         }
+        assert!(!message.contains('<'), "{message}");
     }
 
     /// TC-NU-5: the advice fits the language and the program, and the setup
@@ -1430,10 +1441,7 @@ mod tests {
             make.contains("system program no setup can install"),
             "{make}"
         );
-        assert!(
-            !make.contains("--setup \"<command that installs make>\""),
-            "{make}"
-        );
+        assert!(!make.contains("where COMMAND installs make"), "{make}");
         assert!(!make.contains("devDependencies"), "{make}");
         assert!(
             make.contains("Setup: `pip install -e . pytest`: exited 0."),
@@ -1441,6 +1449,10 @@ mod tests {
         );
         let module = probe_refusal(&plan, "pytest", &ProbeMissing::Module("yaml".into()), None);
         assert!(module.contains("pyproject.toml"), "{module}");
+        assert!(
+            module.contains("--setup \"pip install PACKAGE\", where PACKAGE provides yaml"),
+            "{module}"
+        );
         let tests = probe_refusal(
             &plan,
             "python3 -m unittest discover",
@@ -1481,7 +1493,7 @@ mod tests {
             message.contains("To fix it: pass --toolchain python"),
             "{message}"
         );
-        assert!(!message.contains("pip install <package>"), "{message}");
+        assert!(!message.contains("pip install PACKAGE"), "{message}");
         assert!(!message.contains("node, python, rust or go"), "{message}");
     }
 

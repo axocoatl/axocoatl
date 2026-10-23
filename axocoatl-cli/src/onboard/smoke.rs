@@ -499,16 +499,20 @@ pub(crate) async fn run(
         let args = run_args(
             writer,
             choice,
-            Path::new("<temporary directory>/repo"),
-            Path::new("<temporary directory>/receipt.json"),
-            Path::new("<temporary directory>/record.jsonl"),
+            Path::new("SAMPLE/repo"),
+            Path::new("SAMPLE/receipt.json"),
+            Path::new("SAMPLE/record.jsonl"),
             &o.paths.config_path,
         );
         o.ui.say(format!(
-            "    would copy the sample repository to a temporary directory and run: axocoatl {}",
+            "    would copy the sample repository to a temporary directory, SAMPLE, and run: \
+             axocoatl {}",
             shown(&args)
         ));
-        o.ui.say("    would then run: axocoatl receipt verify <receipt> --key \"$(axocoatl receipt key)\" --repo <repository>");
+        o.ui.say(
+            "    would then run: axocoatl receipt verify SAMPLE/receipt.json --key \
+             \"$(axocoatl receipt key)\" --repo SAMPLE/repo",
+        );
         return true;
     }
     // Tests keep it in their own temporary home.
