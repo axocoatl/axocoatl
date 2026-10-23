@@ -123,6 +123,7 @@ pub use lifecycle::{FinalizedTurn, SuccessorTurn};
 pub use repository::OwnedRepositoryCheck;
 pub(crate) use repository_activation::validate_repository_tools;
 pub use repository_activation::RepositoryActivationResource;
+pub(crate) use repository_snapshot::group_digits;
 pub use run::{AutonomousActivationResources, PreparedActivation, SettledActivation};
 pub(crate) use turn_review::rerun_cause_of_text as review_rerun_cause_of_text;
 #[cfg(test)]

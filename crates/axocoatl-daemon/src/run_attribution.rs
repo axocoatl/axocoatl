@@ -342,7 +342,9 @@ pub(crate) fn attribute_activation(captures: &[CaptureFacts]) -> ActivationChang
     ActivationChanges::Unknown(format!(
         "its {unlisted} capture lists none of the paths that differ from HEAD (it lists at most \
          {}, within its output), and {}, so the captures cannot be compared",
-        grouped_count(axocoatl_session::execution_content::MAX_CHANGED_PATHS),
+        crate::session_dispatch::group_digits(
+            axocoatl_session::execution_content::MAX_CHANGED_PATHS as u64
+        ),
         patch_not_whole()
     ))
 }
@@ -357,19 +359,6 @@ fn patch_not_whole() -> String {
          output)",
         axocoatl_session::execution_content::MAX_RECORDED_PATCH_BYTES / 1024
     )
-}
-
-/// `count` with a comma between each group of three digits, as `10,000`.
-fn grouped_count(count: usize) -> String {
-    let digits = count.to_string();
-    let mut grouped = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
 }
 
 /// One entry of a capture manifest: the path as recorded (bytes), its mode,

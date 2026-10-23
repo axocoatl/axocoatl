@@ -695,7 +695,7 @@ pub(crate) fn grant_exhausted_message(
 }
 
 /// `1457714` as `1,457,714`.
-pub(super) fn group_digits(value: u64) -> String {
+pub(crate) fn group_digits(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
