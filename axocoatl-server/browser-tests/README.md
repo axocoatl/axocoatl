@@ -281,7 +281,14 @@ and product regression file are present in the checkout, preventing an omitted
 untracked suite from producing a green build.
 
 The default suite needs no running Podman service, Ollama model, provider
-credential, or external application server. The optional compatibility reference
+credential, or external application server. It does need a Podman the daemon
+can find (on its `PATH`, and on macOS a machine, running or not, under the
+daemon's `HOME`): the New Session picker blocks Create session while readiness
+reports that no Session can run (`readiness.test.mjs` asserts it with a Podman
+that has no machine), so the journeys that create a Session through it
+(`skill-automation.test.mjs` and several in `workbench.test.mjs`) cannot
+otherwise. `skill-automation.test.mjs` then fails with readiness's reason
+instead of waiting on a disabled button. The optional compatibility reference
 journey requires a real Podman runtime image selected with
 `AXOCOATL_REFERENCE_RUNTIME_IMAGE`. The first-turn journey
 (`native-turn-git.test.mjs`) runs one native turn on Podman against a stub
