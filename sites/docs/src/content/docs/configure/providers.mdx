@@ -326,7 +326,7 @@ agents:
   - id: local-coder
     name: Local coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
 
 providers:
   ollama:
@@ -345,12 +345,59 @@ runs Ollama (the Homebrew service or an `ollama serve` you run), the app's Setti
 as the user `ollama`; then it restarts the server. See
 [Set up Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
-Some Ollama-served models return a requested tool call as response text instead
-of the structured field. Axocoatl recovers only complete, bounded calls whose
-names were actually offered in that Ollama request. The selected effective
-route must still be Ollama; response text from other providers remains text
-because Axocoatl cannot safely invent their native call ids, signatures, or
-content-block sequence.
+### Tool calls written as text
+
+Qwen3-Coder on Ollama sometimes writes a tool call as answer text instead of
+Ollama's structured `tool_calls` (it leaves out the opening `<tool_call>`).
+Both Ollama providers, native and OpenAI-compatible, run such calls only when
+they end the answer in Qwen3-Coder's own `<function=NAME>` format: the first
+line that starts with a call tag starts a run of complete call blocks that goes
+to the end of the answer; every call names a tool the request offered; and its
+values fit that tool's parameters (types, required parameters, `enum`). A
+`<tool_call>` that ends the line before the run is left out of the answer. A
+recovered call gets an id unique in the Session. When the answer also holds a
+call Ollama returned structured, only the structured calls run and the markup
+stays text. Nothing is read from text when the request set stop sequences or
+asked for JSON output.
+
+Markup in a code fence, an indented code block or an HTML block such as `<pre>`
+or `<!--` is quoted text, and so is a call tag after other text on its line in
+inline code (a code span may run over the lines of its paragraph), markup that
+names only tools the request did not offer, and a call tag mentioned in a
+sentence (`the <function=glob> tag`). An unfenced example in that format that
+ends an answer runs.
+
+Otherwise, an answer that calls an offered tool in a way that cannot run is
+refused instead of ending the turn having run nothing:
+
+- a line that starts with a call tag but no runnable run: prose after the
+  calls, a malformed block, a call to a tool the request did not offer next to
+  one it did, values that do not fit, or a response cut at its output limit
+  inside a call;
+- a call block (`<function=NAME>` with a `<parameter=…>` or `</function>` after
+  it) written after other text on its line, anywhere in the answer, even before
+  a run that begins a line;
+- a call written as JSON (`{"name": …, "arguments": …}`, the arguments as an
+  object or as a string holding one, or `{"NAME": {…}}`) that ends the answer:
+  the whole answer, the lines from its last line that starts with `{`, or a
+  `<tool_call>` block.
+
+The activation fails with the reason, the done reason and the number of tools
+offered; the workbench says "The model wrote a tool call as answer text that
+Axocoatl cannot run", the turn needs attention, and a run's Outcome lists it as
+`unrunnable_tool_call`, not as a provider failure. Nothing from that response
+ran; **Continue** asks the model again. JSON never runs as a call: JSON in a
+code fence, or followed by more text, stays the answer. Text from a line that
+starts a call is shown only when the response ends, and a `<tool_call>` that
+ends a line is shown only once the next line shows it opens no call.
+
+Qwen2.5-Coder (`qwen2.5-coder:14b` in Axocoatl's tests) returns its tool calls
+as JSON text rather than as calls Ollama lifts, so they never run. Onboarding
+offers it but never suggests it, nor a model whose `capabilities` lack `tools`,
+and `axocoatl doctor` warns about it for an Agent that lists tools.
+
+Response text from other providers stays text, because Axocoatl cannot safely
+invent their native call ids, signatures or content-block sequence.
 
 ## Use a compatibility endpoint
 

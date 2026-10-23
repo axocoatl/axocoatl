@@ -842,6 +842,11 @@ pub struct ExecutionActivationView {
     pub failure: Option<ActivationFailureView>,
 }
 
+/// How an Ollama provider's refusal of a tool call written as answer text
+/// starts, after `LLM provider error: ` (`ProviderError::RefusedResponse`).
+const TEXT_CALL_REFUSAL: &str = "ollama returned a response that was refused: the model wrote a \
+                                 call to ";
+
 /// How the host's failure line begins for a writer stopped before its
 /// repository captures could establish what it changed: the stop ended it,
 /// and any change it made is kept for review.
@@ -853,8 +858,8 @@ pub const STOPPED_BEFORE_CAPTURE: &str =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
     /// provider_incomplete | provider_error | provider_refusal |
-    /// budget_limited | round_limit | context_limit | scope_violation |
-    /// capture_unavailable | stopped | admission | other
+    /// unrunnable_tool_call | budget_limited | round_limit | context_limit |
+    /// scope_violation | capture_unavailable | stopped | admission | other
     pub class: &'static str,
     pub explanation: String,
     /// continue | finish_partial | review_then_finish | inspect
@@ -884,6 +889,22 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
         http_status,
         refusal,
     };
+    // An Ollama provider refused an answer that calls an offered tool as
+    // text it cannot run (a malformed or unoffered call, JSON, prose after
+    // it, a call after other text on its line): the model's own output, not
+    // the provider's failure. Decided before the rest of the line, which
+    // names a tool and parameter the model wrote.
+    if provider.is_some_and(|rest| rest.starts_with(TEXT_CALL_REFUSAL)) {
+        return Some(ActivationFailureView {
+            class: "unrunnable_tool_call",
+            explanation: "The model wrote a tool call as answer text that Axocoatl cannot run, \
+                          so nothing from that response ran."
+                .into(),
+            next_step: "continue",
+            http_status: None,
+            refusal: false,
+        });
+    }
     if refusal {
         return Some(view(
             "provider_refusal",
@@ -5398,6 +5419,31 @@ mod tests {
             class("Activation failed: LLM provider error: Streaming error: native Ollama: EOF before native terminal"),
             Some(("provider_incomplete", "continue"))
         );
+        // A call the model wrote as text that cannot run says so, as the
+        // model's output and not a provider failure, whatever tool or
+        // parameter name the model wrote into the line.
+        for line in [
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to glob as answer text that Axocoatl cannot run: text follows the call markup, so it does not end the answer. Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 7 tools offered",
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to bash as JSON in its answer, which Axocoatl never runs: only calls Ollama returns as tool calls, or that begin a line and end the answer in Qwen3-Coder's <function=…> format, run. Nothing from this response ran; Ollama ended it with finish_reason \"stop\" and 1 tool offered",
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to read_file as answer text that Axocoatl cannot run: read_file has a parameter content_filter it does not declare. Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 7 tools offered",
+        ] {
+            let view = classify_activation_failure(line).unwrap();
+            assert_eq!(
+                (view.class, view.next_step),
+                ("unrunnable_tool_call", "continue")
+            );
+            assert_eq!(view.http_status, None);
+            assert!(!view.refusal);
+            assert_eq!(
+                crate::failure_class::classify_failure_text(line),
+                crate::run_outcome::FailureClass::UnrunnableToolCall
+            );
+            assert!(
+                view.explanation.starts_with("The model wrote a tool call as answer text"),
+                "{}",
+                view.explanation
+            );
+        }
         assert_eq!(
             class("I finished. Activation failed: Token budget exceeded"),
             None

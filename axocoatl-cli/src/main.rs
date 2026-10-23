@@ -3871,9 +3871,10 @@ mod tests {
         assert_eq!(lead.writes, None, "the lead may change any file");
         let prompt = lead.system_prompt.as_deref().unwrap();
         assert!(
-            prompt.contains("If you have helpers, ask scout")
+            prompt.starts_with("Answer only with tool calls until the change is made and checked")
+                && prompt.contains("if you have helpers, ask scout")
                 && prompt.contains("AXOCOATL.md")
-                && prompt.contains("If you have helpers, ask reviewer"),
+                && prompt.contains("if you have helpers, ask reviewer"),
             "{prompt}"
         );
         for helper in &config.agents[1..3] {

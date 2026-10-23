@@ -84,18 +84,29 @@ async fn native_actor_stream_is_exact_persisted_before_publication_and_survives_
             frames.push(event);
         }
     }
-    assert_eq!(frames.len(), 3);
+    // Each model response is recorded with how it ended once it completes.
+    assert_eq!(frames.len(), 5);
     assert!(matches!(
-        frames[0].content.payload,
-        ActivationStreamPayload::ToolProposed { .. }
+        &frames[0].content.payload,
+        ActivationStreamPayload::ProviderResponse { finish_reason, tool_calls: 1, .. }
+            if finish_reason == "tool_use"
     ));
     assert!(matches!(
         frames[1].content.payload,
-        ActivationStreamPayload::ToolResult { .. }
+        ActivationStreamPayload::ToolProposed { .. }
     ));
     assert!(matches!(
         frames[2].content.payload,
+        ActivationStreamPayload::ToolResult { .. }
+    ));
+    assert!(matches!(
+        frames[3].content.payload,
         ActivationStreamPayload::Text { .. }
+    ));
+    assert!(matches!(
+        &frames[4].content.payload,
+        ActivationStreamPayload::ProviderResponse { finish_reason, tool_calls: 0, .. }
+            if finish_reason == "stop"
     ));
     let snapshot = fixture.controller.snapshot().unwrap();
     for (sequence, frame) in frames.iter().enumerate() {
@@ -115,6 +126,9 @@ async fn native_actor_stream_is_exact_persisted_before_publication_and_survives_
     let public = serde_json::to_string(&fixture.controller.control_plane().unwrap()).unwrap();
     assert!(public.contains("tool_proposed"));
     assert!(public.contains("stream_text"));
+    assert!(public.contains("provider_response"));
+    assert!(public.contains("Model response ended: stop"));
+    assert!(public.contains("; 1 call\"") && public.contains("; 0 calls\""));
     assert!(
         !public.contains("\"arguments\":{\"value\":\"actual\"}"),
         "protected arguments are not stream display data"

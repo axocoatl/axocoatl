@@ -565,6 +565,21 @@ impl SessionTurnControlPlane {
                         ActivationStreamPayload::ProviderRetry { reason } => {
                             ("provider_retry", bounded_text(reason))
                         }
+                        ActivationStreamPayload::ProviderResponse {
+                            finish_reason,
+                            offered_tools,
+                            tool_calls,
+                        } => (
+                            "provider_response",
+                            bounded_text(&format!(
+                                "Model response ended: {}",
+                                provider_response_summary(
+                                    finish_reason,
+                                    *offered_tools,
+                                    *tool_calls
+                                )
+                            )),
+                        ),
                         ActivationStreamPayload::ReasoningSummary { delta } => {
                             ("reasoning_summary", bounded_text(delta))
                         }
@@ -959,6 +974,20 @@ fn bounded_json(value: Value) -> EvidenceValue<Value> {
             original_byte_len: serialized.len() as u64,
         }
     }
+}
+
+/// How a model response ended, in words: `stop; 1 tool offered; 0 calls`.
+pub(crate) fn provider_response_summary(
+    finish_reason: &str,
+    offered_tools: usize,
+    tool_calls: usize,
+) -> String {
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    format!(
+        "{finish_reason}; {offered_tools} tool{} offered; {tool_calls} call{}",
+        plural(offered_tools),
+        plural(tool_calls)
+    )
 }
 
 fn bounded_text(value: &str) -> EvidenceValue<String> {

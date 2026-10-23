@@ -204,15 +204,20 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
 
 ## Data written by 1.5
 
-Axocoatl 1.5 records a change whose patch is larger than 512 KiB by the patch's digest,
-its size and its first 12 KiB; 1.4 could not capture such a change. Axocoatl 1.4.0 does
-not start on a data root in which 1.5 recorded one, and says:
+Axocoatl 1.5 records how each model response of a native Session ended (a
+`provider_response` event in the Session's history), from the first workbench Session
+turn or `axocoatl run` it runs on the data root, and it records a change whose patch is
+larger than 512 KiB by the patch's digest, its size and its first 12 KiB. Axocoatl 1.4
+reads neither, so 1.4.0 does not start on a data root on which 1.5 ran a turn or a run,
+whatever the size of its change. It says:
 
 ```text
-Failed to bootstrap daemon: Session error: could not recover canonical history for Session '…': Session error: Session dispatch: invalid execution content: invalid checked repository identity; existing data was not replaced and no work was replayed
+Failed to bootstrap daemon: Session error: could not recover canonical history for Session '…': Session error: execution content serialization: unknown variant `provider_response`, expected one of `text`, `provider_retry`, `reasoning_summary`, `tool_proposed`, `tool_result` at line 1 column …; existing data was not replaced and no work was replayed
 ```
 
-No command converts such a capture into one 1.4 reads. To go back to 1.4, restore the
+or, for a large change, `… invalid execution content: invalid checked repository identity; …`.
+
+No command converts these records into ones 1.4 reads. To go back to 1.4, restore the
 cold backup you made before upgrading, as [Restore](/operate/data-backup/#restore)
 describes, with the 1.4 binary: start Axocoatl 1.5 on the restored data root once and
 stop it, so that it records the copy's location (1.4.0 refuses a restored copy until

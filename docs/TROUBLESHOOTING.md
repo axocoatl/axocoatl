@@ -67,9 +67,11 @@ the version request. Restart it: `axocoatl service restart`,
 or stop `axocoatl dev` and start it again.
 
 **Axocoatl 1.4.0 does not start after 1.5 used its data**
-"could not recover canonical history for Session …: invalid checked repository
-identity": Axocoatl 1.5 recorded a change larger than 512 KiB in this data root, which
-1.4 cannot read, and no command converts it. Go back to 1.4 with the cold backup made
+"could not recover canonical history for Session …" with "unknown variant
+`provider_response`" or "invalid checked repository identity": Axocoatl 1.5 ran a
+workbench turn or an `axocoatl run` in this data root (it records how each model
+response ended) or recorded a change larger than 512 KiB, which 1.4 cannot read, and no
+command converts it. Go back to 1.4 with the cold backup made
 before the upgrade: restore it, start Axocoatl 1.5 on it once and stop it (1.4.0 refuses
 a restored copy until then), then start 1.4.0, which runs native Ollama Sessions only on
 Ollama 0.20.6. Work done with 1.5 is not in that backup. A large file a 1.5 run left

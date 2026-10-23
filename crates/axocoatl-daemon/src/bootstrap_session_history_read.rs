@@ -188,6 +188,7 @@ fn execution_turn_markdown(
                 match &event.content.payload {
                     ActivationStreamPayload::Text { delta } => markdown.push_str(delta),
                     ActivationStreamPayload::ProviderRetry { reason } => markdown.push_str(&format!("\n\n[Provider response ended early; retried once: {reason}]\n\n")),
+                    ActivationStreamPayload::ProviderResponse { finish_reason, offered_tools, tool_calls } => markdown.push_str(&format!("\nModel response ended: {}.\n", crate::session_control_plane::provider_response_summary(finish_reason, *offered_tools, *tool_calls))),
                     ActivationStreamPayload::ReasoningSummary { delta } => markdown.push_str(&format!("\nReasoning summary: {delta}\n")),
                     ActivationStreamPayload::ToolProposed { name, call_id, arguments_sha256, arguments_bytes, .. } => markdown.push_str(&format!("\nProposed tool: `{name}`, call `{call_id}`; input {arguments_bytes} bytes, SHA-256 `{arguments_sha256}`.\n")),
                     ActivationStreamPayload::ToolResult { name, call_id, result_sha256, result_bytes, is_error } => markdown.push_str(&format!("\nObserved tool result: `{name}`, call `{call_id}`; error: {is_error}; {result_bytes} bytes, SHA-256 `{result_sha256}`.\n")),

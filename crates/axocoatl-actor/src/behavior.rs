@@ -113,6 +113,14 @@ pub enum AgentStreamChunk {
     /// The provider response ended before completing and one retry starts.
     /// Earlier text in this round belongs to the abandoned attempt.
     ProviderRetry { reason: String },
+    /// A provider response completed: how it ended, how many tools its
+    /// request offered and how many calls it returned, so a stored turn shows
+    /// why each model response ended the way it did.
+    ProviderResponse {
+        finish_reason: axocoatl_llm::FinishReason,
+        offered_tools: usize,
+        tool_calls: usize,
+    },
     /// A tool call is about to run — surfaced so the UI can render a live
     /// tool-call card.
     ToolCallStarted {

@@ -217,6 +217,170 @@ async fn native_ollama_turn_runs_a_tool_call_the_model_wrote_as_text() {
         .any(|message| message["role"] == "tool" && message["tool_name"] == "glob"));
 }
 
+/// `text` until the request carries `rounds` tool results, then a final
+/// answer.
+struct TextCallsReply {
+    text: &'static str,
+    rounds: usize,
+}
+
+impl Respond for TextCallsReply {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        let results = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .count();
+        let response = serde_json::json!({
+            "model":"test-local",
+            "message":{"role":"assistant","content":if results >= self.rounds {"done"} else {self.text}},
+            "done":true, "done_reason":"stop", "prompt_eval_count":10, "eval_count":2
+        });
+        ResponseTemplate::new(200).set_body_raw(format!("{response}\n"), "application/x-ndjson")
+    }
+}
+
+async fn text_call_turn(reply: TextCallsReply) -> (Fixture, SettledActivation, Arc<CountingTool>, MockServer) {
+    let server = server_replying(reply).await;
+    let provider = NativeOllamaProvider::connect(native_config(server.uri(), "test-local"))
+        .await
+        .unwrap();
+    let mut config = agent_config("test-local", false, true, OUTPUT);
+    config.tools = vec!["glob".into()];
+    let fixture = local_fixture(config, 3 * ONE_CALL, "Fix the paging bug in src/paginate.js");
+    let tool = Arc::new(CountingTool::default());
+    let mut executor = axocoatl_tools::ToolExecutor::new();
+    executor.register_builtin("glob", tool.clone());
+    let resources = AutonomousActivationResources {
+        config: fixture.config.clone(),
+        profile: fixture.profile.clone(),
+        provider: Arc::new(provider),
+        counter: Arc::new(Counter),
+        tools: Arc::new(executor),
+    };
+    let settled = fixture
+        .controller
+        .prepare_autonomous_activation(fixture.activation.clone(), resources)
+        .unwrap()
+        .run()
+        .await
+        .unwrap();
+    (fixture, settled, tool, server)
+}
+
+/// How each model response of the activation ended, as its stream records it.
+fn recorded_responses(fixture: &Fixture) -> Vec<(String, usize, usize)> {
+    use axocoatl_session::execution_content::ActivationStreamPayload;
+    let state = fixture.controller.lock().unwrap();
+    let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
+    state
+        .content
+        .activation_stream(&snapshot, &fixture.activation)
+        .unwrap()
+        .into_iter()
+        .filter_map(|view| match view.content.payload {
+            ActivationStreamPayload::ProviderResponse {
+                finish_reason,
+                offered_tools,
+                tool_calls,
+            } => Some((finish_reason, offered_tools, tool_calls)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Two calls the model writes as text in one Session take different ids, so
+/// the history that carries both is valid and the turn goes on to its answer.
+/// (Before 1.5.0's final round the second recovery could repeat the first
+/// id, and every later request was refused.) The record says how each model
+/// response ended.
+#[tokio::test]
+async fn two_text_calls_in_one_native_session_keep_their_ids_apart() {
+    let (fixture, settled, tool, server) = text_call_turn(TextCallsReply {
+        text: TEXT_CALL,
+        rounds: 2,
+    })
+    .await;
+    assert!(settled.accepted, "{:?}", settled.failure);
+    assert_eq!(tool.count.load(Ordering::SeqCst), 2);
+    assert_eq!(settled.output.content().output.text, "done");
+    let last: serde_json::Value = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .rfind(|request| request.url.path() == "/api/chat")
+        .unwrap()
+        .body_json()
+        .unwrap();
+    let ids: Vec<&str> = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["tool_calls"][0]["id"].as_str())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(
+        recorded_responses(&fixture),
+        [
+            ("tool_use".to_string(), 1, 1),
+            ("tool_use".to_string(), 1, 1),
+            ("stop".to_string(), 1, 0)
+        ]
+    );
+}
+
+/// A call the model writes as text that cannot run (here a parameter missing
+/// its `</parameter>`) fails the activation with the reason, so the turn
+/// needs attention instead of ending "done" having run nothing.
+#[tokio::test]
+async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
+    let (fixture, settled, tool, _server) = text_call_turn(TextCallsReply {
+        text: "Looking.\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</function>",
+        rounds: 1,
+    })
+    .await;
+    assert!(!settled.accepted);
+    let failure = settled.failure.unwrap();
+    assert!(
+        failure.contains("call to glob as answer text that Axocoatl cannot run")
+            && failure.contains("done_reason \"stop\" and 1 tool offered"),
+        "{failure}"
+    );
+    // The recorded output, which the workbench reads, says what happened and
+    // offers Continue.
+    let recorded = &settled.output.content().output.text;
+    let view = axocoatl_session::execution_content::classify_activation_failure(recorded)
+        .expect("a host-written activation failure");
+    assert_eq!(
+        (view.class, view.next_step),
+        ("unrunnable_tool_call", "continue")
+    );
+    // `axocoatl run` outcomes, receipts and the loadout audit class it as
+    // the model's output, not a provider failure.
+    assert_eq!(
+        crate::loadout::driver::class_of(recorded, None),
+        axocoatl_session::run_outcome::FailureClass::UnrunnableToolCall
+    );
+    assert!(
+        view.explanation
+            .starts_with("The model wrote a tool call as answer text that Axocoatl cannot run"),
+        "{failure}: {}",
+        view.explanation
+    );
+    assert_eq!(tool.count.load(Ordering::SeqCst), 0);
+    let usage = fixture
+        .controller
+        .activation_provider_usage(&fixture.activation)
+        .unwrap();
+    assert_eq!(usage.calls, 1);
+    assert_eq!(usage.unsettled_calls, 0);
+    assert_eq!(usage.tokens.usage, TokenUsageStats::new(10, 2));
+}
+
 #[tokio::test]
 async fn native_ollama_tool_roundtrip_settles_zero_cost_and_reopens_actual_checkpoint() {
     let server = server(true, false).await;
@@ -458,8 +622,11 @@ async fn native_ollama_real_model_through_durable_controller() {
         .controller
         .activation_provider_usage(&fixture.activation)
         .unwrap();
-    assert_eq!(usage.calls, if use_tool { 2 } else { 1 });
-    assert_eq!(tool.count.load(Ordering::SeqCst), usize::from(use_tool));
+    let invocations = tool.count.load(Ordering::SeqCst);
+    if !use_tool {
+        assert_eq!(usage.calls, 1);
+        assert_eq!(invocations, 0);
+    }
     assert_eq!(usage.unsettled_calls, 0);
     assert!(usage.tokens.usage.input_tokens > 0);
     assert!(usage.tokens.usage.output_tokens > 0);
@@ -489,13 +656,32 @@ async fn native_ollama_real_model_through_durable_controller() {
     assert_eq!(checkpoint.cumulative_token_usage_known, !json);
     let answer = &checkpoint.session_messages.last().unwrap().content;
     assert!(!answer.trim().is_empty());
-    assert_eq!(
-        checkpoint
+    let results: Vec<_> = checkpoint
+        .session_messages
+        .iter()
+        .filter(|message| message.role == MessageRole::Tool)
+        .collect();
+    assert_eq!(!results.is_empty(), use_tool);
+    if use_tool {
+        // A model may call the tool more than once (qwen3-coder:30b did so in
+        // 1 run of 4), so the proof is a call with the asked-for value, one
+        // provider call per tool round plus the answer, and the answer.
+        let rounds = checkpoint
             .session_messages
             .iter()
-            .any(|message| message.role == MessageRole::Tool),
-        use_tool,
-    );
+            .filter(|message| message.role == MessageRole::Assistant && !message.tool_calls.is_empty())
+            .count();
+        assert!(invocations >= 1);
+        assert_eq!(results.len(), invocations);
+        assert_eq!(usage.calls as usize, rounds + 1);
+        assert!(
+            results
+                .iter()
+                .any(|result| result.content.contains(r#""value":"actual""#)),
+            "{results:?}"
+        );
+        assert!(answer.to_ascii_lowercase().contains("ready"), "{answer}");
+    }
     if json {
         let value: serde_json::Value = serde_json::from_str(answer).unwrap();
         assert_eq!(value["ok"], true);
@@ -509,7 +695,7 @@ async fn native_ollama_real_model_through_durable_controller() {
             "observed_usage":usage.tokens,"provider_api_cost_microunits":usage.cost_microunits,
             "provider_api_cost_known":usage.cost_known,"calls":usage.calls,
             "accepted":settled.accepted,"checkpoint_reopened":true,"answer":answer,
-            "tool_invocations":tool.count.load(Ordering::SeqCst),
+            "tool_invocations":invocations,
         })
     );
 }

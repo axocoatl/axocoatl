@@ -103,8 +103,11 @@ function validateExecutionView(view) {
       const content = event?.content; const payload = content?.payload;
       requireValue(id(event?.reference) && content?.schema_version === 1 && exactKey(content.activation) === exactKey(exact)
         && content.sequence === sequence++, 'Observed output identity or sequence is invalid.');
-      requireValue(object(payload) && ['text', 'reasoning_summary', 'provider_retry', 'tool_proposed', 'tool_result'].includes(payload.kind), 'This output observation is unsupported.');
+      requireValue(object(payload) && ['text', 'reasoning_summary', 'provider_retry', 'provider_response', 'tool_proposed', 'tool_result'].includes(payload.kind), 'This output observation is unsupported.');
       if (payload.kind === 'provider_retry') requireValue(typeof payload.reason === 'string', 'Observed provider retry is invalid.');
+      else if (payload.kind === 'provider_response') requireValue(['stop', 'tool_use', 'max_tokens', 'content_filter', 'error'].includes(payload.finish_reason)
+        && Number.isSafeInteger(payload.offered_tools) && payload.offered_tools >= 0
+        && Number.isSafeInteger(payload.tool_calls) && payload.tool_calls >= 0, 'Observed provider response is invalid.');
       else if (['text', 'reasoning_summary'].includes(payload.kind)) requireValue(typeof payload.delta === 'string', 'Observed text is invalid.');
       else {
         const byteField = payload.kind === 'tool_proposed' ? 'arguments_bytes' : 'result_bytes';
@@ -302,6 +305,7 @@ export function renderExecutionHistoryTurn(view, {renderMarkdown, onGraph, onRef
         const payload = event.content.payload; const item = document.createElement('pre'); item.dataset.evidenceRef = event.reference;
         if (payload.kind === 'reasoning_summary') item.textContent = payload.delta;
         else if (payload.kind === 'provider_retry') item.textContent = `Provider response ended early; the Agent retried once. ${payload.reason}`;
+        else if (payload.kind === 'provider_response') item.textContent = `Model response ended: ${payload.finish_reason.replaceAll('_', ' ')} · ${payload.offered_tools} tool${payload.offered_tools === 1 ? '' : 's'} offered · ${payload.tool_calls} call${payload.tool_calls === 1 ? '' : 's'}`;
         else if (payload.kind === 'tool_proposed') item.textContent = `Proposed ${payload.name} · call ${payload.call_id}\nInput: ${payload.arguments_bytes} bytes · SHA-256 ${payload.arguments_sha256}`;
         else item.textContent = `Observed ${payload.name} result · call ${payload.call_id} · ${payload.is_error ? 'error' : 'returned'}\n${payload.result_bytes} bytes · SHA-256 ${payload.result_sha256}`;
         details.append(item);

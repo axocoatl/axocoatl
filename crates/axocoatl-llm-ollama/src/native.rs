@@ -34,6 +34,8 @@ use axocoatl_llm::{
     TOOL_METADATA_ROUTE_MODEL, TOOL_METADATA_ROUTE_PROVIDER, TOOL_METADATA_ROUTE_SLOT,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+
+use crate::text_calls::{self, TextCalls, TextHold};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
@@ -72,10 +74,6 @@ const ACCOUNTING_RESERVE: usize = 2048;
 const MAX_MESSAGES: usize = 4096;
 const MAX_RECORDS: usize = 65_536;
 const THINKING_METADATA: &str = "ollama.native.thinking";
-// Where a tool call Qwen3-Coder writes as text begins when it samples a plain
-// `<` instead of its `<tool_call>` token (and so where Ollama's parser leaves it
-// in the content).
-const TEXT_CALL_MARKERS: [&str; 2] = ["<function=", "<tool_call>"];
 
 /// Explicit finite limits for an operator-configured, cloud-disabled GGUF server.
 #[derive(Debug, Clone)]
@@ -555,7 +553,12 @@ impl NativeOllamaProvider {
         self.validate_request(request)?;
         let messages = native_messages(&request.messages)?;
         let mut options = json!({"num_ctx": self.config.context_tokens,
-            "num_predict": self.prediction_limit(request), "stop": request.stop_sequences});
+            "num_predict": self.prediction_limit(request)});
+        // An explicit list, even an empty one, replaces the stop strings of
+        // the model's Modelfile (qwen3-coder has three).
+        if !request.stop_sequences.is_empty() {
+            options["stop"] = json!(request.stop_sequences);
+        }
         if let Some(value) = request.temperature {
             options["temperature"] = json!(value);
         }
@@ -629,16 +632,20 @@ impl NativeOllamaProvider {
             let mut pending = Vec::new();
             let mut received = 0usize;
             let mut records = 0usize;
-            loop {
+            // Why the response ended without its terminal events. Text held
+            // until then is shown first, so the abandoned or refused output
+            // is not lost; nothing in it runs.
+            let mut failure = None;
+            'read: loop {
                 let next = match deadlines.next(&mut bytes, deadline, PROVIDER).await {
                     Ok(value) => value,
-                    Err(error) => { yield Err(error); return; }
+                    Err(error) => { failure = Some(error); break 'read; }
                 };
                 let eof = next.is_none();
                 if let Some(chunk) = next {
-                    let chunk = match chunk { Ok(chunk) => chunk, Err(error) => { yield Err(transport_error(&error)); return; } };
+                    let chunk = match chunk { Ok(chunk) => chunk, Err(error) => { failure = Some(transport_error(&error)); break 'read; } };
                     if chunk.len() > cap.saturating_sub(received) {
-                        yield Err(protocol("response exceeds its byte limit")); return;
+                        failure = Some(protocol("response exceeds its byte limit")); break 'read;
                     }
                     received += chunk.len();
                     pending.extend_from_slice(&chunk);
@@ -650,27 +657,27 @@ impl NativeOllamaProvider {
                     if pending.first() == Some(&b'\n') { pending.remove(0); }
                     if line.iter().all(u8::is_ascii_whitespace) { continue; }
                     records += 1;
-                    if records > MAX_RECORDS { yield Err(protocol("too many response records")); return; }
+                    if records > MAX_RECORDS { failure = Some(protocol("too many response records")); break 'read; }
                     let value: Value = match serde_json::from_slice(&line) {
                         Ok(value) => value,
-                        Err(_) => { yield Err(protocol("malformed NDJSON record")); return; }
+                        Err(_) => { failure = Some(protocol("malformed NDJSON record")); break 'read; }
                     };
                     // Even an error record may contain observed, incurred usage.
                     let observed = state.observe_counts(&value);
                     if let Some(usage) = observed {
                         let event = StreamEvent::UsageObservation(usage);
-                        if let Err(error) = state.charge(&event) { yield Err(error); return; }
+                        if let Err(error) = state.charge(&event) { failure = Some(error); break 'read; }
                         yield Ok(event);
                         if state.emitted > state.cap.saturating_sub(ACCOUNTING_RESERVE) {
-                            yield Err(protocol("payload exhausted its reserved accounting margin")); return;
+                            failure = Some(protocol("payload exhausted its reserved accounting margin")); break 'read;
                         }
                     }
                     let events = match state.record(&value, status) {
                         Ok(events) => events,
-                        Err(error) => { yield Err(with_retry_after(error, retry_after)); return; }
+                        Err(error) => { failure = Some(with_retry_after(error, retry_after)); break 'read; }
                     };
                     for event in events {
-                        if let Err(error) = state.charge(&event) { yield Err(error); return; }
+                        if let Err(error) = state.charge(&event) { failure = Some(error); break 'read; }
                         yield Ok(event);
                     }
                 }
@@ -678,25 +685,35 @@ impl NativeOllamaProvider {
             }
             // A refused request with no readable body is a rejection, not a
             // response that ended early, so it is never retried.
-            if !(200..300).contains(&status) {
-                yield Err(with_retry_after(ProviderError::ApiError {
+            if failure.is_none() && !(200..300).contains(&status) {
+                failure = Some(with_retry_after(ProviderError::ApiError {
                     provider: PROVIDER.into(),
                     status,
                     message: "native Ollama rejected or failed the bounded inference request".into(),
                 }, retry_after));
+            }
+            if failure.is_none() && state.rejected.is_none() {
+                // finish() charges its events; a refusal it finds is taken below.
+                match state.finish() {
+                    Ok(events) => for event in events { yield Ok(event); },
+                    Err(error) => failure = Some(error),
+                }
+            }
+            let rejection = if failure.is_none() { state.take_rejection() } else { None };
+            if failure.is_some() || rejection.is_some() {
+                if let Some(event) = state.release_held() {
+                    if state.charge(&event).is_ok() { yield Ok(event); }
+                }
+            }
+            if let Some(error) = failure {
+                yield Err(error);
                 return;
             }
-            if let Some((usage, error)) = state.take_rejection() {
+            if let Some((usage, error)) = rejection {
                 if let Some(event) = usage {
                     if state.charge(&event).is_ok() { yield Ok(event); }
                 }
                 yield Err(error);
-                return;
-            }
-            let events = match state.finish() { Ok(events) => events, Err(error) => { yield Err(error); return; } };
-            for event in events {
-                if let Err(error) = state.charge(&event) { yield Err(error); return; }
-                yield Ok(event);
             }
         };
         Ok(Box::pin(stream))
@@ -1086,224 +1103,6 @@ fn native_messages(messages: &[ChatMessage]) -> Result<Vec<Value>, ProviderError
     Ok(values)
 }
 
-/// Give each text value of a call written as text the type the tool's schema
-/// declares for it (integer, number or boolean), as Ollama's Qwen3-Coder parser
-/// does for the calls it lifts. A value that does not parse stays text.
-fn coerce_text_arguments(arguments: &mut Value, schema: &Value) {
-    let (Some(arguments), Some(properties)) = (
-        arguments.as_object_mut(),
-        schema.get("properties").and_then(Value::as_object),
-    ) else {
-        return;
-    };
-    for (key, value) in arguments.iter_mut() {
-        let declared: Vec<&str> = match properties.get(key).and_then(|p| p.get("type")) {
-            Some(Value::String(kind)) => vec![kind.as_str()],
-            Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
-            _ => continue,
-        };
-        if let Some(typed) = value.as_str().and_then(|text| typed_text(text, &declared)) {
-            *value = typed;
-        }
-    }
-}
-
-/// `text` as the first declared type it parses as, tried in Ollama's order.
-fn typed_text(text: &str, declared: &[&str]) -> Option<Value> {
-    let text = text.trim();
-    if declared.contains(&"integer") || declared.contains(&"number") {
-        if let Ok(number) = text.parse::<i64>() {
-            return Some(number.into());
-        }
-    }
-    if declared.contains(&"number") {
-        if let Some(number) = text
-            .parse::<f64>()
-            .ok()
-            .and_then(serde_json::Number::from_f64)
-        {
-            return Some(Value::Number(number));
-        }
-    }
-    if declared.contains(&"boolean") {
-        if text.eq_ignore_ascii_case("true") {
-            return Some(true.into());
-        }
-        if text.eq_ignore_ascii_case("false") {
-            return Some(false.into());
-        }
-    }
-    if declared.contains(&"null") && text == "null" {
-        return Some(Value::Null);
-    }
-    if declared.contains(&"array") || declared.contains(&"object") {
-        if let Ok(json) = serde_json::from_str::<Value>(text) {
-            if (json.is_array() && declared.contains(&"array"))
-                || (json.is_object() && declared.contains(&"object"))
-            {
-                return Some(json);
-            }
-        }
-    }
-    None
-}
-
-/// Calls checked per answer and per run, and the longest answer read for
-/// them: bounds on work done inside the stream.
-const TEXT_CALL_LIMIT: usize = 128;
-const TEXT_CALL_CONTENT_LIMIT: usize = 256 * 1024;
-
-/// A call block's tool name and its parameters, as written.
-type TextCall<'a> = (&'a str, Vec<(&'a str, &'a str)>);
-
-/// One `<function=NAME>` block of Qwen3-Coder's call format at the start of
-/// `text`: its name, its `<parameter=KEY>VALUE</parameter>` pairs and its
-/// length. `None` unless only whitespace and parameter pairs come between the
-/// opening tag and `</function>`. A value is text up to `</parameter>`, never
-/// read for further calls, and holds no line that opens or closes a tag (a
-/// value missing its `</parameter>` would otherwise swallow the next call);
-/// one newline on each side is the format's own.
-fn function_block(text: &str) -> Option<(TextCall<'_>, usize)> {
-    let rest = text.strip_prefix("<function=")?;
-    let (name, mut body) = rest.split_once('>')?;
-    if !plain_tag_word(name) {
-        return None;
-    }
-    let mut parameters: Vec<(&str, &str)> = Vec::new();
-    let mut keys = HashSet::new();
-    loop {
-        body = body.trim_start();
-        if let Some(after) = body.strip_prefix("</function>") {
-            return Some(((name, parameters), text.len() - after.len()));
-        }
-        let (key, after) = body.strip_prefix("<parameter=")?.split_once('>')?;
-        let (value, after) = after.split_once("</parameter>")?;
-        if !plain_tag_word(key) || !keys.insert(key) || swallows_markup(value) {
-            return None;
-        }
-        let value = value
-            .strip_prefix("\r\n")
-            .or_else(|| value.strip_prefix('\n'))
-            .unwrap_or(value);
-        let value = value
-            .strip_suffix("\r\n")
-            .or_else(|| value.strip_suffix('\n'))
-            .unwrap_or(value);
-        parameters.push((key, value));
-        body = after;
-    }
-}
-
-/// Whether a parameter value holds markup of the call around it rather than
-/// text: a line that opens or closes a tag, another parameter, or a closed
-/// call followed by another (a value missing its `</parameter>` takes in
-/// what comes after it, on the same line or the next).
-fn swallows_markup(value: &str) -> bool {
-    let tags = [
-        "<function=",
-        "</function>",
-        "<parameter=",
-        "<tool_call>",
-        "</tool_call>",
-    ];
-    value
-        .lines()
-        .any(|line| tags.iter().any(|tag| line.trim_start().starts_with(tag)))
-        || value.contains("<parameter=")
-        || value
-            .split_once("</function>")
-            .is_some_and(|(_, after)| after.contains("<function=") || after.contains("<tool_call>"))
-}
-
-/// A tool or parameter name inside a tag: no whitespace or markup.
-fn plain_tag_word(word: &str) -> bool {
-    !word.is_empty()
-        && !word
-            .chars()
-            .any(|c| c.is_whitespace() || matches!(c, '<' | '>' | '`'))
-}
-
-/// The `<function=…>` blocks `text` consists of, with only whitespace and
-/// `<tool_call>` tags around them; `None` if anything else is in it.
-fn call_run(mut text: &str) -> Option<Vec<TextCall<'_>>> {
-    let mut blocks = Vec::new();
-    loop {
-        text = text.trim_start();
-        if text.is_empty() {
-            return (!blocks.is_empty()).then_some(blocks);
-        }
-        if let Some(after) = text
-            .strip_prefix("<tool_call>")
-            .or_else(|| text.strip_prefix("</tool_call>"))
-        {
-            text = after;
-            continue;
-        }
-        let (block, used) = function_block(text)?;
-        blocks.push(block);
-        if blocks.len() > TEXT_CALL_LIMIT {
-            return None;
-        }
-        text = &text[used..];
-    }
-}
-
-/// A code fence line as Markdown reads it: up to three spaces, then three or
-/// more backticks (with no backtick after them) or tildes. Its character and
-/// length, and whether only whitespace follows (so it can close a fence).
-fn fence_line(line: &str) -> Option<(char, usize, bool)> {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
-        return None;
-    }
-    let line = &line[indent..];
-    let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let length = line.len() - line.trim_start_matches(mark).len();
-    let info = &line[length..];
-    if length < 3 || (mark == '`' && info.contains('`')) {
-        return None;
-    }
-    Some((mark, length, info.trim_matches([' ', '\t']).is_empty()))
-}
-
-/// The calls that end `content`, and where they start: the first line that
-/// begins with a call tag outside a code fence must begin a run of
-/// `<function=…>` blocks ([`call_run`]) that goes to the end. Anything else
-/// (a call quoted in a fence, indented, inline, in another call's value or
-/// with prose after it, or a malformed block) leaves the text as the answer.
-fn trailing_call_run(content: &str) -> Option<(usize, Vec<TextCall<'_>>)> {
-    if content.len() > TEXT_CALL_CONTENT_LIMIT {
-        return None;
-    }
-    let mut fence: Option<(char, usize)> = None;
-    let mut at = 0usize;
-    for line in content.split_inclusive('\n') {
-        let start = at;
-        at += line.len();
-        let text = line.trim_end_matches(['\n', '\r']);
-        if let Some((mark, length, bare)) = fence_line(text) {
-            fence = match fence {
-                None => Some((mark, length)),
-                Some((open, need)) if open == mark && length >= need && bare => None,
-                open => open,
-            };
-            continue;
-        }
-        if fence.is_none() && (line.starts_with("<function=") || line.starts_with("<tool_call>")) {
-            // Markdown also ends a line at a lone CR, which these lines do not
-            // split on: a fence before the call could hide behind one.
-            let lone_cr = content[..start]
-                .match_indices('\r')
-                .any(|(at, _)| !content[at + 1..].starts_with('\n'));
-            if lone_cr {
-                return None;
-            }
-            return call_run(&content[start..]).map(|run| (start, run));
-        }
-    }
-    None
-}
-
 struct NativeResponse {
     model: String,
     request: ChatRequest,
@@ -1315,20 +1114,25 @@ struct NativeResponse {
     token_limit: u64,
     terminal: Option<FinishReason>,
     content: String,
-    /// How much of `content` has been released as text.
-    released: usize,
-    /// `content` from a text call marker on is held until `done`.
-    holding: bool,
+    /// How much of `content` is shown, and what is held while the response
+    /// may still turn out to end in calls written as text.
+    hold: TextHold,
+    /// Every part of `content` is shown as it arrives: the request offered
+    /// no tools (or reads none from text), or a structured call arrived, so
+    /// no text is read as calls.
+    free: bool,
     thinking: String,
     calls: Vec<ToolCall>,
-    /// Why the model's tool calls were refused. The response is still read to
-    /// its `done` record so the usage it incurred is observed and settled.
+    /// Why the response was refused: its tool calls, or the text calls it
+    /// wrote that cannot run. The response is still read to its `done`
+    /// record so the usage it incurred is observed and settled.
     rejected: Option<ProviderError>,
 }
 impl NativeResponse {
     fn new(model: String, request: ChatRequest, cap: usize, token_limit: u64) -> Self {
         Self {
             model,
+            free: !text_calls::reads_text_calls(&request),
             request,
             cap,
             emitted: 0,
@@ -1338,84 +1142,28 @@ impl NativeResponse {
             token_limit,
             terminal: None,
             content: String::new(),
-            released: 0,
-            holding: false,
+            hold: TextHold::default(),
             thinking: String::new(),
             calls: Vec::new(),
             rejected: None,
         }
     }
-    /// The part of `content` that can be shown now: all of it when no tools
-    /// were offered. Otherwise text from a `<function=` or `<tool_call>` marker
-    /// on is held until `done` shows whether it was a call written as text,
-    /// and a short tail is kept so a marker split across records is never
-    /// half-shown.
+    /// The part of `content` that can be shown now ([`TextHold`]): all of it
+    /// when no text is read as calls.
     fn release_text(&mut self) -> Option<String> {
-        let end = if self.request.tools.is_empty() {
-            self.content.len()
-        } else if self.holding {
-            self.released
-        } else if let Some(at) = TEXT_CALL_MARKERS
-            .iter()
-            .filter_map(|marker| self.content[self.released..].find(marker))
-            .min()
-        {
-            self.holding = true;
-            self.released + at
+        if self.free {
+            self.hold.release_to(&self.content, self.content.len())
         } else {
-            super::flush_boundary(&self.content, 16).max(self.released)
-        };
-        if end <= self.released {
-            return None;
+            self.hold.release(&self.content)
         }
-        let delta = self.content[self.released..end].to_owned();
-        self.released = end;
-        Some(delta)
     }
-    /// Calls Qwen3-Coder wrote as text after sampling a plain `<` instead of
-    /// its `<tool_call>` token: Ollama's parser lifts only calls that open with
-    /// that token and returns the rest as content, ended by `stop`. Only the
-    /// run of call blocks that ends the answer is read ([`trailing_call_run`]),
-    /// and only when every block names an offered tool; never bare JSON. Each
-    /// call gets an id no call in the history has, and its text values the
-    /// types the tool's schema declares, as Ollama's own parser gives them.
-    /// `None` (the text stays the answer) otherwise.
-    fn recover_text_calls(&self) -> Option<(usize, Vec<ToolCall>)> {
-        let (start, run) = trailing_call_run(&self.content)?;
-        let used: HashSet<&str> = self
-            .request
-            .messages
-            .iter()
-            .flat_map(|message| &message.tool_calls)
-            .map(|call| call.id.as_str())
-            .collect();
-        let mut next = 0usize;
-        let mut calls = Vec::with_capacity(run.len());
-        for (name, parameters) in run {
-            let tool = self.request.tools.iter().find(|tool| tool.name == name)?;
-            let mut arguments = Value::Object(
-                parameters
-                    .into_iter()
-                    .map(|(key, value)| (key.to_owned(), Value::String(value.to_owned())))
-                    .collect(),
-            );
-            coerce_text_arguments(&mut arguments, &tool.parameters);
-            validate_response_tool_call(PROVIDER, name, &arguments, &self.request.tools).ok()?;
-            let id = loop {
-                let id = format!("call_text_{next}");
-                next += 1;
-                if !used.contains(id.as_str()) {
-                    break id;
-                }
-            };
-            calls.push(ToolCall {
-                id,
-                name: name.to_owned(),
-                arguments,
-                provider_metadata: provider_tool_metadata(PROVIDER),
-            });
-        }
-        Some((start, calls))
+    /// Everything not shown yet, when the response ends without a `done`
+    /// record or is refused: nothing in it runs, and its text is the
+    /// abandoned or refused attempt's.
+    fn release_held(&mut self) -> Option<StreamEvent> {
+        self.hold
+            .release_to(&self.content, self.content.len())
+            .map(|delta| StreamEvent::TextDelta { delta })
     }
     fn observe_counts(&mut self, value: &Value) -> Option<MeasuredTokenUsage> {
         let input = value
@@ -1537,9 +1285,12 @@ impl NativeResponse {
         let mut usage = self.usage.clone();
         usage.complete =
             self.terminal_counts && self.request.response_format != Some(ResponseFormat::Json);
-        let error = ProviderError::RefusedResponse {
-            provider: PROVIDER.into(),
-            message: error.to_string(),
+        let error = match error {
+            refused @ ProviderError::RefusedResponse { .. } => refused,
+            other => ProviderError::RefusedResponse {
+                provider: PROVIDER.into(),
+                message: other.to_string(),
+            },
         };
         Some((Some(StreamEvent::UsageObservation(usage)), error))
     }
@@ -1630,26 +1381,33 @@ impl NativeResponse {
                 delta: thinking.into(),
             });
         }
+        let accepted = match message.get("tool_calls") {
+            Some(calls) if self.rejected.is_none() => match self.accept_calls(calls) {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    self.rejected = Some(error);
+                    Vec::new()
+                }
+            },
+            _ => Vec::new(),
+        };
+        // With a structured call no text is read as a call (markup in the
+        // text stays text), so the text held so far is shown before it, in
+        // the order the model wrote them.
+        if !accepted.is_empty() {
+            self.free = true;
+        }
         if let Some(delta) = self.release_text() {
             events.push(StreamEvent::TextDelta { delta });
         }
-        if let Some(calls) = message.get("tool_calls") {
-            if self.rejected.is_none() {
-                match self.accept_calls(calls) {
-                    Ok(accepted) => {
-                        for call in accepted {
-                            events.push(StreamEvent::ToolCallDelta {
-                                index: Some(self.calls.len()),
-                                id: call.id.clone(),
-                                name: Some(call.name.clone()),
-                                args_delta: call.arguments.to_string(),
-                            });
-                            self.calls.push(call);
-                        }
-                    }
-                    Err(error) => self.rejected = Some(error),
-                }
-            }
+        for call in accepted {
+            events.push(StreamEvent::ToolCallDelta {
+                index: Some(self.calls.len()),
+                id: call.id.clone(),
+                name: Some(call.name.clone()),
+                args_delta: call.arguments.to_string(),
+            });
+            self.calls.push(call);
         }
         if done {
             let reason = value
@@ -1670,44 +1428,91 @@ impl NativeResponse {
         }
         Ok(events)
     }
+    /// `event`, charged against the response's byte limit.
+    fn charged(
+        &mut self,
+        events: &mut Vec<StreamEvent>,
+        event: StreamEvent,
+    ) -> Result<(), ProviderError> {
+        self.charge(&event)?;
+        events.push(event);
+        Ok(())
+    }
+    /// The events that end a response the server completed, each already
+    /// charged. Calls written as text that end the answer are recovered
+    /// ([`text_calls::read_text_calls`]); an answer that calls an offered
+    /// tool in a way that cannot run is refused ([`Self::take_rejection`]
+    /// then reports it) instead of ending the turn having run nothing.
+    /// When it fails, none of its events is sent: the text they would have
+    /// shown stays held for [`Self::release_held`], and their charges and
+    /// recovered calls are taken back.
     fn finish(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
+        let (released, emitted, calls) = (self.hold.released(), self.emitted, self.calls.len());
+        let finished = self.finish_events();
+        if finished.is_err() {
+            self.hold.rewind(released);
+            self.emitted = emitted;
+            self.calls.truncate(calls);
+        }
+        finished
+    }
+    fn finish_events(&mut self) -> Result<Vec<StreamEvent>, ProviderError> {
         let mut reason = self
             .terminal
             .clone()
             .ok_or_else(|| incomplete_stream("EOF before native terminal"))?;
         let mut events = Vec::new();
-        let recovered = if matches!(reason, FinishReason::Stop)
-            && self.holding
-            && self.calls.is_empty()
-            && self.request.response_format != Some(ResponseFormat::Json)
-        {
-            self.recover_text_calls()
-        } else {
-            None
-        };
-        let answer_end = recovered
-            .as_ref()
-            .map_or(self.content.len(), |(start, _)| *start);
-        // The held text up to any recovered markup is part of the answer.
-        if self.released < answer_end {
-            events.push(StreamEvent::TextDelta {
-                delta: self.content[self.released..answer_end].to_owned(),
-            });
-            self.released = answer_end;
-        }
-        if let Some((_, recovered)) = recovered {
-            // The markup is replaced by the calls it wrote, so the transcript
-            // keeps the prose before it and each call once.
-            for call in recovered {
-                events.push(StreamEvent::ToolCallDelta {
-                    index: Some(self.calls.len()),
-                    id: call.id.clone(),
-                    name: Some(call.name.clone()),
-                    args_delta: call.arguments.to_string(),
-                });
-                self.calls.push(call);
+        let read = match reason {
+            _ if self.free => TextCalls::Answer,
+            FinishReason::Stop => {
+                text_calls::read_text_calls(&self.content, &self.request, PROVIDER, true)
             }
-            reason = FinishReason::ToolUse;
+            FinishReason::MaxTokens => {
+                text_calls::read_text_calls(&self.content, &self.request, PROVIDER, false)
+            }
+            _ => TextCalls::Answer,
+        };
+        let answer_end = match &read {
+            TextCalls::Calls { answer_end, .. } => *answer_end,
+            _ => self.content.len(),
+        };
+        // The held text up to any recovered markup is part of the answer.
+        if let Some(delta) = self.hold.release_to(&self.content, answer_end) {
+            self.charged(&mut events, StreamEvent::TextDelta { delta })?;
+        }
+        match read {
+            TextCalls::Unreadable(why) => {
+                let done_reason = if reason == FinishReason::MaxTokens {
+                    "length"
+                } else {
+                    "stop"
+                };
+                self.rejected = Some(ProviderError::RefusedResponse {
+                    provider: PROVIDER.into(),
+                    message: format!(
+                        "{why}. Nothing from this response ran; Ollama ended it with \
+                         done_reason \"{done_reason}\" and {} offered",
+                        text_calls::count_of(self.request.tools.len(), "tool")
+                    ),
+                });
+                return Ok(events);
+            }
+            TextCalls::Calls { calls, .. } => {
+                // The markup is replaced by the calls it wrote, so the
+                // transcript keeps the prose before it and each call once.
+                for call in calls {
+                    let event = StreamEvent::ToolCallDelta {
+                        index: Some(self.calls.len()),
+                        id: call.id.clone(),
+                        name: Some(call.name.clone()),
+                        args_delta: call.arguments.to_string(),
+                    };
+                    self.charged(&mut events, event)?;
+                    self.calls.push(call);
+                }
+                reason = FinishReason::ToolUse;
+            }
+            TextCalls::Answer => {}
         }
         validate_required_stream_tool_call_ids(
             PROVIDER,
@@ -1724,7 +1529,8 @@ impl NativeResponse {
                 .map_err(|_| protocol("native structured response is not complete JSON"))?;
         }
         // Native thinking belongs to each replayed call. Check the entire
-        // repeated encoding before cloning it into a vector of metadata events.
+        // repeated encoding, after the text and calls above were charged,
+        // before cloning it into a vector of metadata events.
         let mut metadata_bytes = 0usize;
         let available = self
             .cap
@@ -1751,23 +1557,28 @@ impl NativeResponse {
                 return Err(protocol("native replay metadata exceeds response capacity"));
             }
         }
-        for (index, call) in self.calls.iter().enumerate() {
+        for index in 0..self.calls.len() {
             let mut metadata = provider_tool_metadata(PROVIDER);
             if !self.thinking.is_empty() {
                 metadata.insert(THINKING_METADATA.into(), self.thinking.clone());
             }
-            events.push(StreamEvent::ToolCallMetadata {
+            let event = StreamEvent::ToolCallMetadata {
                 index: Some(index),
-                id: call.id.clone(),
+                id: self.calls[index].id.clone(),
                 metadata,
-            });
+            };
+            self.charged(&mut events, event)?;
         }
         self.usage.complete =
             self.terminal_counts && self.request.response_format != Some(ResponseFormat::Json);
-        events.push(StreamEvent::UsageObservation(self.usage.clone()));
-        events.push(StreamEvent::Done {
-            finish_reason: reason,
-        });
+        let usage = StreamEvent::UsageObservation(self.usage.clone());
+        self.charged(&mut events, usage)?;
+        self.charged(
+            &mut events,
+            StreamEvent::Done {
+                finish_reason: reason,
+            },
+        )?;
         Ok(events)
     }
 }
