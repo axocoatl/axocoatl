@@ -302,6 +302,10 @@ impl Fixture {
             &upstream,
             "--label",
             &label,
+            // `podman logs` reads it on any host: Podman's journald default
+            // shows nothing to a user who may not read the journal.
+            "--log-driver",
+            "k8s-file",
             "--network",
             &network,
             "--ip",

@@ -186,6 +186,9 @@ contracts = {
     "./scripts/release-gate/newuser-mac-ci.sh",
     "./scripts/release-gate/test-release-gate.sh",
     "node --test scripts/release-gate/*.test.mjs",
+    "./scripts/test-podman-suites.sh check",
+    "./scripts/test-podman-suites.sh run",
+    "./scripts/test-exec-supervisor-runtime.sh run",
   ],
   ".github/workflows/release.yml" => [
     "./scripts/verify-marketing-gate.sh source-bound",
@@ -562,6 +565,36 @@ ci = YAML.load_file(ROOT.join(".github/workflows/ci.yml"))
       && gate.dig("env", "AXO_BROWSER_ENGINE") == "${{ matrix.engine }}"
     errors << ".github/workflows/#{file}: product-browser must run the release build in each leg's engine"
   end
+end
+
+# Every job that pulls with Podman or runs the new-user gate first points
+# Podman at the Docker Hub mirror, so anonymous pulls meet no rate limit.
+{ "ci.yml" => ci, "release.yml" => release }.each do |file, document|
+  document.fetch("jobs").each do |job_name, job|
+    steps = Array(job["steps"])
+    pulls = steps.index do |step|
+      text = step["run"].to_s
+      text.include?("podman pull") || text.include?("newuser-linux.sh") || text.include?("test-podman-suites.sh prepare") \
+        || text.include?("test-exec-supervisor-runtime.sh prepare")
+    end
+    next unless pulls
+    mirror = steps.index { |step| step["run"].to_s.include?("./scripts/ci-registry-mirror.sh") }
+    unless mirror && mirror < pulls
+      errors << ".github/workflows/#{file}: #{job_name} pulls images before ./scripts/ci-registry-mirror.sh"
+    end
+  end
+end
+
+# The ignored suites run in CI, and the check that none is missing runs too.
+podman_groups = Array(ci.dig("jobs", "podman-suites", "strategy", "matrix", "group"))
+unless podman_groups.sort == %w[cli daemon isolation other]
+  errors << ".github/workflows/ci.yml: podman-suites must run the isolation, daemon, cli and other groups"
+end
+unless Array(ci.dig("jobs", "supervisor-runtime", "strategy", "matrix", "include")).map { |leg| leg["arch"] }.sort == %w[aarch64 x86_64]
+  errors << ".github/workflows/ci.yml: supervisor-runtime must run on x86_64 and aarch64"
+end
+unless Array(ci.dig("jobs", "ollama-suites", "steps")).any? { |step| step["run"].to_s.include?("./scripts/test-podman-suites.sh run ollama") }
+  errors << ".github/workflows/ci.yml: ollama-suites must run ./scripts/test-podman-suites.sh run ollama"
 end
 
 release_python = release_steps.call("build").find do |step|

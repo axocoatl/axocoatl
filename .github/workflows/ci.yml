@@ -40,6 +40,8 @@ jobs:
         run: node --test scripts/release-gate/*.test.mjs
       - name: Exercise the new-user gate's scripts and evidence bundle
         run: ./scripts/release-gate/test-release-gate.sh
+      - name: Every ignored test is in a Podman or live suite, or left out with a reason
+        run: ./scripts/test-podman-suites.sh check
 
   marketing-site:
     name: Marketing site
@@ -196,6 +198,9 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: axocoatl-server/browser-tests/package-lock.json
+      - name: Pull Docker Hub images through mirror.gcr.io
+        if: matrix.podman
+        run: ./scripts/ci-registry-mirror.sh
       # preview-cookies.test.mjs runs a real Session app in node:20-slim on
       # the runner's rootless Podman, with its ports published on loopback
       # (sandbox.network: bridge); native-turn-git.test.mjs and the
@@ -315,6 +320,9 @@ jobs:
       - name: Install Podman when the runner image lacks it
         if: matrix.expect_refusal == ''
         run: command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
+      - name: Pull Docker Hub images through mirror.gcr.io
+        if: matrix.expect_refusal == ''
+        run: ./scripts/ci-registry-mirror.sh
       - name: Prove each fixture fails before the stub's fix and passes after it
         if: matrix.expect_refusal == ''
         env:
@@ -413,25 +421,25 @@ jobs:
           retention-days: 30
 
   podman-suites:
-    # The Podman suites ignored by default, against the runner's rootless
-    # Podman (docs/RELEASE_GATE.md). The egress and workload suites need
-    # prepared local images and are not wired yet. The node_modules mount
-    # point tests start Session containers from the same Alpine image on
-    # Podman's default rootless network (the one the new-user job's egress
-    # sidecars on this runner image reach package registries through), and
-    # provisioning installs Git and the other Alpine packages from Alpine's
-    # mirrors over it. The containers of the person's own they start have
-    # no network. Each removal they assert runs while an unrelated container
-    # of the person's own exists, so it needs `podman container inspect` and
-    # `podman volume inspect` to work, and each keep of the empty mount point
-    # they assert names why: a mount `podman ps` lists at the path, the
-    # person's container that inspect saw mounting it, or the one reason
-    # Axocoatl cannot tell that the test sets up (a container that took its
-    # mounts with --volumes-from from one since removed; a keep-id
-    # container's overlay volume it may not read), never Podman failing.
-    name: Podman suites (ignored tests)
+    # Every test that is #[ignore]d by default because it needs Podman,
+    # prepared images or the internet, on the runner's rootless Podman 4.9
+    # (docs/RELEASE_GATE.md). scripts/test-podman-suites.sh prepares each
+    # group's images (pinned by digest), runs every ignored test of its
+    # crates and fails unless every one of them ran and passed; `check`, in
+    # the workflow-contracts job, fails when an ignored test is in no group
+    # or one is left out without a reason. The node_modules mount point tests
+    # (isolation) start Session containers from Alpine on Podman's default
+    # rootless network, and provisioning installs Git and the other Alpine
+    # packages over it; each removal they assert runs while an unrelated
+    # container of the person's own exists, and each keep of the empty mount
+    # point names why, never Podman failing.
+    name: Podman and live suites (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [isolation, daemon, cli, other]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
@@ -439,26 +447,82 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: podman-suites
-      - name: Pull the image the Session trust suite runs with --pull=never
-        run: podman pull docker.io/library/alpine:3.20
-      - name: Session trust volume on rootless Podman
-        run: cargo test --locked -p axocoatl-isolation --test session_trust_podman -- --ignored --test-threads=1
-      - name: Node dependency mount point on rootless Podman (plain, hardened keep-id, the person's containers)
+          shared-key: podman-suites-${{ matrix.group }}
+      - name: Pull Docker Hub images through mirror.gcr.io
+        run: ./scripts/ci-registry-mirror.sh
+      - name: Prepare the images the suites run
+        env:
+          GROUP: ${{ matrix.group }}
+        run: ./scripts/test-podman-suites.sh prepare "$GROUP"
+      - name: Run every ignored test of the group
+        env:
+          GROUP: ${{ matrix.group }}
+        run: ./scripts/test-podman-suites.sh run "$GROUP"
+
+  supervisor-runtime:
+    # The embedded execution supervisors' protocol and process-lifecycle
+    # suite (supervisor_runtime.rs) in Alpine and Debian images, as root and
+    # as a non-root user, each on a kernel of the image's architecture: the
+    # read-only and network-denying cases need Landlock, which user-mode
+    # emulation lacks (docs/EXEC_SUPERVISOR_BUILD.md).
+    name: Execution supervisor runtime (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: supervisor-runtime-${{ matrix.runner }}
+      - name: Pull Docker Hub images through mirror.gcr.io
+        run: ./scripts/ci-registry-mirror.sh
+      - name: Build the Alpine and Debian test images
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: ./scripts/test-exec-supervisor-runtime.sh prepare "$ARCH"
+      - name: Run the supervisor suite in each image
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
-          set -o pipefail
-          cargo test --locked -p axocoatl-isolation --lib -- --ignored --exact --test-threads=1 \
-            session_sandbox::tests::a_repository_without_node_modules_has_none_left_behind \
-            session_sandbox::tests::under_the_hardened_workload_the_mount_point_is_the_persons_until_removal \
-            session_sandbox::tests::a_development_containers_node_modules_volume_keeps_the_mount_point \
-            session_sandbox::tests::a_container_that_bind_mounts_the_mount_point_itself_keeps_it \
-            session_sandbox::tests::a_bind_of_the_mount_point_through_a_link_keeps_it \
-            session_sandbox::tests::a_bind_volume_of_the_mount_point_keeps_it \
-            session_sandbox::tests::an_overlay_volume_of_the_mount_point_keeps_it \
-            session_sandbox::tests::a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it \
-            session_sandbox::tests::mounts_taken_with_volumes_from_keep_the_mount_point \
-            session_sandbox::tests::an_overlay_of_a_keep_id_container_keeps_it_and_says_why \
-            dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected \
-            | tee "$RUNNER_TEMP/mountpoint-tests.log"
-          # All eleven ran: a renamed test must not pass by matching nothing.
-          grep -q '^test result: ok. 11 passed' "$RUNNER_TEMP/mountpoint-tests.log"
+          umask 022
+          ./scripts/test-exec-supervisor-runtime.sh run "$ARCH"
+
+  ollama-suites:
+    # The live Ollama tests: the contract probes the Ollama watch runs on new
+    # releases, here on the audited release, and a native Session's provider
+    # against a real model (plain, JSON and a tool round-trip, and an
+    # over-long input).
+    name: Live Ollama suites (Ollama ${{ matrix.version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        version: ['0.40.6']
+    env:
+      PROBE_MODEL: 'qwen3:0.6b'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ollama-suites
+      - name: Install Ollama and serve it with cloud models off
+        env:
+          OLLAMA_VERSION: ${{ matrix.version }}
+        run: ./scripts/test-podman-suites.sh serve-ollama "$OLLAMA_VERSION"
+      - name: Pull the probe model
+        run: ollama pull "$PROBE_MODEL"
+      - name: Run the live Ollama tests
+        run: ./scripts/test-podman-suites.sh run ollama

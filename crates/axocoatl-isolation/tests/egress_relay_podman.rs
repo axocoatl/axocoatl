@@ -226,12 +226,17 @@ impl Fixture {
     }
 
     async fn start_sidecar(&self) {
+        self.start_sidecar_on(None).await;
+    }
+
+    /// The sidecar on `network` (Podman's default network when `None`).
+    async fn start_sidecar_on(&self, network: Option<String>) {
         let sidecar = EgressSidecar::start_with_options(
             SidecarSpec {
                 session_id: self.session.clone(),
                 runtime_authority: None,
                 image: self.egress_image.clone(),
-                network: None,
+                network,
                 max_connections: 64,
                 require_resource_limits: false,
                 labels: vec![self.label.clone()],
@@ -353,6 +358,21 @@ impl Fixture {
         let left = podman(&["ps", "-aq", "--filter", &format!("label={}", self.label)]);
         if !String::from_utf8_lossy(&left.stdout).trim().is_empty() {
             errors.push("labelled containers are left".into());
+        }
+        let networks = podman(&[
+            "network",
+            "ls",
+            "-q",
+            "--filter",
+            &format!("label={}", self.label),
+        ]);
+        for network in String::from_utf8_lossy(&networks.stdout).split_whitespace() {
+            if !podman(&["network", "rm", "--force", network])
+                .status
+                .success()
+            {
+                errors.push(format!("network {network} is still present"));
+            }
         }
         if errors.is_empty() {
             Ok(())
@@ -581,7 +601,7 @@ async fn hardened_commands_run_in_real_images() {
 /// Measurement, not a check: 50 MiB downloaded through a relay (bytes over
 /// the sidecar's control channel, through `podman` on this computer)
 /// against the same download through an ordinary tunnel to a container on
-/// Podman's network. Prints the speeds; asserts only that every byte came.
+/// a Podman network of its own. Prints the speeds; asserts only that every byte came.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "measurement; requires Podman: CONTAINER_CONNECTION=axocoatl-ci-pr74 cargo test -p axocoatl-isolation --test egress_relay_podman -- --ignored --test-threads=1"]
 async fn relay_and_tunnel_throughput_measurement() {
@@ -593,6 +613,12 @@ async fn relay_and_tunnel_throughput_measurement() {
         let serve = format!(
             "head -c {SIZE} /dev/zero > /tmp/blob && cd /tmp && exec python3 -m http.server 8000"
         );
+        // A bridge network of its own for the upstream and the sidecar: a
+        // rootless container on Podman 4's default network (slirp4netns)
+        // has no address another container can reach.
+        let network = format!("axo-relay-net-{}", std::process::id());
+        let _ = podman_async(&["network", "rm", "--force", &network]).await;
+        podman_ok(&["network", "create", "--label", &fixture.label, &network]).await;
         podman_ok(&[
             "run",
             "-d",
@@ -600,6 +626,8 @@ async fn relay_and_tunnel_throughput_measurement() {
             &upstream,
             "--label",
             &fixture.label,
+            "--network",
+            &network,
             "--entrypoint",
             "sh",
             &client_image,
@@ -610,13 +638,16 @@ async fn relay_and_tunnel_throughput_measurement() {
         let address = podman_ok(&[
             "inspect",
             "--format",
-            "{{.NetworkSettings.IPAddress}}",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
             &upstream,
         ])
         .await;
-        let address: std::net::IpAddr = address.trim().parse().unwrap();
+        let address: std::net::IpAddr = address
+            .trim()
+            .parse()
+            .unwrap_or_else(|error| panic!("the upstream's address {address:?}: {error}"));
         *fixture.authority.tunnel.lock().unwrap() = Some(address);
-        fixture.start_sidecar().await;
+        fixture.start_sidecar_on(Some(network)).await;
         let client = fixture.client("speed", false).await;
         // The upstream needs a moment to write its file and listen.
         for _ in 0..50 {

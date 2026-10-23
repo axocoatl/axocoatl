@@ -291,26 +291,44 @@ Supporting checks, run in CI's workflow-contracts job:
   build. A simulated path always records a failed step and can never be
   evidence.
 
-CI's "Podman suites (ignored tests)" job runs the Podman tests that are
-ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
-`session_trust_podman`, and the nine `node_modules` mount point tests
-(`a_repository_without_node_modules_has_none_left_behind`,
-`under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`,
-`a_development_containers_node_modules_volume_keeps_the_mount_point`,
-`a_container_that_bind_mounts_the_mount_point_itself_keeps_it`,
-`a_bind_of_the_mount_point_through_a_link_keeps_it`,
-`a_bind_volume_of_the_mount_point_keeps_it`,
-`an_overlay_volume_of_the_mount_point_keeps_it`,
-`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it` and
-`dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected`:
-plain, hardened keep-id, a development container, a bind of the mount point
-itself, a bind through a link, a bind volume, an overlay volume, a tmpfs
-through a bind of the repository, and Podman's `no such container` and `no
-such volume` answers). Each removal they assert runs while an unrelated
-container exists, and each keep of the empty mount point they assert names
-why, so a broken `podman container inspect` fails them. The step must report `9 passed`, so that a
-renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
-not wired yet.
+Every test that is `#[ignore]`d by default because it needs Podman, prepared
+images, the internet or a live Ollama runs in CI, against the ubuntu-24.04
+runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
+
+- "Podman and live suites" runs four groups, one job each: `isolation`
+  (`axocoatl-isolation`, among them the Session sandbox, the `node_modules`
+  mount point, egress, relay, workload, SearXNG, browser and trust volume
+  suites, and the `sandbox-session` example), `daemon` (`axocoatl-daemon`:
+  native activations, egress routes, loadout and audit runs, the pinned Claude
+  Code and Codex from their recipe images, the browser tools, live web search
+  and the live `npm`, `crates`, `alpine` and `debian` presets), `cli`
+  (`axocoatl-cli`) and `other` (`axocoatl-memory` and `axocoatl-session`).
+  `prepare` pulls the images pinned by digest and builds the supervisor test
+  images, the browser image and the recipe images with this commit's CLI;
+  `run` lists every ignored test of the group's crates and fails unless every
+  one of them ran and passed, so a renamed test cannot pass by matching
+  nothing. `list GROUP` prints what `run` would run, with no Podman.
+- "Execution supervisor runtime" runs `scripts/test-exec-supervisor-runtime.sh`
+  on x86_64 and on aarch64: the supervisor suite in Alpine and Debian images,
+  as root and as a non-root user, on a kernel of each architecture.
+- "Live Ollama suites" installs Ollama 0.40.6, the audited release, serves it
+  with cloud models off and runs the contract probes and a native Session's
+  provider against `qwen3:0.6b`: plain, JSON, a tool round-trip and an
+  over-long input.
+- `test-podman-suites.sh check`, in the "Workflow contracts" job, fails when
+  an ignored test is in no group or one is left out without a reason. Left
+  out: the four live E2B tests (E2B's hosted service with a key; the project
+  has no E2B account), the two live OpenRouter tests (credit and a key; the
+  `C1-openrouter` and `D1` paths run OpenRouter models live) and four helpers
+  that other tests, or a private probe of released binaries, start.
+
+Each removal the `node_modules` mount point tests assert runs while an
+unrelated container exists, and each keep of the empty mount point they
+assert names why, so a broken `podman container inspect` fails them. Every
+CI job that pulls images first points Podman at `mirror.gcr.io`, Google's
+public cache of Docker Hub (`scripts/ci-registry-mirror.sh`), so the
+anonymous pulls of many jobs at once meet no Docker Hub rate limit; a digest
+pull is the same bytes from either.
 
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
 with `GATE_REQUIRE_ALL_TOOLCHAINS=1`, which proves each fixture in
