@@ -1164,8 +1164,8 @@ pub(crate) fn judged_changed_paths(
 pub(super) fn capture_timed_out(limit: std::time::Duration) -> String {
     format!(
         "The repository capture did not finish within its {} seconds: it reads every file in \
-         the repository, so a repository or change of many thousands of files, or a busy \
-         computer, can take longer",
+         the repository, so a very large repository or change (hundreds of thousands of \
+         files), or a busy computer, can take longer",
         limit.as_secs()
     )
 }
@@ -1748,8 +1748,8 @@ changed_b64={encoded}
             assert_eq!(
                 failure,
                 "Session dispatch: The repository capture did not finish within its 180 \
-                 seconds: it reads every file in the repository, so a repository or change of \
-                 many thousands of files, or a busy computer, can take longer"
+                 seconds: it reads every file in the repository, so a very large repository or \
+                 change (hundreds of thousands of files), or a busy computer, can take longer"
             );
         }
         let finished = serde_json::json!({"stdout": "", "exit_code": 1,

@@ -849,6 +849,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
     }
 
+    /// Each file is read by its own name, never as standard input or an
+    /// option, and a name sha256sum would escape or split is read alone: a
+    /// file named `-` is recorded with its own mode (the capture read the
+    /// mode of its standard input for it before), and names with a leading
+    /// dash, a backslash, a newline, a tab or a percent sign with their own
+    /// content's digest and mode.
+    #[test]
+    fn every_file_is_read_by_its_own_name_whatever_the_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let files = [
+            ("-", 0o600),
+            ("-n", 0o755),
+            ("back\\slash", 0o644),
+            ("new\nline", 0o640),
+            ("tab\tname", 0o644),
+            ("%s%n", 0o644),
+        ];
+        for (name, mode) in files {
+            std::fs::write(root.join(name), format!("{name}\n")).unwrap();
+            std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        }
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        let mut expected: Vec<_> = files
+            .iter()
+            .map(|(name, mode)| {
+                (
+                    (*name).to_owned(),
+                    format!("{mode:o}"),
+                    "file".to_owned(),
+                    sha256_text(&format!("{name}\n")),
+                )
+            })
+            .collect();
+        expected.sort();
+        let mut recorded = changed_lines(&output).unwrap();
+        recorded.sort();
+        assert_eq!(recorded, expected);
+        // Git reads a path "-" as standard input; the patch still holds the
+        // file's own content, under the name Git gives any other file.
+        let patch = String::from_utf8(decoded(&output, "patch_b64")).unwrap();
+        assert!(
+            patch.contains("diff --git a/- b/-\nnew file mode 100644\nindex 0000000.."),
+            "{patch}"
+        );
+        assert!(
+            patch.contains("--- /dev/null\n+++ b/-\n@@ -0,0 +1 @@\n+-\n"),
+            "{patch}"
+        );
+        assert!(!patch.contains("./-"), "{patch}");
+    }
+
+    /// A repository of thousands of files, far more than one batch of records
+    /// holds, is recorded whole: the manifest's size and tree digest are the
+    /// ones its files' records give, computed here, each record once. A
+    /// submodule and a nested checkout, which have no record, cost no other
+    /// path its own: when records were read one at a time, a submodule first
+    /// in its batch lost every record after it in that batch.
+    #[test]
+    fn a_manifest_of_many_batches_holds_every_file_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        git(root, &["init", "--quiet"]);
+        let committer = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+        let sub = root.join("0-sub");
+        std::fs::create_dir(&sub).unwrap();
+        git(&sub, &["init", "--quiet"]);
+        std::fs::write(sub.join("inner.txt"), "inner\n").unwrap();
+        git(&sub, &["add", "-A"]);
+        git(
+            &sub,
+            &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
+        );
+        let mut lines = Vec::new();
+        for index in 0..4000 {
+            let name = format!("dir-{}/file {index} {}", index % 7, "x".repeat(index % 50));
+            let path = root.join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let content = format!("{index}\n");
+            std::fs::write(&path, &content).unwrap();
+            let mode = if index % 3 == 0 { 0o755 } else { 0o644 };
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            lines.push(format!(
+                "{}\t{mode:o}\tfile\t{}\n",
+                base64::engine::general_purpose::STANDARD.encode(&name),
+                sha256_text(&content)
+            ));
+        }
+        git(root, &["add", "-A"]);
+        git(
+            root,
+            &[&committer[..], &["commit", "--quiet", "-m", "many"]].concat(),
+        );
+        let nested = root.join("0-nested");
+        std::fs::create_dir(&nested).unwrap();
+        git(&nested, &["init", "--quiet"]);
+        lines.sort();
+        let manifest = lines.concat();
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&output, "manifest_bytes"), manifest.len().to_string());
+        assert_eq!(field(&output, "tree"), sha256_text(&manifest));
+        // In every mode.
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        assert_eq!(field(&kept, "tree"), sha256_text(&manifest));
+        let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
+    }
+
     /// `len` bytes no compressor shrinks, as a compiled test program's would
     /// barely be, at `path`.
     fn random_file(path: &std::path::Path, len: usize, seed: u64) {

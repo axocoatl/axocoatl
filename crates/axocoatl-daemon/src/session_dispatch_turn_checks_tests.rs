@@ -510,8 +510,9 @@ fn a_capture_that_could_not_record_the_repository_says_why() {
         not_captured(&[&tree, &failed]),
         "The repository could not be captured around the checks, so they establish nothing: \
          its state could not be recorded (The repository capture did not finish within its 180 \
-         seconds: it reads every file in the repository, so a repository or change of many \
-         thousands of files, or a busy computer, can take longer). Continue runs them again."
+         seconds: it reads every file in the repository, so a very large repository or change \
+         (hundreds of thousands of files), or a busy computer, can take longer). Continue runs \
+         them again."
     );
 }
 

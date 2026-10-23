@@ -1281,8 +1281,8 @@ mod write_scope_tests {
         assert_eq!(
             super::super::repository_snapshot::capture_timed_out(Duration::from_secs(180)),
             "The repository capture did not finish within its 180 seconds: it reads every file \
-             in the repository, so a repository or change of many thousands of files, or a busy \
-             computer, can take longer"
+             in the repository, so a very large repository or change (hundreds of thousands of \
+             files), or a busy computer, can take longer"
         );
     }
 

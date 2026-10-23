@@ -320,9 +320,11 @@ would cut into the allowance. Each check may run for three minutes unless the te
 another timeout for it, from 1 second to 30 minutes (a [loadout](/configure/loadouts/#checks)'s
 `timeout`, or `check_options` in the [Team and budget API](/reference/http-api/#native-session-controls)),
 and keeps up to 768 KiB of output and 256 KiB of errors. Each repository capture may
-run for three minutes. It reads every file in the repository, so a repository or change
-of many thousands of files, or a busy computer, can take longer; the turn then needs
-attention and says that the capture did not finish within its 180 seconds.
+run for three minutes. It reads every file in the repository: on a 6-CPU Podman machine
+a repository of 50,000 files took 12 seconds, and 12,288 new files took 16. A very large
+repository or change (hundreds of thousands of files), or a busy computer, can take
+longer; the turn then needs attention and says that the capture did not finish within
+its 180 seconds.
 
 If the checks cannot be paid for because the paying Agent's budget is spent, has
 expired or was revoked, the turn needs attention and says why, for example "Required

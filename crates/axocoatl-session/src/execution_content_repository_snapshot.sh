@@ -107,17 +107,135 @@ common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
 AXO_SNAPSHOT_SCRATCH=$scratch
 export AXO_SNAPSHOT_SCRATCH
 head_before=$(git rev-parse --verify HEAD 2>/dev/null || printf unborn)
+# Each NUL-terminated name on the input, as `od -An -v -tu1` prints its
+# bytes, in base64 on a line of its own, as base64 writes it unwrapped: one
+# od and one awk for every name, where base64 for each one took three
+# processes.
+cat > "$scratch/base64.awk" <<'EOF'
+BEGIN {
+  digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  n = 0
+}
+{
+  for (field = 1; field <= NF; field++) {
+    if ($field == 0) {
+      emit()
+    } else {
+      bytes[n] = $field + 0
+      n++
+    }
+  }
+}
+END {
+  if (n > 0) emit()
+}
+function emit(  i, a, b, c, out) {
+  out = ""
+  for (i = 0; i + 2 < n; i += 3) {
+    a = bytes[i]; b = bytes[i + 1]; c = bytes[i + 2]
+    out = out substr(digits, int(a / 4) + 1, 1)
+    out = out substr(digits, (a % 4) * 16 + int(b / 16) + 1, 1)
+    out = out substr(digits, (b % 16) * 4 + int(c / 64) + 1, 1)
+    out = out substr(digits, c % 64 + 1, 1)
+  }
+  if (n - i == 1) {
+    a = bytes[i]
+    out = out substr(digits, int(a / 4) + 1, 1)
+    out = out substr(digits, (a % 4) * 16 + 1, 1) "=="
+  } else if (n - i == 2) {
+    a = bytes[i]; b = bytes[i + 1]
+    out = out substr(digits, int(a / 4) + 1, 1)
+    out = out substr(digits, (a % 4) * 16 + int(b / 16) + 1, 1)
+    out = out substr(digits, (b % 16) * 4 + 1, 1) "="
+  }
+  print out
+  n = 0
+}
+EOF
+# One batch's records, a kind and what the record is on each line of the
+# input, joined in order with what was read for them: each name's base64,
+# each file's digest from sha256sum's output, each mode from stat's, and
+# each digest read alone. Anything out of step fails the capture.
+cat > "$scratch/records.awk" <<'EOF'
+function next_of(list,  line) {
+  if ((getline line < (batch "/" list)) <= 0) {
+    failed = 1
+    exit
+  }
+  return line
+}
+BEGIN {
+  FS = "\t"
+  failed = 0
+}
+{
+  kind = $1
+  meta = substr($0, length(kind) + 2)
+  encoded = next_of("encoded")
+  if (kind == "file") {
+    digest = next_of("digests")
+    if (substr(digest, 1, 1) == "\\") digest = substr(digest, 2)
+    digest = substr(digest, 1, 64)
+    mode = next_of("modes")
+  } else if (kind == "alone" || kind == "link") {
+    digest = next_of("alone")
+    mode = next_of("modes")
+    if (kind == "alone") kind = "file"
+  } else if (kind == "deleted") {
+    digest = "missing"
+    mode = "0"
+  } else {
+    failed = 1
+    exit
+  }
+  if (kind != "deleted" && (length(digest) != 64 || digest ~ /[^0-9a-f]/ || mode !~ /^[0-7]+$/)) {
+    failed = 1
+    exit
+  }
+  printf "%s\t%s\t%s\t%s\t%s\n", encoded, mode, kind, digest, meta
+}
+END {
+  if (!failed && ((getline line < (batch "/encoded")) > 0 || (getline line < (batch "/digests")) > 0 || (getline line < (batch "/modes")) > 0 || (getline line < (batch "/alone")) > 0)) failed = 1
+  if (failed) exit 70
+}
+EOF
+# The patch section of a root file named "-", which Git diffs as "./-",
+# with the names Git gives every other file's: "a/-" and "b/-" in its
+# header, the lines before its first hunk or binary data.
+cat > "$scratch/dash.awk" <<'EOF'
+!body && (/^@@ / || $0 == "GIT binary patch" || /^Binary files /) { body = 1 }
+!body && $0 == "diff --git a/./- b/./-" { $0 = "diff --git a/- b/-" }
+!body && $0 == "+++ b/./-" { $0 = "+++ b/-" }
+{ print }
+EOF
 # One line per record: the path, then its mode, kind and content digest as
 # read from the working tree itself, then what the record is: the index
 # entry (flags, mode, object and stage) of a tracked path, "?" for an
 # untracked path, "!" for an ignore file Git reads although it is ignored
 # itself, and "git" for Git's own settings, hooks and exclude files.
+#
+# Each batch of paths xargs passes is read with one sha256sum and one stat
+# for all of its files and its names encoded by one od and one awk, so a
+# repository of tens of thousands of files is captured within the time a
+# capture has: read one at a time, each file took six processes. A file
+# whose name sha256sum would escape or split (a backslash or a newline in
+# it) is read alone, as a symbolic link's target is. Operands are paths
+# that start with "./" or "/", so no name is read as standard input or an
+# option.
 records() {
   xargs -0 -r sh -c '
     set -eu
     tab=$(printf "\t")
+    newline="
+"
     source=$1
     shift
+    batch=$AXO_SNAPSHOT_SCRATCH/batch.$$
+    rm -rf -- "$batch"
+    mkdir "$batch"
+    for list in kinds names hash stat alone; do
+      : > "$batch/$list"
+    done
     for record do
       case $source in
         index) meta=${record%%"$tab"*}; path=${record#*"$tab"}; name=$path ;;
@@ -130,22 +248,45 @@ records() {
           meta="!"; path=$record; name=$path ;;
         git) meta=git; path=$AXO_GIT_BASE/$record; name=.git/$record ;;
       esac
-      encoded=$(printf %s "$name" | base64 | tr -d "\n")
+      case $path in
+        /*) operand=$path ;;
+        *) operand=./$path ;;
+      esac
       if [ -L "$path" ]; then
         readlink -n -- "$path" > "$AXO_SNAPSHOT_SCRATCH/link"
         digest=$(sha256sum < "$AXO_SNAPSHOT_SCRATCH/link"); kind=link
-        mode=$(stat -c %a -- "$path")
+        printf "%s\n" "${digest%% *}" >> "$batch/alone"
+        printf "%s\0" "$operand" >> "$batch/stat"
       elif [ -f "$path" ]; then
-        digest=$(sha256sum < "$path"); kind=file
-        mode=$(stat -c %a -- "$path")
+        case $path in
+          *"$newline"* | *\\*)
+            digest=$(sha256sum < "$path"); kind=alone
+            printf "%s\n" "${digest%% *}" >> "$batch/alone"
+            ;;
+          *)
+            kind=file
+            printf "%s\0" "$operand" >> "$batch/hash"
+            ;;
+        esac
+        printf "%s\0" "$operand" >> "$batch/stat"
       elif [ ! -e "$path" ]; then
-        digest=missing; kind=deleted; mode=0
+        kind=deleted
       else
-        # A submodule or special file requires its own checked identity.
-        exit 65
+        # A submodule, a nested checkout or another special file has no
+        # content this capture reads, so it has no record. Every other path
+        # of the batch still has its own: one at a time, the records after
+        # it in its batch were lost, as many as a thousand.
+        continue
       fi
-      printf "%s\t%s\t%s\t%s\t%s\n" "$encoded" "$mode" "$kind" "${digest%% *}" "$meta"
+      printf "%s\0" "$name" >> "$batch/names"
+      printf "%s\t%s\n" "$kind" "$meta" >> "$batch/kinds"
     done
+    xargs -0 -r sha256sum -- < "$batch/hash" > "$batch/digests"
+    xargs -0 -r stat -c %a -- < "$batch/stat" > "$batch/modes"
+    od -An -v -tu1 < "$batch/names" |
+      awk -f "$AXO_SNAPSHOT_SCRATCH/base64.awk" > "$batch/encoded"
+    awk -v batch="$batch" -f "$AXO_SNAPSHOT_SCRATCH/records.awk" < "$batch/kinds"
+    rm -rf -- "$batch"
   ' sh "$1"
 }
 # Every tracked and untracked path, whatever the index's flags say about it.
@@ -223,12 +364,24 @@ size_job=$!
       git diff --no-ext-diff --no-textconv --binary "$head_before" -- || code=$?
   fi
   # Preserve untracked additions in the protected patch too. Paths are
-  # arguments, never shell source.
+  # arguments, never shell source. Git reads a path "-" as its standard
+  # input, so a file of that name at the root is diffed as "./-" and its
+  # section named as Git names any other file's (dash.awk).
   if [ "$code" -eq 0 ]; then
     xargs -0 -r sh -c '
       for path do
-        git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null "$path"
-        code=$?
+        if [ "$path" = - ]; then
+          {
+            code=0
+            git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null ./- ||
+              code=$?
+            echo "$code" > "$AXO_SNAPSHOT_SCRATCH/dash-status"
+          } | awk -f "$AXO_SNAPSHOT_SCRATCH/dash.awk" || exit 70
+          read -r code < "$AXO_SNAPSHOT_SCRATCH/dash-status"
+        else
+          git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null "$path"
+          code=$?
+        fi
         [ "$code" -le 1 ] || exit "$code"
       done
     ' sh < "$scratch/untracked" || code=$?
@@ -262,11 +415,7 @@ else
     > "$scratch/differ"
 fi
 cat "$scratch/untracked" >> "$scratch/differ"
-xargs -0 -r sh -c '
-  for name do
-    printf "%s\n" "$(printf %s "$name" | base64 | tr -d "\n")"
-  done
-' sh < "$scratch/differ" | sort -u > "$scratch/differ-names"
+od -An -v -tu1 < "$scratch/differ" | awk -f "$scratch/base64.awk" | sort -u > "$scratch/differ-names"
 tab=$(printf '\t')
 awk -F "$tab" -v OFS="$tab" -v names="$scratch/differ-names" '
   BEGIN { while ((getline name < names) > 0) wanted[name] = 1 }
