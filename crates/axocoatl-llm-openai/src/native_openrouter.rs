@@ -34,9 +34,10 @@ mod observation;
 mod stream;
 use observation::CallShape;
 pub use observation::{
-    catalog_call_floor, observe_native_openrouter_profiles, CatalogCallFloor,
-    NativeOpenRouterEfforts, NativeOpenRouterObservation, NativeOpenRouterReasoning,
-    NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
+    catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
+    CatalogCallFloor, NativeOpenRouterEfforts, NativeOpenRouterEndpoints,
+    NativeOpenRouterObservation, NativeOpenRouterReasoning, NativeOpenRouterReasoningRequest,
+    UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
     STREAMED_BYTES_PER_RESPONSE_TOKEN,
 };
 
@@ -192,19 +193,42 @@ impl NativeOpenRouterProvider {
         Ok(this)
     }
     async fn verify(&self) -> Result<(), ProviderError> {
-        let profiles = observe_native_openrouter_profiles(
+        let endpoints = observe_native_openrouter_endpoints(
             &self.observation.base_url,
             &self.inner.api_key,
             &self.observation.model,
         )
         .await?;
-        if !profiles
+        if endpoints
+            .profiles
             .iter()
             .any(|profile| self.observation.same_contract(profile))
         {
-            return Err(invalid("the retained OpenRouter endpoint, capabilities, price ceiling or token limits changed; review a new profile"));
+            return Ok(());
         }
-        Ok(())
+        // The endpoint is the same, but OpenRouter reports it unavailable
+        // or degraded right now: said as that, not as a changed contract.
+        if let Some(down) = endpoints
+            .unavailable
+            .iter()
+            .find(|endpoint| self.observation.same_contract(&endpoint.profile))
+        {
+            return Err(ProviderError::ApiError {
+                provider: PROVIDER.into(),
+                status: 503,
+                message: format!(
+                    "OpenRouter reports the endpoint this Session uses for {} as unavailable or \
+                     degraded right now ({}). This is OpenRouter's provider status: try again \
+                     later, or choose another model; nothing was sent to the model",
+                    self.observation.model,
+                    down.describe()
+                ),
+            });
+        }
+        if let Some(refusal) = endpoints.refusal(&self.observation.model) {
+            return Err(refusal);
+        }
+        Err(invalid("the retained OpenRouter endpoint, capabilities, price ceiling or token limits changed; review a new profile"))
     }
     /// The exact request body and its bounds. Every byte of the body counts
     /// toward the prompt bound: the provider renders the messages and tools,

@@ -269,6 +269,17 @@ anything else is refused, and the error names the component; a sampling setting 
 endpoint accepts is named too. Dynamic router aliases and custom OpenRouter endpoints
 are unsupported. A model Axocoatl cannot run says why when Team & budget is applied.
 
+An eligible endpoint is used only while OpenRouter reports it healthy (its `status` is
+0). A degraded or unavailable one is never used, even when no healthy endpoint is
+left: every request pins one endpoint with no fallback, so a run on it would fail part
+way and still cost credits. When OpenRouter reports every eligible endpoint of a model
+unavailable or degraded, the Session or run stops before any model call and says so:
+each endpoint's status and its share of requests that succeeded over the last 30
+minutes, that this is OpenRouter's provider status and not your setup, and to try again
+later or choose another model. A Session whose retained endpoint has become degraded is
+told the same when it opens the provider again. Onboarding reads the endpoints of the
+models you choose before it writes the setup.
+
 ## Configure Ollama
 
 Native execution requires a loopback Ollama **0.40.6 or later** that reports

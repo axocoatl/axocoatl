@@ -1,9 +1,10 @@
 mod convert;
 pub mod native_openrouter;
 pub use native_openrouter::{
-    catalog_call_floor, observe_native_openrouter_profiles, CatalogCallFloor,
-    NativeOpenRouterEfforts, NativeOpenRouterObservation, NativeOpenRouterProvider,
-    NativeOpenRouterReasoning, NativeOpenRouterReasoningRequest, MINIMUM_REASONING_ALLOWANCE,
+    catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
+    CatalogCallFloor, NativeOpenRouterEfforts, NativeOpenRouterEndpoints,
+    NativeOpenRouterObservation, NativeOpenRouterProvider, NativeOpenRouterReasoning,
+    NativeOpenRouterReasoningRequest, UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE,
     PROMPT_TEMPLATE_ALLOWANCE, REASONING_DETAILS_METADATA, REASONING_TOKENS_METADATA,
 };
 

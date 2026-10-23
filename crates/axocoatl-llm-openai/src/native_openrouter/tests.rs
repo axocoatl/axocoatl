@@ -1409,3 +1409,202 @@ async fn an_error_inside_the_stream_carries_its_status() {
         }
     }
 }
+
+/// A server with the catalog row of `model` and `endpoints` as its
+/// endpoint list.
+async fn serving_endpoints(model: &str, endpoints: &Value) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{
+            "id":model,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},
+            "supported_parameters":["max_tokens","tools"]
+        }]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{model}/endpoints")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(endpoints))
+        .mount(&server)
+        .await;
+    server
+}
+
+/// qwen/qwen3-coder's public endpoint fields, captured 2026-10-23, with each
+/// endpoint's `status` and `uptime_last_30m` set to `health`.
+fn qwen3_coder(health: &[(i64, Option<f64>)]) -> Value {
+    let mut endpoints: Value =
+        serde_json::from_str(include_str!("fixtures/qwen--qwen3-coder.json")).unwrap();
+    for (row, (status, uptime)) in endpoints["data"]["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(health)
+    {
+        row["status"] = json!(status);
+        row["uptime_last_30m"] = json!(uptime);
+    }
+    endpoints
+}
+
+/// When OpenRouter reports every endpoint that fits as unavailable or
+/// degraded (as it did for qwen/qwen3-coder on 2026-10-23: status -5 and
+/// -2, 0 to 80% of requests succeeding), the refusal says so plainly, with
+/// each endpoint's status and uptime and what to do, as a 503: OpenRouter's
+/// state, not a model identity or a setup problem. No degraded endpoint is
+/// used while none is healthy: a run stays on one endpoint with no
+/// fallback.
+#[tokio::test]
+async fn every_endpoint_unavailable_is_said_as_openrouter_status() {
+    let model = "qwen/qwen3-coder";
+    let server = serving_endpoints(
+        model,
+        &qwen3_coder(&[(-5, Some(0.0)), (-2, Some(80.0)), (-2, Some(75.0))]),
+    )
+    .await;
+    let error = observe_native_openrouter_profiles(&server.uri(), KEY, model)
+        .await
+        .unwrap_err();
+    let ProviderError::ApiError {
+        status: 503,
+        message,
+        ..
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.starts_with(
+            "OpenRouter reports every endpoint that could serve qwen/qwen3-coder as unavailable \
+             or degraded right now (google-vertex/us-south1: status -5, 0% of requests \
+             succeeded over the last 30 minutes; deepinfra/turbo: status -2, 80% of requests \
+             succeeded over the last 30 minutes; venice/fp8: status -2, 75% of requests \
+             succeeded over the last 30 minutes). This is OpenRouter's provider status, not your \
+             setup: try again later, or choose another model"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("identity"), "{message}");
+    let endpoints = observe_native_openrouter_endpoints(&server.uri(), KEY, model)
+        .await
+        .unwrap();
+    assert!(endpoints.profiles.is_empty());
+    assert_eq!(endpoints.unavailable.len(), 3);
+    assert!(endpoints.rejected.is_empty(), "{:?}", endpoints.rejected);
+
+    // One healthy endpoint is used; the degraded ones are not.
+    let server = serving_endpoints(
+        model,
+        &qwen3_coder(&[(-5, Some(0.0)), (0, Some(95.2)), (-5, None)]),
+    )
+    .await;
+    let profiles = observe_native_openrouter_profiles(&server.uri(), KEY, model)
+        .await
+        .unwrap();
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.endpoint_tag.as_str())
+            .collect::<Vec<_>>(),
+        ["deepinfra/turbo"]
+    );
+}
+
+/// Another model id under an endpoint is said as that, apart from
+/// availability; an endpoint that would not fit is never said to be only
+/// unavailable.
+#[tokio::test]
+async fn identity_and_fit_are_said_apart_from_availability() {
+    let model = "qwen/qwen3-coder";
+    let mut endpoints = qwen3_coder(&[(0, Some(100.0)), (-2, Some(80.0)), (0, Some(100.0))]);
+    endpoints["data"]["endpoints"][0]["model_id"] = json!("qwen/qwen3-coder-other");
+    endpoints["data"]["endpoints"][2]["supported_parameters"] = json!(["max_tokens"]);
+    let server = serving_endpoints(model, &endpoints).await;
+    let error = observe_native_openrouter_profiles(&server.uri(), KEY, model)
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains(
+            "OpenRouter reports every endpoint that could serve qwen/qwen3-coder as unavailable \
+             or degraded right now (deepinfra/turbo: status -2, 80% of requests succeeded"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Its other endpoints cannot be used: google-vertex/us-south1: OpenRouter lists it \
+             under another model id; venice/fp8: does not accept max_tokens and tools."
+        ),
+        "{message}"
+    );
+    // Nothing unavailable: the fit reasons alone, as before.
+    endpoints["data"]["endpoints"][1]["supported_parameters"] = json!(["max_tokens"]);
+    let server = serving_endpoints(model, &endpoints).await;
+    let message = observe_native_openrouter_profiles(&server.uri(), KEY, model)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("no OpenRouter endpoint for qwen/qwen3-coder has exact text/tool limits"),
+        "{message}"
+    );
+    assert!(!message.contains("unavailable"), "{message}");
+}
+
+/// A Session's retained endpoint that OpenRouter reports degraded when the
+/// provider is opened again is said as that, not as a changed contract.
+#[tokio::test]
+async fn a_retained_endpoint_that_is_degraded_now_is_said_as_that() {
+    let model = "qwen/qwen3-coder";
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{
+            "id":model,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},
+            "supported_parameters":["max_tokens","tools"]
+        }]})))
+        .mount(&server)
+        .await;
+    // Healthy when the Session observed it, degraded since.
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{model}/endpoints")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(qwen3_coder(&[
+            (-5, Some(0.0)),
+            (0, Some(100.0)),
+            (-5, Some(0.0)),
+        ])))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{model}/endpoints")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(qwen3_coder(&[
+            (-5, Some(0.0)),
+            (-2, Some(60.0)),
+            (-5, Some(0.0)),
+        ])))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let profile = observe_native_openrouter_profiles(&server.uri(), KEY, model)
+        .await
+        .unwrap()
+        .remove(0);
+    let error =
+        match NativeOpenRouterProvider::connect_observed(profile, KEY, 4096, 1 << 20, None).await {
+            Ok(_) => panic!("a degraded endpoint must not be opened"),
+            Err(error) => error,
+        };
+    let message = error.to_string();
+    assert!(
+        message.contains(
+            "OpenRouter reports the endpoint this Session uses for qwen/qwen3-coder as \
+             unavailable or degraded right now (deepinfra/turbo: status -2, 60% of requests \
+             succeeded over the last 30 minutes)"
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("review a new profile"), "{message}");
+}
