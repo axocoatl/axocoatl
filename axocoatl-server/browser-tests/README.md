@@ -327,7 +327,11 @@ the Preview and failure paths called out below.
   Monaco has loaded.
 - Open workspace marks Git repositories, refuses the home folder until its
   name is typed, and Remove from list forgets a Workspace without touching its
-  folder, refusing one with open Sessions.
+  folder, refusing one with open Sessions. New session for a Workspace the
+  Session browser has not read yet (the rail reads the Workspaces itself, so
+  it can offer one right after the workbench opens, or one opened elsewhere
+  since) reads the list and opens the picker; only a Workspace that is not
+  there gets "Open a Workspace first".
 - Source Control names the person a commit is by, disables Commit with the
   reason when no Git identity is set, shows a refused commit as Not committed
   with Git's message, offers Initialize Git here in a folder that is not a

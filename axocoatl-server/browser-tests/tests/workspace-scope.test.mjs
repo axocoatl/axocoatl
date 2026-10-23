@@ -180,4 +180,41 @@ for (const engine of engines) {
       await close();
     }
   });
+
+  // The rail reads the Workspaces itself, so it can offer New session for one
+  // the Session browser has not read yet: right after the workbench opens
+  // (its own read still under way), or one opened in another tab or with the
+  // CLI since. The picker then opens once the browser has read it; only a
+  // Workspace that is not there is refused.
+  test(`${engine.name}: New session for a Workspace the Session browser has not read yet opens once it is read`, async () => {
+    const { page, errors, close } = await openHome(engine);
+    let late = null;
+    try {
+      await page.waitForFunction(() => Boolean(document.querySelector('ax-rail')?.workspace));
+      await page.evaluate(() => closeCockpit({ homeScope: 'all' }));
+      await page.waitForFunction(() => (document.querySelector('ax-session-home')?.workspaces?.length || 0) > 0);
+      late = await runtime.createProjectWorkspace(`late-${engine.name}`, `Late ${engine.name}`);
+      assert.equal(await page.evaluate((id) =>
+        document.querySelector('ax-session-home').workspace(id), late.workspace.id), null);
+
+      assert.equal(await page.evaluate((id) =>
+        document.querySelector('ax-session-home').newSession(id), late.workspace.id), true);
+      const dialog = page.getByRole('dialog', { name: `New session in Late ${engine.name}` });
+      await dialog.waitFor({ state: 'visible' });
+      assert.equal(await page.locator('ax-session-home .picker-path').textContent(), late.workspace.canonical_path);
+      const refusal = page.locator('ax-session-home .notice', { hasText: 'Open a Workspace first' });
+      assert.equal(await refusal.count(), 0);
+      await page.locator('ax-session-home [data-action="picker-cancel"]').click();
+      await dialog.waitFor({ state: 'detached' });
+
+      assert.equal(await page.evaluate(() =>
+        document.querySelector('ax-session-home').newSession('wsp-not-a-workspace')), false);
+      await refusal.waitFor();
+      assert.equal(await page.locator('ax-session-home .picker-host .modal').count(), 0);
+      assert.deepEqual(errors, []);
+    } finally {
+      await close();
+      if (late) await fetch(`${runtime.baseUrl}/api/workspaces/${encodeURIComponent(late.workspace.id)}`, { method: 'DELETE' });
+    }
+  });
 }

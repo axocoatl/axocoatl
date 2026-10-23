@@ -437,6 +437,8 @@ export class AxSessionHome extends HTMLElement {
   #pathPhase = 'idle';
   #pathError = '';
   #refreshGeneration = 0;
+  // The latest read of the Workspace and Session lists (refresh).
+  #reading = null;
   #pathGeneration = 0;
   #navigationGeneration = 0;
   #picker = null;
@@ -572,7 +574,13 @@ export class AxSessionHome extends HTMLElement {
     this.#renderSidebar(); this.#renderPath(); this.#renderRows();
   }
 
-  async refresh() {
+  refresh() {
+    const read = this.#readLists();
+    this.#reading = read;
+    return read;
+  }
+
+  async #readLists() {
     // A shell may deliberately prime the element before it connects. Count
     // that as the initial load so connectedCallback does not issue a duplicate
     // sessions read after upgrade.
@@ -694,14 +702,32 @@ export class AxSessionHome extends HTMLElement {
 
   openWorkspace(initialPath = '') { this.#openPicker('workspace', initialPath); }
 
-  newSession(workspaceId = this.#selectedWorkspaceId) {
-    const workspace = this.workspace(workspaceId);
+  /** Open the New Session picker for `workspaceId`. The rail reads the
+   *  Workspaces itself, so it can offer one this list has not read yet:
+   *  right after the workbench opens, or one opened elsewhere since. The
+   *  list is read again then, and only a Workspace it still lacks is
+   *  refused. */
+  async newSession(workspaceId = this.#selectedWorkspaceId) {
+    const workspace = this.workspace(workspaceId) || await this.#readWorkspace(workspaceId);
     if (!workspace) {
       this.#notify('Open a Workspace first', 'A Session always belongs to one project folder.', 'err');
       return false;
     }
     this.#openPicker('session', workspaceDirectory(workspace), workspace.id);
     return true;
+  }
+
+  /** `id`'s Workspace once the lists have been read again (a newer read
+   *  replaces the one awaited, so the last one counts), or null. */
+  async #readWorkspace(id) {
+    if (!id) return null;
+    let read = this.refresh();
+    for (;;) {
+      await read;
+      if (read === this.#reading || this.workspace(id)) break;
+      read = this.#reading;
+    }
+    return this.workspace(id);
   }
 
   /** Open the explicit runtime/setup decision for a persisted Session. */
