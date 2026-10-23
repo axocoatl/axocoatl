@@ -546,6 +546,24 @@ unless step_position.call("test-gate", "Require a monotonic stable release versi
   errors << ".github/workflows/release.yml: normal release gate lacks the stable-SemVer frontier proof"
 end
 
+# The browser gate: ci.yml's product-browser legs, which release.yml repeats
+# before anything is built: the release build in Chromium on x86_64 and
+# aarch64 Linux, and in WebKit on x86_64 Linux and macOS.
+ci = YAML.load_file(ROOT.join(".github/workflows/ci.yml"))
+{ "ci.yml" => ci, "release.yml" => release }.each do |file, document|
+  job = document.dig("jobs", "product-browser") || {}
+  legs = Array(job.dig("strategy", "matrix", "include"))
+  wanted = [%w[chromium ubuntu-24.04], %w[chromium ubuntu-24.04-arm], %w[webkit ubuntu-24.04], %w[webkit macos-26]]
+  unless legs.map { |leg| [leg["engine"], leg["runner"]] }.sort == wanted.sort
+    errors << ".github/workflows/#{file}: product-browser must run Chromium on ubuntu-24.04 and ubuntu-24.04-arm and WebKit on ubuntu-24.04 and macos-26"
+  end
+  gate = Array(job["steps"]).find { |step| step["run"].to_s.include?("./scripts/verify-product-browser-gate.sh") }
+  unless gate && gate.dig("env", "AXO_BROWSER_PROFILE") == "release" \
+      && gate.dig("env", "AXO_BROWSER_ENGINE") == "${{ matrix.engine }}"
+    errors << ".github/workflows/#{file}: product-browser must run the release build in each leg's engine"
+  end
+end
+
 release_python = release_steps.call("build").find do |step|
   step["uses"] == "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c"
 end

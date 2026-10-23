@@ -150,10 +150,14 @@ jobs:
 
   product-browser:
     # The release build, as users get it, on x86_64 and aarch64 in Chromium,
-    # and on x86_64 in WebKit, the Safari engine (docs/RELEASE_GATE.md).
+    # and in WebKit, the Safari engine, on x86_64 Linux and on macOS
+    # (docs/RELEASE_GATE.md). release.yml runs the same legs.
     name: Product browser regressions (${{ matrix.leg }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    # The Linux legs that passed took 16 to 32 minutes (the 30 CI runs of
+    # 14 to 23 October 2026); the margin is for a cold cache and the macOS
+    # runner.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -161,12 +165,24 @@ jobs:
           - leg: x86_64, Chromium
             runner: ubuntu-24.04
             engine: chromium
+            podman: true
           - leg: aarch64, Chromium
             runner: ubuntu-24.04-arm
             engine: chromium
+            podman: true
           - leg: x86_64, WebKit
             runner: ubuntu-24.04
             engine: webkit
+            podman: true
+          # WebKit's own cookie store and a Mac without Podman exist only
+          # here; a hosted macOS runner cannot run a Podman machine, so the
+          # journey files that start a Session on Podman are left out
+          # (scripts/verify-product-browser-gate.sh) and run in the release
+          # gate's C1-browser-webkit path on a Mac.
+          - leg: macOS arm64, WebKit
+            runner: macos-26
+            engine: webkit
+            podman: false
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-23
@@ -182,24 +198,32 @@ jobs:
           cache-dependency-path: axocoatl-server/browser-tests/package-lock.json
       # preview-cookies.test.mjs runs a real Session app in node:20-slim on
       # the runner's rootless Podman, with its ports published on loopback
-      # (sandbox.network: bridge). The pull is pinned to the image index by
-      # digest and tagged with the name the journey and the daemon look up;
-      # the daemon pulls only an image that is missing. With
-      # AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1 a missing image fails the journey
-      # instead of skipping it.
-      - name: Pull the Session image the Preview cookie journey runs
+      # (sandbox.network: bridge); native-turn-git.test.mjs and the
+      # coordination reference journey run a Session in rust:bookworm, a
+      # curated image with Git (their fixtures have no network). Each pull is
+      # pinned to the image index by digest and tagged with the name the
+      # journeys and the daemon look up; the daemon pulls only an image that
+      # is missing. With AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1 a missing node
+      # image fails the Preview journeys instead of skipping them.
+      - name: Pull the Session images the Preview, native turn and reference journeys run
+        if: matrix.podman
         env:
           NODE_IMAGE: docker.io/library/node@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+          RUST_IMAGE: docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
         run: |
           command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
           podman pull "$NODE_IMAGE"
           podman tag "$NODE_IMAGE" docker.io/library/node:20-slim
+          podman pull "$RUST_IMAGE"
+          podman tag "$RUST_IMAGE" docker.io/library/rust:bookworm
       - name: Build and exercise the visible product surface
         env:
           AXO_BROWSER_INSTALL_WITH_DEPS: 'true'
           AXO_BROWSER_ENGINE: ${{ matrix.engine }}
           AXO_BROWSER_PROFILE: release
-          AXOCOATL_E2E_REQUIRE_NODE_IMAGE: '1'
+          AXO_BROWSER_WITHOUT_PODMAN: ${{ !matrix.podman && '1' || '' }}
+          AXOCOATL_E2E_REQUIRE_NODE_IMAGE: ${{ matrix.podman && '1' || '' }}
+          AXOCOATL_REFERENCE_RUNTIME_IMAGE: ${{ matrix.podman && 'docker.io/library/rust:bookworm' || '' }}
         run: ./scripts/verify-product-browser-gate.sh
 
   cross-aarch64-linux:

@@ -27,6 +27,7 @@ bundle, and each must say `pass: true`.
 - `C1-codex`: Tier C, Codex as the writer, billed to the ChatGPT plan
 - `C1-openrouter`: Tier C, writer and reviewer on OpenRouter, and Claude Code with an OpenRouter reviewer
 - `C1-workbench-webkit`: Tier C, the workbench in Safari (WebKit), from the sign-in link to a commit
+- `C1-browser-webkit`: Tier C, every product browser journey in WebKit on the gate Mac with Podman, against the candidate's macOS binary (`browser-webkit-mac.sh`)
 - `D1`: Tier D, Ubuntu 24.04 VM, a new user made with `adduser`, OpenRouter models (`newuser-linux.sh --live`)
 - `C2-local` (when the public copy names 16 GB): Tier C on a 16 GB Apple-silicon Mac
 - `C2-openrouter` (when the public copy names 16 GB): the same Mac, OpenRouter reviewer
@@ -443,6 +444,10 @@ openrouter` runs), as a new user does.
 scripts/release-gate/reset-mac-account.sh
 scripts/release-gate/newuser-mac.sh --release-dir ~/candidate --site ~/candidate/site \
   --pr-repo OWNER/axocoatl-gate-receipts
+# In any account with Node 22 and a running Podman machine, in a checkout of
+# the same commit: the product browser journeys in WebKit (C1-browser-webkit).
+scripts/release-gate/browser-webkit-mac.sh \
+  --tarball ~/candidate/axocoatl-vX.Y.Z-aarch64-apple-darwin.tar.gz --commit SHA
 scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   --from release-evidence --ci-run RUN_ID
 ```
@@ -451,6 +456,17 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
 "New user (Linux)" legs uploaded the Tier A evidence. It must have
 succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
 `success`.
+
+`browser-webkit-mac.sh` (`C1-browser-webkit`) runs
+`scripts/verify-product-browser-gate.sh` in WebKit with the binary from the
+candidate's macOS archive (checked against its `.sha256`, so nothing is
+built) on the Mac's running Podman machine, with the Preview's Session image
+(`node:20-slim`, pulled by the digest CI pins) required, so no Preview
+journey is skipped. Safari's own cookie behaviour exists only in WebKit on
+macOS, and the journeys that assert it with a real Preview need a Session on
+Podman: CI's macOS WebKit leg has no Podman, and its Linux legs have Linux
+WebKit. The suite's log is the path's evidence. It does not need the gate
+account; any account of the gate Mac with Node 22 will do.
 
 - `reset-mac-account.sh`:
   - It runs only as the gate account (`GATE_ACCOUNT`, default `axo-newuser`).
@@ -519,9 +535,15 @@ succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
   sign-in link. Separately, CI's "Product browser regressions" job runs
   every browser regression on WebKit, Safari's engine
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
-  and in Chromium on x86_64 and aarch64, all against the release build.
-  `release.yml`'s browser gate still runs Chromium only, until the WebKit leg
-  has passed in CI. In every engine a failure that followed a browser crash
+  on x86_64 Linux and on macOS 26 (arm64), and in Chromium on x86_64 and
+  aarch64, all against the release build; `release.yml`'s browser gate runs
+  the same four legs, and a failing one blocks the release. A hosted macOS
+  runner has no Podman, so its leg sets `AXO_BROWSER_WITHOUT_PODMAN=1`: it
+  leaves out the five journey files that start a Session on Podman (listed in
+  `scripts/verify-product-browser-gate.sh`), and the Preview journeys skip;
+  the macOS journeys of the signed-out and readiness files run there, and
+  `C1-browser-webkit` runs every journey in WebKit on the gate Mac with
+  Podman. In every engine a failure that followed a browser crash
   the suite detected is marked `# browser crash:`; nothing is rerun, so it
   still fails the suite (that README, "Browser crashes"). Run on a Mac with
   `AXO_BROWSER_ENGINE=webkit`, Playwright's
@@ -544,9 +566,11 @@ succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
   token cookie never reaches a Preview origin, and that the workbench still
   opens, connects and reads the API. `preview-cookies.test.mjs` needs Podman and
   `docker.io/library/node:20-slim`. On a developer machine it is skipped
-  without that image. CI's product-browser legs and `release.yml`'s browser
-  gate pull the image by digest and set `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`,
-  so there a missing image fails it. Through the real Preview proxy and a real
+  without that image. The Linux legs of CI's product-browser job and of
+  `release.yml`'s browser gate pull the image by digest and set
+  `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`, so there a missing image fails it, as
+  it does in `C1-browser-webkit` on the gate Mac; the macOS leg has no Podman
+  and skips it. Through the real Preview proxy and a real
   Session app it asserts that:
   - in WebKit on a Mac, a Preview address typed into a tab, a redirect from
     another site to one, and a real Command-click on a Preview link inside the

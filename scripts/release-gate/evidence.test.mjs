@@ -149,7 +149,7 @@ test('the required paths come from the block in RELEASE_GATE.md, the 16 GB ones 
   assert.throws(() => parseRequiredPaths('# nothing'), /required-paths block/);
   const real = parseRequiredPaths(readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8'));
   const always = real.filter((entry) => entry.when === 'always').map((entry) => entry.name);
-  assert.deepEqual(always, ['A-x86', 'A-arm', 'C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-workbench-webkit', 'D1']);
+  assert.deepEqual(always, ['A-x86', 'A-arm', 'C1-local', 'C1-claude-code', 'C1-codex', 'C1-openrouter', 'C1-workbench-webkit', 'C1-browser-webkit', 'D1']);
   assert.ok(real.some((entry) => entry.name.startsWith('C2-') && entry.when === 'sixteen-gb'));
 });
 
