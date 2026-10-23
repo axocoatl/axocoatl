@@ -851,6 +851,16 @@ pub(crate) fn user_systemd_item(
 ) -> Item {
     let user_arg = crate::onboard::host::shell_quote(user);
     if !systemd.reachable {
+        // Linger keeps the manager running, but a login that started no
+        // session still cannot reach it.
+        let linger = if systemd.linger == Some(true) {
+            " (linger is already on, so the service keeps running after you log out)".to_string()
+        } else {
+            format!(
+                "; to keep the service running after you log out, also run `loginctl \
+                 enable-linger {user_arg}` there"
+            )
+        };
         return Item::warn(
             "systemd user session",
             format!(
@@ -861,8 +871,7 @@ pub(crate) fn user_systemd_item(
             ),
             Some(format!(
                 "Log in as {user} directly (a desktop session, or `ssh {user_arg}@localhost`) \
-                 instead of switching users with su or sudo; to keep the service running after you \
-                 log out, also run `sudo loginctl enable-linger {user_arg}`"
+                 instead of switching users with su or sudo{linger}"
             )),
         );
     }
@@ -3391,9 +3400,27 @@ mod tests {
             item.detail
         );
         let fix = item.fix.unwrap();
-        assert!(fix.contains("`ssh alex@localhost`"), "{fix}");
-        assert!(fix.contains("`sudo loginctl enable-linger alex`"), "{fix}");
+        assert_eq!(
+            fix,
+            "Log in as alex directly (a desktop session, or `ssh alex@localhost`) instead of \
+             switching users with su or sudo; to keep the service running after you log out, \
+             also run `loginctl enable-linger alex` there"
+        );
         crate::paste_safe::assert_paste_safe(&fix);
+        // With linger on already (`sudo -iu` into such a user), it is not
+        // asked for again.
+        let lingering = detect::UserSystemd {
+            linger: Some(true),
+            ..none.clone()
+        };
+        assert_eq!(
+            user_systemd_item(&lingering, "alex", true).fix.as_deref(),
+            Some(
+                "Log in as alex directly (a desktop session, or `ssh alex@localhost`) instead \
+                 of switching users with su or sudo (linger is already on, so the service keeps \
+                 running after you log out)"
+            )
+        );
         let session = |linger| detect::UserSystemd {
             reachable: true,
             state: "running".into(),

@@ -468,7 +468,8 @@ while the configuration names an environment variable for a key. On Linux the se
 is a `systemctl --user` unit: in a login without a systemd user session (reached with
 `su -`, `sudo -iu`, or an SSH login that started none, where `systemctl --user` reaches
 no manager) onboarding does not offer it and says to log in as that user directly,
-and to run `sudo loginctl enable-linger USER` to keep it running after you log out.
+and, unless linger is on already, to run `loginctl enable-linger USER` in that login
+to keep it running after you log out.
 The terminal choice starts `axocoatl dev` as its own process; Ctrl+C stops it.
 
 ### Step 7: a first run
