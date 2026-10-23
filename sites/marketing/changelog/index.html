@@ -235,7 +235,8 @@
               Session opens it only when Ollama reports its cloud features disabled.</li>
           <li>Dependencies move to zip 9 for RUSTSEC-2026-0367, -0368 and -0369, to
               rustls-webpki 0.103.16 for RUSTSEC-2026-0382, and to webpki-roots and
-              webpki-root-certs 1.0.10 for RUSTSEC-2026-0381 and -0383. candle-core, used
+              webpki-root-certs 1.0.10 for RUSTSEC-2026-0381 and -0383, and to tokio
+              1.53.3 for RUSTSEC-2026-0386. candle-core, used
               for local embeddings, still brings zip 1.1.4, whose affected
               <code>extract()</code> nothing in Axocoatl reaches; a test fails if that
               changes.</li>
