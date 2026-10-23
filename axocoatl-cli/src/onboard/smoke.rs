@@ -888,7 +888,8 @@ mod tests {
             ..Choice::default()
         };
         let args = run_args(WriterChoice::Ollama, &local, repo, receipt, record, config);
-        assert!(shown(&args).starts_with("run fix --task 'Fix the bug: paging skips the last item' --repo"));
+        assert!(shown(&args)
+            .starts_with("run fix --task 'Fix the bug: paging skips the last item' --repo"));
         assert_eq!(
             args.join(" "),
             "run fix --task Fix the bug: paging skips the last item --repo /tmp/f/repo --receipt \
