@@ -207,7 +207,11 @@ The same line is among the Outcome's notes, which the summary, the JUnit file's 
 case, the **Run outcome** panel and the record bundle show, and the run's manifest in the
 record keeps the choice (`"credentials": {"writer": "codex-chatgpt"}`), which a daemon
 restart applies again instead of choosing anew. A `fix-claude-code` run says the same of
-`claude-code-oauth`.
+`claude-code-oauth`. When `auto` chooses `codex-openai` while `codex-chatgpt` is stored
+too, the note adds that the run is billed at OpenAI API rates to the key's OpenAI
+Platform organization, not to your ChatGPT plan, and that
+`--param credential=codex-chatgpt` uses the plan: storing a key moves `auto`'s runs to
+API rates, and every such run says so as it starts.
 
 ### Budgets
 
