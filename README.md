@@ -294,27 +294,30 @@ repository can start, and the release notes must then name the paths not run.
     Preview inside the workbench only (a Preview address opened in a tab, reached by a
     redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say
     when another page floods `localhost` with cookies.
-- **Linux**, as a new user who starts without Axocoatl, its data or stored credentials,
-  or Podman, and whose subordinate ids the gate removes first (the gate's instructions
-  use a new Ubuntu 24.04 VM): onboarding installs Podman with apt and adds a range of
-  subordinate ids that overlaps no other user's, each with `sudo` after asking, connects
-  OpenRouter through its browser sign-in and installs no Ollama. With those OpenRouter
-  models, `axocoatl run fix` passes on the same repositories, and the Always-On Service
-  runs as a systemd user unit through to its uninstall.
+- **Linux**, on an account that starts without Axocoatl, its data or stored
+  credentials, or Podman, and whose subordinate ids the gate removes first (the gate's
+  instructions make a new user with `adduser` in a new Ubuntu 24.04 VM): onboarding
+  installs Podman with apt and adds a range of subordinate ids that overlaps no other
+  user's, each with `sudo` after asking, connects OpenRouter through its browser sign-in
+  and installs no Ollama. With those OpenRouter models, `axocoatl run fix` passes on the
+  same repositories, and the Always-On Service runs as a systemd user unit through to
+  its uninstall.
 - **CI**, on Ubuntu 24.04 on x86_64 and arm64: the same install command, then
   onboarding with no terminal against a scripted model server (Podman already on the
   runner, no first-run sample), and `axocoatl run fix` passes on the same repositories.
 
-Every receipt and record of these runs is verified. The evidence also holds each path's
-transcript, times and downloads, the Podman, Ollama, Claude Code and Codex versions it
-ran, the models, the system, its memory and the account, and who answered each
-question: the person, or for the workbench's questions up to the commit, a WebDriver
-driver in Safari.
+Each run on those repositories has its receipt and record verified (the `--keep pr`
+run, its receipt, by the verify-receipt Action), and each timed run on a real repository
+its receipt. The evidence also holds each path's transcript, times and downloads, the
+Podman, Ollama, Claude Code and Codex versions it ran, the models, the system, its
+memory and the account, and who answered each question: the person, or for the
+workbench's questions up to the commit, a WebDriver driver in Safari. The gate checks
+neither the Mac's memory nor which local models onboarding chose there, so its runs
+verify local models only on the memory and models the evidence names.
 
-Not yet verified: Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04,
-Debian 12, Fedora with SELinux, and WSL2 on Windows. Docker is not supported; Podman can
-run alongside it. The first daemon start downloads an 87 MB embedding model from
-huggingface.co. To remove Axocoatl, see
+Not yet verified: Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux, and WSL2 on
+Windows. Docker is not supported; Podman can run alongside it. The first daemon start
+downloads an 87 MB embedding model from huggingface.co. To remove Axocoatl, see
 [Uninstall](https://docs.axocoatl.ai/operate/uninstall/).
 
 Prefer Cargo? `cargo install axocoatl-cli` (requires Rust 1.88+).

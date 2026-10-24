@@ -279,7 +279,7 @@
         <ul>
           <li>The release gate requires the release commit to go from the published
               install command to passing, signed runs on each path below, every receipt
-              and record verified. The release workflow publishes nothing until the
+              verified. The release workflow publishes nothing until the
               signed evidence shows every step each path lists; the only way past it is
               a logged override that only maintainers listed in the repository can
               start, and the release notes must then name the paths not run.</li>
@@ -304,9 +304,10 @@
               commit, shows a Session's Preview inside the workbench only, and stays as
               the docs say when another page floods <code>localhost</code> with
               cookies.</li>
-          <li>On Linux, as a new user who starts without Axocoatl, its data or stored
+          <li>On Linux, on an account that starts without Axocoatl, its data or stored
               credentials, or Podman, and whose subordinate ids the gate removes first
-              (the gate's instructions use a new Ubuntu 24.04 VM): onboarding installs
+              (the gate's instructions make a new user with <code>adduser</code> in a new
+              Ubuntu 24.04 VM): onboarding installs
               Podman with apt and adds a range of subordinate ids that overlaps no
               other user's, with <code>sudo</code> after asking, and connects
               OpenRouter through its browser sign-in; <code>fix</code> with those OpenRouter models passes on
@@ -318,7 +319,9 @@
           <li>Each path's transcript, times, downloads and tool versions, the models, the
               system, its memory and the account, and who answered each question go into
               the signed evidence bundle under <code>release-evidence/1.5.0/</code> in
-              the repository.</li>
+              the repository. The gate checks neither the Mac's memory nor which local
+              models onboarding chose there, so its runs verify local models only on the
+              memory and models the evidence names.</li>
         </ul>
       </article>
 

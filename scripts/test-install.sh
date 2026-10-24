@@ -772,6 +772,9 @@ startup_expect adds_to_path no "the unmarked line in a function" "$(printf 'use_
 startup_expect adds_to_path no "the unmarked line after an early return" "$(printf '[ -n "$NO_LOCAL" ] && return\n%s' "$unguarded")"
 startup_expect adds_to_path no "the unmarked line after an exec with a command" "$(printf 'exec 2>/dev/null zsh\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the unmarked line after an exec that only redirects" "$(printf 'exec 2>>"$HOME/.shell.log" 3<&-\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after an exec that opens a named descriptor" "$(printf 'exec {fd}>>"$HOME/.shell.log"\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after assignments" "$(printf 'FOO=1; export FOO\nX=1 Y=2 true\nZ=1 2>/dev/null; export Z\n%s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after an exec after an assignment" "$(printf 'SHELL=/bin/zsh exec zsh\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the marked line in a block for another OS (taken at the user's word)" \
   "$(os_block "$(printf '  # Added by the Axocoatl installer\n  %s' "$unguarded")")"
 startup_expect adds_to_path yes "fish's line" "$(path_line_for fish)" config.fish
@@ -794,6 +797,7 @@ startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'e
 fish_line="$(path_line_for fish)"
 for fish_before in 'status is-login || return' 'status is-interactive || exit' 'not status is-interactive && return' \
   'status is-login || exec bash' '! status is-interactive && return' 'not not return' 'true & return' \
+  'SHELL=/bin/zsh exec zsh' 'status is-login || A=1 B=2 exec bash' \
   'status is-login ||' 'status is-login &&' 'echo x |' "echo a \\" \
   "$(printf 'status is-login ||\n# a comment')" 'status is-login || # a comment'; do
   startup_expect adds_to_path no "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
@@ -1035,6 +1039,16 @@ appended_expect stops "an exec after redirections" 'exec 2>/dev/null zsh' .bashr
 appended_expect stops "an exec on the next line" "$(printf 'exec \\\n  zsh')" .bashrc
 appended_expect stops "a return after builtin" '[ -n "$X" ] && builtin return' .bashrc
 appended_expect stops "an exec after command" '[ -x /bin/zsh ] && command exec zsh' .bashrc
+appended_expect stops "an exec after command -p" 'command -p exec zsh' .bashrc
+appended_expect stops "a return after command --" '[ -n "$X" ] && command -- return' .bashrc
+appended_expect stops "an exec after an assignment" 'FOO=1 exec zsh' .bashrc
+appended_expect stops "an exec after assignments, to switch shells" '[ -x /usr/bin/fish ] && SHELL=/usr/bin/fish TERM+=x exec fish' .bashrc
+appended_expect stops "an exec after an assignment and a redirection" 'FOO=1 2>/dev/null exec zsh' .zshrc
+appended_expect stops "an exec on the line after an assignment and a \\" "$(printf 'FOO=1 \\\n  exec zsh')" .bashrc
+appended_expect stops "an exec after an assignment in fish" 'SHELL=/usr/bin/zsh exec zsh' config.fish
+appended_expect runs "an exec that opens a named descriptor" 'exec {fd}>>"$HOME/.bash.log"' .bashrc
+appended_expect runs "command -v exec" 'command -v exec >/dev/null' .bashrc
+appended_expect runs "assignments with no command" "$(printf 'FOO=1; export FOO\nX=1 && Y=2 || Z=3\nA=1 B=2 >/dev/null\nexport C=exec')" .bashrc
 appended_expect stops "a return after a subshell" '( cd /tmp ) && return' .bashrc
 appended_expect stops "a return after a one-line if on a non-interactive test" 'if [ -z "$PS1" ]; then :; fi; return' .bashrc
 appended_expect stops "a return in a one-line if's else" 'if [ -z "$PS1" ]; then :; else return; fi' .bashrc

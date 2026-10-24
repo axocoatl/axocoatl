@@ -138,14 +138,15 @@ own_fish_lines() {
 #     coproc).
 # It splits words much as the shell does, with quotes, backslashes and
 # comments (also in $( ), <( ), >( ) and in a ( ) word), and takes a keyword
-# only where a command starts; after builtin or command a command still
-# starts, and digits right before < or > are the descriptor a redirection
-# names (2>/dev/null), not a word. Where it sees that it cannot follow the file,
-# later lines do not count: it opens a block for any word that ends in {, but
-# closes one only at a } where a command starts, so after zsh's `f() { cmd }`
-# no later line counts. So sure() means only that the installer can tell
-# nothing before the line keeps it from running. What it cannot see: a
-# command that stops the shell another way (set -e and a failing command, a
+# only where a command starts; after builtin, command (also command -p or
+# command --) or an assignment (FOO=1) a command still starts, and digits or a
+# {NAME} right before < or > are the descriptor a redirection names
+# (2>/dev/null, {fd}>file), not a word. Where it sees that it cannot follow
+# the file, later lines do not count: it opens a block for any word that ends
+# in {, but closes one only at a } where a command starts, so after zsh's
+# `f() { cmd }` no later line counts. So sure() means only that the installer
+# can tell nothing before the line keeps it from running. What it cannot see:
+# a command that stops the shell another way (set -e and a failing command, a
 # sourced file or an eval that returns or exits), a syntax error it does not
 # notice, after which the shell stops reading the file, and a later line that
 # takes the directory out of PATH again; a valid file it misreads in some
@@ -174,6 +175,7 @@ BEGIN {
   testmode = 0; pending = 0; redir = 0; fname = 0; fnparen = 0; afterfname = 0
   prevcmd = 0; word = ""; raw = ""; inword = 0; last = ""; ctxbs = 0; stopped = 0
   cmtat = 0; curline = ""; linewords = 0; execpend = 0; exechere = 0
+  assign = 0; cmdopts = 0
   # Tests true only in a shell that is not interactive (ni), and only in one
   # that is (it), for the stops that stopped leaves out.
   ps1 = "\"?\\$(PS1|\\{PS1\\})\"?"
@@ -224,13 +226,15 @@ function shut(kind, m) {
   if (nblk && blk[nblk] == kind && (m == "" || mode[nblk] == m)) nblk--
   else lost = 1
 }
-function tok_word(w,    k, m, opens, u) {
+function tok_word(w,    k, m, opens, u, wasopts) {
   linewords++
   prevcmd = 0
   afterfname = 0
   last = w
   if (fnparen) { lost = 1; return }
   if (redir) { redir = 0; return }
+  assign = 0
+  wasopts = cmdopts; cmdopts = 0
   # A word after an exec where a command starts, other than the targets of
   # its redirections: exec runs that command in place of the shell.
   if (execpend) {
@@ -268,6 +272,10 @@ function tok_word(w,    k, m, opens, u) {
   if (opens) { push("{", ""); fnb[nblk] = pending; cmd = 1; pending = 0; return }
   if (!cmd) return
   pending = 0
+  # After an assignment (FOO=1 exec zsh), and after command and its -p or
+  # --, a command still starts.
+  if (w ~ /^[A-Za-z_][A-Za-z0-9_]*\+?=/) { assign = 1; return }
+  if (w == "command" || (wasopts && (w == "-p" || w == "--"))) { cmdopts = 1; return }
   if (w == "if") { push("if", ""); niif[nblk] = (linewords == 1 && curline ~ ni_if); return }
   if (w == "then") { if (k != "if") lost = 1; return }
   if (w == "elif" || w == "else") {
@@ -285,21 +293,25 @@ function tok_word(w,    k, m, opens, u) {
   if (w == "}") { shut("{", ""); cmd = 0; return }
   if (w == "[[") { testmode = 1; cmd = 0; return }
   if (w == "function") { fname = 1; cmd = 0; return }
-  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect" || w == "builtin" || w == "command") return
+  if (w == "!" || w == "time" || w == "noglob" || w == "nocorrect" || w == "builtin") return
   if (w == "foreach" || w == "repeat" || w == "coproc" || w == "end") { lost = 1; return }
   if (w ~ /\(\)$/ && w !~ /=/) { pending = 1; return }
   cmd = 0
   prevcmd = 1
 }
-function tok_op(o,    k, m, wasprev, wasafter) {
+function tok_op(o,    k, m, wasprev, wasafter, wasassign) {
   wasprev = prevcmd; prevcmd = 0
   wasafter = afterfname; afterfname = 0
+  wasassign = assign; assign = 0
+  cmdopts = 0
   last = o
   if (redir) { redir = 0; lost = 1 }
   if (testmode) return
   if (o == "<<" || o == "<<-") { lost = 1; return }
-  if (o == "<" || o == ">" || o == ">>" || o == "<>" || o == ">|" || o == "&>" || o == "&>>" || o == ">&" || o == "<&" || o == "<<<") { redir = 1; return }
+  if (o == "<" || o == ">" || o == ">>" || o == "<>" || o == ">|" || o == "&>" || o == "&>>" || o == ">&" || o == "<&" || o == "<<<") { redir = 1; assign = wasassign; return }
   execpend = 0
+  # An operator after assignments alone (FOO=1; cmd) ends that command.
+  if (wasassign) cmd = 0
   if (o == ")" && fnparen) { fnparen = 0; pending = 1; cmd = 1; return }
   if (fnparen) { lost = 1; return }
   if (o == "(" && (wasprev || wasafter)) { fnparen = 1; return }
@@ -330,6 +342,8 @@ function tok_op(o,    k, m, wasprev, wasafter) {
 }
 function newline(    k, m) {
   execpend = 0
+  assign = 0
+  cmdopts = 0
   if (redir || fnparen || fname) lost = 1
   redir = 0
   fnparen = 0
@@ -447,8 +461,9 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
       continue
     }
     if (index(";&|<>()", c)) {
-      # Digits right before < or > name the descriptor it redirects.
-      if (inword && (c == "<" || c == ">") && word ~ /^[0-9]+$/ && raw == "") { word = ""; inword = 0 }
+      # Digits or a {NAME} right before < or > name the descriptor it
+      # redirects.
+      if (inword && (c == "<" || c == ">") && word ~ /^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$/ && raw == "") { word = ""; inword = 0 }
       else if (inword) endword(s, i)
       three = substr(s, i, 3)
       two = substr(s, i, 2)
@@ -541,13 +556,13 @@ adds_to_path() {
     }
     # fish: a command starts at the start of a line and after a ;, & or |
     # (so also after && and ||) that is not written with a backslash, and
-    # its first word is the one after any and, or, not, !, command or
-    # builtin. Blocks open with if, for, while, function, switch or begin
-    # where a command starts and close with end. After a return, exit or
-    # exec where a command starts (status is-login || return, not
-    # status is-interactive && exit), even in a block, no line counts
-    # (fended). A line with a quote or a # that names one of those words
-    # anywhere is not followed (flost), so nothing after it counts.
+    # its first word is the one after any and, or, not, !, command, builtin
+    # or assignment (FOO=1). Blocks open with if, for, while, function,
+    # switch or begin where a command starts and close with end. After a
+    # return, exit or exec where a command starts (status is-login ||
+    # return, not status is-interactive && exit), even in a block, no line
+    # counts (fended). A line with a quote or a # that names one of those
+    # words anywhere is not followed (flost), so nothing after it counts.
     function fish_track(s,    i, n, c, nparts, part, k, w) {
       if (s ~ /^#/) return
       if ((index(s, "\"") || index(s, sq) || index(s, "#")) && s ~ /(^|[ \t;(&|])(if|for|while|function|switch|begin|end|return|exit|exec)([ \t;)&|]|$)/) {
@@ -565,7 +580,7 @@ adds_to_path() {
       }
       for (k = 1; k <= nparts; k++) {
         w = trim(part[k])
-        while (w ~ /^(and|or|not|!|command|builtin)([ \t]|$)/) {
+        while (w ~ /^(and|or|not|!|command|builtin)([ \t]|$)/ || w ~ /^[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]/) {
           sub(/^[^ \t]+/, "", w)
           w = trim(w)
         }
