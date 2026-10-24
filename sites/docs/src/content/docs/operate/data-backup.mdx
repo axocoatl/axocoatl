@@ -66,6 +66,7 @@ can include:
 | `memory/semantic/v1/agent_<agent-key>_semantic.json` | Current semantic records and vectors |
 | `models/` | Downloaded local embedding-model cache |
 | `local-api-token` | Per-daemon local API token (`0600`); a restore reuses it, deleting it issues a new one at the next start |
+| `local-api-token.issued` | SHA-256 of the token 1.5.0 or later issued (`0600`); a token it does not name, one an earlier version created, is replaced once at the next start |
 | `loadout-runs/<run id>/` | Each [loadout run](/reference/run/#where-runs-are-kept): `manifest.json`, `events.jsonl` and `outcome.json`; kept when its Session is deleted |
 | `secrets/<name>` | Route credentials stored with `axocoatl secret set` (`0600`, not encrypted) |
 | `recipes/images.json` | Image ids recorded by `axocoatl recipe build`; a Session trusts exactly these recipe images |

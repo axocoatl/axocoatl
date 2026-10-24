@@ -31,6 +31,13 @@ use std::str::FromStr;
 
 /// File in the data root that holds the per-daemon local API token.
 pub const LOCAL_TOKEN_FILE: &str = "local-api-token";
+/// Beside it: the SHA-256 of the token a daemon that serves the workbench at
+/// `127.0.0.1` issued. Sign-in links before 1.5.0 named `localhost`, so a
+/// browser may still hold the token in a cookie for `localhost`, which every
+/// server on a `localhost` port receives (on macOS a Session's app too: its
+/// ports are published on `[::1]`, which `localhost` reaches). A token this
+/// file does not name is replaced once, so no such copy signs anything in.
+pub const LOCAL_TOKEN_ISSUED_FILE: &str = "local-api-token.issued";
 /// Cookie names are `axocoatl-token-<port>`: cookies ignore ports, and two
 /// daemons on one machine must not overwrite each other's sign-in.
 pub const LOCAL_TOKEN_COOKIE_PREFIX: &str = "axocoatl-token-";
@@ -172,11 +179,19 @@ pub fn read_local_token(data_root: &SecureDir) -> std::io::Result<Option<SecretS
 
 /// Return the local API token, creating it on first use: 32 bytes from the
 /// OS random number generator, base64url without padding, written atomically
-/// with mode 0600. Only the daemon calls this, while it holds the data-root
-/// lease. Delete the file and restart to rotate the token.
+/// with mode 0600. A token that [`LOCAL_TOKEN_ISSUED_FILE`] does not name (one
+/// a version before 1.5.0 created) is replaced the same way. Only the daemon
+/// calls this, while it holds the data-root lease. Delete the file and
+/// restart to rotate the token.
 pub fn load_or_create_local_token(data_root: &SecureDir) -> std::io::Result<SecretString> {
     if let Some(token) = read_local_token(data_root)? {
-        return Ok(token);
+        if issued_for_the_workbench_address(data_root, &token)? {
+            return Ok(token);
+        }
+        tracing::info!(
+            "replacing the local API token, which a version before 1.5.0 created: \
+             sign-in links then named localhost, where a browser may still hold it"
+        );
     }
     let mut bytes = [0_u8; LOCAL_TOKEN_BYTES];
     getrandom::fill(&mut bytes).map_err(|error| {
@@ -184,9 +199,32 @@ pub fn load_or_create_local_token(data_root: &SecureDir) -> std::io::Result<Secr
             "could not read the OS random number generator for the local API token: {error}"
         ))
     })?;
-    let token = URL_SAFE_NO_PAD.encode(bytes);
-    data_root.atomic_write(LOCAL_TOKEN_FILE, token.as_bytes())?;
-    Ok(SecretString::from(token))
+    let token = SecretString::from(URL_SAFE_NO_PAD.encode(bytes));
+    data_root.atomic_write(LOCAL_TOKEN_FILE, token.expose_secret().as_bytes())?;
+    data_root.atomic_write(LOCAL_TOKEN_ISSUED_FILE, issued_record(&token).as_bytes())?;
+    Ok(token)
+}
+
+/// What [`LOCAL_TOKEN_ISSUED_FILE`] holds for `token`.
+fn issued_record(token: &SecretString) -> String {
+    let digest = Sha256::digest(token.expose_secret().as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Whether [`LOCAL_TOKEN_ISSUED_FILE`] names `token`. A missing file, or
+/// anything but a regular file that names it, does not.
+fn issued_for_the_workbench_address(
+    data_root: &SecureDir,
+    token: &SecretString,
+) -> std::io::Result<bool> {
+    Ok(
+        match data_root.read_leaf_limited(LOCAL_TOKEN_ISSUED_FILE, LOCAL_TOKEN_MAX_FILE_BYTES)? {
+            Some(SecureLeaf::Regular { bytes, .. }) => {
+                bytes.trim_ascii() == issued_record(token).as_bytes()
+            }
+            _ => false,
+        },
+    )
 }
 
 /// Read the local API token from a data directory path without creating
@@ -2107,6 +2145,46 @@ mod tests {
             assert_eq!(
                 std::fs::read_to_string(&path).unwrap(),
                 first.expose_secret()
+            );
+        }
+
+        /// A token a version before 1.5.0 created may sit in a browser's
+        /// cookie for `localhost`: the first load replaces it once, records
+        /// the new one, and later loads reuse that.
+        #[test]
+        fn a_token_created_before_1_5_is_replaced_once() {
+            let (dir, root) = data_root();
+            let path = dir.path().join(LOCAL_TOKEN_FILE);
+            let issued = dir.path().join(LOCAL_TOKEN_ISSUED_FILE);
+            let old = "A".repeat(LOCAL_TOKEN_MIN_LEN);
+            std::fs::write(&path, &old).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert_eq!(
+                read_local_token(&root).unwrap().unwrap().expose_secret(),
+                old
+            );
+
+            let new = load_or_create_local_token(&root).unwrap();
+            assert_ne!(new.expose_secret(), old);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), new.expose_secret());
+            let record = std::fs::read_to_string(&issued).unwrap();
+            assert_eq!(record, issued_record(&new));
+            assert_eq!(record.len(), 64);
+            assert!(!record.contains(new.expose_secret()));
+            let mode = std::fs::metadata(&issued).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+            let again = load_or_create_local_token(&root).unwrap();
+            assert_eq!(again.expose_secret(), new.expose_secret());
+
+            // A record of another token (an earlier version wrote a new
+            // token file after this one recorded its own) is replaced too.
+            std::fs::write(&path, &old).unwrap();
+            let replaced = load_or_create_local_token(&root).unwrap();
+            assert_ne!(replaced.expose_secret(), old);
+            assert_ne!(replaced.expose_secret(), new.expose_secret());
+            assert_eq!(
+                std::fs::read_to_string(&issued).unwrap(),
+                issued_record(&replaced)
             );
         }
 

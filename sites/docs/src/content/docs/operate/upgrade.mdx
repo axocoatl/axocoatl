@@ -74,7 +74,10 @@ format, as one the daemon creates does, and keeps the files in it.
    ```
 
    Scripts send `Authorization: Bearer <token>` with the contents of
-   `local-api-token` in the data root.
+   `local-api-token` in the data root. The first start of 1.5.0 or later
+   replaces a token an earlier version created, once, because sign-in links
+   before 1.5.0 left it in a cookie for `localhost`: open the new link, and
+   give scripts that kept the old token the new one.
 7. Inspect Sessions, Automation run history, Agent status, and logs before
    resuming automatic triggers.
 

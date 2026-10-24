@@ -94,6 +94,13 @@ described after this list.
   the data root with mode `0600`. Later starts reuse the file. A file that is a
   symlink, is not a regular file, is readable or writable by other users, or
   does not hold a token stops startup.
+- The first start of 1.5.0 or later replaces a token an earlier version
+  created, once, and writes the SHA-256 of the token it issued to
+  `local-api-token.issued`. Sign-in links before 1.5.0 named `localhost`, so a
+  browser may still hold the old token in a cookie for `localhost`, which
+  every server on a `localhost` port receives; replaced, that copy signs
+  nothing in. Open the new sign-in link, and give scripts that kept the old
+  token the new one.
 - `axocoatl dev` and `axocoatl serve` print a sign-in link,
   `http://127.0.0.1:<port>/?token=<token>`, when their output is a terminal.
   `127.0.0.1` is the workbench's one address
@@ -160,7 +167,8 @@ publishes Session ports on another loopback address
 the cookie was stored for `localhost`, so servers opened on `localhost` ports
 received it instead; a browser that signed in then keeps that copy until it
 opens the workbench at `localhost` once, which removes it, or its 30 days
-end. Session containers have no mount of the data root, so Session code
+end, but the copy no longer matches the token, which the first start of
+1.5.0 replaced. Session containers have no mount of the data root, so Session code
 cannot read the token file, and Preview origins never receive the cookie.
 
 `server.auth.allow_unauthenticated: true` turns the token off on loopback, for
@@ -831,8 +839,9 @@ this contract, and Axocoatl cannot change or always detect those settings.
   repository scripts and Agent commands.
 - Protect the data root, backups, config, service definition, and logs. Axocoatl
   has no application-level at-rest encryption.
-- The data root holds `local-api-token`. A backup includes it, and a restore
-  reuses it. Delete the file and restart to issue a new one.
+- The data root holds `local-api-token` and `local-api-token.issued`. A backup
+  includes them, and a restore reuses the token. Delete `local-api-token` and
+  restart to issue a new one.
 
 The runtime attempts to set its data root to mode `0700`; selected memory and
 checkpoint files use `0600`. Do not assume every persisted file is encrypted or
