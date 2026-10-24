@@ -25,6 +25,11 @@
 //!   template Ollama renders the model with (its own renderer, a Go
 //!   template, the model's chat template in llama-server, or Harmony).
 //!
+//! A probe Ollama does not answer (a request that fails, an error status,
+//! an answer that ends before its final record) is not a failed guarantee:
+//! the error says what Ollama did, and nothing is kept, so the next try
+//! probes again.
+//!
 //! All send the same `num_ctx` and `shift:false` as inference (and as the
 //! observation's load request), so none makes Ollama reload the model, and
 //! the same [`PROBE_SEED`] at the model's own sampling settings, so a probe
@@ -204,6 +209,64 @@ fn failed(guarantee: &str, model: &str, version: &str, detail: impl AsRef<str>) 
     ))
 }
 
+/// How Ollama left a probe unanswered.
+enum Unanswered {
+    /// The request was not sent, or its answer not read, in time or at all.
+    Request(String),
+    /// A status that is not 2xx, or one that does not refuse the over-long
+    /// prompt for its length, with Ollama's message.
+    Status(u16, String),
+    /// The answer ended before its final record, with Ollama's message if
+    /// it sent one.
+    Unfinished(Option<String>),
+}
+
+/// A probe Ollama did not answer: the request failed, Ollama answered with
+/// an error status, or its answer ended before its final record (a model
+/// runner that stopped, out of memory for one; on Ollama 0.40.8 a request to
+/// a runner that had stopped got an answer without one). That shows nothing
+/// about the guarantee, so the model is not refused for it: the error says
+/// what Ollama did, and the probes run again on the next try.
+fn unanswered(guarantee: &str, model: &str, version: &str, how: Unanswered) -> ProviderError {
+    let check = format!("the {guarantee} check of {model} on Ollama {version}");
+    match how {
+        Unanswered::Request(error) => ProviderError::Network(format!(
+            "{error}, so {check} did not run; try again once Ollama answers"
+        )),
+        Unanswered::Status(status, message) => ProviderError::ApiError {
+            provider: PROVIDER.into(),
+            status,
+            message: format!("{message}; {check} did not run: try again once Ollama answers"),
+        },
+        Unanswered::Unfinished(message) => ProviderError::IncompleteStream {
+            provider: PROVIDER.into(),
+            message: format!(
+                "Ollama ended its answer in {check} before its final record{}, so the check did \
+                 not run; Ollama's log says why (a model runner that stopped, for one): try again",
+                message.map(|text| format!(" ({text})")).unwrap_or_default()
+            ),
+        },
+    }
+}
+
+/// Why a probe's request or answer failed: Ollama did not answer it, or
+/// answered with something that is not a bounded NDJSON answer.
+enum PostError {
+    Unanswered(String),
+    Invalid(String),
+}
+
+impl PostError {
+    fn into_error(self, guarantee: &str, model: &str, version: &str) -> ProviderError {
+        match self {
+            Self::Unanswered(error) => {
+                unanswered(guarantee, model, version, Unanswered::Request(error))
+            }
+            Self::Invalid(detail) => failed(guarantee, model, version, detail),
+        }
+    }
+}
+
 const OVER_LONG: &str = "over-long prompt refusal (truncate:false)";
 const STOP: &str = "output limit (num_predict)";
 const LONG_OUTPUT: &str = "long output limit and count (num_predict, eval_count)";
@@ -256,26 +319,25 @@ async fn post(
     base_url: &str,
     body: &Value,
     timeout: Duration,
-) -> Result<(u16, Vec<Value>), String> {
-    let url = validated_endpoint(base_url, "api/chat", PROVIDER).map_err(|e| e.to_string())?;
+) -> Result<(u16, Vec<Value>), PostError> {
+    let url = validated_endpoint(base_url, "api/chat", PROVIDER)
+        .map_err(|e| PostError::Invalid(e.to_string()))?;
     let mut response = client
         .post(url)
         .json(body)
         .timeout(timeout)
         .send()
         .await
-        .map_err(|error| format!("the probe request failed: {error}"))?;
+        .map_err(|error| PostError::Unanswered(format!("the probe request failed: {error}")))?;
     let status = response.status().as_u16();
     let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("the probe answer could not be read: {error}"))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        PostError::Unanswered(format!("the probe answer could not be read: {error}"))
+    })? {
         if chunk.len() > MAX_PROBE_RESPONSE_BYTES.saturating_sub(bytes.len()) {
-            return Err(format!(
+            return Err(PostError::Invalid(format!(
                 "the probe answer is longer than {MAX_PROBE_RESPONSE_BYTES} bytes"
-            ));
+            )));
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -284,8 +346,11 @@ async fn post(
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let value: Value = serde_json::from_slice(line)
-            .map_err(|_| format!("Ollama answered {status} with a body that is not JSON"))?;
+        let value: Value = serde_json::from_slice(line).map_err(|_| {
+            PostError::Invalid(format!(
+                "Ollama answered {status} with a body that is not JSON"
+            ))
+        })?;
         records.push(value);
     }
     Ok((status, records))
@@ -317,7 +382,7 @@ async fn over_long_probe(
         timeout,
     )
     .await
-    .map_err(|detail| failed(OVER_LONG, model, version, detail))?;
+    .map_err(|error| error.into_error(OVER_LONG, model, version))?;
     if records
         .iter()
         .any(|record| record.get("eval_count").is_some())
@@ -349,14 +414,16 @@ async fn over_long_probe(
     match error_text(&records) {
         // Ollama answered with a refusal, but not one of the prompt's length:
         // the probe proves nothing about the guarantee.
-        Some(_) if matches!(status, 404 | 429 | 499 | 503) => Err(failed(
+        Some(message) if matches!(status, 404 | 429 | 499 | 503) => Err(unanswered(
             OVER_LONG,
             model,
             version,
-            format!(
-                "Ollama answered {status} ({}), which is not a refusal of the prompt's length; \
-                 try again when the server is idle",
-                error_text(&records).unwrap_or_default()
+            Unanswered::Status(
+                status,
+                format!(
+                    "{message}, which is not a refusal of the prompt's length (try again when \
+                     the server is idle)"
+                ),
             ),
         )),
         Some(_) => Ok(()),
@@ -369,16 +436,53 @@ async fn over_long_probe(
     }
 }
 
-/// Why a probe answer that should have been generated was not: a status that
-/// is not 2xx, or an error record. `what` names the request.
-fn refused(status: u16, records: &[Value], what: &str) -> Result<(), String> {
-    if !(200..300).contains(&status) || error_text(records).is_some() {
-        return Err(format!(
-            "{what} was refused (status {status}: {})",
-            error_text(records).unwrap_or_default()
+/// Whether Ollama answered a probe that should have been generated: a 2xx
+/// status and a final record. An error status, or an answer that ends
+/// before its final record, leaves the probe [`unanswered`]. An error record
+/// inside the answer does too, unless `error_fails` (the tool-call probe:
+/// Ollama ends an answer with one when it cannot parse the model's call),
+/// in which case the guarantee failed. `what` names the request.
+fn answered(
+    status: u16,
+    records: &[Value],
+    (guarantee, model, version): (&str, &str, &str),
+    what: &str,
+    error_fails: bool,
+) -> Result<(), ProviderError> {
+    let error = error_text(records);
+    if !(200..300).contains(&status) {
+        let message = error.unwrap_or_else(|| "Ollama gave no reason".into());
+        return Err(unanswered(
+            guarantee,
+            model,
+            version,
+            Unanswered::Status(status, message),
         ));
     }
-    Ok(())
+    let done = records
+        .iter()
+        .any(|record| record.get("done").and_then(Value::as_bool) == Some(true));
+    match error {
+        Some(message) if error_fails => Err(failed(
+            guarantee,
+            model,
+            version,
+            format!("{what} ended with an error: {message}"),
+        )),
+        Some(message) => Err(unanswered(
+            guarantee,
+            model,
+            version,
+            Unanswered::Unfinished(Some(message)),
+        )),
+        None if !done => Err(unanswered(
+            guarantee,
+            model,
+            version,
+            Unanswered::Unfinished(None),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The one `done` record a generated probe answer ends with, its
@@ -441,8 +545,14 @@ async fn stop_probe(
         timeout,
     )
     .await
-    .map_err(fail)?;
-    refused(status, &records, WHAT).map_err(fail)?;
+    .map_err(|error| error.into_error(STOP, model, &key.server_version))?;
+    answered(
+        status,
+        &records,
+        (STOP, model, &key.server_version),
+        WHAT,
+        false,
+    )?;
     let (last, _, generated) = finished(&records, WHAT).map_err(fail)?;
     if generated > 1 {
         return Err(fail(format!(
@@ -474,8 +584,14 @@ async fn long_output_probe(
         timeout,
     )
     .await
-    .map_err(fail)?;
-    refused(status, &records, WHAT).map_err(fail)?;
+    .map_err(|error| error.into_error(LONG_OUTPUT, model, &key.server_version))?;
+    answered(
+        status,
+        &records,
+        (LONG_OUTPUT, model, &key.server_version),
+        WHAT,
+        false,
+    )?;
     let (last, reason, generated) = finished(&records, WHAT).map_err(fail)?;
     if generated > limit {
         return Err(fail(format!(
@@ -569,8 +685,14 @@ async fn tool_call_probe(
     body["tools"] = crate::tools_json(&request.tools);
     let (status, records) = post(client, &key.base_url, &body, timeout)
         .await
-        .map_err(fail)?;
-    refused(status, &records, WHAT).map_err(fail)?;
+        .map_err(|error| error.into_error(TOOL_CALL, model, &key.server_version))?;
+    answered(
+        status,
+        &records,
+        (TOOL_CALL, model, &key.server_version),
+        WHAT,
+        true,
+    )?;
     let (_, reason, generated) = finished(&records, WHAT).map_err(fail)?;
     if generated > limit {
         return Err(fail(format!(

@@ -332,7 +332,9 @@ small requests to your server with that context and the settings every call uses
 Each probe samples with the same fixed seed at the model's own settings, so it gives the
 same answer every time it runs on your server. A model that fails one is refused on that
 server for every Agent and every run, with or without tools, and the error names the
-guarantee that failed. Images are not probed: every call reserves the model's whole
+guarantee that failed. A probe Ollama does not answer (an error status, or an answer that
+ends before its final record, as when the model's runner stopped) refuses nothing: the
+error says the check did not run, and the next try probes again. Images are not probed: every call reserves the model's whole
 context plus its output limit, whatever the prompt holds, and Ollama counts an image's
 tokens in the prompt it checks against the context, so an image that does not fit is
 refused rather than cut. The

@@ -400,7 +400,8 @@ and Harmony alike; a call to a tool it was not offered beside it is tolerated, a
 answers one with a tool error). Every probe samples with one fixed seed at the model's own
 settings, so it gives the same answer each time it runs (Ollama 0.40.8 gave the same tool-call
 answer five times out of five for each model measured). A failed probe refuses the model on that
-server for every Agent and run. Images are not probed: every call reserves the whole context plus
+server for every Agent and run; a probe Ollama does not answer (a failed request, an error status,
+an answer without its final record) refuses nothing and is reported as not run. Images are not probed: every call reserves the whole context plus
 its output limit whatever its prompt holds, and `llama-server` counts an image's tokens in the
 prompt it checks against the context (Ollama 0.40.8, `qwen3.5:0.8b` at a 4,096-token context: a
 64x64 image counted 11 tokens; 4,090 tokens of text were generated from, and the same text with
