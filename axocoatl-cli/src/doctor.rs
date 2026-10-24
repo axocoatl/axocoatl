@@ -1957,12 +1957,15 @@ pub(crate) async fn collect(config_path: &Path, env: &Environment) -> Report {
                 Ok(axocoatl_daemon::ipc::IpcResponse::RuntimeVolumes { check }) => Some(check),
                 _ => None,
             };
-            sections
-                .daemon
-                .push(match crate::runtime_volume_doctor_line(check.as_ref()) {
+            sections.daemon.push(
+                match crate::runtime_volume_doctor_line(
+                    check.as_ref(),
+                    &config_flag(config_path, &env.default_config),
+                ) {
                     Ok(line) => Item::ok("Session volumes", line),
                     Err((line, hint)) => Item::warn("Session volumes", line, Some(hint)),
-                });
+                },
+            );
         }
         None => {
             sections.daemon.push(Item::warn(

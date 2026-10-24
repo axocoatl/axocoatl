@@ -644,11 +644,15 @@ impl SearxngService {
     }
 
     /// Remove the SearXNG containers that carry `authority`, the runtime
-    /// authority of a path the daemon's data root was moved from, once they
-    /// have exited: what a daemon there that was killed left, after the
-    /// Podman machine stopped it. One in any other state is left, as a data
-    /// root made at that path since may use it. Whether one is left.
-    pub async fn reap_exited_of_moved_root(authority: &str) -> Result<bool, IsolationError> {
+    /// authority of a path the daemon's data root was moved from: what a
+    /// daemon there that was killed left. One that has exited is removed.
+    /// One that still runs (the Podman machine kept running) is removed when
+    /// `path_unused`, as no daemon runs at that path; otherwise it is left,
+    /// as a data root made at that path since uses it. Whether one is left.
+    pub async fn reap_of_moved_root(
+        authority: &str,
+        path_unused: bool,
+    ) -> Result<bool, IsolationError> {
         let listed = podman(
             &[
                 "ps".to_string(),
@@ -677,7 +681,7 @@ impl SearxngService {
             .map(|(name, state)| (name.trim(), state.trim()))
             .filter(|(name, _)| name.starts_with("axo-searxng-"))
         {
-            if !matches!(state, "exited" | "stopped") {
+            if !path_unused && !matches!(state, "exited" | "stopped") {
                 left = true;
                 continue;
             }

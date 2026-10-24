@@ -10,14 +10,21 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::{ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus};
+use crate::{
+    LogMark, ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus,
+};
 
 /// launchd label for the daemon agent.
 const LABEL: &str = "ai.axocoatl.daemon";
 
-/// How long a stopped daemon may take to exit. launchd kills a job that has
-/// not exited 20 seconds after it was asked to (its default `ExitTimeOut`).
-const EXIT_WAIT: Duration = Duration::from_secs(60);
+/// How long launchd lets a stopped daemon end its Sessions before it kills
+/// it: the plist's `ExitTimeOut`. Without one launchd kills a LaunchAgent 5
+/// seconds after it asked it to exit, and it takes no more than 60 (macOS
+/// 26.6 lists a larger one as `exit timeout = 60` and kills the job then).
+const EXIT_TIMEOUT_SECS: u64 = 60;
+/// How long a stopped daemon may take to exit: until launchd kills it, and
+/// then lets go of it.
+const EXIT_WAIT: Duration = Duration::from_secs(EXIT_TIMEOUT_SECS + 15);
 const EXIT_POLL: Duration = Duration::from_millis(250);
 
 /// Manages the daemon as a launchd user agent.
@@ -142,6 +149,17 @@ fn runs(printed: &str) -> bool {
     printed.lines().any(|line| line.trim() == "state = running")
 }
 
+/// Whether `launchctl print` output says the agent's process exited since
+/// it was loaded: it has a last exit code (`last exit code = (never
+/// exited)` until then) or a last terminating signal.
+fn exited(printed: &str) -> bool {
+    printed.lines().map(str::trim).any(|line| {
+        line.strip_prefix("last exit code = ")
+            .is_some_and(|code| code != "(never exited)")
+            || line.starts_with("last terminating signal = ")
+    })
+}
+
 fn xml_text(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -157,7 +175,8 @@ fn xml_path(path: &Path) -> String {
 /// Podman client the daemon started outlives it. A Podman machine the
 /// daemon starts is not in that group (`podman machine start` runs in a
 /// session of its own), so stopping or restarting the service leaves the VM
-/// running.
+/// running. `ExitTimeOut` gives a stopped daemon [`EXIT_TIMEOUT_SECS`] to
+/// end its turns and Sessions (launchd's own 5 seconds cut that short).
 fn render_plist(exe: &Path, config: &Path, environment: &ServiceEnvironment, log: &Path) -> String {
     let working_dir = config.parent().unwrap_or_else(|| Path::new("."));
     let variables: String = environment
@@ -198,6 +217,8 @@ fn render_plist(exe: &Path, config: &Path, environment: &ServiceEnvironment, log
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ExitTimeOut</key>
+  <integer>{EXIT_TIMEOUT_SECS}</integer>
 </dict>
 </plist>
 "#,
@@ -258,6 +279,24 @@ impl ServiceManager for LaunchdManager {
 
     fn last_start_failure(&self) -> Option<String> {
         crate::last_start_failure(&crate::read_log_tail(&self.log_path).ok()?)
+    }
+
+    fn log_mark(&self) -> LogMark {
+        LogMark {
+            offset: std::fs::metadata(&self.log_path).map_or(0, |metadata| metadata.len()),
+            cursor: None,
+        }
+    }
+
+    fn log_since(&self, mark: &LogMark) -> Option<String> {
+        crate::read_log_from(&self.log_path, mark.offset).ok()
+    }
+
+    fn exited_since_start(&self) -> bool {
+        // A start that loads the agent, and a restart, load it afresh: its
+        // counts are the started daemon's.
+        self.launchctl(&["print", &self.service_target()])
+            .is_ok_and(|printed| exited(&printed))
     }
 
     fn uninstall(&self) -> Result<(), ServiceError> {
@@ -372,8 +411,9 @@ mod tests {
     /// ("Bootstrap failed: 5: Input/output error"); `bootout` returns at
     /// once while the daemon still exits, and `print` lists the agent for
     /// two more calls (forever when `never-exits` exists); `print` of an
-    /// agent that is not loaded fails with 113. Each call is logged to
-    /// `calls`.
+    /// agent that is not loaded fails with 113, and of one whose daemon
+    /// exited since it was loaded names the code in `exit-code`. Each call
+    /// is logged to `calls`.
     #[cfg(unix)]
     struct FakeLaunchctl {
         dir: tempfile::TempDir,
@@ -402,14 +442,18 @@ print)
   fi
   printf 'gui/501/ai.axocoatl.daemon = {
 	state = %s
+	exit timeout = 60
+	runs = 1
+	last exit code = %s
 	endpoints = {
 		state = active
 	}
 }
-' "$(cat "$D/loaded")"
+' "$(cat "$D/loaded")" "$(cat "$D/exit-code" 2>/dev/null || echo '(never exited)')"
   ;;
 bootstrap)
   if [ -f "$D/loaded" ]; then echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; fi
+  rm -f "$D/exit-code"
   echo running > "$D/loaded"
   ;;
 bootout)
@@ -581,6 +625,83 @@ esac
         assert!(!manager.plist_path.exists());
     }
 
+    /// What a start waits on: the log the daemon writes after the mark taken
+    /// before it, and whether launchd says the daemon exited since it loaded
+    /// the agent.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_reads_the_log_written_after_it_and_sees_the_daemon_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let launchctl = FakeLaunchctl::new();
+        let manager = manager(root.path(), &launchctl.program());
+        assert_eq!(manager.log_mark().offset, 0, "no log yet");
+        prepare_log(&manager.log_path).unwrap();
+        std::fs::write(
+            &manager.log_path,
+            "Failed to bootstrap daemon: an earlier start\n",
+        )
+        .unwrap();
+        let mark = manager.log_mark();
+        assert!(!manager.exited_since_start(), "not loaded");
+
+        assert_eq!(manager.start().unwrap(), ServiceStart::Started);
+        assert!(!manager.exited_since_start());
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&manager.log_path)
+            .unwrap();
+        std::io::Write::write_all(&mut log, b"Failed to bootstrap daemon: this start\n").unwrap();
+        std::fs::write(launchctl.dir.path().join("exit-code"), "1").unwrap();
+        assert_eq!(
+            manager.log_since(&mark).as_deref(),
+            Some("Failed to bootstrap daemon: this start\n")
+        );
+        assert!(manager.exited_since_start());
+        assert_eq!(
+            crate::wait_for_daemon(
+                &manager,
+                &mark,
+                Duration::from_secs(5),
+                Duration::from_millis(10)
+            ),
+            crate::DaemonStart::Failed("Failed to bootstrap daemon: this start".into())
+        );
+
+        // Loaded again, the agent has not exited.
+        assert_eq!(manager.restart().unwrap(), ServiceStart::Restarted);
+        assert!(!manager.exited_since_start());
+    }
+
+    #[test]
+    fn launchctl_print_says_whether_the_daemon_exited() {
+        let printed = |lines: &str| format!("gui/501/ai.axocoatl.daemon = {{\n{lines}\n}}\n");
+        assert!(!exited(&printed(
+            "\tstate = running\n\tlast exit code = (never exited)"
+        )));
+        assert!(exited(&printed(
+            "\tstate = spawn scheduled\n\tlast exit code = 1"
+        )));
+        assert!(exited(&printed(
+            "\tstate = spawn scheduled\n\tlast terminating signal = Killed: 9"
+        )));
+        assert!(!exited(&printed("\tstate = running")));
+    }
+
+    /// launchd gives a stopped daemon `ExitTimeOut` seconds to end its
+    /// Sessions before it kills it; without one it gives 5. It takes no more
+    /// than 60, and `stop` waits longer than that.
+    #[test]
+    fn plist_gives_the_daemon_time_to_end_its_sessions() {
+        let plist = render_plist(
+            Path::new("/usr/local/bin/axocoatl"),
+            Path::new("/Users/test/config.yaml"),
+            &homebrew(),
+            Path::new(LOG),
+        );
+        assert!(plist.contains("  <key>ExitTimeOut</key>\n  <integer>60</integer>\n"));
+        assert!(EXIT_WAIT > Duration::from_secs(EXIT_TIMEOUT_SECS));
+    }
+
     #[test]
     fn plist_uses_config_directory_and_escapes_paths() {
         let plist = render_plist(
@@ -673,6 +794,7 @@ esac
         assert_eq!(extract("StandardOutPath"), LOG);
         assert_eq!(extract("StandardErrorPath"), LOG);
         assert_eq!(extract("ProgramArguments.1"), "serve");
+        assert_eq!(extract("ExitTimeOut"), "60");
     }
 
     #[test]

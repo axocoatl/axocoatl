@@ -910,16 +910,34 @@ fn failure(message: impl Into<String>) -> DaemonError {
     DaemonError::Session(format!("Session execution migration: {}", message.into()))
 }
 
+/// What [`super::AxocoatlDaemon::record_data_root_location`] recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedLocation {
+    /// What it recorded of the data root's location; `None` when the root
+    /// was already recorded where it is.
+    pub location: Option<String>,
+    /// When asked to record that the data root it was copied from was
+    /// deleted: how many runtime authorities of that one it made its own.
+    pub adopted: Option<usize>,
+}
+
 impl super::AxocoatlDaemon {
     /// Record a copied or moved data root's new location, as a daemon start
     /// does, and change nothing else: under the data root's leases (so never
-    /// beside a daemon that runs on it), only its ownership record and an
-    /// interrupted conversion's are rewritten. Nothing is reconciled, no
-    /// Session is opened or converted, and no directory is created: a
-    /// release from 1.1.0 to 1.4.0, which refuses a copied root, then starts
-    /// on a restored backup. What was recorded, or `None` when the root was
-    /// already recorded where it is.
-    pub fn record_data_root_location(data_dir: &std::path::Path) -> Result<Option<String>> {
+    /// beside a daemon that runs on it), only its ownership record, an
+    /// interrupted conversion's and the runtime authorities it keeps are
+    /// rewritten. Nothing is reconciled, no Session is opened or converted,
+    /// and no directory is created: a release from 1.1.0 to 1.4.0, which
+    /// refuses a copied root, then starts on a restored backup.
+    ///
+    /// With `original_deleted`, also record that the data root this one was
+    /// copied from was deleted (a move by copying, as across volumes): the
+    /// runtime authorities kept of it become previous ones, as a move's, so
+    /// the next start removes the volumes its Sessions left there as its own.
+    pub fn record_data_root_location(
+        data_dir: &std::path::Path,
+        original_deleted: bool,
+    ) -> Result<RecordedLocation> {
         let data = SecureDir::open_existing_all(data_dir).map_err(|error| {
             failure(format!(
                 "the data directory '{}' cannot be opened: {error}",
@@ -950,11 +968,11 @@ impl super::AxocoatlDaemon {
         }
         super::admit_and_restrict_data_root(&data)?;
         let (lease, relocated) = super::DataDirLease::acquire_relocating(&data)?;
-        super::record_moved_from(
-            &data,
-            relocated.as_ref(),
-            &super::local_runtime_authority(&data)?,
-        )?;
+        let own = super::local_runtime_authority(&data)?;
+        super::record_moved_from(&data, relocated.as_ref(), &own)?;
+        let adopted = original_deleted
+            .then(|| super::runtime_volumes::adopt_copied_from(&data, &own))
+            .transpose()?;
         let upgrade = match data.existing_child("checkpoints") {
             Ok(_) => PreparedStartupMigration::record_location(
                 &data,
@@ -980,7 +998,10 @@ impl super::AxocoatlDaemon {
         if upgrade {
             recorded.push("the new location of its interrupted Session storage upgrade".into());
         }
-        Ok((!recorded.is_empty()).then(|| recorded.join(" and ")))
+        Ok(RecordedLocation {
+            location: (!recorded.is_empty()).then(|| recorded.join(" and ")),
+            adopted,
+        })
     }
 
     /// What `doctor` says of an interrupted Session storage upgrade in the

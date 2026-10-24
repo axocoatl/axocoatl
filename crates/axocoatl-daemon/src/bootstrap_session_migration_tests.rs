@@ -914,27 +914,69 @@ async fn record_location_records_a_copied_root_and_changes_nothing_else() {
         names
     };
     let before = listing(&copy);
-    let recorded = super::super::AxocoatlDaemon::record_data_root_location(&copy)
+    // The digest of the path the original recorded, which its volumes carry.
+    let original: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(copy.join(".axocoatl-daemon.lock/format.json")).unwrap(),
+    )
+    .unwrap();
+    let original = original["root_authority_sha256"]
+        .as_str()
         .unwrap()
+        .to_string();
+    let recorded = super::super::AxocoatlDaemon::record_data_root_location(&copy, false)
+        .unwrap()
+        .location
         .unwrap();
     assert!(
         recorded.contains("its new location (it is a copy at another path)")
             && recorded.contains("its interrupted Session storage upgrade"),
         "{recorded}"
     );
-    assert_eq!(listing(&copy), before);
+    // ...and the runtime authority of the data root it was copied from, as a
+    // start records it.
+    let copied_from = "copied-from-runtime-authorities.json";
+    let mut expected = before.clone();
+    expected.push(copied_from.to_string());
+    expected.sort();
+    assert_eq!(listing(&copy), expected);
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&std::fs::read(copy.join(copied_from)).unwrap())
+            .unwrap(),
+        std::slice::from_ref(&original)
+    );
     let data = SecureDir::open(&copy).unwrap();
     let migration: PreparedStartupMigration =
         serde_json::from_slice(&std::fs::read(copy.join(STARTUP_MIGRATION_FILE)).unwrap()).unwrap();
     assert_eq!(migration.root_inode, data.inode_identity().unwrap());
     // Recorded: a second time records nothing.
     assert_eq!(
-        super::super::AxocoatlDaemon::record_data_root_location(&copy).unwrap(),
-        None
+        super::super::AxocoatlDaemon::record_data_root_location(&copy, false).unwrap(),
+        super::RecordedLocation {
+            location: None,
+            adopted: None
+        }
     );
+    // The data root it was copied from was deleted: its authority becomes
+    // this one's previous one, as a move's.
+    let adopted = super::super::AxocoatlDaemon::record_data_root_location(&copy, true).unwrap();
+    assert_eq!(adopted.location, None);
+    assert_eq!(adopted.adopted, Some(1));
+    assert!(!copy.join(copied_from).exists());
+    let data_copy = SecureDir::open(&copy).unwrap();
+    assert_eq!(
+        super::super::runtime_volumes::previous_runtime_authorities(&data_copy),
+        std::slice::from_ref(&original)
+    );
+    assert_eq!(
+        super::super::AxocoatlDaemon::record_data_root_location(&copy, true)
+            .unwrap()
+            .adopted,
+        Some(0)
+    );
+    drop(data_copy);
     // A daemon holds the root.
     let lease = DataDirLease::acquire(&data).unwrap();
-    let error = super::super::AxocoatlDaemon::record_data_root_location(&copy)
+    let error = super::super::AxocoatlDaemon::record_data_root_location(&copy, false)
         .unwrap_err()
         .to_string();
     assert!(error.contains("already owned by another daemon"), "{error}");
@@ -943,7 +985,7 @@ async fn record_location_records_a_copied_root_and_changes_nothing_else() {
     let empty = copies.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
     std::fs::set_permissions(&empty, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
-    let error = super::super::AxocoatlDaemon::record_data_root_location(&empty)
+    let error = super::super::AxocoatlDaemon::record_data_root_location(&empty, true)
         .unwrap_err()
         .to_string();
     assert!(
@@ -952,7 +994,8 @@ async fn record_location_records_a_copied_root_and_changes_nothing_else() {
     );
     assert!(listing(&empty).is_empty());
     assert!(super::super::AxocoatlDaemon::record_data_root_location(
-        &copies.path().join("missing")
+        &copies.path().join("missing"),
+        false
     )
     .is_err());
 }

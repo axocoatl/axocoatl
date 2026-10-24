@@ -212,6 +212,13 @@ repositories that are at the same paths as before. A repository now at another p
 another Workspace for new runs; a Session made in the old path refuses work and names
 that folder until you move the repository back or delete the Session.
 
+A data root moved to another volume is copied, then the original deleted. Its Sessions'
+Podman volumes carry the original's runtime authority, which a copy never takes for its
+own, as the original may still run. Once the original is deleted, run
+`axocoatl session record-location --original-deleted` (with the same `--config`) while
+Axocoatl is stopped; the next start then removes those volumes as its own when their
+Sessions are closed or deleted. `axocoatl doctor` says when a copy has such volumes.
+
 If an installed service keeps restarting, `axocoatl service status` shows the line its
 last failed start logged.
 
