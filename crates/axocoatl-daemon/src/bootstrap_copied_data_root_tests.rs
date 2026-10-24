@@ -161,6 +161,20 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
         .success());
 }
 
+/// The runtime authorities `previous-runtime-authorities.json` in `data`
+/// keeps, and whether it names `data` as the directory it was written in.
+fn kept_previous(data: &std::path::Path) -> (Vec<String>, bool) {
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(data.join("previous-runtime-authorities.json")).unwrap(),
+    )
+    .unwrap();
+    let here = SecureDir::open(data).unwrap().inode_identity().unwrap();
+    (
+        serde_json::from_value(kept["authorities"].clone()).unwrap(),
+        kept["directory"] == here.as_str(),
+    )
+}
+
 fn ownership_id(data: &std::path::Path) -> String {
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(data.join(".axocoatl-daemon.lock/format.json")).unwrap(),
@@ -238,6 +252,7 @@ async fn phase_body(phase: &str) {
     let repo =
         std::path::PathBuf::from(std::env::var_os("AXOCOATL_COPIED_DATA_ROOT_REPO").unwrap());
     let ids = std::path::PathBuf::from(std::env::var_os("AXOCOATL_COPIED_DATA_ROOT_IDS").unwrap());
+    let closed = ids.with_file_name("closed");
     if phase == "refused" {
         let error = AxocoatlDaemon::bootstrap_headless(config)
             .await
@@ -301,6 +316,11 @@ async fn phase_body(phase: &str) {
         } else {
             assert_eq!(next.workspace_id, kept.workspace_id);
         }
+        if phase == "moved" {
+            // A closed Session, for the copy made later.
+            daemon.close_session(&next.session_id).await.unwrap();
+            std::fs::write(&closed, &next.session_id).unwrap();
+        }
     }
     daemon.shutdown().await.unwrap();
 }
@@ -359,21 +379,22 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
     )
     .unwrap();
     // A daemon killed there left its SearXNG, which carries it too: removed
-    // once it has exited; a running one is left, and the authority kept for
-    // it.
+    // once it has exited. A running one is left while a daemon runs at that
+    // path (a data root made there since, which holds the path's lease
+    // here), and the authority kept for it; removed once none does.
     std::fs::write(
         root.join(format!("ps-{before}-searxng")),
         "axo-searxng-exited\texited\naxo-searxng-running\trunning\n",
     )
     .unwrap();
+    let at_old_path = axocoatl_session::execution_ownership::PathLease::hold(&before)
+        .unwrap()
+        .unwrap();
     let moved = root.join("moved");
     std::fs::rename(&data, &moved).unwrap();
     succeeded(&child(&root, "moved", &moved, &repo).await);
     let previous = moved.join("previous-runtime-authorities.json");
-    assert_eq!(
-        serde_json::from_slice::<Vec<String>>(&std::fs::read(&previous).unwrap()).unwrap(),
-        std::slice::from_ref(&before)
-    );
+    assert_eq!(kept_previous(&moved), (vec![before.clone()], true));
     let removed = std::fs::read_to_string(root.join("removed")).unwrap();
     assert!(removed.contains(" axo-searxng-exited\n"), "{removed}");
     assert!(!removed.contains("axo-searxng-running"), "{removed}");
@@ -381,35 +402,148 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
     std::fs::remove_file(root.join("volumes.json")).unwrap();
     succeeded(&child(&root, "restarted", &moved, &repo).await);
     assert!(previous.exists());
-    std::fs::remove_file(root.join(format!("ps-{before}-searxng"))).unwrap();
+    drop(at_old_path);
     succeeded(&child(&root, "restarted", &moved, &repo).await);
+    let removed = std::fs::read_to_string(root.join("removed")).unwrap();
+    assert!(removed.contains(" axo-searxng-running\n"), "{removed}");
     assert!(!previous.exists());
+    std::fs::remove_file(root.join(format!("ps-{before}-searxng"))).unwrap();
+    // What its volumes carry from now on, until a daemon starts on it at
+    // another path.
+    let original = local_runtime_authority(&SecureDir::open(&moved).unwrap()).unwrap();
     std::fs::rename(&moved, &data).unwrap();
     // What the original was moved from is not a copy's: a copy forgets it.
+    let original_previous = serde_json::to_vec(&serde_json::json!({
+        "directory": SecureDir::open(&data).unwrap().inode_identity().unwrap(),
+        "authorities": ["0".repeat(64)],
+    }))
+    .unwrap();
     std::fs::write(
         data.join("previous-runtime-authorities.json"),
-        serde_json::to_vec(&["0".repeat(64)]).unwrap(),
+        &original_previous,
     )
     .unwrap();
 
     // A migration: the root and the repository both copied to new paths.
+    // The copy's Sessions are the original's too (the same ids), and the
+    // original, which may still run, owns the volumes that carry its
+    // authority: the copy never removes one, an open Session's nor a closed
+    // one's, and keeps none of the original's authorities as its own, only
+    // as the ones it was copied from, while a volume carries one.
+    let closed = std::fs::read_to_string(root.join("closed")).unwrap();
+    let open_volume = format!("axo-egr-{}", session["session"].as_str().unwrap());
+    let closed_volume = format!("axo-egi-{closed}");
+    std::fs::write(
+        root.join("volumes.json"),
+        serde_json::to_vec(&serde_json::json!([
+            {"Name": open_volume, "Labels": {"io.axocoatl.runtime-authority": original}},
+            {"Name": closed_volume, "Labels": {"io.axocoatl.runtime-authority": original}},
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(root.join("removed"), "").unwrap();
+    // The volumes removed so far (each start also removes its Sessions'
+    // containers by name, and an egress container is named as its volume).
+    let removed_volumes = || {
+        std::fs::read_to_string(root.join("removed"))
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("volume rm "))
+            .flat_map(|line| line.split(' ').skip(2).map(str::to_string))
+            .collect::<Vec<_>>()
+    };
     let migrated = root.join("migrated");
     std::fs::create_dir(&migrated).unwrap();
     copy_tree(&data, &migrated.join("data"));
     copy_tree(&repo, &root.join("outside/repo-copy"));
-    succeeded(
-        &child(
-            &root,
-            "copied_repository",
-            &migrated.join("data"),
-            &root.join("outside/repo-copy"),
+    let copy_start = || async {
+        succeeded(
+            &child(
+                &root,
+                "copied_repository",
+                &migrated.join("data"),
+                &root.join("outside/repo-copy"),
+            )
+            .await,
         )
-        .await,
-    );
+    };
+    copy_start().await;
     assert_eq!(ownership_id(&migrated.join("data")), id);
     assert!(!migrated
         .join("data/previous-runtime-authorities.json")
         .exists());
+    let removed = removed_volumes();
+    assert!(
+        !removed.contains(&open_volume) && !removed.contains(&closed_volume),
+        "{removed:?}"
+    );
+    let copied_from = migrated.join("data/copied-from-runtime-authorities.json");
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&std::fs::read(&copied_from).unwrap()).unwrap(),
+        std::slice::from_ref(&original)
+    );
+    // The original was deleted (a move by copying): `session record-location
+    // --original-deleted` makes its authority this copy's previous one, as a
+    // move's, and the next start removes the closed Session's volume and
+    // keeps the open one's.
+    let recorded = AxocoatlDaemon::record_data_root_location(&migrated.join("data"), true).unwrap();
+    assert_eq!(recorded.location, None);
+    assert_eq!(recorded.adopted, Some(1));
+    assert!(!copied_from.exists());
+    copy_start().await;
+    let removed = removed_volumes();
+    assert!(
+        removed.contains(&closed_volume) && !removed.contains(&open_volume),
+        "{removed:?}"
+    );
+    assert_eq!(
+        kept_previous(&migrated.join("data")),
+        (vec![original.clone()], true)
+    );
+
+    // A copy whose first start recorded its location and stopped before it
+    // moved the original's authorities (the file still names the original's
+    // directory): it still never takes them for its own.
+    let stopped = root.join("stopped");
+    std::fs::create_dir(&stopped).unwrap();
+    copy_tree(&data, &stopped.join("data"));
+    let stopped = stopped.join("data");
+    AxocoatlDaemon::record_data_root_location(&stopped, false).unwrap();
+    std::fs::write(
+        stopped.join("previous-runtime-authorities.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "directory": SecureDir::open(&data).unwrap().inode_identity().unwrap(),
+            "authorities": [original],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::remove_file(stopped.join("copied-from-runtime-authorities.json")).unwrap();
+    std::fs::write(root.join("removed"), "").unwrap();
+    succeeded(
+        &child(
+            &root,
+            "copied_repository",
+            &stopped,
+            &root.join("outside/repo-copy"),
+        )
+        .await,
+    );
+    let removed = removed_volumes();
+    assert!(
+        !removed.contains(&open_volume) && !removed.contains(&closed_volume),
+        "{removed:?}"
+    );
+    assert!(!stopped.join("previous-runtime-authorities.json").exists());
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(
+            &std::fs::read(stopped.join("copied-from-runtime-authorities.json")).unwrap()
+        )
+        .unwrap(),
+        std::slice::from_ref(&original)
+    );
+    std::fs::remove_file(root.join("volumes.json")).unwrap();
 
     // A damaged copy is still refused, and left as it was.
     let damaged = root.join("damaged");

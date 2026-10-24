@@ -271,6 +271,11 @@ enum SessionCommands {
     RecordLocation {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
+        /// Also record that the data directory this one was copied from was
+        /// deleted (it was moved by copying, as to another volume), so the
+        /// next start removes the Podman volumes its Sessions left as its own
+        #[arg(long)]
+        original_deleted: bool,
     },
     /// Upgrade existing Session storage while the daemon is stopped
     Upgrade {
@@ -527,6 +532,58 @@ fn connect_parse_error(error: &clap::Error, argv: &[std::ffi::OsString]) -> Opti
     }
 }
 
+/// What `session record-location` says it recorded in `data_dir`.
+fn record_location_lines(
+    data_dir: &std::path::Path,
+    recorded: &axocoatl_daemon::bootstrap::RecordedLocation,
+) -> Vec<String> {
+    let mut lines = vec![match &recorded.location {
+        Some(location) => format!(
+            "✓ Recorded {location} for the data directory {}.",
+            data_dir.display()
+        ),
+        None => format!(
+            "✓ The data directory {} is already recorded where it is.",
+            data_dir.display()
+        ),
+    }];
+    match recorded.adopted {
+        Some(0) => lines.push(
+            "  It is not recorded as a copy of another data directory whose Podman volumes are \
+             left, so nothing more was recorded."
+                .to_string(),
+        ),
+        Some(_) => lines.push(
+            "✓ Recorded that the data directory it was copied from was deleted: its next start \
+             treats the Podman volumes its Sessions left there as its own, and removes those no \
+             Session needs any more."
+                .to_string(),
+        ),
+        None => {}
+    }
+    let changed = recorded.location.is_some() || recorded.adopted.is_some_and(|n| n > 0);
+    lines.push(if changed {
+        "Nothing else changed.".to_string()
+    } else {
+        "Nothing changed.".to_string()
+    });
+    lines
+}
+
+/// The log level a command shows unless RUST_LOG asks for another.
+/// `onboard` and `doctor` say everything they do themselves, so they show
+/// only warnings. `session record-location` says what it recorded, which
+/// the daemon's admission also logs as a warning, so it shows only errors.
+fn log_filter(command: &Commands) -> &'static str {
+    match command {
+        Commands::Onboard(_) | Commands::Doctor { .. } => "warn",
+        Commands::Session {
+            command: SessionCommands::RecordLocation { .. },
+        } => "error",
+        _ => "info",
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = match Cli::try_parse() {
@@ -536,17 +593,12 @@ async fn main() {
 
     // Initialize tracing. Logs go to stderr so they never collide with a
     // command's stdout output — in particular `mcp serve`, whose stdout is the
-    // MCP JSON-RPC channel. `onboard` and `doctor` say everything they do
-    // themselves, so they show only warnings unless RUST_LOG asks for more.
-    let default_filter = match cli.command {
-        Commands::Onboard(_) | Commands::Doctor { .. } => "warn",
-        _ => "info",
-    };
+    // MCP JSON-RPC channel.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_filter(&cli.command))),
         )
         .init();
 
@@ -566,21 +618,24 @@ async fn main() {
             session,
         } => cmd_chat(&config, &agent, session).await,
         Commands::Session { command } => match command {
-            SessionCommands::RecordLocation { config } => {
+            SessionCommands::RecordLocation {
+                config,
+                original_deleted,
+            } => {
                 let recorded = configure_data_dir(&config).and_then(|data_dir| {
-                    axocoatl_daemon::AxocoatlDaemon::record_data_root_location(&data_dir)
-                        .map(|recorded| (data_dir, recorded))
-                        .map_err(|error| error.to_string())
+                    axocoatl_daemon::AxocoatlDaemon::record_data_root_location(
+                        &data_dir,
+                        original_deleted,
+                    )
+                    .map(|recorded| (data_dir, recorded))
+                    .map_err(|error| error.to_string())
                 });
                 match recorded {
-                    Ok((data_dir, Some(recorded))) => println!(
-                        "✓ Recorded {recorded} for the data directory {}. Nothing else changed.",
-                        data_dir.display()
-                    ),
-                    Ok((data_dir, None)) => println!(
-                        "✓ The data directory {} is already recorded where it is. Nothing changed.",
-                        data_dir.display()
-                    ),
+                    Ok((data_dir, recorded)) => {
+                        for line in record_location_lines(&data_dir, &recorded) {
+                            println!("{line}");
+                        }
+                    }
                     Err(error) => {
                         eprintln!("✗ {error}");
                         std::process::exit(1);
@@ -1310,9 +1365,11 @@ fn format_ownership_doctor_line(
 
 /// The `doctor` line for what the running daemon did about leaked Session
 /// volumes when it started (`None`: it did not say, as a daemon older than
-/// 1.3.0 does not). `Err` is a warning with its hint.
+/// 1.3.0 does not). `Err` is a warning with its hint. `config_flag`: the
+/// ` --config PATH` a command in the hint needs, if any.
 fn runtime_volume_doctor_line(
     check: Option<&axocoatl_daemon::RuntimeVolumeCheck>,
+    config_flag: &str,
 ) -> Result<String, (String, String)> {
     use axocoatl_daemon::RuntimeVolumeCheck;
     let plural = |count: usize| if count == 1 { "" } else { "s" };
@@ -1354,9 +1411,24 @@ fn runtime_volume_doctor_line(
                     format!(" and {} without an owner label", report.unlabelled_kept)
                 },
             );
-            if report.failed.is_empty() {
-                Ok(summary)
-            } else {
+            let mut line = summary;
+            let mut hints = Vec::new();
+            if report.copied_from > 0 {
+                line.push_str(&format!(
+                    "; {} of them carry the runtime authority of the data directory this one \
+                     was copied from",
+                    report.copied_from
+                ));
+                hints.push(format!(
+                    "If you deleted that data directory (this one was moved by copying it, as to \
+                     another volume), stop Axocoatl and run `axocoatl session record-location \
+                     --original-deleted{config_flag}`: its next start removes those its \
+                     Sessions left as its own. If that data directory is still in use, they are \
+                     its own: leave them."
+                ));
+            }
+            if !report.failed.is_empty() {
+                line.push_str(&format!("; {} could not be removed", report.failed.len()));
                 let shown = report
                     .failed
                     .iter()
@@ -1365,18 +1437,20 @@ fn runtime_volume_doctor_line(
                     .collect::<Vec<_>>()
                     .join("\n           ");
                 let more = report.failed.len().saturating_sub(5);
-                Err((
-                    format!("{summary}; {} could not be removed", report.failed.len()),
-                    format!(
-                        "{shown}{}\n           Remove each with `podman volume rm <name>` once no \
-                         container uses it, or restart the daemon to try again.",
-                        if more == 0 {
-                            String::new()
-                        } else {
-                            format!("\n           …and {more} more")
-                        }
-                    ),
-                ))
+                hints.push(format!(
+                    "{shown}{}\n           Remove each with `podman volume rm NAME` once no \
+                     container uses it, or restart the daemon to try again.",
+                    if more == 0 {
+                        String::new()
+                    } else {
+                        format!("\n           …and {more} more")
+                    }
+                ));
+            }
+            if hints.is_empty() {
+                Ok(line)
+            } else {
+                Err((line, hints.join("\n           ")))
             }
         }
     }
@@ -3443,20 +3517,23 @@ mod tests {
                 kept_open: 3,
                 kept_dependencies: 0,
                 other_daemons: 12,
+                copied_from: 0,
                 unlabelled_kept: 0,
                 failed,
             },
         };
         assert_eq!(
-            runtime_volume_doctor_line(Some(&checked(195, Vec::new()))).unwrap(),
+            runtime_volume_doctor_line(Some(&checked(195, Vec::new())), "").unwrap(),
             "Session volumes: the daemon removed 195 leaked runtime volumes of closed, deleted or \
              unknown Sessions and 0 Node dependency volumes of deleted or unknown Sessions when \
              it started; kept 3 runtime volumes of open Sessions and 0 dependency volumes of \
              open or closed Sessions; left 12 of other daemons"
         );
-        assert!(runtime_volume_doctor_line(Some(&checked(1, Vec::new())))
-            .unwrap()
-            .contains("removed 1 leaked runtime volume of"));
+        assert!(
+            runtime_volume_doctor_line(Some(&checked(1, Vec::new())), "")
+                .unwrap()
+                .contains("removed 1 leaked runtime volume of")
+        );
         let dependencies = RuntimeVolumeCheck::Checked {
             report: RuntimeVolumeReap {
                 removed: vec![
@@ -3467,40 +3544,70 @@ mod tests {
                 kept_open: 1,
                 kept_dependencies: 1,
                 other_daemons: 4,
+                copied_from: 0,
                 unlabelled_kept: 2,
                 failed: Vec::new(),
             },
         };
         assert_eq!(
-            runtime_volume_doctor_line(Some(&dependencies)).unwrap(),
+            runtime_volume_doctor_line(Some(&dependencies), "").unwrap(),
             "Session volumes: the daemon removed 1 leaked runtime volume of closed, deleted or \
              unknown Sessions and 2 Node dependency volumes of deleted or unknown Sessions when \
              it started; kept 1 runtime volume of open Sessions and 1 dependency volume of open \
              or closed Sessions; left 4 of other daemons and 2 without an owner label"
         );
-        let (line, hint) = runtime_volume_doctor_line(Some(&checked(
-            0,
-            vec!["axo-egr-ses-9: volume is being used by container x".into()],
-        )))
+        let (line, hint) = runtime_volume_doctor_line(
+            Some(&checked(
+                0,
+                vec!["axo-egr-ses-9: volume is being used by container x".into()],
+            )),
+            "",
+        )
         .unwrap_err();
         assert!(line.ends_with("; 1 could not be removed"), "{line}");
         assert!(
             hint.starts_with("axo-egr-ses-9: volume is being used"),
             "{hint}"
         );
-        assert!(hint.contains("podman volume rm <name>"), "{hint}");
+        assert!(hint.contains("podman volume rm NAME"), "{hint}");
+        // A copy names the volumes of the data root it was copied from, and
+        // how to make them its own once that one is deleted.
+        let mut copied = checked(0, Vec::new());
+        if let RuntimeVolumeCheck::Checked { report } = &mut copied {
+            report.other_daemons = 5;
+            report.copied_from = 3;
+        }
+        let (line, hint) =
+            runtime_volume_doctor_line(Some(&copied), " --config /c/axocoatl.yaml").unwrap_err();
         assert!(
-            runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred))
+            line.ends_with(
+                "left 5 of other daemons; 3 of them carry the runtime authority of the data \
+                 directory this one was copied from"
+            ),
+            "{line}"
+        );
+        assert!(
+            hint.contains(
+                "`axocoatl session record-location --original-deleted --config \
+                 /c/axocoatl.yaml`"
+            ) && hint.contains("If that data directory is still in use, they are its own"),
+            "{hint}"
+        );
+        assert!(
+            runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred), "")
                 .unwrap()
                 .contains("before the first local Session starts")
         );
-        let (line, hint) = runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Failed {
-            error: "listing Session volumes: no connection".into(),
-        }))
+        let (line, hint) = runtime_volume_doctor_line(
+            Some(&RuntimeVolumeCheck::Failed {
+                error: "listing Session volumes: no connection".into(),
+            }),
+            "",
+        )
         .unwrap_err();
         assert!(line.contains("were not checked"), "{line}");
         assert!(hint.starts_with("listing Session volumes"), "{hint}");
-        let (line, _) = runtime_volume_doctor_line(None).unwrap_err();
+        let (line, _) = runtime_volume_doctor_line(None, "").unwrap_err();
         assert!(line.contains("does not report"), "{line}");
     }
 
@@ -4079,6 +4186,72 @@ mod tests {
                 Some(format!("ollama:{text}"))
             );
         }
+    }
+
+    /// What `session record-location` says: what it recorded of the
+    /// location, and with `--original-deleted` whether there was a data
+    /// directory this one was copied from to record as deleted.
+    #[test]
+    fn record_location_says_what_it_recorded() {
+        use axocoatl_daemon::bootstrap::RecordedLocation;
+        let data = std::path::Path::new("/d/data");
+        let lines = |location: Option<&str>, adopted| {
+            record_location_lines(
+                data,
+                &RecordedLocation {
+                    location: location.map(str::to_string),
+                    adopted,
+                },
+            )
+        };
+        assert_eq!(
+            lines(
+                Some("its new location (it is a copy at another path)"),
+                None
+            ),
+            [
+                "✓ Recorded its new location (it is a copy at another path) for the data \
+                 directory /d/data.",
+                "Nothing else changed."
+            ]
+        );
+        assert_eq!(
+            lines(None, None),
+            [
+                "✓ The data directory /d/data is already recorded where it is.",
+                "Nothing changed."
+            ]
+        );
+        let adopted = lines(None, Some(1));
+        assert!(
+            adopted[1].starts_with(
+                "✓ Recorded that the data directory it was copied from was \
+                 deleted"
+            ) && adopted[2] == "Nothing else changed.",
+            "{adopted:?}"
+        );
+        let nothing = lines(None, Some(0));
+        assert!(
+            nothing[1].contains("is not recorded as a copy") && nothing[2] == "Nothing changed.",
+            "{nothing:?}"
+        );
+    }
+
+    /// `session record-location` prints what it recorded once: the
+    /// daemon's admission logs the same as a warning, which it does not show.
+    #[test]
+    fn record_location_shows_only_its_own_lines() {
+        let filter = |args: &[&str]| {
+            log_filter(
+                &Cli::try_parse_from(std::iter::once("axocoatl").chain(args.iter().copied()))
+                    .unwrap()
+                    .command,
+            )
+        };
+        assert_eq!(filter(&["session", "record-location"]), "error");
+        assert_eq!(filter(&["doctor"]), "warn");
+        assert_eq!(filter(&["session", "list"]), "info");
+        assert_eq!(filter(&["serve"]), "info");
     }
 
     /// A service whose start keeps failing is started again by launchd or

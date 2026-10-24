@@ -49,7 +49,8 @@ mod session_writers;
 #[path = "bootstrap_workspace_operation.rs"]
 pub(crate) mod workspace_operation;
 pub use runtime_volumes::RuntimeVolumeCheck;
-use runtime_volumes::{forget_previous_runtime_authorities, record_previous_runtime_authority};
+use runtime_volumes::{record_copied_from, record_previous_runtime_authority};
+pub use session_migration::RecordedLocation;
 
 // 1.3 loadouts. Each file has one owning workstream; see
 // docs/design/1.3-loadouts.md ("Ownership").
@@ -2972,16 +2973,19 @@ fn external_lease_name(data_root: &SecureDir) -> String {
 /// data root of its own is left at that path. The daemon then reaps the
 /// volumes of its Sessions that carry it (see `reap_leaked_runtime_volumes`).
 /// A copy is another directory: its original keeps its own authority, and
-/// what the original was moved from, so a copy keeps none.
+/// what the original was moved from, so a copy keeps none as its own, only
+/// as the authorities of the data root it was copied from.
 fn record_moved_from(
     data_root: &SecureDir,
     relocated: Option<&axocoatl_session::execution_ownership::Relocated>,
     runtime_authority: &str,
 ) -> Result<(), DaemonError> {
     match relocated {
-        Some(relocated) if relocated.recorded.directory_changed => {
-            forget_previous_runtime_authorities(data_root)
-        }
+        Some(relocated) if relocated.recorded.directory_changed => record_copied_from(
+            data_root,
+            &relocated.previous_root_authority,
+            runtime_authority,
+        ),
         Some(relocated)
             if relocated.recorded.path_changed
                 && relocated.previous_root_authority != runtime_authority =>
