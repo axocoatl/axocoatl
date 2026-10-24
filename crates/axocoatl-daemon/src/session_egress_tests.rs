@@ -740,6 +740,7 @@ async fn grants_write_env_files_and_unbind_when_dropped() {
     }
     assert!(contents.contains("NO_PROXY=localhost,127.0.0.1,::1\n"));
     assert!(contents.contains("NODE_USE_ENV_PROXY=1\n"));
+    assert!(contents.contains("GIT_HTTP_PROXY_AUTHMETHOD=basic\n"));
     // Nothing secret reaches the record.
     let recorded = serde_json::to_string(&fixture.record.events()).unwrap();
     assert!(!recorded.contains(&token));

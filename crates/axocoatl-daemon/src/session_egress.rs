@@ -544,6 +544,10 @@ pub fn env_file_contents(token: &str) -> String {
     }
     contents.push_str(&format!("NO_PROXY={NO_PROXY}\nno_proxy={NO_PROXY}\n"));
     contents.push_str("NODE_USE_ENV_PROXY=1\n");
+    // Git asks the proxy without the credential first to learn its methods,
+    // and each such ask is refused (`no_credential`) and recorded; with
+    // basic it sends the credential at once.
+    contents.push_str("GIT_HTTP_PROXY_AUTHMETHOD=basic\n");
     contents
 }
 
