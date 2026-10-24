@@ -636,22 +636,24 @@ fn measured_error_response(
     )
 }
 
+/// A failed execute: `409` for a conflict, `422` for a refusal the person
+/// acts on (a request the daemon refuses, or a native provider check's
+/// refusal such as a Team to review again after an Ollama upgrade), `500`
+/// otherwise; the error as the person reads it.
 fn measured_daemon_failure_response(
     failure: axocoatl_daemon::MeasuredDaemonFailure,
 ) -> (StatusCode, Json<MeasuredErrorResponse>) {
-    let status = if matches!(
-        &failure.error,
+    let status = match &failure.error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
-            | axocoatl_daemon::DaemonError::SessionConflict(_)
-            | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
-    ) {
-        StatusCode::CONFLICT
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
+        | axocoatl_daemon::DaemonError::SessionConflict(_)
+        | axocoatl_daemon::DaemonError::WorkspaceBusy(_) => StatusCode::CONFLICT,
+        axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        error if error.is_provider_refusal() => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     measured_error_response(
         status,
-        failure.error,
+        failure.error.person_facing(),
         &failure.token_usage,
         failure.token_usage_known,
     )
@@ -827,44 +829,11 @@ pub async fn delete_session_ways_decision(
 }
 /// A Team and budget refusal as the person reads it: a native provider
 /// check's own message, without the layers it passed through
-/// ("Provider setup failed: Session dispatch: Invalid request for ollama: "),
-/// starting with a capital when its first word is a plain word. A first word
-/// such as a model name (`qwen3.5:0.8b`) is kept as it is.
-fn person_facing_team_message(message: &str) -> String {
-    let mut text = message
-        .strip_prefix("Provider setup failed: Session dispatch: ")
-        .unwrap_or(message);
-    if let Some(rest) = text.strip_prefix("Invalid request for ") {
-        if let Some((provider, reason)) = rest.split_once(": ") {
-            if !provider.is_empty()
-                && provider
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            {
-                text = reason;
-            }
-        }
-    }
-    let plain_word = text
-        .split(' ')
-        .next()
-        .is_some_and(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_alphabetic()));
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) if plain_word => first.to_uppercase().chain(chars).collect(),
-        Some(_) => text.to_string(),
-        None => message.to_string(),
-    }
-}
-
+/// ([`axocoatl_daemon::person_facing_message`]).
 fn team_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
-    let (status, Json(ErrorResponse { error })) = attempt_err(error);
-    (
-        status,
-        Json(ErrorResponse {
-            error: person_facing_team_message(&error),
-        }),
-    )
+    let message = error.person_facing();
+    let (status, _) = attempt_err(error);
+    (status, Json(ErrorResponse { error: message }))
 }
 
 pub async fn preview_session_team(
@@ -2844,6 +2813,7 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
         | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
         | axocoatl_daemon::DaemonError::WorkspaceRefused { .. } => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        error if error.is_provider_refusal() => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::BAD_REQUEST,
@@ -8366,43 +8336,63 @@ mod tests {
         assert!(session_environment_route_error(&ready.id, Some(&ready)).is_none());
     }
 
+    /// A native provider check's refusal (here the live error for a Team
+    /// 1.4 reviewed on Ollama 0.20.6, after Ollama was upgraded to 0.40.8)
+    /// is a `422` with the check's own words from execute and from Team &
+    /// budget; a fault is still a `500` from execute.
     #[test]
-    fn team_refusals_lose_their_internal_layers() {
+    fn provider_refusals_are_422s_in_the_providers_own_words() {
+        let upgraded = || {
+            axocoatl_daemon::DaemonError::Provider(
+                "Session dispatch: Invalid request for ollama: Ollama was upgraded from 0.20.6 \
+                 to 0.40.8; review Team & budget again"
+                    .into(),
+            )
+        };
+        let failure = |error| axocoatl_daemon::MeasuredDaemonFailure {
+            error,
+            token_usage: Default::default(),
+            token_usage_known: true,
+        };
+        let (status, Json(body)) = measured_daemon_failure_response(failure(upgraded()));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Session dispatch: Invalid request for ollama: Ollama 0.20.6 is no longer supported"
-            ),
-            "Ollama 0.20.6 is no longer supported"
+            body.error,
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
         );
+        let (status, Json(body)) = team_err(upgraded());
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Session dispatch: Invalid request for openrouter: the smallest call costs more"
-            ),
-            "The smallest call costs more"
+            body.error,
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
         );
+        let (status, Json(body)) = team_err(axocoatl_daemon::DaemonError::Provider(
+            "Session dispatch: Invalid request for ollama: qwen3.5:0.8b is run by Ollama's MLX \
+             runner"
+                .into(),
+        ));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body.error, "qwen3.5:0.8b is run by Ollama's MLX runner");
+        let (status, _) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::InvalidRequest("Raise its token limit".into()),
+        ));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (status, Json(body)) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::Provider("Provider 'openrouter' not configured".into()),
+        ));
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Provider 'openrouter' not configured"
-            ),
+            body.error,
             "Provider setup failed: Provider 'openrouter' not configured"
         );
-        assert_eq!(
-            person_facing_team_message("Lead's token limit of 10,000 is too small"),
-            "Lead's token limit of 10,000 is too small"
-        );
-        // A model name that starts a refusal is never changed.
-        assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Session dispatch: Invalid request for ollama: qwen3.5:0.8b is run by Ollama's MLX runner"
-            ),
-            "qwen3.5:0.8b is run by Ollama's MLX runner"
-        );
-        assert_eq!(
-            person_facing_team_message(
-                "Invalid request for ollama: The model qwen3.5:0.8b is run by Ollama's MLX runner"
-            ),
-            "The model qwen3.5:0.8b is run by Ollama's MLX runner"
-        );
+        let (status, _) = team_err(axocoatl_daemon::DaemonError::Provider(
+            "Provider 'openrouter' not configured".into(),
+        ));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::SessionConflict("busy".into()),
+        ));
+        assert_eq!(status, StatusCode::CONFLICT);
     }
 
     #[test]

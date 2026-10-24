@@ -199,13 +199,7 @@ impl AxocoatlDaemon {
     }
 
     fn reject_native_send(&self, source: &NativeSessionSend, error: &DaemonError) {
-        let _ = self
-            .stream_bus
-            .send(crate::stream::StreamFrame::SessionRequestRejected {
-                session: source.session_id.clone(),
-                turn_id: source.turn_id.clone(),
-                error: error.to_string(),
-            });
+        let _ = self.stream_bus.send(native_send_rejection(source, error));
     }
 
     pub(super) async fn prepare_native_send_request(
@@ -335,6 +329,21 @@ impl AxocoatlDaemon {
     }
 }
 
+/// The frame that tells the app a send did not start a turn, with the
+/// refusal as the person reads it (the app shows it as the "not sent"
+/// notice): a native provider check's own words, such as "Ollama was
+/// upgraded from 0.20.6 to 0.40.8; review Team & budget again".
+fn native_send_rejection(
+    source: &NativeSessionSend,
+    error: &DaemonError,
+) -> crate::stream::StreamFrame {
+    crate::stream::StreamFrame::SessionRequestRejected {
+        session: source.session_id.clone(),
+        turn_id: source.turn_id.clone(),
+        error: error.person_facing(),
+    }
+}
+
 pub(super) fn publish_native_disposition(
     bus: &crate::stream::StreamBus,
     turn: &ExecutionTurnView,
@@ -439,5 +448,66 @@ fn native_outcome(
         LogicalTurnState::Completed | LogicalTurnState::Finished => Ok(AgentRunOutcome::Completed(output)),
         LogicalTurnState::Cancelled => Ok(AgentRunOutcome::Cancelled {run_id:AgentRunId::new(turn.turn_id.as_str()), partial_output:output}),
         _ => Err(DaemonError::session_execution_measured(failed("This turn needs attention; inspect its blocked or interrupted work before continuing"), usage.usage, usage.complete)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn send() -> NativeSessionSend {
+        NativeSessionSend {
+            session_id: "ses-upgraded".into(),
+            turn_id: "turn-1".into(),
+            idempotency_key: None,
+            display_input: None,
+            input: "Explain README.md".into(),
+            reference_ids: Vec::new(),
+            context_references: Vec::new(),
+            model_override: None,
+            target_agent: None,
+        }
+    }
+
+    /// A send refused by a native provider check (here the error a live
+    /// 1.5 daemon gave a Team that 1.4 reviewed on Ollama 0.20.6, after
+    /// Ollama was upgraded to 0.40.8) reaches the app with the check's own
+    /// words: the "not sent" notice and its toast show them as they are.
+    #[test]
+    fn a_refused_send_says_why_in_the_providers_own_words() {
+        let error = DaemonError::Provider(
+            "Session dispatch: Invalid request for ollama: Ollama was upgraded from 0.20.6 to \
+             0.40.8; review Team & budget again"
+                .into(),
+        );
+        let crate::stream::StreamFrame::SessionRequestRejected {
+            session,
+            turn_id,
+            error,
+        } = native_send_rejection(&send(), &error)
+        else {
+            panic!("a rejection frame");
+        };
+        assert_eq!(
+            (session.as_str(), turn_id.as_str()),
+            ("ses-upgraded", "turn-1")
+        );
+        assert_eq!(
+            error,
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
+        );
+        // Any other refusal keeps its text.
+        let crate::stream::StreamFrame::SessionRequestRejected { error, .. } =
+            native_send_rejection(
+                &send(),
+                &failed("This turn ID was already used for a different Session request"),
+            )
+        else {
+            panic!("a rejection frame");
+        };
+        assert_eq!(
+            error,
+            "Session conflict: This turn ID was already used for a different Session request"
+        );
     }
 }
