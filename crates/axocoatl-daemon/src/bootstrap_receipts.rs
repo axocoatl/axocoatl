@@ -546,7 +546,7 @@ impl AxocoatlDaemon {
 /// Most reasons the warning `receipt_incomplete` names, and most bytes of
 /// each.
 const INCOMPLETE_REASONS: usize = 3;
-const INCOMPLETE_REASON_BYTES: usize = 300;
+const INCOMPLETE_REASON_BYTES: usize = 400;
 
 /// The warning of a finished run whose receipt does not cover every path the
 /// run changed, with why (`unattributed`, the receipt's own reasons), so a

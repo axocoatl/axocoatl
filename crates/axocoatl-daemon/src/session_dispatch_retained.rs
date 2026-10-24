@@ -122,6 +122,7 @@ impl SessionDispatchController {
             repository_owners: HashMap::new(),
             repository_reattachments: HashMap::new(),
             repository_registration: None,
+            review_rerun_at_ms: None,
             poisoned: None,
             #[cfg(test)]
             fail_at: None,

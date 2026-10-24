@@ -442,7 +442,8 @@ impl SessionDispatchController {
                                 capture.condition_run = Some(recorded.run.run_id.clone());
                                 capture.outcome = Some(result.reference().clone());
                                 let bytes = result.stdout().retained_bytes().map_err(error)?;
-                                let value = serde_json::json!({"exit_code":match result.status() {ConditionProcessStatus::Exited {code} => Some(*code), _ => None}, "stdout":String::from_utf8_lossy(&bytes), "stdout_truncated":result.stdout().is_truncated()});
+                                let value = serde_json::json!({"exit_code":match result.status() {ConditionProcessStatus::Exited {code} => Some(*code), _ => None}, "stdout":String::from_utf8_lossy(&bytes), "stdout_truncated":result.stdout().is_truncated(),
+                                    "timed_out_after_ms":matches!(result.status(), ConditionProcessStatus::TimedOut).then_some(definition.timeout_ms)});
                                 if let Err(failure) = repository_snapshot::parse_capture(
                                     &value,
                                     &mut capture,

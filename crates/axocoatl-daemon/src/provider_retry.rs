@@ -214,7 +214,7 @@ pub fn transient_failure_of_text(text: &str) -> Option<ProviderFailure> {
     } else if rest.starts_with("Rate limited by ") {
         ProviderFailure::Status {
             status: 429,
-            retry_after: None,
+            retry_after: rate_limit_retry_after(rest),
         }
     } else if rest.starts_with("Network error: ") || rest.starts_with("Streaming error: ") {
         if names_timeout(rest) {
@@ -228,6 +228,14 @@ pub fn transient_failure_of_text(text: &str) -> Option<ProviderFailure> {
         return None;
     };
     matches!(decide(&failure, 0), RetryDecision::RetryAfter(_)).then_some(failure)
+}
+
+/// The `Retry-After` a rate limit's message states, as
+/// [`ProviderError::RateLimited`] writes it: `Retry after Some(5)s`.
+fn rate_limit_retry_after(message: &str) -> Option<Duration> {
+    let (_, rest) = message.rsplit_once("Retry after Some(")?;
+    let (seconds, _) = rest.split_once(")s")?;
+    seconds.parse::<u64>().ok().map(Duration::from_secs)
 }
 
 /// The note recording that the host ran review round `round` again after
@@ -517,6 +525,22 @@ mod tests {
                 line("Rate limited by openrouter. Retry after None s"),
                 status(429),
             ),
+            // A rate limit's own Retry-After is kept, for the review round's
+            // run again to wait it out.
+            (
+                line("Rate limited by openrouter. Retry after Some(7)s"),
+                ProviderFailure::Status {
+                    status: 429,
+                    retry_after: Some(Duration::from_secs(7)),
+                },
+            ),
+            (
+                line("openrouter API error: 429 - busy (Retry-After: 12 s)"),
+                ProviderFailure::Status {
+                    status: 429,
+                    retry_after: Some(Duration::from_secs(12)),
+                },
+            ),
             (
                 line("Network error: operation timed out"),
                 ProviderFailure::Timeout,
@@ -538,6 +562,7 @@ mod tests {
             line("openrouter API error: 503 - Content filtered by openrouter"),
             line("Network error: dns error: no such host"),
             line("openrouter API error: 429 - busy (Retry-After: 3600 s)"),
+            line("Rate limited by openrouter. Retry after Some(3600)s"),
             "Activation failed: LLM provider stream ended early".to_owned(),
             "Activation failed: Tool call failed: API error: 502 - timed out".to_owned(),
             format!("Something else\n{}", line("openrouter API error: 502 - x")),

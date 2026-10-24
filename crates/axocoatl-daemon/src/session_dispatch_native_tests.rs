@@ -620,6 +620,62 @@ fn openrouter_json_admission_uses_one_call_and_preserves_finite_limits() {
     );
 }
 
+/// The window a retained native profile states is the one its provider
+/// fits each request to: for Ollama the observed context and the output
+/// allowance; for OpenRouter the context less the reasoning allowance,
+/// within the endpoint's own prompt limit. A profile that is not a native
+/// one states none, and the reviewer's change is then fitted to the
+/// smallest context onboarding configures.
+#[tokio::test]
+async fn a_retained_profile_states_the_window_its_requests_are_fitted_to() {
+    let (server, _) = metadata_server().await;
+    let observed = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    let preparation = NativeDefinitionPreparation::new(
+        config(),
+        AgentDefinitionId::new("counter").unwrap(),
+        1,
+        limits(200_000),
+    )
+    .unwrap();
+    let runtime = preparation.observed(observed.clone()).unwrap();
+    let NativeRuntimeConfiguration::Ollama(ollama) = &runtime else {
+        panic!("an Ollama runtime");
+    };
+    assert_eq!(
+        retained_request_window(&serde_json::to_string(&runtime).unwrap()),
+        Some((observed.context_tokens, ollama.max_output_tokens))
+    );
+    let mut sonnet = config();
+    sonnet.provider = "openrouter".into();
+    sonnet.model = "anthropic/claude-sonnet-5.5".into();
+    sonnet.sampling.max_tokens = Some(4096);
+    let preparation = NativeDefinitionPreparation::new(
+        sonnet,
+        AgentDefinitionId::new("sonnet").unwrap(),
+        1,
+        GrantLimits {
+            cost_microunits: 1_000_000,
+            ..limits(200_000)
+        },
+    )
+    .unwrap();
+    let runtime = preparation
+        .openrouter_runtime(vec![claude_observation()])
+        .unwrap();
+    // A 1,000,000-token context, 4,096 output tokens and 16,384 of
+    // reasoning at the model's default effort.
+    assert_eq!(
+        retained_request_window(&serde_json::to_string(&runtime).unwrap()),
+        Some((1_000_000 - 16_384, 4096))
+    );
+    assert_eq!(
+        retained_request_window(r#"{"fixture":"finite local provider; no external model"}"#),
+        None
+    );
+}
+
 #[test]
 fn a_reasoning_model_fits_a_modest_grant_and_retains_its_reasoning_setting() {
     use axocoatl_core::ReasoningEffort;

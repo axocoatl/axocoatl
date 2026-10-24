@@ -695,7 +695,7 @@ pub(crate) fn grant_exhausted_message(
 }
 
 /// `1457714` as `1,457,714`.
-fn group_digits(value: u64) -> String {
+pub(crate) fn group_digits(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -1158,26 +1158,38 @@ pub(crate) fn judged_changed_paths(
     (compared.before_sha256 == *before).then(|| compared.changed_paths.clone())
 }
 
-/// Why a capture whose patch reached the 64 MiB limit on its temporary
-/// files (exit 68) recorded nothing.
-pub(super) const TOO_LARGE_TO_CAPTURE: &str = "The change is larger than Axocoatl records: its \
-     patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new binary file \
-     data";
+/// Why a capture stopped at its time limit (`limit`) recorded nothing. It
+/// reads every file of the repository, so the time grows with the files the
+/// repository and the change hold.
+pub(super) fn capture_timed_out(limit: std::time::Duration) -> String {
+    format!(
+        "The repository capture did not finish within its {} seconds: it reads every file in \
+         the repository, so a very large repository or change (hundreds of thousands of \
+         files), or a busy computer, can take longer",
+        limit.as_secs()
+    )
+}
 
+/// Read one capture's result. A capture around the checks that ran past its
+/// time limit carries that limit as `timed_out_after_ms`.
 pub(super) fn parse_capture(
     value: &serde_json::Value,
     observation: &mut ActivationRepositorySnapshot,
     mode: &CaptureMode,
 ) -> Result<()> {
+    if let Some(limit) = value
+        .get("timed_out_after_ms")
+        .and_then(serde_json::Value::as_u64)
+    {
+        return Err(error(capture_timed_out(std::time::Duration::from_millis(
+            limit,
+        ))));
+    }
     let exit_code = value.get("exit_code").and_then(serde_json::Value::as_i64);
     // A comparison whose list of changed paths is longer than one capture
     // records (`MAX_COMPARED_PATH_BYTES` in base64) refuses it.
     if matches!(mode, CaptureMode::Compare { .. }) && exit_code == Some(67) {
         return Err(error("Repository capture changed too many paths to record"));
-    }
-    // A patch that reached the limit on a capture's temporary files.
-    if exit_code == Some(68) {
-        return Err(error(TOO_LARGE_TO_CAPTURE));
     }
     if exit_code != Some(0)
         || value
@@ -1711,16 +1723,44 @@ changed_b64={encoded}
             failure.contains("failed or its result was truncated"),
             "{failure}"
         );
-        // A patch that reached the limit on a capture's temporary files says
-        // the change is larger than Axocoatl records, in every mode.
-        let too_large =
-            serde_json::json!({"stdout": "", "exit_code": 68, "stdout_truncated": false});
+        // The capture reads a patch of any size without storing it, so no
+        // exit code of its own names a change too large to capture: 68, which
+        // a capture that stored the patch used for that, is a failure like
+        // any other.
+        let other = serde_json::json!({"stdout": "", "exit_code": 68, "stdout_truncated": false});
         for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
-            let failure = parse_capture(&too_large, &mut observation(), mode)
+            let failure = parse_capture(&other, &mut observation(), mode)
                 .unwrap_err()
                 .to_string();
-            assert_eq!(failure, format!("Session dispatch: {TOO_LARGE_TO_CAPTURE}"));
+            assert!(
+                failure.contains("failed or its result was truncated"),
+                "{failure}"
+            );
         }
+        // A capture around the checks that ran past its time limit says so,
+        // with the limit, in every mode.
+        let timed_out = serde_json::json!({"stdout": "", "exit_code": null,
+            "stdout_truncated": false, "timed_out_after_ms": 180_000});
+        for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
+            let failure = parse_capture(&timed_out, &mut observation(), mode)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                failure,
+                "Session dispatch: The repository capture did not finish within its 180 \
+                 seconds: it reads every file in the repository, so a very large repository or \
+                 change (hundreds of thousands of files), or a busy computer, can take longer"
+            );
+        }
+        let finished = serde_json::json!({"stdout": "", "exit_code": 1,
+            "stdout_truncated": false, "timed_out_after_ms": null});
+        let failure = parse_capture(&finished, &mut observation(), &CaptureMode::Observe)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            failure.contains("failed or its result was truncated"),
+            "{failure}"
+        );
     }
 
     fn view(content: ActivationRepositorySnapshot) -> ActivationRepositorySnapshotView {

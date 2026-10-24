@@ -13,9 +13,9 @@ pub const REPOSITORY_CAPTURE_SCRIPT: &str =
 /// repository, and nothing the repository configures can run a program. Its
 /// output stays within the smallest capture bound whatever the change: a
 /// patch larger than [`MAX_RECORDED_PATCH_BYTES`] is recorded by its digest,
-/// its size and its first [`MAX_PATCH_PREFIX_BYTES`]. A patch that reaches
-/// the 64 MiB limit on its temporary files (about 49 MiB of new binary file
-/// data) ends it with exit code 68: a change larger than it records.
+/// its size and its first [`MAX_PATCH_PREFIX_BYTES`], read as Git writes it
+/// and never stored whole, so a patch of any size is captured. What it writes
+/// to standard error is bounded too: its first and last 8 KiB.
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot.sh")
@@ -54,6 +54,11 @@ pub const MAX_PATCH_PREFIX_BYTES: usize = 12 * 1024;
 /// Most bytes of the manifest lines of the paths that differ from `HEAD`
 /// one capture records ([`ActivationRepositorySnapshot::changed_manifest`]).
 pub const MAX_CHANGED_MANIFEST_BYTES: usize = 576 * 1024;
+
+/// Most paths that differ from `HEAD` whose lines one capture records
+/// ([`ActivationRepositorySnapshot::changed_manifest`]); with more, or when
+/// their lines do not fit its output, it records none.
+pub const MAX_CHANGED_PATHS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -443,6 +448,15 @@ fn validate_observation(
 mod tests {
     use super::*;
     use base64::Engine as _;
+
+    /// The capture records the lines of at most [`MAX_CHANGED_PATHS`]
+    /// paths that differ from HEAD, the limit the host names when it cannot
+    /// attribute a change of more.
+    #[test]
+    fn the_capture_lists_at_most_the_changed_paths_the_host_names() {
+        assert!(REPOSITORY_CAPTURE_SCRIPT
+            .contains(&format!("if [ \"$differ_count\" -le {MAX_CHANGED_PATHS} ]")));
+    }
 
     /// One capture field of the command's output.
     fn field<'a>(output: &'a str, name: &str) -> &'a str {
@@ -835,6 +849,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
     }
 
+    /// Each file is read by its own name, never as standard input or an
+    /// option, and a name sha256sum would escape or split is read alone: a
+    /// file named `-` is recorded with its own mode (the capture read the
+    /// mode of its standard input for it before), and names with a leading
+    /// dash, a backslash, a newline, a tab or a percent sign with their own
+    /// content's digest and mode.
+    #[test]
+    fn every_file_is_read_by_its_own_name_whatever_the_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let files = [
+            ("-", 0o600),
+            ("-n", 0o755),
+            ("back\\slash", 0o644),
+            ("new\nline", 0o640),
+            ("tab\tname", 0o644),
+            ("%s%n", 0o644),
+        ];
+        for (name, mode) in files {
+            std::fs::write(root.join(name), format!("{name}\n")).unwrap();
+            std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        }
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        let mut expected: Vec<_> = files
+            .iter()
+            .map(|(name, mode)| {
+                (
+                    (*name).to_owned(),
+                    format!("{mode:o}"),
+                    "file".to_owned(),
+                    sha256_text(&format!("{name}\n")),
+                )
+            })
+            .collect();
+        expected.sort();
+        let mut recorded = changed_lines(&output).unwrap();
+        recorded.sort();
+        assert_eq!(recorded, expected);
+        // Git reads a path "-" as standard input; the patch still holds the
+        // file's own content, under the name Git gives any other file.
+        let patch = String::from_utf8(decoded(&output, "patch_b64")).unwrap();
+        assert!(
+            patch.contains("diff --git a/- b/-\nnew file mode 100644\nindex 0000000.."),
+            "{patch}"
+        );
+        assert!(
+            patch.contains("--- /dev/null\n+++ b/-\n@@ -0,0 +1 @@\n+-\n"),
+            "{patch}"
+        );
+        assert!(!patch.contains("./-"), "{patch}");
+    }
+
+    /// A repository of thousands of files, far more than one batch of records
+    /// holds, is recorded whole: the manifest's size and tree digest are the
+    /// ones its files' records give, computed here, each record once. A
+    /// submodule and a nested checkout, which have no record, cost no other
+    /// path its own: when records were read one at a time, a submodule first
+    /// in its batch lost every record after it in that batch.
+    #[test]
+    fn a_manifest_of_many_batches_holds_every_file_once() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        git(root, &["init", "--quiet"]);
+        let committer = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+        let sub = root.join("0-sub");
+        std::fs::create_dir(&sub).unwrap();
+        git(&sub, &["init", "--quiet"]);
+        std::fs::write(sub.join("inner.txt"), "inner\n").unwrap();
+        git(&sub, &["add", "-A"]);
+        git(
+            &sub,
+            &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
+        );
+        let mut lines = Vec::new();
+        for index in 0..4000 {
+            let name = format!("dir-{}/file {index} {}", index % 7, "x".repeat(index % 50));
+            let path = root.join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let content = format!("{index}\n");
+            std::fs::write(&path, &content).unwrap();
+            let mode = if index % 3 == 0 { 0o755 } else { 0o644 };
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            lines.push(format!(
+                "{}\t{mode:o}\tfile\t{}\n",
+                base64::engine::general_purpose::STANDARD.encode(&name),
+                sha256_text(&content)
+            ));
+        }
+        git(root, &["add", "-A"]);
+        git(
+            root,
+            &[&committer[..], &["commit", "--quiet", "-m", "many"]].concat(),
+        );
+        let nested = root.join("0-nested");
+        std::fs::create_dir(&nested).unwrap();
+        git(&nested, &["init", "--quiet"]);
+        lines.sort();
+        let manifest = lines.concat();
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&output, "manifest_bytes"), manifest.len().to_string());
+        assert_eq!(field(&output, "tree"), sha256_text(&manifest));
+        // In every mode.
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        assert_eq!(field(&kept, "tree"), sha256_text(&manifest));
+        let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
+    }
+
     /// `len` bytes no compressor shrinks, as a compiled test program's would
     /// barely be, at `path`.
     fn random_file(path: &std::path::Path, len: usize, seed: u64) {
@@ -1016,39 +1140,113 @@ mod tests {
         assert_eq!(field(&output, "changed_complete"), "1");
     }
 
-    /// A patch that reaches the 64 MiB limit on a capture's temporary files
-    /// stops the capture with its own exit code, 68, which the host reads as
-    /// a change larger than Axocoatl records, in every mode: 50 MiB of new
-    /// random file data does (Git's binary patch writes 52 bytes as a line of
-    /// 67), and 49 MiB is still captured, as any change too large to record
-    /// whole.
+    /// The patch a capture's Git commands write, exactly as the capture
+    /// reads it: every change against HEAD, then each untracked file's.
+    fn whole_patch(root: &std::path::Path) -> Vec<u8> {
+        let output = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "git diff --no-ext-diff --no-textconv --binary HEAD -- && \
+                 git ls-files --others --exclude-standard -z | xargs -0 -r -n 1 sh -c \
+                 'git diff --no-ext-diff --no-textconv --binary --no-index -- /dev/null \"$0\"; \
+                 [ $? -le 1 ]'",
+            ])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        output.stdout
+    }
+
+    /// A patch of any size is captured, in every mode, by its digest, its
+    /// size and its first 12 KiB, within the bound: the capture reads it as
+    /// Git writes it and never stores it whole. 80 MiB of new random file
+    /// data, a patch of about 108 MB, is captured; a capture that stored the
+    /// patch under its 64 MiB limit on temporary files stopped at about 49
+    /// MiB of such data.
     #[test]
-    fn a_patch_past_the_temporary_file_limit_is_named_as_too_large() {
+    fn a_patch_of_any_size_is_captured_by_its_digest_size_and_first_bytes() {
         let repo = sizeable_repository();
         let root = repo.path();
         let kept = capture(root, "capture_mode=keep\n").unwrap();
         let baseline = field(&kept, "baseline").to_owned();
         let expected = field(&kept, "judged").to_owned();
-        random_file(&root.join("big.bin"), 49 * 1024 * 1024, 21);
-        let output = capture(root, "capture_mode=observe\n").unwrap();
-        let size: u64 = field(&output, "patch_bytes").parse().unwrap();
-        assert!(size > 63 * 1024 * 1024 && size < 64 * 1024 * 1024, "{size}");
-        assert_eq!(field(&output, "changed_complete"), "1");
-        random_file(&root.join("big.bin"), 50 * 1024 * 1024, 21);
+        std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
+        random_file(&root.join("big.bin"), 80 * 1024 * 1024, 21);
+        let whole = whole_patch(root);
+        assert!(whole.len() > 100 * 1024 * 1024, "{}", whole.len());
         for mode in [
             "capture_mode=observe\n".to_owned(),
             format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
         ] {
             let (code, output, stderr) =
                 run_command(root, &format!("{mode}{REPOSITORY_CAPTURE_SCRIPT}"));
-            assert_eq!(code, 68, "{stderr}");
-            assert!(
-                stderr.contains("the patch is larger than one capture records"),
-                "{stderr}"
+            assert_eq!(code, 0, "{stderr}");
+            assert!(output.len() <= MOST_PRINTED, "{}", output.len());
+            assert_eq!(field(&output, "patch_bytes"), whole.len().to_string());
+            assert_eq!(field(&output, "patch_sha256"), sha256(&whole));
+            assert_eq!(
+                decoded(&output, "patch_b64"),
+                whole[..MAX_PATCH_PREFIX_BYTES]
             );
-            assert_eq!(output, "");
+            assert_eq!(field(&output, "changed_complete"), "1");
         }
-        let _ = std::fs::remove_dir_all(&baseline);
+        assert!(!std::path::Path::new(&baseline).exists());
+    }
+
+    /// What a capture's commands write to standard error is bounded to its
+    /// first and last 8 KiB, so warnings Git writes for each of thousands of
+    /// files never pass the bound the host reads it within; what it prints
+    /// is unchanged.
+    #[test]
+    fn a_capture_bounds_what_it_writes_to_standard_error() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
+        let quiet = capture(root, "capture_mode=observe\n").unwrap();
+        // Every Git command first warns 64 KiB, as Git can for each file.
+        let wrapper = tempfile::tempdir().unwrap();
+        let git = String::from_utf8(
+            std::process::Command::new("sh")
+                .args(["-c", "command -v git"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let script = wrapper.path().join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ni=0\nwhile [ $i -lt 1024 ]; do\n  printf 'warning: %063d\\n' \
+                 $i >&2\n  i=$((i + 1))\ndone\nexec {} \"$@\"\n",
+                git.trim()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!(
+            "{}:{}",
+            wrapper.path().display(),
+            std::env::var("PATH").unwrap()
+        );
+        let noisy = std::process::Command::new("sh")
+            .args(["-c", REPOSITORY_SNAPSHOT_COMMAND])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(noisy.status.success());
+        assert_eq!(String::from_utf8(noisy.stdout).unwrap(), quiet);
+        let stderr = String::from_utf8(noisy.stderr).unwrap();
+        assert_eq!(stderr.len(), 16 * 1024, "{}", stderr.len());
+        assert!(stderr.starts_with(&format!("warning: {:063}\n", 0)));
+        assert!(stderr.ends_with(&format!("warning: {:063}\n", 1023)));
     }
 
     /// A comparison whose changed list is long leaves the patch less room,
@@ -1095,6 +1293,51 @@ mod tests {
             assert_eq!(listed.split(',').count(), files + 1);
             assert_eq!(decoded(&output, "patch_b64").len(), MAX_PATCH_PREFIX_BYTES);
         }
+    }
+
+    /// A comparison whose changed list leaves no room for a patch within the
+    /// 512 KiB the host records whole prints only the patch's first 12 KiB,
+    /// beside its digest and size, as for a patch too large to record: 1,000
+    /// files under .git/hooks with 200-byte names, which the comparison lists
+    /// and the patch does not hold, beside a 396 KB patch.
+    #[test]
+    fn a_long_changed_list_leaves_a_patch_within_the_bound_only_its_first_bytes() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        let baseline = field(&kept, "baseline").to_owned();
+        let expected = field(&kept, "judged").to_owned();
+        for index in 0..1000 {
+            let name = format!("{index:05}-{}", "h".repeat(194));
+            std::fs::write(root.join(".git/hooks").join(name), "#!/bin/sh\n").unwrap();
+        }
+        let line = format!("{}\n", "x".repeat(63));
+        std::fs::write(root.join("notes.txt"), line.repeat(6000)).unwrap();
+        let whole = whole_patch(root);
+        assert!(
+            whole.len() > 390_000 && whole.len() <= MAX_RECORDED_PATCH_BYTES,
+            "{}",
+            whole.len()
+        );
+        let (code, output, stderr) = run_command(
+            root,
+            &format!(
+                "capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n\
+                 {REPOSITORY_CAPTURE_SCRIPT}"
+            ),
+        );
+        assert_eq!(code, 0, "{stderr}");
+        assert!(output.len() <= MOST_PRINTED, "{}", output.len());
+        assert_eq!(field(&output, "changed").split(',').count(), 1001);
+        assert_eq!(field(&output, "patch_bytes"), whole.len().to_string());
+        assert_eq!(field(&output, "patch_sha256"), sha256(&whole));
+        assert_eq!(
+            decoded(&output, "patch_b64"),
+            whole[..MAX_PATCH_PREFIX_BYTES]
+        );
+        // Observed alone, the same patch is printed whole.
+        let observed = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(decoded(&observed, "patch_b64"), whole);
     }
 
     #[test]

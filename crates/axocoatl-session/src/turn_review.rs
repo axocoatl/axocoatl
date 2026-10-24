@@ -226,56 +226,504 @@ fn patch_sections(patch: &str) -> Vec<(&str, &str)> {
         .collect()
 }
 
+/// What the description of a change may spend of the reviewer's request,
+/// and how it is counted.
+#[derive(Clone, Copy)]
+pub struct ChangeBudget<'a> {
+    /// Most tokens the description may take.
+    pub tokens: usize,
+    /// The tokens a text takes in the reviewer's request, as the host counts
+    /// a request against its model's context.
+    pub count: &'a dyn Fn(&str) -> usize,
+}
+
+/// The change a turn made, as the reviewer is shown it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescribedChange {
+    pub text: String,
+    /// Whether the reviewer is not shown all of it: the data of a binary
+    /// file, a file or hunks left out to fit its context, or a patch the
+    /// capture recorded only in part. The text's notes say what.
+    pub partial: bool,
+}
+
+/// How a description marks the data of a binary file it left out.
+const BINARY_LEFT_OUT: &str = "[binary data left out";
+
 /// The change a turn made, as the reviewer reads it. Both patches are the
 /// repository's changes against HEAD, as the host's captures record them:
 /// `before` when the turn began and `after` when its Agents finished. The
 /// change is every file section of `after` that is not identical in
-/// `before`, and every file `before` changed that `after` no longer does. It
-/// is bounded to [`MAX_CHANGE_BYTES`] and says when it was cut.
-pub fn describe_change(before: Option<&str>, after: &str, after_complete: bool) -> String {
+/// `before`, and every file `before` changed that `after` no longer does.
+///
+/// The data of each binary file (Git's base85 `literal` and `delta` blocks)
+/// is left out, as [`describe_partial_change`] leaves it out, and the file
+/// is named with its size. The rest is shown whole when it fits `budget` and
+/// [`MAX_CHANGE_BYTES`]. Otherwise a note first says the change is not shown
+/// in full, and the files a reviewer needs most are shown first: source,
+/// then generated or dense text, then binary files, each whole when it fits
+/// and else cut at a hunk boundary, saying there what of it was left out.
+/// Every file left out in whole or in part is listed at the end with its
+/// bytes not shown, as many as fit, the rest counted by directory. The
+/// description, notes included, stays within `budget` as it counts, unless
+/// that is too small for the notes themselves.
+pub fn describe_change(
+    before: Option<&str>,
+    after: &str,
+    after_complete: bool,
+    budget: ChangeBudget<'_>,
+) -> DescribedChange {
+    let count = budget.count;
     let before_sections = before.map(patch_sections).unwrap_or_default();
     let after_sections = patch_sections(after);
-    let mut text = String::new();
-    for (_, section) in &after_sections {
-        if !before_sections
-            .iter()
-            .any(|(_, earlier)| earlier == section)
-        {
-            text.push_str(section);
-            if !section.ends_with('\n') {
-                text.push('\n');
-            }
-        }
-    }
+    let files: Vec<FileChange> = after_sections
+        .iter()
+        .filter(|(_, section)| {
+            !before_sections
+                .iter()
+                .any(|(_, earlier)| earlier == section)
+        })
+        .map(|(header, section)| FileChange::new(header, section, count))
+        .collect();
     let reverted: Vec<&str> = before_sections
         .iter()
         .filter(|(header, _)| !after_sections.iter().any(|(later, _)| later == header))
         .map(|(header, _)| *header)
         .collect();
+    let mut reverted_note = String::new();
     if !reverted.is_empty() {
-        text.push_str(
-            "\nThese files had uncommitted changes when the turn began and now match HEAD \
-             again:\n",
+        reverted_note.push_str(
+            "\nThese files had uncommitted changes when the turn began and no longer differ \
+             from HEAD (changed back, or new and since removed):\n",
         );
-        for header in reverted {
-            text.push_str(header);
-            text.push('\n');
+        let mut room = MAX_LISTED_PATH_BYTES;
+        let mut listed = 0;
+        for header in reverted.iter().take(MAX_LISTED_PATHS) {
+            if header.len() + 1 > room {
+                break;
+            }
+            room -= header.len() + 1;
+            reverted_note.push_str(header);
+            reverted_note.push('\n');
+            listed += 1;
+        }
+        if listed < reverted.len() {
+            reverted_note.push_str(&format!("...and {} more\n", reverted.len() - listed));
         }
     }
-    if text.trim().is_empty() {
-        text = "The turn changed no files.\n".into();
+    let incomplete = if after_complete {
+        ""
+    } else {
+        "\n[The repository capture recorded only part of the patch; read the files themselves \
+         for the rest of the change.]"
+    };
+    if files.is_empty() && reverted.is_empty() {
+        return DescribedChange {
+            text: format!("The turn changed no files.\n{incomplete}"),
+            partial: !after_complete,
+        };
     }
-    let mut described = bounded(&text, MAX_CHANGE_BYTES);
-    if described.len() < text.len() {
-        described.push_str(" Read the files themselves for the rest of the change.");
+    let binary = files.iter().filter(|file| file.binary_left_out).count();
+    let binary_note = match binary {
+        0 => String::new(),
+        1 => "[The data of 1 binary file is left out; it is named below with its size.]\n".into(),
+        _ => format!(
+            "[The data of {binary} binary files is left out; each is named below with its \
+             size.]\n"
+        ),
+    };
+    let whole: String = files.iter().map(|file| file.shown.as_str()).collect();
+    let text = format!("{binary_note}{whole}{reverted_note}{incomplete}");
+    // The files' own counts first: a change far past the budget is not
+    // counted again whole.
+    let files_tokens: usize = files.iter().map(|file| file.tokens).sum();
+    if whole.len() <= MAX_CHANGE_BYTES
+        && files_tokens <= budget.tokens
+        && count(&text) <= budget.tokens
+    {
+        return DescribedChange {
+            text,
+            partial: binary > 0 || !after_complete,
+        };
     }
-    if !after_complete {
-        described.push_str(
-            "\n[The repository capture recorded only part of the patch; read the files \
-             themselves for the rest of the change.]",
+    // Not all of it fits: choose what to show beside room for the notes,
+    // with more room each time the whole description does not fit.
+    let fixed = count(&binary_note) + count(&reverted_note) + count(incomplete);
+    let mut notes_room = (budget.tokens / 4).clamp(64, 1024);
+    loop {
+        let room = budget.tokens.saturating_sub(fixed + notes_room);
+        let choice = choose_shown(&files, room, count);
+        if choice.shown.iter().all(|shown| *shown == Shown::Whole) {
+            // Counted piece by piece it fits after all: nothing is left out.
+            return DescribedChange {
+                text,
+                partial: binary > 0 || !after_complete,
+            };
+        }
+        let text = cut_description(
+            &files,
+            &choice,
+            &binary_note,
+            &reverted_note,
+            incomplete,
+            budget.tokens.saturating_sub(fixed + choice.tokens),
+            count,
         );
+        if room == 0 || count(&text) <= budget.tokens {
+            return DescribedChange {
+                text,
+                partial: true,
+            };
+        }
+        notes_room = notes_room.saturating_mul(2);
     }
-    described
+}
+
+/// One file's section of the turn's patch, as the reviewer may be shown it.
+struct FileChange {
+    /// The name Git's header gives the file, quoted as Git quotes it.
+    name: String,
+    /// The section with the data of a binary file left out.
+    shown: String,
+    binary_left_out: bool,
+    /// What a reviewer needs least comes last: 0 for source, 1 for a
+    /// generated or dense file, 2 for a binary one.
+    rank: u8,
+    /// Its tokens as the reviewer's request counts them.
+    tokens: usize,
+    /// Where each hunk of `shown` starts; none when it has no hunk.
+    hunks: Vec<usize>,
+}
+
+impl FileChange {
+    fn new(header: &str, section: &str, count: &dyn Fn(&str) -> usize) -> Self {
+        let (mut shown, binary_left_out) = without_binary_data(section);
+        if !shown.ends_with('\n') {
+            shown.push('\n');
+        }
+        let name = section_name(header);
+        let binary = binary_left_out
+            || section
+                .lines()
+                .any(|line| line.starts_with("Binary files ") && line.ends_with(" differ"));
+        let tokens = count(&shown);
+        let rank = if binary {
+            2
+        } else if generated(&name, &shown) || dense(&shown, tokens) {
+            1
+        } else {
+            0
+        };
+        let mut hunks = Vec::new();
+        let mut at = 0;
+        for line in shown.split_inclusive('\n') {
+            if line.starts_with("@@ ") && !binary {
+                hunks.push(at);
+            }
+            at += line.len();
+        }
+        Self {
+            name,
+            shown,
+            binary_left_out,
+            rank,
+            tokens,
+            hunks,
+        }
+    }
+}
+
+/// How much of each file is shown: all of it, its first hunks, or none.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    Whole,
+    Hunks(usize),
+    None,
+}
+
+/// What [`choose_shown`] chose, and its tokens.
+struct Choice {
+    shown: Vec<Shown>,
+    tokens: usize,
+}
+
+/// The files to show within `room` tokens and [`MAX_CHANGE_BYTES`], rank by
+/// rank: each file of a rank whole when it fits, in the patch's order, then
+/// as many first hunks as fit of each one that did not.
+fn choose_shown(files: &[FileChange], room: usize, count: &dyn Fn(&str) -> usize) -> Choice {
+    let mut shown = vec![Shown::None; files.len()];
+    let (mut tokens, mut bytes) = (0usize, 0usize);
+    for rank in 0..=2 {
+        for (index, file) in files.iter().enumerate() {
+            if file.rank == rank
+                && tokens + file.tokens <= room
+                && bytes + file.shown.len() <= MAX_CHANGE_BYTES
+            {
+                shown[index] = Shown::Whole;
+                tokens += file.tokens;
+                bytes += file.shown.len();
+            }
+        }
+        for (index, file) in files.iter().enumerate() {
+            if file.rank != rank || shown[index] != Shown::None || file.hunks.len() < 2 {
+                continue;
+            }
+            // Its header and as many of its hunks as fit, never all of them
+            // (it did not fit whole), each counted once.
+            let mut cost = count(&file.shown[..file.hunks[0]]);
+            let mut best = None;
+            for (taken, pair) in file.hunks.windows(2).enumerate() {
+                cost += count(&file.shown[pair[0]..pair[1]]);
+                let size = pair[1];
+                if tokens + cost > room || bytes + size > MAX_CHANGE_BYTES {
+                    break;
+                }
+                best = Some((taken + 1, cost, size));
+            }
+            if let Some((taken, cost, size)) = best {
+                shown[index] = Shown::Hunks(taken);
+                tokens += cost;
+                bytes += size;
+            }
+        }
+    }
+    Choice { shown, tokens }
+}
+
+/// The description of a change not all of which is shown: a note saying
+/// so, the files chosen in the patch's order, each cut one saying what of it
+/// was left out where it was cut, and the files left out in whole or in part
+/// listed with their bytes not shown, in as many of `room` tokens as their
+/// names take, the rest counted by directory.
+fn cut_description(
+    files: &[FileChange],
+    choice: &Choice,
+    binary_note: &str,
+    reverted_note: &str,
+    incomplete: &str,
+    room: usize,
+    count: &dyn Fn(&str) -> usize,
+) -> String {
+    let total: usize = files.iter().map(|file| file.shown.len()).sum();
+    let mut body = String::new();
+    let mut left_out: Vec<(&str, String)> = Vec::new();
+    let (mut whole, mut cut, mut omitted) = (0usize, 0usize, 0usize);
+    for (file, shown) in files.iter().zip(&choice.shown) {
+        match *shown {
+            Shown::Whole => {
+                body.push_str(&file.shown);
+                whole += 1;
+            }
+            Shown::Hunks(taken) => {
+                let end = file.hunks[taken];
+                let rest = file.shown.len() - end;
+                let more = file.hunks.len() - taken;
+                body.push_str(&file.shown[..end]);
+                body.push_str(&format!(
+                    "[The other {more} of this file's {} hunks, {rest} bytes, are left out.]\n",
+                    file.hunks.len()
+                ));
+                cut += 1;
+                omitted += rest;
+                left_out.push((
+                    &file.name,
+                    format!(
+                        "{more} of its {} hunks left out, {rest} bytes",
+                        file.hunks.len()
+                    ),
+                ));
+            }
+            Shown::None => {
+                omitted += file.shown.len();
+                left_out.push((&file.name, format!("left out, {} bytes", file.shown.len())));
+            }
+        }
+    }
+    let files_word = |count: usize| if count == 1 { "file" } else { "files" };
+    let without = if files.iter().any(|file| file.binary_left_out) {
+        ", without the data of binary files,"
+    } else {
+        ""
+    };
+    let mut note = format!(
+        "[Not all of the change is shown: its patch{without} is {total} bytes in {} {}, more \
+         than fits beside the rest of your request. Shown: {whole} {} whole",
+        files.len(),
+        files_word(files.len()),
+        files_word(whole),
+    );
+    if cut > 0 {
+        note.push_str(&format!(
+            ", {cut} {} cut at a hunk boundary",
+            files_word(cut)
+        ));
+    }
+    let none = files.len() - whole - cut;
+    if none > 0 {
+        note.push_str(&format!(", {none} {} left out", files_word(none)));
+    }
+    note.push_str(&format!(
+        ". You have not seen the other {omitted} bytes, listed at the end: read those files \
+         themselves before you judge them.]\n"
+    ));
+    let mut listing = format!("\n[Left out of the change shown above, {omitted} bytes:]\n");
+    // Room left for names, beside the counts by directory.
+    let mut room = room
+        .saturating_sub(count(&note))
+        .saturating_sub(count(&listing))
+        .saturating_sub(160);
+    let mut listed = 0;
+    for (name, what) in &left_out {
+        let line = format!("{name}: {what}\n");
+        let cost = count(&line);
+        if listed == MAX_LISTED_PATHS || cost > room {
+            break;
+        }
+        room -= cost;
+        listing.push_str(&line);
+        listed += 1;
+    }
+    let rest: Vec<&[u8]> = left_out[listed..]
+        .iter()
+        .map(|(name, _)| name.as_bytes())
+        .collect();
+    if !rest.is_empty() {
+        listing.push_str(&format!("...and {} more, not listed:\n", rest.len()));
+        count_by_directory(&mut listing, &rest, |name| {
+            String::from_utf8_lossy(name).into_owned()
+        });
+    }
+    if left_out.is_empty() {
+        listing.clear();
+    }
+    format!("{note}{binary_note}{body}{listing}{reverted_note}{incomplete}")
+}
+
+/// `section` with the data of a binary file (the lines after `GIT binary
+/// patch`: Git's base85 `literal` and `delta` blocks) left out, as
+/// [`describe_partial_change`] leaves it out, and the file's size said in
+/// its place; and whether any was left out.
+fn without_binary_data(section: &str) -> (String, bool) {
+    let mut shown = String::new();
+    let mut blocks: Vec<(&str, &str)> = Vec::new();
+    let mut binary = false;
+    for line in section.split_inclusive('\n') {
+        if binary {
+            if let Some((kind, size)) = line.trim_end_matches('\n').split_once(' ') {
+                if matches!(kind, "literal" | "delta")
+                    && !size.is_empty()
+                    && size.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    blocks.push((kind, size));
+                }
+            }
+            continue;
+        }
+        shown.push_str(line);
+        if line.trim_end_matches('\n') == "GIT binary patch" {
+            binary = true;
+            if !shown.ends_with('\n') {
+                shown.push('\n');
+            }
+        }
+    }
+    if !binary {
+        return (shown, false);
+    }
+    let deleted = section
+        .lines()
+        .take_while(|line| *line != "GIT binary patch")
+        .any(|line| line.starts_with("deleted file mode "));
+    let size = match (blocks.first(), blocks.get(1)) {
+        (_, Some(("literal", old))) if deleted => format!(": the deleted file was {old} bytes"),
+        (Some(("literal", new)), _) => format!(": the file's new content is {new} bytes"),
+        (Some(("delta", delta)), _) => format!(": a {delta}-byte delta from its old content"),
+        _ => String::new(),
+    };
+    shown.push_str(&format!("{BINARY_LEFT_OUT}{size}]\n"));
+    (shown, true)
+}
+
+/// The name a section's `diff --git` header gives its file, the new one for
+/// a rename, as Git wrote it: quoted when Git quotes it, so it is one line.
+fn section_name(header: &str) -> String {
+    let names = header.strip_prefix("diff --git ").unwrap_or(header);
+    if names.ends_with('"') {
+        if let Some(start) = names.rfind(" \"b/") {
+            return format!("\"{}", &names[start + 4..]);
+        }
+    }
+    // `a/<path> b/<path>`: the halves name one path when it is not a
+    // rename, whatever spaces it holds.
+    if let Some(path) = names.strip_prefix("a/") {
+        let half = path.len().saturating_sub(3) / 2;
+        if let (Some(left), Some(right)) = (path.get(..half), path.get(half..)) {
+            if !left.is_empty() && right.strip_prefix(" b/") == Some(left) {
+                return left.to_owned();
+            }
+        }
+    }
+    match names.rfind(" b/") {
+        Some(start) => names[start + 3..].to_owned(),
+        None => names.to_owned(),
+    }
+}
+
+/// Whether a file's name or first lines say it is generated: a lock file,
+/// minified code or a source map, under a directory builds write to, or
+/// marked `@generated`, `Code generated` or `DO NOT EDIT`.
+fn generated(name: &str, shown: &str) -> bool {
+    const LOCKS: &[&str] = &[
+        "Cargo.lock",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "uv.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "composer.lock",
+        "mix.lock",
+        "flake.lock",
+        "Podfile.lock",
+        "pubspec.lock",
+        "Package.resolved",
+    ];
+    const SUFFIXES: &[&str] = &[".min.js", ".min.css", ".map", ".lock", ".pb.go", "_pb2.py"];
+    const DIRECTORIES: &[&str] = &[
+        "target/",
+        "dist/",
+        "build/",
+        "out/",
+        "node_modules/",
+        "vendor/",
+        ".next/",
+        "__pycache__/",
+        "coverage/",
+    ];
+    let name = name.trim_matches('"');
+    let file = name.rsplit('/').next().unwrap_or(name);
+    LOCKS.contains(&file)
+        || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+        || DIRECTORIES
+            .iter()
+            .any(|directory| name.starts_with(directory) || name.contains(&format!("/{directory}")))
+        || shown.lines().take(16).any(|line| {
+            line.contains("@generated")
+                || line.contains("Code generated")
+                || line.contains("DO NOT EDIT")
+        })
+}
+
+/// Whether a file's text is dense: at least 1 KiB at fewer than 2.5 bytes
+/// a token as the reviewer's request counts it, as base64, hex, minified
+/// code and bytes that are not UTF-8 are, where source and prose take three
+/// to four.
+fn dense(text: &str, tokens: usize) -> bool {
+    text.len() >= 1024 && tokens.saturating_mul(5) > text.len().saturating_mul(2)
 }
 
 /// Most changed paths [`describe_partial_change`] names, and most bytes
@@ -297,14 +745,35 @@ pub const MAX_PARTIAL_CHANGE_BYTES: usize = 20 * 1024;
 const MAX_COUNTED_DIRECTORIES: usize = 10;
 const MAX_DIRECTORY_NAME_BYTES: usize = 120;
 
+/// What the capture taken when a turn began recorded of the paths that
+/// differed from HEAD then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EarlierPaths<'a> {
+    /// Its lines of them, on the HEAD the capture after the turn saw.
+    Listed(&'a str),
+    /// It did not list them, but recorded its whole patch on that HEAD:
+    /// the paths that patch names (as UTF-8, lossily), without what each
+    /// held.
+    Patched(&'a std::collections::BTreeSet<String>),
+    /// It did not list them: there was no such capture, or more paths
+    /// differed from HEAD than a capture lists.
+    NotListed,
+    /// HEAD moved during the turn, so what it listed was against another
+    /// HEAD.
+    OtherHead,
+}
+
 /// The change a turn made when the capture taken after it could not record
 /// the whole patch against HEAD (`patch_bytes` bytes, more than one capture
 /// records). It says so, names the paths the turn changed, from the lines of
 /// the paths that differ from HEAD the captures recorded (`before`, taken
 /// when the turn began on the same HEAD, and `after`), and shows the
 /// beginning of `prefix`, the first part of the patch, with the data of
-/// binary files left out. Without `before` it names every path that differs
-/// from HEAD and says those can include changes made before the turn.
+/// binary files left out. With only the paths `before`'s whole patch names,
+/// it names the paths the turn changed apart from those that already
+/// differed from HEAD, which it may also have changed. Without either it
+/// names every path that differs from HEAD and says those can include
+/// changes made before the turn, and why it cannot tell them apart.
 ///
 /// It is bounded whatever the change: at most [`MAX_LISTED_PATHS`] names in
 /// [`MAX_LISTED_PATH_BYTES`], files HEAD has first (the change's own
@@ -312,7 +781,7 @@ const MAX_DIRECTORY_NAME_BYTES: usize = 120;
 /// [`MAX_SHOWN_PREFIX_BYTES`] of the patch. Each name is shown as
 /// [`quote_path`] quotes it, so no name adds a line of its own.
 pub fn describe_partial_change(
-    before: Option<&str>,
+    before: EarlierPaths<'_>,
     after: Option<&str>,
     prefix: &str,
     patch_bytes: u64,
@@ -327,8 +796,74 @@ pub fn describe_partial_change(
         names: MAX_LISTED_PATHS,
         bytes: MAX_LISTED_PATH_BYTES,
     };
-    match (before.map(differing_paths), after.map(differing_paths)) {
+    let earlier = match before {
+        EarlierPaths::Listed(lines) => Some(lines),
+        EarlierPaths::Patched(_) | EarlierPaths::NotListed | EarlierPaths::OtherHead => None,
+    };
+    match (earlier.map(differing_paths), after.map(differing_paths)) {
         (_, None) => text.push_str("\nThe capture could not list the changed files either.\n"),
+        (None, Some(after)) if matches!(before, EarlierPaths::Patched(_)) => {
+            let EarlierPaths::Patched(named) = before else {
+                unreachable!("matched above");
+            };
+            let mut changed: Vec<(&[u8], &str)> = Vec::new();
+            let mut earlier: Vec<(&[u8], &str)> = Vec::new();
+            for (path, (kind, _)) in &after {
+                if named.contains(String::from_utf8_lossy(path).as_ref()) {
+                    earlier.push((path.as_slice(), kind.as_str()));
+                } else {
+                    changed.push((path.as_slice(), kind.as_str()));
+                }
+            }
+            let now: std::collections::BTreeSet<String> = after
+                .keys()
+                .map(|path| String::from_utf8_lossy(path).into_owned())
+                .collect();
+            let reverted: Vec<(&[u8], &str)> = named
+                .iter()
+                .filter(|name| !now.contains(*name))
+                .map(|name| (name.as_bytes(), "file"))
+                .collect();
+            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() {
+                text.push_str("\nThe turn changed no files.\n");
+            }
+            if !changed.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!("The {} the turn changed:", file_count(changed.len())),
+                    changed,
+                    &in_head,
+                    &mut room,
+                );
+            }
+            if !earlier.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!(
+                        "Files that already had uncommitted changes when the turn began, which \
+                         the turn may also have changed ({}; the capture taken then recorded its \
+                         patch, not each file's state):",
+                        file_count(earlier.len())
+                    ),
+                    earlier,
+                    &in_head,
+                    &mut room,
+                );
+            }
+            if !reverted.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!(
+                        "Files that had uncommitted changes when the turn began and no longer \
+                         differ from HEAD, changed back or new and since removed ({}):",
+                        file_count(reverted.len())
+                    ),
+                    reverted,
+                    &in_head,
+                    &mut room,
+                );
+            }
+        }
         (Some(before), Some(after)) => {
             let changed: Vec<(&[u8], &str)> = after
                 .iter()
@@ -346,7 +881,7 @@ pub fn describe_partial_change(
             if !changed.is_empty() {
                 list_paths(
                     &mut text,
-                    &format!("The {} files the turn changed:", changed.len()),
+                    &format!("The {} the turn changed:", file_count(changed.len())),
                     changed,
                     &in_head,
                     &mut room,
@@ -356,9 +891,9 @@ pub fn describe_partial_change(
                 list_paths(
                     &mut text,
                     &format!(
-                        "These {} files had uncommitted changes when the turn began and now \
-                         match HEAD again:",
-                        reverted.len()
+                        "Files that had uncommitted changes when the turn began and no longer \
+                         differ from HEAD, changed back or new and since removed ({}):",
+                        file_count(reverted.len())
                     ),
                     reverted,
                     &in_head,
@@ -374,12 +909,17 @@ pub fn describe_partial_change(
             if differing.is_empty() {
                 text.push_str("\nNo path differs from HEAD.\n");
             } else {
+                let why = if before == EarlierPaths::OtherHead {
+                    "which the capture taken when it began cannot tell apart: it listed the \
+                     paths that differed from HEAD before HEAD moved"
+                } else {
+                    "which the capture taken when it began did not list"
+                };
                 list_paths(
                     &mut text,
                     &format!(
                         "The {} paths that differ from HEAD (they may include changes made \
-                         before this turn, which the capture taken when it began did not \
-                         list):",
+                         before this turn, {why}):",
                         differing.len()
                     ),
                     differing,
@@ -419,6 +959,103 @@ pub fn describe_partial_change(
         described.push_str(" Read the files themselves for the rest of the change.");
     }
     described
+}
+
+/// `text`, a description of a change, as it is when it takes at most
+/// `budget.tokens` as counted; otherwise cut after its last whole line that
+/// fits beside a note saying how much of it was left out.
+pub fn fit_description(text: String, budget: ChangeBudget<'_>) -> String {
+    let count = budget.count;
+    if count(&text) <= budget.tokens {
+        return text;
+    }
+    let note = |end: usize| {
+        format!(
+            "[Cut to fit your context: the other {} bytes of this description are left out. \
+             Read the files themselves for the rest of the change.]\n",
+            text.len() - end
+        )
+    };
+    let ends: Vec<usize> = text
+        .match_indices('\n')
+        .map(|(index, _)| index + 1)
+        .collect();
+    // The most whole lines that fit with the note; their counts grow with
+    // each line.
+    let (mut fits, mut over) = (0usize, ends.len());
+    while fits < over {
+        let middle = (fits + over).div_ceil(2);
+        let end = ends[middle - 1];
+        if count(&text[..end]) + count(&note(end)) <= budget.tokens {
+            fits = middle;
+        } else {
+            over = middle - 1;
+        }
+    }
+    let end = if fits == 0 { 0 } else { ends[fits - 1] };
+    format!("{}{}", &text[..end], note(end))
+}
+
+/// What a change shown whole from the patch the capture after the turn
+/// recorded cannot say when the capture taken as it began recorded no whole
+/// patch: which files already differed from HEAD then, so their sections can
+/// hold earlier changes, and which differed then and no longer do (a file the
+/// turn deleted, or changed back), which no section shows. From the lines of
+/// the paths that differ from HEAD the two captures recorded on one HEAD,
+/// `before` and `after`; empty when there is nothing to say. Bounded as
+/// [`describe_partial_change`] bounds its lists.
+pub fn earlier_changes(before: &str, after: &str) -> String {
+    let before = differing_paths(before);
+    let after = differing_paths(after);
+    let mut text = String::new();
+    let mut room = Listing {
+        names: MAX_LISTED_PATHS,
+        bytes: MAX_LISTED_PATH_BYTES,
+    };
+    let none = std::collections::BTreeSet::new();
+    let earlier: Vec<(&[u8], &str)> = after
+        .iter()
+        .filter(|(path, _)| before.contains_key(*path))
+        .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+        .collect();
+    if !earlier.is_empty() {
+        list_paths(
+            &mut text,
+            &format!(
+                "Files that already had uncommitted changes when the turn began, so their \
+                 sections above can include changes made before it ({}):",
+                file_count(earlier.len())
+            ),
+            earlier,
+            &none,
+            &mut room,
+        );
+    }
+    let reverted: Vec<(&[u8], &str)> = before
+        .keys()
+        .filter(|path| !after.contains_key(*path))
+        .map(|path| (path.as_slice(), "file"))
+        .collect();
+    if !reverted.is_empty() {
+        list_paths(
+            &mut text,
+            &format!(
+                "Files that had uncommitted changes when the turn began and no longer differ \
+                 from HEAD, changed back or new and since removed, so no section above shows \
+                 them ({}):",
+                file_count(reverted.len())
+            ),
+            reverted,
+            &none,
+            &mut room,
+        );
+    }
+    text
+}
+
+/// `count` files, as a heading names them: `1 file`, `2 files`.
+fn file_count(count: usize) -> String {
+    format!("{count} file{}", if count == 1 { "" } else { "s" })
 }
 
 /// What is left of a description's room for names.
@@ -461,17 +1098,6 @@ fn list_paths(
     if rest.is_empty() {
         return;
     }
-    let mut counts: std::collections::BTreeMap<Option<&[u8]>, usize> = Default::default();
-    for (path, _) in rest {
-        let directory = path
-            .iter()
-            .position(|byte| *byte == b'/')
-            .map(|end| &path[..end]);
-        *counts.entry(directory).or_default() += 1;
-    }
-    let mut counts: Vec<(Option<&[u8]>, usize)> = counts.into_iter().collect();
-    // Most first; ties in name order.
-    counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     text.push_str(&format!(
         "...and {} more, not listed{}:\n",
         rest.len(),
@@ -481,10 +1107,29 @@ fn list_paths(
             ""
         }
     ));
+    let rest: Vec<&[u8]> = rest.iter().map(|(path, _)| *path).collect();
+    count_by_directory(text, &rest, quote_path);
+}
+
+/// Append how many of `paths` are under each of their first directories,
+/// the [`MAX_COUNTED_DIRECTORIES`] with most first (ties in name order),
+/// each name as `show` shows it, then how many are elsewhere.
+fn count_by_directory(text: &mut String, paths: &[&[u8]], show: impl Fn(&[u8]) -> String) {
+    let mut counts: std::collections::BTreeMap<Option<&[u8]>, usize> = Default::default();
+    for path in paths {
+        let directory = path
+            .iter()
+            .position(|byte| *byte == b'/')
+            .map(|end| &path[..end]);
+        *counts.entry(directory).or_default() += 1;
+    }
+    let mut counts: Vec<(Option<&[u8]>, usize)> = counts.into_iter().collect();
+    // Most first; ties in name order.
+    counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     for (directory, count) in counts.iter().take(MAX_COUNTED_DIRECTORIES) {
         match directory {
             Some(name) => {
-                let mut shown = quote_path(name);
+                let mut shown = show(name);
                 if shown.len() > MAX_DIRECTORY_NAME_BYTES {
                     let mut end = MAX_DIRECTORY_NAME_BYTES;
                     while !shown.is_char_boundary(end) {
@@ -878,6 +1523,22 @@ pub fn project_review(
         {
             view.state = "running".into();
             view.reason = "The reviewer is reviewing the result.".into();
+        } else if contract.state() == Some(LogicalTurnState::Running)
+            && contract.stop_requested().is_none()
+            && reviewing.is_some_and(|item| {
+                item.state == crate::turn_contract::ActivationState::Failed
+                    && contract
+                        .epochs()
+                        .last()
+                        .is_some_and(|epoch| epoch.id == item.activation.execution_epoch_id)
+            })
+        {
+            // The host has not recorded the round yet: it runs it again once
+            // a wait for the provider ends, or records why it ended.
+            view.state = "running".into();
+            view.reason = "The reviewer did not finish; its round runs again shortly when a new \
+                           run can help, or the review ends saying why."
+                .into();
         } else if contract.state() == Some(LogicalTurnState::Finished)
             && contract
                 .stop_requested()
@@ -1042,36 +1703,328 @@ mod tests {
         assert_eq!(old.to_round().findings[0].id, "F1");
     }
 
+    /// A stand-in for the host's count of a request's tokens: four bytes a
+    /// token for a line with a space, as source and prose take, two for a
+    /// long line without one, as base64 and other dense text take.
+    fn approximate(text: &str) -> usize {
+        text.split_inclusive('\n')
+            .map(|line| {
+                if line.contains(' ') || line.len() < 24 {
+                    line.len().div_ceil(4)
+                } else {
+                    line.len().div_ceil(2)
+                }
+            })
+            .sum()
+    }
+
+    fn budget(tokens: usize) -> ChangeBudget<'static> {
+        ChangeBudget {
+            tokens,
+            count: &approximate,
+        }
+    }
+
     #[test]
-    fn the_change_is_what_the_turn_added_to_the_tree_and_is_bounded() {
+    fn the_change_is_what_the_turn_added_to_the_tree() {
         let old = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n";
         let gone = "diff --git a/c.txt b/c.txt\n--- a/c.txt\n+++ b/c.txt\n@@ -1 +1 @@\n-c\n+d\n";
         let new = "diff --git a/b.txt b/b.txt\nnew file mode 100644\n--- /dev/null\n+++ b/b.txt\n@@ -0,0 +1 @@\n+x\n";
         let before = format!("{old}{gone}");
         let after = format!("{old}{new}");
-        let change = describe_change(Some(&before), &after, true);
-        assert!(change.starts_with(new), "{change}");
+        let change = describe_change(Some(&before), &after, true, budget(100_000));
+        assert!(!change.partial);
+        assert!(change.text.starts_with(new), "{}", change.text);
         assert!(
-            !change.contains("-a\n+b"),
+            !change.text.contains("-a\n+b"),
             "an earlier change is not the turn's"
         );
-        assert!(change.contains("now match HEAD again:\ndiff --git a/c.txt b/c.txt"));
+        assert!(change
+            .text
+            .contains("(changed back, or new and since removed):\ndiff --git a/c.txt b/c.txt"));
         assert_eq!(
-            describe_change(Some(&after), &after, true),
-            "The turn changed no files.\n"
+            describe_change(Some(&after), &after, true, budget(100_000)),
+            DescribedChange {
+                text: "The turn changed no files.\n".into(),
+                partial: false
+            }
         );
-        assert_eq!(describe_change(None, new, true), new);
-        let large = format!(
-            "diff --git a/big b/big\n{}",
-            "+line\n".repeat(MAX_CHANGE_BYTES / 4)
+        assert_eq!(
+            describe_change(None, new, true, budget(100_000)),
+            DescribedChange {
+                text: new.into(),
+                partial: false
+            }
         );
-        let cut = describe_change(None, &large, false);
-        assert!(cut.len() < MAX_CHANGE_BYTES + 512);
-        assert!(cut.contains(&format!(
-            "[Cut at {MAX_CHANGE_BYTES} of {} bytes.]",
-            large.len()
-        )));
-        assert!(cut.ends_with("the rest of the change.]"));
+        let part = describe_change(None, new, false, budget(100_000));
+        assert!(part.partial);
+        assert!(
+            part.text.ends_with("the rest of the change.]"),
+            "{}",
+            part.text
+        );
+    }
+
+    /// The fix to src/lib.rs, as the release gate's writer made it.
+    const FIX: &str = "diff --git a/src/lib.rs b/src/lib.rs\nindex 384eba8..4dda3a8 100644\n\
+        --- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -15,7 +15,7 @@ pub fn paginate<T: Clone>(items: \
+        &[T], size: usize) -> Vec<Vec<T>> {\n         } else {\n-            items.len() % size\n\
+        +            items.len() - start\n         };\n";
+
+    /// Binary files in a whole patch, new, changed and deleted, are named
+    /// with their sizes and never shown as Git's base85 data, however small
+    /// the file; the rest of the patch is shown whole, and the change is
+    /// marked as not all shown.
+    #[test]
+    fn binary_data_is_left_out_of_a_whole_patch_and_each_file_named_with_its_size() {
+        let new = binary_section("test_fix", 24 * 1024);
+        let changed = "diff --git a/logo.png b/logo.png\nindex 3333333..4444444 100644\n\
+            GIT binary patch\ndelta 312\nzcmV-;0b2b9n^O7a`8(6RvB*e=W$\n\ndelta 298\n\
+            zcmV-;0b2b9n^O7a`8(6RvB*e=W$\n\n";
+        let deleted = "diff --git a/old.bin b/old.bin\ndeleted file mode 100644\n\
+            index 5555555..0000000\nGIT binary patch\nliteral 0\nHcmV?d00001\n\nliteral 100\n\
+            zcmV-;0b2b9n^O7a`8(6RvB*e=W$\n\n";
+        let unshown = "diff --git a/a.bin b/a.bin\nindex 6666666..7777777 100644\n\
+            Binary files a/a.bin and b/a.bin differ\n";
+        let patch = format!("{FIX}{new}{changed}{deleted}{unshown}");
+        let change = describe_change(None, &patch, true, budget(100_000));
+        assert!(change.partial);
+        let text = &change.text;
+        assert!(!text.contains("zcmV") && !text.contains("HcmV"), "{text}");
+        assert!(
+            text.starts_with(
+                "[The data of 3 binary files is left out; each is named below with its size.]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains(FIX), "{text}");
+        assert!(
+            text.contains(
+                "diff --git a/test_fix b/test_fix\nnew file mode 100644\nindex 0000000..1f2e3d4\n\
+                 GIT binary patch\n[binary data left out: the file's new content is 24576 bytes]\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "index 3333333..4444444 100644\nGIT binary patch\n[binary data left out: a \
+                 312-byte delta from its old content]\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "deleted file mode 100644\nindex 5555555..0000000\nGIT binary patch\n[binary \
+                 data left out: the deleted file was 100 bytes]\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with(unshown), "{text}");
+        // Nothing else was left out, so there is no note of a cut.
+        assert!(!text.contains("Not all of the change is shown"), "{text}");
+        // Under the same budget the base85 data alone would not have fit.
+        assert!(approximate(&patch) > approximate(text) + 9_000);
+        // Without binary data, the patch is shown as it is.
+        assert_eq!(
+            describe_change(None, FIX, true, budget(100_000)),
+            DescribedChange {
+                text: FIX.into(),
+                partial: false
+            }
+        );
+    }
+
+    /// A source file of `hunks` hunks of about 1 KiB each.
+    fn source_section(path: &str, hunks: usize) -> String {
+        let mut section =
+            format!("diff --git a/{path} b/{path}\nindex 1111111..2222222 100644\n--- a/{path}\n+++ b/{path}\n");
+        for hunk in 0..hunks {
+            let start = hunk * 100 + 1;
+            section.push_str(&format!(
+                "@@ -{start},20 +{start},20 @@ fn part_{hunk}() {{\n"
+            ));
+            for line in 0..20 {
+                let sign = match line % 5 {
+                    0 => '-',
+                    1 => '+',
+                    _ => ' ',
+                };
+                section.push_str(&format!(
+                    "{sign}    let value_{hunk}_{line} = compute(items, {line}, size);\n"
+                ));
+            }
+        }
+        section
+    }
+
+    /// A new text file of `bytes` bytes of base64, as `base64` wraps it.
+    fn base64_section(path: &str, bytes: usize) -> String {
+        let mut section = format!(
+            "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..8888888\n\
+             --- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{} @@\n",
+            bytes / 77
+        );
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut state = 7u64;
+        for _ in 0..bytes / 77 {
+            section.push('+');
+            for _ in 0..76 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                section.push(alphabet[(state % 64) as usize] as char);
+            }
+            section.push('\n');
+        }
+        section
+    }
+
+    /// A change past the budget: source first, cut at a hunk boundary when
+    /// a file does not fit whole, then generated and dense text, then
+    /// binary files. The reviewer is told first that not all of it is
+    /// shown, each cut says what of the file was left out, and every file
+    /// left out in whole or in part is listed with its bytes; the whole
+    /// description fits the budget.
+    #[test]
+    fn a_change_past_the_budget_is_cut_at_a_hunk_boundary_and_says_what_was_left_out() {
+        let small = source_section("src/small.rs", 1);
+        let large = source_section("src/large.rs", 12);
+        let lock = format!(
+            "diff --git a/Cargo.lock b/Cargo.lock\nindex 1..2 100644\n--- a/Cargo.lock\n+++ \
+             b/Cargo.lock\n@@ -1,3 +1,3 @@\n{}",
+            " [[package]]\n name = \"x\"\n version = \"1.0.0\"\n".repeat(60)
+        );
+        let blob = base64_section("data/blob.b64", 400_000);
+        let binary = binary_section("test_fix", 4096);
+        let patch = format!("{large}{lock}{blob}{small}{binary}");
+        let change = describe_change(None, &patch, true, budget(4_000));
+        let text = &change.text;
+        assert!(change.partial);
+        assert!(approximate(text) <= 4_000, "{}", approximate(text));
+        assert!(
+            text.starts_with(
+                "[Not all of the change is shown: its patch, without the data of \
+                 binary files, is "
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("in 5 files, more than fits beside the rest of your request. Shown: "),
+            "{text}"
+        );
+        assert!(text.contains("read those files themselves before you judge them.]\n"));
+        // The small source file whole, the large one's first hunks, cut at
+        // a hunk boundary, in the patch's order.
+        assert!(text.contains(&small), "{text}");
+        let large_at = text.find("diff --git a/src/large.rs").unwrap();
+        assert!(large_at < text.find("diff --git a/src/small.rs").unwrap());
+        let marker = text.find("[The other ").unwrap();
+        let shown = &text[large_at..marker];
+        let taken = shown.matches("\n@@ ").count();
+        assert!((1..12).contains(&taken), "{taken}: {text}");
+        assert!(large.starts_with(shown), "the cut is at a hunk boundary");
+        assert!(large[shown.len()..].starts_with("@@ "));
+        let rest = large.len() - shown.len();
+        assert!(
+            text[marker..].starts_with(&format!(
+                "[The other {} of this file's 12 hunks, {rest} bytes, are left out.]\n",
+                12 - taken
+            )),
+            "{text}"
+        );
+        // Neither the lock file nor the dense file is shown; both are
+        // listed with their bytes, as is the rest of the large file.
+        assert!(
+            !text.contains("[[package]]") && !text.contains("+ABC"),
+            "{text}"
+        );
+        let listing = &text[text
+            .find("\n[Left out of the change shown above, ")
+            .unwrap()..];
+        assert!(
+            listing.contains(&format!(
+                "\nsrc/large.rs: {} of its 12 hunks left out, {rest} bytes\n",
+                12 - taken
+            )),
+            "{listing}"
+        );
+        assert!(
+            listing.contains(&format!("\nCargo.lock: left out, {} bytes\n", lock.len())),
+            "{listing}"
+        );
+        assert!(
+            listing.contains(&format!(
+                "\ndata/blob.b64: left out, {} bytes\n",
+                blob.len()
+            )),
+            "{listing}"
+        );
+        // The binary file is named with its size, never shown as data.
+        assert!(
+            text.contains("[The data of 1 binary file is left out"),
+            "{text}"
+        );
+        assert!(!text.contains("zcmV"), "{text}");
+
+        // A dense file is shown after source, never instead of it: with
+        // room for the source files, the base64 is what is left out.
+        let both = format!("{blob}{small}");
+        let change = describe_change(None, &both, true, budget(2_000));
+        assert!(change.text.contains(&small), "{}", change.text);
+        assert!(change.text.contains("\ndata/blob.b64: left out, "));
+
+        // Far more files than the budget can name: as many as fit are
+        // listed, the rest counted by directory, still within the budget.
+        let mut many = String::new();
+        for index in 0..600 {
+            many.push_str(&source_section(&format!("gen/part-{index}.rs"), 1));
+        }
+        let change = describe_change(None, &many, true, budget(3_000));
+        assert!(
+            approximate(&change.text) <= 3_000,
+            "{}",
+            approximate(&change.text)
+        );
+        assert!(
+            change.text.contains(" more, not listed:\n"),
+            "{}",
+            change.text
+        );
+        assert!(change.text.contains(" under gen/\n"), "{}", change.text);
+        // The bytes shown never pass the byte bound, whatever the budget.
+        let change = describe_change(None, &many, true, budget(10_000_000));
+        assert!(change.text.len() <= MAX_CHANGE_BYTES + MAX_LISTED_PATH_BYTES + 4096);
+        assert!(change.text.starts_with("[Not all of the change is shown"));
+    }
+
+    /// The name a description lists a file by is the one Git's header
+    /// gives, quoted as Git quoted it; a rename's is the new one.
+    #[test]
+    fn a_file_is_listed_by_the_name_its_header_gives() {
+        assert_eq!(
+            section_name("diff --git a/src/lib.rs b/src/lib.rs"),
+            "src/lib.rs"
+        );
+        assert_eq!(
+            section_name("diff --git a/a b/c.txt b/a b/c.txt"),
+            "a b/c.txt"
+        );
+        assert_eq!(section_name("diff --git a/old.rs b/new.rs"), "new.rs");
+        assert_eq!(
+            section_name("diff --git \"a/x\\ny\" \"b/x\\ny\""),
+            "\"x\\ny\""
+        );
+        for name in [
+            "Cargo.lock",
+            "web/package-lock.json",
+            "app/dist/main.js",
+            "a.min.js",
+        ] {
+            assert!(generated(name, ""), "{name}");
+        }
+        assert!(generated("src/schema.rs", "+// @generated by diesel\n"));
+        assert!(!generated("src/lib.rs", "+fn main() {}\n"));
+        assert!(!generated("src/builder.rs", ""));
     }
 
     /// A line of a capture's lines of the paths that differ from HEAD.
@@ -1128,7 +2081,12 @@ mod tests {
             "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n-a\n+b\n{}",
             binary_section("aaa-generated.bin", 600)
         );
-        let change = describe_partial_change(Some(&before), Some(&after), &prefix, 9_437_184);
+        let change = describe_partial_change(
+            EarlierPaths::Listed(&before),
+            Some(&after),
+            &prefix,
+            9_437_184,
+        );
         assert!(
             change.starts_with(
                 "[The change is too large to show in full: its patch against HEAD is 9437184 bytes"
@@ -1149,7 +2107,7 @@ mod tests {
             "an earlier change is not the turn's: {change}"
         );
         assert!(
-            change.contains("now match HEAD again:\nold.txt\n"),
+            change.contains("changed back or new and since removed (1 file):\nold.txt\n"),
             "{change}"
         );
         let shown = "diff --git a/src/lib.rs b/src/lib.rs\nindex 1111111..2222222 100644\n-a\n+b\n\
@@ -1165,16 +2123,18 @@ mod tests {
         );
         assert!(!change.contains("zcmV"), "{change}");
 
-        let unlisted = describe_partial_change(None, None, &prefix, 6_000_000);
+        let unlisted = describe_partial_change(EarlierPaths::NotListed, None, &prefix, 6_000_000);
         assert!(unlisted.contains("\nThe capture could not list the changed files either.\n"));
-        let unchanged = describe_partial_change(Some(&after), Some(&after), "", 6_000_000);
+        let unchanged =
+            describe_partial_change(EarlierPaths::Listed(&after), Some(&after), "", 6_000_000);
         assert!(
             unchanged.ends_with("\nThe turn changed no files.\n"),
             "{unchanged}"
         );
         // Without the lines of the capture taken when the turn began, every
         // path that differs from HEAD is named as such, never as the turn's.
-        let differing = describe_partial_change(None, Some(&after), "", 6_000_000);
+        let differing =
+            describe_partial_change(EarlierPaths::NotListed, Some(&after), "", 6_000_000);
         assert!(
             differing.contains(
                 "The 5 paths that differ from HEAD (they may include changes made before this \
@@ -1184,6 +2144,74 @@ mod tests {
         );
         assert!(differing.contains("\nnotes.txt\n"), "{differing}");
         assert!(!differing.contains("files the turn changed"), "{differing}");
+        // When HEAD moved, the capture taken as the turn began listed its
+        // paths against the HEAD before, and the heading says so.
+        let moved = describe_partial_change(EarlierPaths::OtherHead, Some(&after), "", 6_000_000);
+        assert!(
+            moved.contains(
+                "The 5 paths that differ from HEAD (they may include changes made before this \
+                 turn, which the capture taken when it began cannot tell apart: it listed the \
+                 paths that differed from HEAD before HEAD moved):\ngone.rs (deleted)\n"
+            ),
+            "{moved}"
+        );
+        assert!(!moved.contains("did not list"), "{moved}");
+        // With only the paths the capture taken as the turn began names in
+        // its whole patch, the paths the turn changed are told apart from
+        // those that already differed (which it may also have changed), and
+        // those no longer differing are named too.
+        let named: std::collections::BTreeSet<String> =
+            ["notes.txt", "old.txt"].map(String::from).into();
+        let patched =
+            describe_partial_change(EarlierPaths::Patched(&named), Some(&after), "", 6_000_000);
+        assert!(
+            patched.contains(
+                "The 4 files the turn changed:\ngone.rs (deleted)\naaa-generated.bin\nsrc/lib.rs\n\
+                 test_fix\n"
+            ),
+            "{patched}"
+        );
+        assert!(
+            patched.contains(
+                "Files that already had uncommitted changes when the turn began, which the turn \
+                 may also have changed (1 file; the capture taken then recorded its patch, not \
+                 each file's state):\nnotes.txt\n"
+            ),
+            "{patched}"
+        );
+        assert!(
+            patched.contains("changed back or new and since removed (1 file):\nold.txt\n"),
+            "{patched}"
+        );
+        assert!(!patched.contains("did not list"), "{patched}");
+    }
+
+    /// A change shown whole from the capture after the turn, when the one
+    /// taken as it began could not record its patch: from both captures'
+    /// lines, the files that already differed from HEAD are named, and those
+    /// that no longer differ (a new file the turn removed, say), which no
+    /// section of the patch shows.
+    #[test]
+    fn earlier_changes_name_what_a_whole_change_cannot_tell() {
+        let before = [
+            changed_line(b"notes.txt", "file", 'a'),
+            changed_line(b"scratch.txt", "file", 'b'),
+        ]
+        .concat();
+        let after = [
+            changed_line(b"notes.txt", "file", 'e'),
+            changed_line(b"src/lib.rs", "file", 'c'),
+        ]
+        .concat();
+        assert_eq!(
+            earlier_changes(&before, &after),
+            "\nFiles that already had uncommitted changes when the turn began, so their \
+             sections above can include changes made before it (1 file):\nnotes.txt\n\nFiles \
+             that had uncommitted changes when the turn began and no longer differ from HEAD, \
+             changed back or new and since removed, so no section above shows them (1 \
+             file):\nscratch.txt\n"
+        );
+        assert_eq!(earlier_changes("", &after), "");
     }
 
     /// Thousands of changed paths, the most one capture lists (3,072 small
@@ -1215,7 +2243,8 @@ mod tests {
             end -= 1;
         }
         prefix.truncate(end);
-        let change = describe_partial_change(Some(""), Some(&after), &prefix, 4_717_831);
+        let change =
+            describe_partial_change(EarlierPaths::Listed(""), Some(&after), &prefix, 4_717_831);
         assert!(change.len() <= 8 * 1024, "{}", change.len());
         assert!(
             change.contains("The 3073 files the turn changed:\nsrc/lib.rs\ngen/f0.bin\n"),
@@ -1238,7 +2267,7 @@ mod tests {
         assert!(!change.contains("zcmV"), "{change}");
 
         // Past what a capture lists, only the patch's first part is shown.
-        let unlisted = describe_partial_change(Some(""), None, &prefix, 7_000_000);
+        let unlisted = describe_partial_change(EarlierPaths::Listed(""), None, &prefix, 7_000_000);
         assert!(unlisted.len() <= 2 * 1024, "{}", unlisted.len());
 
         // Long names in many directories: the listing stops at its bytes,
@@ -1251,7 +2280,7 @@ mod tests {
                 after.push_str(&changed_line(name.as_bytes(), "file", 'f'));
             }
         }
-        let change = describe_partial_change(Some(""), Some(&after), "", 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(&after), "", 7_000_000);
         let listed: usize = change
             .lines()
             .filter(|line| line.starts_with("dir-"))
@@ -1270,7 +2299,7 @@ mod tests {
         );
         // A name longer than the listing's room is counted, never cut.
         let long = changed_line(format!("deep/{}", "x".repeat(9000)).as_bytes(), "file", 'f');
-        let change = describe_partial_change(Some(""), Some(&long), "", 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(&long), "", 7_000_000);
         assert!(
             change.contains(
                 "...and 1 more, not listed (no name fits what the reviewer is shown):\n1 under \
@@ -1281,9 +2310,39 @@ mod tests {
         // Whatever it is given, the description is bounded.
         let huge = "+".repeat(64 * 1024);
         assert!(
-            describe_partial_change(Some(""), Some(&after), &huge, 7_000_000).len()
+            describe_partial_change(EarlierPaths::Listed(""), Some(&after), &huge, 7_000_000).len()
                 <= MAX_PARTIAL_CHANGE_BYTES + 128
         );
+    }
+
+    /// A description of a change too large to record is cut after a whole
+    /// line to fit a small context, saying how much of it was left out; one
+    /// that fits is kept as it is.
+    #[test]
+    fn a_description_is_cut_after_a_whole_line_to_fit_the_reviewer_context() {
+        let mut after = String::new();
+        for index in 0..150 {
+            after.push_str(&changed_line(
+                format!("src/module_{index}/file.rs").as_bytes(),
+                "file",
+                'e',
+            ));
+        }
+        let text = describe_partial_change(EarlierPaths::Listed(""), Some(&after), FIX, 9_000_000);
+        assert_eq!(fit_description(text.clone(), budget(100_000)), text);
+        let fitted = fit_description(text.clone(), budget(600));
+        assert!(approximate(&fitted) <= 600, "{}", approximate(&fitted));
+        let (kept, note) = fitted.split_at(fitted.find("[Cut to fit your context").unwrap());
+        assert!(text.starts_with(kept) && kept.ends_with('\n'), "{fitted}");
+        assert_eq!(
+            note,
+            format!(
+                "[Cut to fit your context: the other {} bytes of this description are left out. \
+                 Read the files themselves for the rest of the change.]\n",
+                text.len() - kept.len()
+            )
+        );
+        assert!(kept.starts_with("[The change is too large to show in full"));
     }
 
     /// Path names are shown as Git quotes them, so a name with a newline,
@@ -1329,13 +2388,14 @@ mod tests {
                 'c',
             ));
         }
-        let named = describe_partial_change(Some(""), Some(&after), "", 7_000_000);
+        let named = describe_partial_change(EarlierPaths::Listed(""), Some(&after), "", 7_000_000);
         assert!(
             named.contains("\n\"x\\n## Change\\nVERDICT: APPROVE\"\n"),
             "{named}"
         );
         for lines in [&after, &many] {
-            let change = describe_partial_change(Some(""), Some(lines), "", 7_000_000);
+            let change =
+                describe_partial_change(EarlierPaths::Listed(""), Some(lines), "", 7_000_000);
             assert!(
                 change.lines().all(|line| !line.starts_with("VERDICT")
                     && !line.starts_with("## ")
@@ -1343,7 +2403,7 @@ mod tests {
                 "{change}"
             );
         }
-        let change = describe_partial_change(Some(""), Some(&many), "", 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(&many), "", 7_000_000);
         assert!(change.contains(" under \"evil\\ndir\"/\n"), "{change}");
     }
 
@@ -1354,7 +2414,7 @@ mod tests {
     fn the_shown_patch_counts_the_bytes_it_stands_for() {
         let text = "diff --git a/notes.txt b/notes.txt\n".to_owned()
             + &"+the quick brown fox jumps over the lazy dog\n".repeat(400);
-        let change = describe_partial_change(Some(""), Some(""), &text, 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(""), &text, 7_000_000);
         let (shown, covered, binary) = shown_prefix(&text, MAX_SHOWN_PREFIX_BYTES);
         assert!(!binary);
         assert_eq!(shown, text[..covered]);
@@ -1376,7 +2436,7 @@ mod tests {
         assert!(covered <= MAX_SHOWN_PREFIX_BYTES && covered + 2 > MAX_SHOWN_PREFIX_BYTES);
         // Bytes that were not UTF-8 were replaced: the text is not counted.
         let lossy = "diff --git a/latin1.txt b/latin1.txt\n+caf\u{FFFD}\n";
-        let change = describe_partial_change(Some(""), Some(""), lossy, 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(""), lossy, 7_000_000);
         assert!(
             change.contains(
                 "\nThe beginning of the patch against HEAD (bytes that are not UTF-8 are shown \
@@ -1389,7 +2449,7 @@ mod tests {
         let later = format!("{text}+caf\u{FFFD}\n");
         let (_, covered, _) = shown_prefix(&later, MAX_SHOWN_PREFIX_BYTES);
         assert!(covered < text.len());
-        let change = describe_partial_change(Some(""), Some(""), &later, 7_000_000);
+        let change = describe_partial_change(EarlierPaths::Listed(""), Some(""), &later, 7_000_000);
         assert!(
             change.contains(&format!(
                 "\nThe first {covered} bytes of the patch against HEAD"

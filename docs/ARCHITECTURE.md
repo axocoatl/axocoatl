@@ -1697,8 +1697,9 @@ restriction below and `write_file` and `edit_file` are withheld.
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD
   file by file. If any non-ignored file outside the scope changed, or the captures cannot
-  establish the change set (an exhausted invocation allowance, a HEAD moved by a commit, a
-  patch over 512 KiB, a submodule or nested checkout), the activation fails and its turn
+  establish the change set (an exhausted invocation allowance, a HEAD moved by a commit,
+  more changed paths than one capture lists in its 512 KiB, a submodule or nested
+  checkout), the activation fails and its turn
   needs attention. The change is not reverted; it stays for the person to keep or undo.
   Ignored files are not judged. This is review evidence, not confinement. A writer
   stopped before its After capture (a Stop skips it) fails as stopped, saying that its
