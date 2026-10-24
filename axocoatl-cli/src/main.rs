@@ -1607,8 +1607,16 @@ fn bind_failure_message(
 async fn bind_or_exit(
     host: &str,
     port: u16,
+    auth: &axocoatl_config::ServerAuthYaml,
     config_path: &std::path::Path,
 ) -> axocoatl_server::BoundListeners {
+    if let Err(error) = axocoatl_server::check_workbench_address(host, auth) {
+        eprintln!(
+            "✗ Axocoatl did not start: {error} ({})",
+            shell_word(config_path)
+        );
+        std::process::exit(1);
+    }
     match axocoatl_server::bind_server(host, port).await {
         Ok(listeners) => listeners,
         Err(error) => {
@@ -1634,7 +1642,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     let port = config.server.port;
     // The port is held before the banner: a taken port fails here, not
     // after "Axocoatl is running".
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
 
     println!("Axocoatl dev mode");
@@ -1715,7 +1723,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
     let ollama_url = config.providers.ollama.as_ref().map(|o| o.base_url.clone());
 
