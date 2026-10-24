@@ -38,6 +38,10 @@ enum Probes {
     LongUndercount,
     /// The long answer streams more pieces of text than tokens it reports.
     LongPiecesOverCount,
+    /// The long answer is refused (a server error).
+    LongRefused,
+    /// The long answer ends at its limit without a prompt count.
+    LongWithoutPromptCount,
     /// Asked to call the tool, the model answers in text.
     ToolAnsweredInText,
     /// The tool call comes without an id.
@@ -46,6 +50,19 @@ enum Probes {
     ToolThinksToLimit,
     /// The model calls a tool it was not offered.
     ToolCallsAnotherTool,
+    /// The model calls a tool it was not offered, with the offered tool's
+    /// argument.
+    ToolCallsAnotherToolWithTheWord,
+    /// The model calls the offered tool without its string argument.
+    ToolCallWithoutTheWord,
+    /// The model calls the offered tool and then one it was not offered,
+    /// which inference answers with a tool error.
+    ToolCallAndAnUndeclaredOne,
+    /// The model calls the offered tool, then sends a malformed call.
+    ToolCallThenAMalformedOne,
+    /// The model calls the offered tool but reports more tokens than the
+    /// probe allows.
+    ToolCallPastTheLimit,
     /// The model writes the call as text without its opening `<tool_call>`
     /// token, as Qwen3-Coder sometimes does: inference reads it as a call.
     ToolCallWrittenAsText,
@@ -112,6 +129,13 @@ async fn probes(server: &MockServer, behavior: Probes) {
                     piece("4\n"),
                     done("stop", 3, empty),
                 ]),
+                (ContractProbe::LongOutput, Probes::LongRefused) => ResponseTemplate::new(500)
+                    .set_body_json(json!({"error": "llama runner process has terminated"})),
+                (ContractProbe::LongOutput, Probes::LongWithoutPromptCount) => ndjson_records(&[
+                    piece("1\n2\n"),
+                    json!({"model":model,"message":empty,"done":true,"done_reason":"length",
+                        "eval_count":LONG_OUTPUT_TOKENS}),
+                ]),
                 (ContractProbe::ToolCall, Probes::ToolAnsweredInText) => ndjson_records(&[
                     piece("I am ready."),
                     done("stop", 4, empty),
@@ -125,7 +149,11 @@ async fn probes(server: &MockServer, behavior: Probes) {
                 (ContractProbe::ToolCall, Probes::ToolThinksToLimit) => ndjson_records(&[
                     json!({"model":model,"message":{"role":"assistant","content":"",
                         "thinking":"The user wants"},"done":false}),
-                    done("length", 512, json!({"role":"assistant","content":""})),
+                    done(
+                        "length",
+                        TOOL_CALL_TOKENS as u64,
+                        json!({"role":"assistant","content":""}),
+                    ),
                 ]),
                 (ContractProbe::ToolCall, Probes::ToolCallsAnotherTool) => {
                     ndjson_records(&[done(
@@ -135,6 +163,50 @@ async fn probes(server: &MockServer, behavior: Probes) {
                             "function":{"name":"get_weather","arguments":{"city":"Paris"}}}]}),
                     )])
                 }
+                (ContractProbe::ToolCall, Probes::ToolCallsAnotherToolWithTheWord) => {
+                    ndjson_records(&[done(
+                        "stop",
+                        20,
+                        json!({"role":"assistant","content":"","tool_calls":[{"id":"call_1",
+                            "function":{"name":"report","arguments":{"word":"ready"}}}]}),
+                    )])
+                }
+                (ContractProbe::ToolCall, Probes::ToolCallWithoutTheWord) => {
+                    ndjson_records(&[done(
+                        "stop",
+                        20,
+                        json!({"role":"assistant","content":"","tool_calls":[{"id":"call_1",
+                            "function":{"name":PROBE_TOOL,"arguments":{"word":1}}}]}),
+                    )])
+                }
+                (ContractProbe::ToolCall, Probes::ToolCallAndAnUndeclaredOne) => {
+                    ndjson_records(&[done(
+                        "stop",
+                        30,
+                        json!({"role":"assistant","content":"","tool_calls":[
+                            {"id":"call_1","function":{"name":PROBE_TOOL,
+                                "arguments":{"word":"ready"}}},
+                            {"id":"call_2","function":{"name":"answer",
+                                "arguments":{"text":"ready"}}}]}),
+                    )])
+                }
+                (ContractProbe::ToolCall, Probes::ToolCallThenAMalformedOne) => ndjson_records(&[
+                    json!({"model":model,"message":{"role":"assistant","content":"",
+                        "tool_calls":[{"id":"call_1","function":{"name":PROBE_TOOL,
+                            "arguments":{"word":"ready"}}}]},"done":false}),
+                    done(
+                        "stop",
+                        30,
+                        json!({"role":"assistant","content":"","tool_calls":[{"function":
+                            {"name":PROBE_TOOL,"arguments":{"word":"ready"}}}]}),
+                    ),
+                ]),
+                (ContractProbe::ToolCall, Probes::ToolCallPastTheLimit) => ndjson_records(&[done(
+                    "stop",
+                    TOOL_CALL_TOKENS as u64 + 1,
+                    json!({"role":"assistant","content":"","tool_calls":[{"id":"call_1",
+                        "function":{"name":PROBE_TOOL,"arguments":{"word":"ready"}}}]}),
+                )]),
                 (ContractProbe::ToolCall, Probes::ToolCallWrittenAsText) => ndjson_records(&[
                     piece("<function=report_ready>\n<parameter=word>\nready\n</parameter>\n</function>\n</tool_call>"),
                     done("stop", 24, empty),
@@ -277,6 +349,13 @@ async fn observed_runner_context_becomes_explicit_request_without_inventing_a_de
         assert_eq!(body["stream"], true);
         assert_eq!(body.pointer("/options/num_ctx"), Some(&json!(4096)));
         assert_eq!(body.pointer("/options/num_predict"), Some(&json!(output)));
+        // One seed, at the model's own sampling settings: the same answer
+        // each time a probe runs.
+        assert_eq!(
+            body.pointer("/options/seed"),
+            Some(&json!(contract_probe::PROBE_SEED))
+        );
+        assert!(body.pointer("/options/temperature").is_none());
         assert_eq!(body["model"], "test-model");
     }
     let over_long = probe_bodies[0]["messages"][0]["content"].as_str().unwrap();
@@ -703,6 +782,17 @@ async fn a_long_answer_past_its_limit_or_its_count_refuses_the_model() {
             Probes::LongPiecesOverCount,
             "streamed 4 pieces of text but reported 3 generated tokens",
         ),
+        (
+            40,
+            Probes::LongRefused,
+            "a long answer was refused (status 500: llama runner process has terminated)",
+        ),
+        (
+            41,
+            Probes::LongWithoutPromptCount,
+            "a long answer reported a prompt count of None, not between 0 and the 4096-token \
+             context",
+        ),
     ] {
         let server = MockServer::start().await;
         standard_with(
@@ -729,9 +819,11 @@ async fn a_long_answer_past_its_limit_or_its_count_refuses_the_model() {
 }
 
 /// A model that reports tool calling but, asked to call the one tool it is
-/// offered, answers in text, calls without an id, thinks until its limit or
-/// calls another tool, never becomes an observation: its calls would not
-/// run in a Session.
+/// offered, answers in text, calls without an id, thinks until its limit,
+/// calls another tool (with or without the offered tool's argument), calls
+/// the offered tool without its string argument or with a malformed call
+/// after it, or runs past the probe's limit, never becomes an observation:
+/// its calls would not run in a Session.
 #[tokio::test]
 async fn a_model_that_cannot_call_the_offered_tool_is_refused() {
     for (seed, behavior, detail) in [
@@ -748,12 +840,32 @@ async fn a_model_that_cannot_call_the_offered_tool_is_refused() {
         (
             25,
             Probes::ToolThinksToLimit,
-            "the model reached its 512-token limit without a tool call",
+            "the model reached its 1024-token limit without a tool call",
         ),
         (
             26,
             Probes::ToolCallsAnotherTool,
             "the model called get_weather with {\"city\":\"Paris\"}",
+        ),
+        (
+            42,
+            Probes::ToolCallsAnotherToolWithTheWord,
+            "the model called report with {\"word\":\"ready\"}",
+        ),
+        (
+            43,
+            Probes::ToolCallWithoutTheWord,
+            "the model called report_ready with {\"word\":1}",
+        ),
+        (
+            44,
+            Probes::ToolCallThenAMalformedOne,
+            "the tool call cannot run: ",
+        ),
+        (
+            45,
+            Probes::ToolCallPastTheLimit,
+            "asked for at most 1024 tokens (num_predict:1024), the model generated 1025",
         ),
     ] {
         let server = MockServer::start().await;
@@ -819,6 +931,20 @@ async fn the_tool_call_probe_runs_for_tool_models_and_reads_calls_as_inference_d
     assert!(observation.tools_supported);
     let (probe_bodies, other) = chats(&server).await;
     assert_eq!((probe_bodies.len(), other), (PROBES, 0));
+
+    // A call to a tool it was not offered next to the offered one passes:
+    // inference answers it with a tool error and the model goes on.
+    let server = MockServer::start().await;
+    standard_with(
+        &server,
+        AUDITED_OLLAMA_VERSION,
+        &unique_digest(46),
+        Probes::ToolCallAndAnUndeclaredOne,
+    )
+    .await;
+    observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
 }
 
 /// An over-long probe that is refused for another reason (the server is

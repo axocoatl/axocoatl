@@ -94,9 +94,11 @@ with it leaves a variant already installed in place, hence the `ollama rm`);
 
 **Model refused by a contract probe**
 When a Team is reviewed, Axocoatl checks on your server that a prompt longer than the
-model's context is refused before generation and that a call stops at its output limit.
-The error names the check that failed; Axocoatl cannot bound calls to that model on that
-Ollama, so use another model or Ollama release.
+model's context is refused before generation, that a call stops at its output limit and
+reports the tokens it generated, and, for a model with tool calling, that a request to
+call the one tool it is offered comes back as a call of that tool. The error names the
+check that failed; native Sessions and runs refuse that model on that Ollama for every
+Agent, so use another model or Ollama release.
 
 ## Config
 

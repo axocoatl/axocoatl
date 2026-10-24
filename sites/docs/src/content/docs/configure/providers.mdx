@@ -323,11 +323,19 @@ small requests to your server with that context and the settings every call uses
   pieces of text than the tokens it reports (a model Ollama runs with speculative
   decoding, such as the `-mtp` tags, accepts several drafted tokens at a time);
 - for a model that reports tool calling, a request to call the one tool it is offered,
-  within 512 tokens (room for a thinking model's reasoning), which must come back as a
-  call of that tool with a call id and a string argument, read the way Axocoatl reads
-  every answer.
+  within 1,024 tokens (room for a thinking model's reasoning: on Ollama 0.40.8,
+  `qwen3:4b` called it after 195 to 309 tokens), which must come back as a call of that
+  tool with a call id and a string argument, read the way Axocoatl reads every answer.
+  A call to a tool it was not offered beside that one is no failure: a Session answers
+  such a call with a tool error and the model goes on.
 
-A model that fails one is refused, and the error names the guarantee that failed. The
+Each probe samples with the same fixed seed at the model's own settings, so it gives the
+same answer every time it runs on your server. A model that fails one is refused on that
+server for every Agent and every run, with or without tools, and the error names the
+guarantee that failed. Images are not probed: every call reserves the model's whole
+context plus its output limit, whatever the prompt holds, and Ollama counts an image's
+tokens in the prompt it checks against the context, so an image that does not fit is
+refused rather than cut. The
 result is kept per Ollama version, model digest, context and tool calling; after an
 upgrade to another accepted Ollama version, the probes run again on it before it serves
 an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be reviewed again.

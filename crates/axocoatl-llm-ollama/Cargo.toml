@@ -34,3 +34,7 @@ wiremock = { workspace = true }
 [features]
 default = []
 llm-integration-tests = []
+# Tests only: `ContractProbe`, which tells which contract probe a request is
+# and answers it as Ollama 0.40 does, for the test servers of the crates that
+# stand in for Ollama. Never enable it in a build that runs Sessions.
+contract-probe-stand-in = []

@@ -5,8 +5,9 @@
 //! stops at a positive `num_predict`; the contract probes check both, and a
 //! long answer's count and a tool call, on the person's own server and model
 //! before a Team uses it. Thinking+structured output runs in one pass on 0.40,
-//! but format requests still reserve two full passes (a valid, loose bound). Reported final metrics cover only the last
-//! pass and are consequently lower bounds for format requests.
+//! but format requests still reserve two full passes (a valid, loose bound).
+//! Reported final metrics cover only the last pass and are consequently lower
+//! bounds for format requests.
 //! This is an operator-configured server capability, not model-weight attestation.
 //! The existing OpenAI-compatible provider is intentionally unchanged.
 
@@ -40,12 +41,9 @@ use tokio_stream::{Stream, StreamExt};
 
 mod contract_probe;
 /// Which contract probe a request is and what Ollama answers to it, for test
-/// servers that stand in for Ollama.
+/// servers that stand in for Ollama (the `contract-probe-stand-in` feature).
+#[cfg(feature = "contract-probe-stand-in")]
 pub use contract_probe::ContractProbe;
-/// The stop probe's prompt, for test servers that stand in for Ollama and
-/// answer the contract probes. The over-long probe's message is `"x "`
-/// repeated.
-pub use contract_probe::STOP_PROBE_PROMPT as CONTRACT_STOP_PROBE_PROMPT;
 mod http_error;
 pub use http_error::{describe_native_ollama_error, native_ollama_error_hint};
 mod observed_context;
@@ -995,6 +993,9 @@ fn validate_history(messages: &[ChatMessage]) -> Result<(), ProviderError> {
 // check (llama.cpp b11669, tools/server/server-common.cpp, the multimodal
 // input chunks; Ollama v0.40.6 sends images inline as base64 only).
 // truncate:false rejects the expanded prompt; num_predict bounds generation.
+// Measured on Ollama 0.40.8 with qwen3.5:0.8b at num_ctx 4096: a 64x64 image
+// counted 11 prompt tokens, and 4,090 tokens of text were generated from
+// while the same text with the image (4,101 tokens) was refused.
 // Images therefore consume the existing full context reservation, never an
 // estimated image-token allowance or an additional unbounded provider route.
 fn inline_image<'a>(url: &'a str, detail: &ImageDetail) -> Result<&'a str, ProviderError> {

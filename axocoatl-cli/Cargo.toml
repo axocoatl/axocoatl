@@ -76,6 +76,9 @@ tempfile = "3.27"
 # Onboarding's OpenRouter tests read model endpoints from a fake OpenRouter
 # on a loopback address, which only this feature of the test build admits.
 axocoatl-llm-openai = { version = "1.5.0", path = "../crates/axocoatl-llm-openai", features = ["test-loopback-endpoint"] }
+# Test servers that stand in for Ollama answer the contract probes as Ollama
+# 0.40 does (`axocoatl_llm_ollama::ContractProbe`).
+axocoatl-llm-ollama = { version = "1.5.0", path = "../crates/axocoatl-llm-ollama", features = ["contract-probe-stand-in"] }
 # `connect codex --refresh`'s end-to-end test serves the daemon's API router
 # in the test process.
 axum = { workspace = true }

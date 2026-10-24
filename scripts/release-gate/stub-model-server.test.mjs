@@ -144,7 +144,7 @@ test('requests are told apart: writer, reviewer, contract probe and anything els
   assert.equal(classify({ truncate: false, options: { num_predict: 1 }, messages: [{ role: 'user', content: 'x x x x' }] }), 'probe');
   assert.equal(classify({ truncate: false, options: { num_predict: 64 }, messages: [{ role: 'user', content: LONG_OUTPUT_PROBE_PROMPT }] }), 'probe');
   // The tool-call probe offers a tool, and is still a probe, not a reviewer.
-  assert.equal(classify({ truncate: false, options: { num_predict: 512 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] }), 'probe');
+  assert.equal(classify({ truncate: false, options: { num_predict: 1024 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] }), 'probe');
   assert.equal(classify({ messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] }), 'other');
   assert.equal(classify({ messages: [{ role: 'user', content: 'hello' }] }), 'other');
   const review = decide({ tools: REVIEWER_TOOLS, messages: [{ role: 'user', content: 'review' }] }, fixes);
@@ -224,7 +224,7 @@ test('the contract probes get Ollama 0.40 answers and are counted apart from mod
   assert.equal(longRecords.at(-1).eval_count, 64);
   assert.ok(longRecords.filter((entry) => entry.message.content).length <= 64);
   // Asked to call the offered tool, the model calls it, with a call id.
-  const tool = await call('/api/chat', { model: 'gpt-oss:20b', truncate: false, shift: false, stream: true, options: { num_ctx: 32768, num_predict: 512 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] });
+  const tool = await call('/api/chat', { model: 'gpt-oss:20b', truncate: false, shift: false, stream: true, options: { num_ctx: 32768, num_predict: 1024 }, tools: [{ type: 'function', function: { name: 'report_ready' } }], messages: [{ role: 'user', content: TOOL_PROBE_PROMPT }] });
   const call0 = JSON.parse(tool.text.trim()).message.tool_calls[0];
   assert.ok(call0.id);
   assert.deepEqual([call0.function.name, call0.function.arguments], ['report_ready', { word: 'ready' }]);

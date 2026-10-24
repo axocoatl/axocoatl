@@ -393,11 +393,20 @@ request must stop after one token; a request for hundreds of lines with `num_pre
 stop by 64 generated tokens, report exactly 64 when the limit ended it, and stream no more
 pieces of text than the tokens it reports (where speculative decoding, which accepts several
 drafted tokens per step, could overshoot or undercount); and, for a model that reports tool
-calling, a request to call the one offered tool within 512 tokens must come back as a call
+calling, a request to call the one offered tool within 1,024 tokens must come back as a call
 of that tool with an id and a string argument, read by the same parser as inference (so it
 holds for Ollama's own renderers, Go templates, the model's chat template in `llama-server`
-and Harmony alike). Passes are cached per server, version, model digest, context and tool
-calling; a newer accepted version is probed again before it serves a retained profile. The
+and Harmony alike; a call to a tool it was not offered beside it is tolerated, as inference
+answers one with a tool error). Every probe samples with one fixed seed at the model's own
+settings, so it gives the same answer each time it runs (Ollama 0.40.8 gave the same tool-call
+answer five times out of five for each model measured). A failed probe refuses the model on that
+server for every Agent and run. Images are not probed: every call reserves the whole context plus
+its output limit whatever its prompt holds, and `llama-server` counts an image's tokens in the
+prompt it checks against the context (Ollama 0.40.8, `qwen3.5:0.8b` at a 4,096-token context: a
+64x64 image counted 11 tokens; 4,090 tokens of text were generated from, and the same text with
+the image, 4,101 tokens, was refused under `truncate:false`). Passes are cached per server,
+version, model digest, context and tool calling; a newer accepted version is probed again before
+it serves a retained profile. The
 scheduled `ollama-watch` workflow runs the probes daily against each new Ollama release and
 release candidate (an ignored test, `native::observed_context::watch`, that bypasses the version
 policy so a release candidate is probed too). Plain

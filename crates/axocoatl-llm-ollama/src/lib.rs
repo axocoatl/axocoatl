@@ -1,6 +1,7 @@
 use std::pin::Pin;
 
 mod native;
+#[cfg(feature = "contract-probe-stand-in")]
 pub use native::ContractProbe;
 pub use native::{
     check_native_ollama_server, check_shown_model, describe_native_ollama_error,
@@ -9,8 +10,8 @@ pub use native::{
     ollama_version_note, ollama_version_refusal, ollama_version_unaudited,
     show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaConfig,
     NativeOllamaContextObservation, NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode,
-    OllamaServedVersions, ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT,
-    DENIED_OLLAMA_VERSIONS, OBSERVATION_SCHEMA_VERSION,
+    OllamaServedVersions, ShownModel, AUDITED_OLLAMA_VERSION, DENIED_OLLAMA_VERSIONS,
+    OBSERVATION_SCHEMA_VERSION,
 };
 
 /// How long Ollama may take to start an answer, loading the model first,

@@ -19,15 +19,29 @@
 //! - Tool call, for a model that reports tool calling: asked to call the one
 //!   tool it is offered, within [`TOOL_CALL_TOKENS`], the answer is read the
 //!   way inference reads one ([`super::NativeResponse`]) and must call that
-//!   tool, with a call id and a string argument. This holds whichever
+//!   tool, with a call id and a string argument. A call to a tool it was not
+//!   offered next to that one is no failure: inference answers such a call
+//!   with a tool error and lets the model go on. This holds whichever
 //!   template Ollama renders the model with (its own renderer, a Go
 //!   template, the model's chat template in llama-server, or Harmony).
 //!
 //! All send the same `num_ctx` and `shift:false` as inference (and as the
-//! observation's load request), so none makes Ollama reload the model.
+//! observation's load request), so none makes Ollama reload the model, and
+//! the same [`PROBE_SEED`] at the model's own sampling settings, so a probe
+//! gives the same answer each time it runs on a server and model.
 //! A pass is kept for this process per server, version, model digest,
 //! context and tool calling; a new Ollama version is probed again before it
-//! serves.
+//! serves. A failed probe refuses the model on that server, for every Agent
+//! and run that would use it.
+//!
+//! Images are not probed. Every call reserves the model's whole context
+//! plus its output limit, whatever its prompt holds, and llama-server
+//! counts an image's tokens in the prompt it checks against the context:
+//! on Ollama 0.40.8, with `qwen3.5:0.8b` loaded at a 4,096-token context, a
+//! 64x64 image counted 11 prompt tokens, 4,090 tokens of text were
+//! generated from, and the same text with the image (4,101 tokens) was
+//! refused under `truncate:false`. An image therefore never takes a call past
+//! what it reserves, and the output limit is probed above.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
@@ -61,12 +75,23 @@ pub const TOOL_PROBE_PROMPT: &str = "Call the report_ready tool with word set to
 pub const PROBE_TOOL: &str = "report_ready";
 
 /// The tool-call probe's `num_predict`: room for a thinking model's
-/// reasoning before its call (Ollama 0.40.8 measured 31 tokens for
-/// gpt-oss:20b, 84 to 101 for qwen3.5:0.8b), still a bounded cost.
-pub const TOOL_CALL_TOKENS: usize = 512;
+/// reasoning before its call, still a bounded cost. On Ollama 0.40.8, at
+/// each model's own sampling settings, the call came after 23 tokens for
+/// qwen3-coder:30b, 34 to 44 for gpt-oss:20b, 82 to 113 for qwen3:0.6b, 96
+/// to 167 for qwen3.5:0.8b and 195 to 309 for qwen3:4b.
+pub const TOOL_CALL_TOKENS: usize = 1024;
+
+/// The seed every probe samples with. With it, Ollama 0.40.8 gave the same
+/// answer to the tool-call probe five times out of five for each model
+/// measured, at that model's own temperature (the one inference uses unless
+/// an Agent sets its own), so a pass or a failure is the same when the probe
+/// runs again.
+pub const PROBE_SEED: u64 = 42;
 
 /// Which contract probe a `/api/chat` request is, and what Ollama 0.40
-/// answers to it, for test servers that stand in for Ollama.
+/// answers to it, for test servers that stand in for Ollama. Tests only
+/// (the `contract-probe-stand-in` feature).
+#[cfg(any(test, feature = "contract-probe-stand-in"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContractProbe {
     /// The over-long prompt (`"x "` repeated): refused.
@@ -79,6 +104,7 @@ pub enum ContractProbe {
     ToolCall,
 }
 
+#[cfg(any(test, feature = "contract-probe-stand-in"))]
 impl ContractProbe {
     /// The probe a parsed `/api/chat` body is, or `None` for any other request.
     pub fn of(body: &Value) -> Option<Self> {
@@ -220,7 +246,7 @@ fn probe_body(model: &str, content: &str, context: usize, num_predict: usize) ->
         "stream": true,
         "truncate": false,
         "shift": false,
-        "options": {"num_ctx": context, "num_predict": num_predict},
+        "options": {"num_ctx": context, "num_predict": num_predict, "seed": PROBE_SEED},
     })
 }
 
@@ -572,18 +598,33 @@ async fn tool_call_probe(
         }));
     }
     read.map_err(|error| fail(format!("the tool call cannot run: {error}")))?;
-    for call in &answer.calls {
-        if call.name != PROBE_TOOL || !call.arguments.get("word").is_some_and(Value::is_string) {
-            return Err(fail(format!(
-                "asked to call {PROBE_TOOL} with a string word, the model called {} with {}",
-                super::shown_name(&call.name),
-                call.arguments
-                    .to_string()
-                    .chars()
-                    .take(200)
-                    .collect::<String>()
-            )));
-        }
+    let called = |call: &axocoatl_llm::ToolCall| {
+        fail(format!(
+            "asked to call {PROBE_TOOL} with a string word, the model called {} with {}",
+            super::shown_name(&call.name),
+            call.arguments
+                .to_string()
+                .chars()
+                .take(200)
+                .collect::<String>()
+        ))
+    };
+    // A call to a tool it was not offered is answered with a tool error in
+    // inference, and the model goes on; the offered tool must be called, and
+    // each call to it must carry its argument.
+    let offered: Vec<_> = answer
+        .calls
+        .iter()
+        .filter(|call| call.name == PROBE_TOOL)
+        .collect();
+    if offered.is_empty() {
+        return Err(called(&answer.calls[0]));
     }
-    Ok(())
+    match offered
+        .into_iter()
+        .find(|call| !call.arguments.get("word").is_some_and(Value::is_string))
+    {
+        Some(call) => Err(called(call)),
+        None => Ok(()),
+    }
 }
