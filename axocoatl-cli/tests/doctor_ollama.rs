@@ -376,15 +376,17 @@ async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
         "{stdout}"
     );
     // The refusal reads as a sentence that names the fix once (Ollama 0.40.8
-    // showed qwen3.5:0.8b, an MLX model, this way live).
+    // showed qwen3.5:0.8b, an MLX model, this way live, and the commands it
+    // names replaced it with the GGUF variant there).
     assert!(
         stdout.contains("→ The model qwen3-coder:30b is run by Ollama's MLX runner;"),
         "{stdout}"
     );
     assert!(
         stdout.contains(
-            "by default: pull its GGUF variant with `ollama pull --runner llamacpp \
-             qwen3-coder:30b` (an undocumented Ollama flag), or choose another model.\n"
+            "by default: remove it and pull its GGUF variant with `ollama rm qwen3-coder:30b && \
+             ollama pull --runner llamacpp qwen3-coder:30b` (an undocumented Ollama flag, which \
+             does not replace a variant already installed), or choose another model.\n"
         ),
         "{stdout}"
     );

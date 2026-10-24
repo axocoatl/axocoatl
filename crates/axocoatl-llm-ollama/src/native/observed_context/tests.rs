@@ -637,6 +637,16 @@ async fn a_loaded_mlx_or_unknown_runner_is_refused_before_any_probe() {
             .unwrap_err()
             .to_string();
         assert!(refusal.contains(reason), "{runner}: {refusal}");
+        // MLX is fixed by the model's GGUF variant, which the refusal names.
+        assert_eq!(
+            refusal.contains(
+                "remove it and pull its GGUF variant with `ollama rm test-model:latest && ollama \
+                 pull --runner llamacpp test-model:latest` (an undocumented Ollama flag, which \
+                 does not replace a variant already installed), or choose another model"
+            ),
+            runner == json!("mlx"),
+            "{runner}: {refusal}"
+        );
         assert_eq!(chats(&server).await, (Vec::new(), 0));
     }
 }

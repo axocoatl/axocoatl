@@ -292,21 +292,9 @@ pub fn ollama_model_problem(
 ) -> String {
     let reason = match error {
         // Native execution's own refusals (not GGUF, an MLX runner, a cloud
-        // model, no text completion) are already in words.
-        ProviderError::InvalidRequest { message, .. } => {
-            let mut reason = message.clone();
-            let lower = message.to_ascii_lowercase();
-            if (lower.contains("gguf") || lower.contains("mlx") || lower.contains("safetensors"))
-                && !lower.contains("--runner llamacpp")
-            {
-                reason.push_str(&format!(
-                    ". Pull its GGUF variant with `ollama pull --runner llamacpp {}` (an \
-                     undocumented Ollama flag), or choose another model",
-                    model.model
-                ));
-            }
-            reason
-        }
+        // model, no text completion) are already in words, with the GGUF
+        // pull when that is the fix.
+        ProviderError::InvalidRequest { message, .. } => message.clone(),
         other => axocoatl_llm_ollama::describe_native_ollama_error(other),
     };
     format!(
@@ -761,15 +749,7 @@ mod tests {
              cannot serve: Model not found: gpt-oss:20b on ollama. Ollama does not have \
              gpt-oss:20b: run `ollama pull gpt-oss:20b`"
         );
-        let mlx = ProviderError::InvalidRequest {
-            provider: "ollama".into(),
-            message: "x is a safetensors model".into(),
-        };
-        assert!(
-            ollama_model_problem(&["Agent writer".to_string()], &spec("ollama:x"), url, &mlx)
-                .contains("ollama pull --runner llamacpp x")
-        );
-        // Native execution's own MLX refusal names the fix already: once.
+        // Native execution's own MLX refusal names the fix: once.
         let shown = serde_json::json!({"details": {"format": "safetensors", "runner": "mlx"},
             "capabilities": ["completion", "tools"]});
         let mlx = axocoatl_llm_ollama::check_shown_model("qwen3.5:0.8b", &shown).unwrap_err();
@@ -785,11 +765,32 @@ mod tests {
         );
         assert_eq!(
             problem
-                .matches("`ollama pull --runner llamacpp qwen3.5:0.8b`")
+                .matches("`ollama rm qwen3.5:0.8b && ollama pull --runner llamacpp qwen3.5:0.8b`")
                 .count(),
             1,
             "{problem}"
         );
+        // An embedding or image-generation model has no GGUF variant that
+        // would serve: no pull is suggested.
+        for (name, capabilities) in [
+            ("nomic-embed-text", serde_json::json!(["embedding"])),
+            ("flux", serde_json::json!(["completion", "image"])),
+        ] {
+            let shown = serde_json::json!({"details": {"format": "gguf"},
+                "capabilities": capabilities});
+            let refusal = axocoatl_llm_ollama::check_shown_model(name, &shown).unwrap_err();
+            let problem = ollama_model_problem(
+                &["Agent writer".to_string()],
+                &spec(&format!("ollama:{name}")),
+                url,
+                &refusal,
+            );
+            assert!(
+                problem.contains("needs a local GGUF completion model"),
+                "{problem}"
+            );
+            assert!(!problem.contains("--runner"), "{problem}");
+        }
         let down = ProviderError::Network("connection refused".into());
         assert!(ollama_unreachable(url, &down).contains("ollama serve"));
         let check = NativeOllamaServerCheck {

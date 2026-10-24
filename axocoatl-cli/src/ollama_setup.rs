@@ -37,10 +37,6 @@ pub const RECOMMENDED_REVIEWER_MODEL: &str = "gpt-oss:20b";
 /// one (65.4 GB).
 pub const LARGE_REVIEWER_MODEL: &str = "gpt-oss:120b";
 
-/// The flag of `ollama pull` that selects the GGUF variant of a model whose
-/// tag also has an MLX variant. Ollama does not document it.
-pub const LLAMACPP_PULL_FLAG: &str = "--runner llamacpp";
-
 /// The smallest context, in tokens, a fix run's first writer call fits in
 /// (it needs about 9.7k); below it native Sessions and runs refuse the model
 /// up front instead of failing after the first call.
@@ -240,14 +236,14 @@ impl InstalledModel {
         if self.runner == "mlx" || (!self.format.is_empty() && self.format != "gguf") {
             return Some(format!(
                 "{} run by Ollama's MLX runner, which does not hold num_ctx as a hard limit; \
-                 native Sessions run only GGUF models (try `ollama pull {LLAMACPP_PULL_FLAG} {}`, \
-                 an undocumented Ollama flag)",
+                 native Sessions run only GGUF models (try `{}`; `--runner` is an undocumented \
+                 Ollama flag, which does not replace a variant already installed)",
                 if self.format.is_empty() {
                     "a model".to_string()
                 } else {
                     format!("a {} model", self.format)
                 },
-                self.name
+                axocoatl_llm_ollama::gguf_variant_commands(&self.name)
             ));
         }
         None
@@ -899,8 +895,9 @@ pub async fn model_finding(base_url: &str, model: &str, needs_tools: bool) -> Fi
 pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Finding {
     match check_shown_model(model, shown) {
         Err(error) => {
-            // Native execution's own refusal is already in words: shown as a
-            // sentence, without the error kind, so the fix reads after it.
+            // Native execution's own refusal is already in words, with the
+            // GGUF pull when that is the fix: shown as a sentence, without
+            // the error kind.
             let mut why = match &error {
                 ProviderError::InvalidRequest { message, .. } => message.clone(),
                 other => other.to_string(),
@@ -908,18 +905,7 @@ pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Fin
             if !why.ends_with('.') {
                 why.push('.');
             }
-            let refused_format = !matches!(
-                shown.pointer("/details/format").and_then(Value::as_str),
-                Some("gguf")
-            ) || shown.pointer("/details/runner").and_then(Value::as_str) == Some("mlx");
-            let fix_named = why.contains(LLAMACPP_PULL_FLAG);
-            let mut hint = vec![why];
-            if refused_format && !fix_named {
-                hint.push(format!(
-                    "Pull its GGUF variant with `ollama pull {LLAMACPP_PULL_FLAG} {model}` (an undocumented Ollama flag), or choose another model."
-                ));
-            }
-            Finding::fail(format!("Model '{model}' cannot run in native Sessions"), hint)
+            Finding::fail(format!("Model '{model}' cannot run in native Sessions"), vec![why])
         }
         Ok(capabilities) if needs_tools && !capabilities.tools => Finding::fail(
             format!("Model '{model}' does not report tool calling, and an Agent that uses it lists tools"),
@@ -1111,7 +1097,9 @@ mod tests {
         for (name, why) in &refused {
             assert!(why.contains("MLX runner"), "{why}");
             assert!(
-                why.contains(&format!("ollama pull --runner llamacpp {name}")),
+                why.contains(&format!(
+                    "`ollama rm {name} && ollama pull --runner llamacpp {name}`"
+                )),
                 "{why}"
             );
             assert!(why.contains("undocumented"), "{why}");
@@ -1152,8 +1140,9 @@ mod tests {
         );
         assert!(
             hint.ends_with(
-                "by default: pull its GGUF variant with `ollama pull --runner llamacpp \
-                 qwen3.5:27b` (an undocumented Ollama flag), or choose another model."
+                "by default: remove it and pull its GGUF variant with `ollama rm qwen3.5:27b \
+                 && ollama pull --runner llamacpp qwen3.5:27b` (an undocumented Ollama flag, \
+                 which does not replace a variant already installed), or choose another model."
             ),
             "{hint}"
         );
@@ -1168,6 +1157,32 @@ mod tests {
             "{finding:?}"
         );
         assert!(!finding.hint.join(" ").contains("--runner"), "{finding:?}");
+        // A cloud model of no reported format, an embedding model and an
+        // image-generation model have no GGUF variant to pull.
+        for (name, shown, reason) in [
+            (
+                "gpt-oss:120b-cloud",
+                json!({"details":{},"capabilities":["completion"],
+                    "remote_host":"https://ollama.com:443"}),
+                "is a cloud model",
+            ),
+            (
+                "nomic-embed-text",
+                json!({"details":{"format":"gguf"},"capabilities":["embedding"]}),
+                "does not report text completion",
+            ),
+            (
+                "flux",
+                json!({"details":{"format":"gguf"},"capabilities":["completion","image"]}),
+                "is an image-generation model",
+            ),
+        ] {
+            let finding = shown_model_finding(name, &shown, false);
+            assert!(!finding.ok);
+            let hint = finding.hint.join(" ");
+            assert!(hint.contains(reason), "{hint}");
+            assert!(!hint.contains("--runner"), "{hint}");
+        }
     }
 
     #[test]

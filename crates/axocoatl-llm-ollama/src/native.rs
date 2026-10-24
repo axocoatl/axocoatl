@@ -149,11 +149,23 @@ fn shown_name(model: &str) -> String {
         .collect()
 }
 
+/// The commands that replace `name`, a model Ollama runs with MLX or that
+/// is not GGUF, with its GGUF variant. `ollama pull --runner llamacpp`, a
+/// flag Ollama does not document, pulls the GGUF variant of a tag that also
+/// has an MLX one, but leaves a variant already installed in place (Ollama
+/// 0.40.8: with the MLX `qwen3.5:0.8b` installed it pulled nothing and the
+/// tag stayed MLX; after `ollama rm` it pulled the GGUF one), so the
+/// installed one is removed first.
+pub fn gguf_variant_commands(name: &str) -> String {
+    format!("ollama rm {name} && ollama pull --runner llamacpp {name}")
+}
+
 /// What to do about a model Ollama runs with MLX or that is not GGUF.
 pub(crate) fn gguf_fix(name: &str) -> String {
     format!(
-        "pull its GGUF variant with `ollama pull --runner llamacpp {name}` (an undocumented \
-         Ollama flag), or choose another model"
+        "remove it and pull its GGUF variant with `{}` (an undocumented Ollama flag, which \
+         does not replace a variant already installed), or choose another model",
+        gguf_variant_commands(name)
     )
 }
 
