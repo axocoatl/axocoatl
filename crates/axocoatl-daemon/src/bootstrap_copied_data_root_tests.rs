@@ -483,13 +483,32 @@ async fn a_copied_or_moved_data_root_starts_and_keeps_its_sessions() {
         serde_json::from_slice::<Vec<String>>(&std::fs::read(&copied_from).unwrap()).unwrap(),
         std::slice::from_ref(&original)
     );
+    // `session record-location --original-deleted` while a daemon runs on
+    // the original (it holds its path's lease): it was not deleted, and its
+    // authority stays the original's.
+    let original_runs = axocoatl_session::execution_ownership::PathLease::hold(&original)
+        .unwrap()
+        .unwrap();
+    let recorded = AxocoatlDaemon::record_data_root_location(&migrated.join("data"), true).unwrap();
+    assert_eq!(
+        (recorded.location, recorded.adopted, recorded.in_use),
+        (None, Some(0), 1)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&std::fs::read(&copied_from).unwrap()).unwrap(),
+        std::slice::from_ref(&original)
+    );
+    assert!(!migrated
+        .join("data/previous-runtime-authorities.json")
+        .exists());
+    drop(original_runs);
     // The original was deleted (a move by copying): `session record-location
     // --original-deleted` makes its authority this copy's previous one, as a
     // move's, and the next start removes the closed Session's volume and
     // keeps the open one's.
     let recorded = AxocoatlDaemon::record_data_root_location(&migrated.join("data"), true).unwrap();
     assert_eq!(recorded.location, None);
-    assert_eq!(recorded.adopted, Some(1));
+    assert_eq!((recorded.adopted, recorded.in_use), (Some(1), 0));
     assert!(!copied_from.exists());
     copy_start().await;
     let removed = removed_volumes();

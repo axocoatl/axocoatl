@@ -238,12 +238,13 @@ impl ServiceManager for SystemdManager {
             Some(cursor) => self.journal(&[&format!("--after-cursor={cursor}")])?,
             None => self.journal(&[])?,
         };
+        // Its end, where the started daemon said last how its start ended.
         if log.len() as u64 > crate::LOG_TAIL_BYTES {
-            let mut end = crate::LOG_TAIL_BYTES as usize;
-            while !log.is_char_boundary(end) {
-                end -= 1;
+            let mut start = log.len() - crate::LOG_TAIL_BYTES as usize;
+            while !log.is_char_boundary(start) {
+                start += 1;
             }
-            log.truncate(end);
+            log.drain(..start);
         }
         Some(log)
     }
@@ -529,15 +530,30 @@ cat "$(dirname "$0")/shown"
             manager.log_since(&mark).as_deref(),
             Some("Failed to bootstrap daemon: no\n")
         );
-        assert_eq!(
+        let wait = || {
             crate::wait_for_daemon(
                 &manager,
                 &mark,
                 Duration::from_secs(5),
-                Duration::from_millis(10)
-            ),
+                Duration::from_millis(10),
+            )
+        };
+        shown("ActiveState=activating\nSubState=auto-restart\nNRestarts=0\n");
+        assert_eq!(
+            wait(),
             crate::DaemonStart::Failed("Failed to bootstrap daemon: no".into())
         );
+
+        // A start that logs more than is read: its end says how it ended.
+        let mut long = String::from("Axocoatl server starting on 127.0.0.1:8080\n");
+        long.push_str(&"é INFO upgrading Session storage\n".repeat(4000));
+        long.push_str("Axocoatl server starting on 127.0.0.1:8080\n");
+        std::fs::write(&journal, &long).unwrap();
+        let read = manager.log_since(&mark).unwrap();
+        assert!(read.len() as u64 <= crate::LOG_TAIL_BYTES);
+        assert!(read.ends_with("\nAxocoatl server starting on 127.0.0.1:8080\n"));
+        shown("ActiveState=active\nSubState=running\nNRestarts=0\n");
+        assert_eq!(wait(), crate::DaemonStart::Started);
 
         shown("ActiveState=active\nSubState=running\nNRestarts=0\n");
         assert!(!manager.exited_since_start());

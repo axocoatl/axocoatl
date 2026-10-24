@@ -533,10 +533,12 @@ fn connect_parse_error(error: &clap::Error, argv: &[std::ffi::OsString]) -> Opti
 }
 
 /// What `session record-location` says it recorded in `data_dir`.
+/// With `--original-deleted`, the error line when the data directory it was
+/// copied from is still in use.
 fn record_location_lines(
     data_dir: &std::path::Path,
     recorded: &axocoatl_daemon::bootstrap::RecordedLocation,
-) -> Vec<String> {
+) -> (Vec<String>, Option<String>) {
     let mut lines = vec![match &recorded.location {
         Some(location) => format!(
             "✓ Recorded {location} for the data directory {}.",
@@ -548,6 +550,7 @@ fn record_location_lines(
         ),
     }];
     match recorded.adopted {
+        Some(0) if recorded.in_use > 0 => {}
         Some(0) => lines.push(
             "  It is not recorded as a copy of another data directory whose Podman volumes are \
              left, so nothing more was recorded."
@@ -567,7 +570,22 @@ fn record_location_lines(
     } else {
         "Nothing changed.".to_string()
     });
-    lines
+    let in_use = (recorded.in_use > 0).then(|| {
+        format!(
+            "✗ A daemon runs at {} (it holds that path's lease), so the Podman volumes its \
+             Sessions left there stay as they were: they are its own. Run this with \
+             --original-deleted again once the data directory this one was copied from is gone.",
+            if recorded.in_use == 1 {
+                "the path of the data directory this one was copied from".to_string()
+            } else {
+                format!(
+                    "{} of the paths the data directory this one was copied from had",
+                    recorded.in_use
+                )
+            }
+        )
+    });
+    (lines, in_use)
 }
 
 /// The log level a command shows unless RUST_LOG asks for another.
@@ -632,8 +650,13 @@ async fn main() {
                 });
                 match recorded {
                     Ok((data_dir, recorded)) => {
-                        for line in record_location_lines(&data_dir, &recorded) {
+                        let (lines, in_use) = record_location_lines(&data_dir, &recorded);
+                        for line in lines {
                             println!("{line}");
+                        }
+                        if let Some(in_use) = in_use {
+                            eprintln!("{in_use}");
+                            std::process::exit(1);
                         }
                     }
                     Err(error) => {
@@ -4261,14 +4284,20 @@ mod tests {
     fn record_location_says_what_it_recorded() {
         use axocoatl_daemon::bootstrap::RecordedLocation;
         let data = std::path::Path::new("/d/data");
-        let lines = |location: Option<&str>, adopted| {
+        let recorded = |location: Option<&str>, adopted, in_use| {
             record_location_lines(
                 data,
                 &RecordedLocation {
                     location: location.map(str::to_string),
                     adopted,
+                    in_use,
                 },
             )
+        };
+        let lines = |location: Option<&str>, adopted| {
+            let (lines, in_use) = recorded(location, adopted, 0);
+            assert_eq!(in_use, None);
+            lines
         };
         assert_eq!(
             lines(
@@ -4301,6 +4330,29 @@ mod tests {
             nothing[1].contains("is not recorded as a copy") && nothing[2] == "Nothing changed.",
             "{nothing:?}"
         );
+        // The data directory it was copied from is in use: not deleted.
+        let (lines, in_use) = recorded(None, Some(0), 1);
+        assert_eq!(
+            lines,
+            [
+                "✓ The data directory /d/data is already recorded where it is.",
+                "Nothing changed."
+            ]
+        );
+        assert_eq!(
+            in_use.as_deref(),
+            Some(
+                "✗ A daemon runs at the path of the data directory this one was copied from (it \
+                 holds that path's lease), so the Podman volumes its Sessions left there stay as \
+                 they were: they are its own. Run this with --original-deleted again once the \
+                 data directory this one was copied from is gone."
+            )
+        );
+        let (lines, in_use) = recorded(None, Some(1), 2);
+        assert!(lines[1].starts_with("✓ Recorded that the data directory it was copied from"));
+        assert!(in_use
+            .unwrap()
+            .starts_with("✗ A daemon runs at 2 of the paths the data directory"));
     }
 
     /// `session record-location` prints what it recorded once: the

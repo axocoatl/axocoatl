@@ -919,6 +919,9 @@ pub struct RecordedLocation {
     /// When asked to record that the data root it was copied from was
     /// deleted: how many runtime authorities of that one it made its own.
     pub adopted: Option<usize>,
+    /// Of those, how many it left as they were, as a daemon runs at that
+    /// path now: that data root was not deleted, and its volumes are its own.
+    pub in_use: usize,
 }
 
 impl super::AxocoatlDaemon {
@@ -934,6 +937,7 @@ impl super::AxocoatlDaemon {
     /// copied from was deleted (a move by copying, as across volumes): the
     /// runtime authorities kept of it become previous ones, as a move's, so
     /// the next start removes the volumes its Sessions left there as its own.
+    /// One at whose path a daemon runs now is left as it was.
     pub fn record_data_root_location(
         data_dir: &std::path::Path,
         original_deleted: bool,
@@ -973,6 +977,8 @@ impl super::AxocoatlDaemon {
         let adopted = original_deleted
             .then(|| super::runtime_volumes::adopt_copied_from(&data, &own))
             .transpose()?;
+        let in_use = adopted.map_or(0, |(_, in_use)| in_use);
+        let adopted = adopted.map(|(adopted, _)| adopted);
         let upgrade = match data.existing_child("checkpoints") {
             Ok(_) => PreparedStartupMigration::record_location(
                 &data,
@@ -1001,6 +1007,7 @@ impl super::AxocoatlDaemon {
         Ok(RecordedLocation {
             location: (!recorded.is_empty()).then(|| recorded.join(" and ")),
             adopted,
+            in_use,
         })
     }
 
