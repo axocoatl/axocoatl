@@ -6,6 +6,13 @@ use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 use axocoatl_session::turn_contract::AgentDefinitionId;
 use std::os::unix::fs::PermissionsExt;
 
+/// How long a child test process that starts a daemon may run before the
+/// test says it hung. It takes about nine seconds on an idle computer, 17 at
+/// a load average of 75, and 211 when six copies ran starved of CPU
+/// (`taskpolicy -b`) at a load average of 60. This stops only a child that
+/// would never end; it is not a speed check.
+const CHILD_HANG_GUARD: Duration = Duration::from_secs(900);
+
 const CONFIG: &str = r#"
 agents:
   - id: researcher
@@ -40,7 +47,9 @@ async fn child_body() {
     // Startup looks for a SearXNG left by an earlier run, by this data root's
     // authority and the searxng role, in the background.
     let log = std::path::PathBuf::from(std::env::var_os("AXOCOATL_TEST_PODMAN_LOG").unwrap());
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // A wait for the lookup, bounded only to stop a hang (see
+    // `CHILD_HANG_GUARD`).
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
     loop {
         let calls = std::fs::read_to_string(&log).unwrap_or_default();
         if calls.lines().any(|line| {
@@ -182,7 +191,7 @@ esac
     .unwrap();
     std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
     let result = tokio::time::timeout(
-        Duration::from_secs(60),
+        CHILD_HANG_GUARD,
         tokio::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -392,7 +401,7 @@ esac
         .unwrap();
         std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
         let result = tokio::time::timeout(
-            Duration::from_secs(60),
+            CHILD_HANG_GUARD,
             tokio::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",

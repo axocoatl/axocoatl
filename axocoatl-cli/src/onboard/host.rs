@@ -14,8 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// How long a read-only probe may take.
-pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a read-only probe may run. Tests answer with shim scripts that
+/// never hang, which a loaded computer (a build and other test suites
+/// beside them) was seen to run for more than 15 s: their bound only stops
+/// a hang.
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 300 } else { 30 });
 
 /// The onboarding log: every command onboarding runs, its exit status and
 /// the output of the ones it reads. Never a key.
@@ -646,6 +649,8 @@ pub(crate) mod testing {
         /// of subordinate ids in `etc/subuid` and `etc/subgid`, with a
         /// setuid `newuidmap` and `newgidmap` on PATH.
         pub(crate) fn new() -> Self {
+            // Podman's probes run these shims too (see `PROBE_TIMEOUT`).
+            axocoatl_isolation::podman::raise_probe_bound_for_tests(PROBE_TIMEOUT);
             let shims = Self {
                 dir: tempfile::tempdir().unwrap(),
                 home: tempfile::tempdir().unwrap(),

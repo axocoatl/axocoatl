@@ -149,11 +149,14 @@ pub(crate) fn health_url(host: &str, port: u16) -> String {
     )
 }
 
+/// How long one `GET /health` may take. A daemon answers it at once; a
+/// loaded computer was seen to take more than 3 s, which made a running
+/// Axocoatl look like another program. Tests answer from a mock that never
+/// hangs, so their bound only stops a hang.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 300 } else { 10 });
+
 async fn healthy(url: &str) -> bool {
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-    else {
+    let Ok(client) = reqwest::Client::builder().timeout(HEALTH_TIMEOUT).build() else {
         return false;
     };
     client
@@ -234,7 +237,7 @@ async fn wait_healthy(url: &str, wait: Duration) -> bool {
 /// not say.
 async fn started_at(url: &str) -> Option<Option<u64>> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(HEALTH_TIMEOUT)
         .build()
         .ok()?;
     let response = client.get(url).send().await.ok()?;

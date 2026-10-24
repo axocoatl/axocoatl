@@ -23,7 +23,33 @@ use tokio::process::Command;
 use crate::error::IsolationError;
 use crate::session_sandbox::{BoundedCommandOutput, SessionSandbox};
 
+/// The bound on each read-only probe of Podman: `--version`, `info` and
+/// `machine list` here, and [`crate::podman_report`]'s.
 const READINESS_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+/// A longer bound for those probes, set only by the tests of crates that
+/// answer them with fake `podman` scripts ([`raise_probe_bound_for_tests`]).
+static TEST_PROBE_BOUND: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+
+/// The bound on a read-only probe of Podman: [`READINESS_COMMAND_TIMEOUT`],
+/// or the one tests set.
+pub(crate) fn probe_bound() -> Duration {
+    TEST_PROBE_BOUND
+        .get()
+        .copied()
+        .unwrap_or(READINESS_COMMAND_TIMEOUT)
+}
+
+/// Tests only (`test-support`): bound read-only probes of Podman by
+/// `bound` in this process, the first time it is called. A fake `podman`
+/// script answers at once on an idle computer but was seen to take more
+/// than the 15 s product bound on a loaded one (a build and other test
+/// suites beside it), which turned its answer into "did not answer"; a
+/// test's bound only has to stop a hang.
+#[cfg(any(test, feature = "test-support"))]
+pub fn raise_probe_bound_for_tests(bound: Duration) {
+    let _ = TEST_PROBE_BOUND.set(bound);
+}
+
 /// Starting an existing macOS VM is a bounded mutation but can take
 /// substantially longer than the read-only version, list, and info probes.
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(120);
@@ -108,11 +134,11 @@ async fn has(bin: &str) -> Result<bool, IsolationError> {
     if !command_exists(bin) {
         return Ok(false);
     }
-    let output = bounded_output(bin, &["--version"], READINESS_COMMAND_TIMEOUT).await?;
+    let output = bounded_output(bin, &["--version"], probe_bound()).await?;
     if output.timed_out {
         return Err(IsolationError::podman_not_answering(
             "--version",
-            READINESS_COMMAND_TIMEOUT,
+            probe_bound(),
         ));
     }
     if output.status.success() {
@@ -155,17 +181,9 @@ fn validate_runtime_info(stdout: &[u8]) -> Result<(), IsolationError> {
 /// Prove that the Podman service can answer a bounded runtime request. A
 /// working client binary or a running machine entry alone is not enough.
 async fn runtime_available_with(program: &str) -> Result<(), IsolationError> {
-    let output = bounded_output(
-        program,
-        &["info", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
-    )
-    .await?;
+    let output = bounded_output(program, &["info", "--format", "json"], probe_bound()).await?;
     if output.timed_out {
-        return Err(IsolationError::podman_not_answering(
-            "info",
-            READINESS_COMMAND_TIMEOUT,
-        ));
+        return Err(IsolationError::podman_not_answering("info", probe_bound()));
     }
     if !output.status.success() {
         return Err(IsolationError::OciSetupFailed(format!(
@@ -181,7 +199,7 @@ async fn machine_state_with(program: &str) -> Result<(bool, bool), IsolationErro
     let output = bounded_output(
         program,
         &["machine", "list", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
+        probe_bound(),
     )
     .await?;
     machine_state_from_output(&output)
@@ -193,7 +211,7 @@ fn machine_state_from_output(
     if output.timed_out {
         return Err(IsolationError::podman_not_answering(
             "machine list",
-            READINESS_COMMAND_TIMEOUT,
+            probe_bound(),
         ));
     }
     if !output.status.success() {
@@ -392,13 +410,13 @@ async fn machine_list_with(
     let output = bounded_output(
         program,
         &["machine", "list", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
+        probe_bound(),
     )
     .await?;
     if output.timed_out {
         return Err(IsolationError::podman_not_answering(
             "machine list",
-            READINESS_COMMAND_TIMEOUT,
+            probe_bound(),
         ));
     }
     if !output.status.success() {

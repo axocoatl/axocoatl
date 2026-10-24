@@ -23,6 +23,14 @@ use super::*;
 
 const FAKE_CLAUDE: &str = include_str!("../../tests/fixtures/fake-claude.sh");
 
+/// How long a wait for something that does happen (the fake's prompt, a
+/// line on the screen, `connect` finishing) may take before the test says it
+/// hung. Each takes well under a second on an idle computer; on a loaded one
+/// the fake's prompt took more than 30 s to appear, and nine sign-ins took
+/// 900 s in all when six copies ran starved of CPU (`taskpolicy -b`) at a
+/// load average of 60. This stops only a hang; it is not a speed check.
+const HANG_GUARD: Duration = Duration::from_secs(600);
+
 /// A token of the real shape, unique to the test so a scan of shared
 /// directories cannot match another test's.
 fn fresh_token() -> String {
@@ -292,7 +300,7 @@ fn typist(
     let slave = terminal.slave.try_clone().unwrap();
     let screen = screen.clone();
     std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + HANG_GUARD;
         while !screen.contains(prompt) {
             assert!(Instant::now() < deadline, "the fake never asked for a key");
             std::thread::sleep(Duration::from_millis(20));
@@ -308,8 +316,9 @@ fn typist(
     })
 }
 
-/// `connect`'s result; if it has not finished within 60 seconds, `claude`
-/// is stopped (so no test is left waiting on it) and the test fails.
+/// `connect`'s result; if it has not finished within [`HANG_GUARD`],
+/// `claude` is stopped (so no test is left waiting on it) and the test
+/// fails.
 async fn finish_within<F>(connecting: F, interrupt: &Interrupt) -> Result<String, Failure>
 where
     F: std::future::Future<Output = Result<String, Failure>>,
@@ -317,10 +326,10 @@ where
     tokio::pin!(connecting);
     tokio::select! {
         result = &mut connecting => result,
-        () = tokio::time::sleep(Duration::from_secs(60)) => {
+        () = tokio::time::sleep(HANG_GUARD) => {
             interrupt.raise();
             let _ = connecting.await;
-            panic!("connect did not finish within 60 seconds");
+            panic!("connect did not finish within {HANG_GUARD:?}");
         }
     }
 }
@@ -712,7 +721,7 @@ async fn an_interrupt_stops_claude_and_stores_nothing() {
 
 /// Wait until `screen` shows `text`.
 fn wait_for(screen: &Screen, text: &str) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + HANG_GUARD;
     while !screen.contains(text) {
         assert!(Instant::now() < deadline, "never shown: {text}");
         std::thread::sleep(Duration::from_millis(20));
@@ -2111,7 +2120,7 @@ fn podman_commands_started_while_ctrl_c_is_typed() {
     });
     let mut writer = pair.master.take_writer().unwrap();
     let ready = directory.path().join("ready");
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + HANG_GUARD;
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -2154,7 +2163,7 @@ fn start_podman_commands_while_ctrl_c_is_typed() {
     let interrupt = Interrupt::default();
     let _listeners = runtime.block_on(async { interrupt.listen() });
     std::fs::write(directory.join("ready"), "").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + HANG_GUARD;
     while !interrupt.raised() {
         assert!(Instant::now() < deadline, "no Ctrl-C arrived");
         std::thread::sleep(Duration::from_millis(1));
@@ -2293,9 +2302,9 @@ fn opened(file: &Path) -> String {
     std::fs::read_to_string(file).unwrap_or_default()
 }
 
-/// Wait up to five seconds for the opener's answer.
+/// Wait for the opener's answer (at most [`HANG_GUARD`]).
 fn opener_answer(receiver: std::sync::mpsc::Receiver<bool>) -> bool {
-    receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+    receiver.recv_timeout(HANG_GUARD).unwrap()
 }
 
 /// Only the exact page is accepted: `https://auth.openai.com` (no other
@@ -2752,7 +2761,7 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
     let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     result.unwrap_or_else(|failure| panic!("{}", failure.message));
     // Wait out the opener's answer, then the relay has nothing to say.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + HANG_GUARD;
     while opened(&log).is_empty() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -3063,14 +3072,24 @@ fn a_held_line_is_kept_only_when_the_program_ends_with_an_error() {
         assert!(screen.contains("last words\r\n"), "{script}");
     }
 
-    // A program that runs on after it: shown while it runs.
-    let (running, screen) = start("printf 'Error: and then\\n'; sleep 5; exit 3", true);
-    let deadline = Instant::now() + Duration::from_secs(4);
+    // A program that runs on after it (until this test lets it end): shown
+    // while it runs.
+    let directory = tempfile::tempdir().unwrap();
+    let go = directory.path().join("go");
+    let (running, screen) = start(
+        &format!(
+            "printf 'Error: and then\\n'; while [ ! -e '{}' ]; do sleep 0.05; done; exit 3",
+            go.display()
+        ),
+        true,
+    );
+    let deadline = Instant::now() + HANG_GUARD;
     while !screen.contains("Error: and then\r\n") {
         assert!(Instant::now() < deadline, "not shown while it ran");
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(!running.is_finished());
+    std::fs::write(&go, "").unwrap();
     let run = running.join().unwrap();
     assert!(run.held_line.is_empty());
     assert_eq!(
