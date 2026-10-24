@@ -151,9 +151,9 @@ impl ReasoningDetails {
     }
 }
 
-/// The answer of `profile`'s endpoint. Once the answer names that
-/// endpoint's provider, the endpoint is recorded in `served` as one that
-/// answered a call.
+/// The answer of `profile`'s endpoint. Once the answer, named as that
+/// endpoint's provider, completed, the endpoint is recorded in `served` as
+/// one that answered a call; an answer that fails is not.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn decode(
     response: reqwest::Response,
@@ -214,11 +214,6 @@ pub(super) fn decode(
                 if let Some(provider) = value.get("provider").and_then(Value::as_str) {
                     if provider != profile.provider_name {
                         Err(protocol("response changed the exact admitted provider"))?;
-                    }
-                    if !observed_provider {
-                        if let Some(served) = &served {
-                            served.record(&profile);
-                        }
                     }
                     observed_provider = true;
                 }
@@ -476,19 +471,31 @@ pub(super) fn decode(
                 metadata,
             };
         }
-        yield StreamEvent::Done {
-            finish_reason: finished.ok_or_else(|| protocol("terminal finish missing"))?,
-        };
+        let finish_reason = finished.ok_or_else(|| protocol("terminal finish missing"))?;
+        if let Some(served) = &served {
+            served.record(&profile);
+        }
+        yield StreamEvent::Done { finish_reason };
     })
 }
+/// One call's whole answer, with what is known of the call when it failed:
+/// what opening it said, or, once its answer started, never that it cost
+/// nothing.
 pub(super) async fn collect(
     provider: &NativeOpenRouterProvider,
     request: ChatRequest,
-) -> AccountedChatOutcome {
+) -> (AccountedChatOutcome, FailureFacts) {
     let mut usage = MeasuredTokenUsage::lower_bound(TokenUsageStats::default());
     let mut cost_microunits = None;
+    let mut facts = None;
     let response = async {
-        let mut stream = provider.chat_stream(request).await?;
+        let mut stream = match provider.open(request).await {
+            Ok(stream) => stream,
+            Err(failed) => {
+                facts = Some(failed.facts);
+                return Err(failed.error);
+            }
+        };
         let mut content = String::new();
         let mut calls = BTreeMap::<usize, ToolCall>::new();
         let mut raw = BTreeMap::<usize, String>::new();
@@ -557,12 +564,19 @@ pub(super) async fn collect(
         Ok(response)
     }
     .await;
+    let facts = match &response {
+        Ok(_) => FailureFacts::default(),
+        Err(error) => facts.unwrap_or_else(|| failover::answer_facts(error)),
+    };
     if response.is_err() {
         usage.complete = false;
     }
-    AccountedChatOutcome {
-        response,
-        usage,
-        cost_microunits,
-    }
+    (
+        AccountedChatOutcome {
+            response,
+            usage,
+            cost_microunits,
+        },
+        facts,
+    )
 }

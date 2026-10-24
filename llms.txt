@@ -258,7 +258,7 @@ events, Automations, and sandbox lifecycle.
   that check is review evidence, not confinement.
 - Provider failures: a native call that fails with 429, a 5xx status, a timeout or
   a reset connection moves at once to another healthy OpenRouter endpoint of the
-  same model that Team & budget retained, and is otherwise retried once on the same
+  same model that fits the Agent's budget, and is otherwise retried once on the same
   model, and 400 to 403 are not; an
   Ollama stream that ends early is retried once, older tool output is replaced by a
   placeholder in later requests, and a request that would overflow the context

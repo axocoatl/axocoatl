@@ -122,6 +122,37 @@ impl LoadoutRuns {
             .unwrap_or_default()
     }
 
+    /// Forget what `session_id`'s native providers recorded (the Ollama
+    /// versions and OpenRouter endpoints that served them) once the Session
+    /// is closed or deleted, so the daemon holds them only for Sessions that
+    /// exist. A run reads them when it writes its Outcome, before then; a
+    /// Session opened again records anew.
+    pub(crate) fn forget_served(&self, session_id: &str) {
+        self.ollama_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+    }
+
+    /// The Sessions whose served logs the daemon holds: (Ollama, OpenRouter).
+    #[cfg(test)]
+    pub(crate) fn served_sessions(&self) -> (usize, usize) {
+        (
+            self.ollama_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+            self.openrouter_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+        )
+    }
+
     /// Where `session_id`'s native OpenRouter providers record the
     /// endpoints that answered them.
     pub(crate) fn openrouter_served(

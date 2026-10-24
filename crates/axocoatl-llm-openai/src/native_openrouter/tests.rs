@@ -791,6 +791,91 @@ async fn reasoning_goes_back_unmodified_with_tool_results_and_raises_the_prompt_
     assert!(provider.execution_bounds(&request).is_none());
 }
 
+/// After a call moves to another endpoint of the model, the reasoning an
+/// earlier tool-calling turn returned from the first endpoint goes back to
+/// the new one unchanged, as OpenRouter documents for tool use and as its
+/// own load balancing sends a conversation's turns to several providers;
+/// the new endpoint's bound includes the replayed reasoning tokens.
+#[tokio::test]
+async fn reasoning_goes_back_unchanged_to_the_endpoint_a_call_moved_to() {
+    let server = MockServer::start().await;
+    let (row, endpoints) = captured(CLAUDE);
+    catalog(&server, row, endpoints).await;
+    let profiles = observe_native_openrouter_profiles(&server.uri(), KEY, CLAUDE)
+        .await
+        .unwrap();
+    let endpoints = vec![
+        tagged(&profiles, "anthropic"),
+        tagged(&profiles, "amazon-bedrock"),
+    ];
+    let reasoning = endpoints[0].reasoning_request(None).unwrap();
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"provider":{"only":["anthropic"]}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            reasoning_tool_stream(reasoning_usage()),
+            "text/event-stream",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let answer = [
+        frame(json!({"content":"It is noon in Oslo."}), Some("stop"), None),
+        frame(
+            json!({}),
+            Some("stop"),
+            Some(json!({"prompt_tokens":932,"completion_tokens":12,
+            "total_tokens":944,"cost":0.001984,"is_byok":false})),
+        ),
+        "data: [DONE]\n\n".into(),
+    ]
+    .concat()
+    .replace(SONNET_PROVIDER, "Amazon Bedrock");
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"provider":{"only":["amazon-bedrock"]}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(answer, "text/event-stream"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = NativeOpenRouterProvider::connect_observed_endpoints(
+        endpoints, KEY, 1024, 65536, reasoning,
+    )
+    .await
+    .unwrap();
+    let mut request = ChatRequest::simple("Which is further east, Oslo or Lima? Get its time.");
+    request.tools.push(time_tool());
+    let first = provider
+        .chat_with_accounting(request.clone())
+        .await
+        .response
+        .unwrap();
+    request
+        .messages
+        .push(axocoatl_core::ChatMessage::assistant_with_tool_calls(
+            first.content.clone(),
+            first.tool_calls.clone(),
+        ));
+    let mut result = axocoatl_core::ChatMessage::tool("12:00");
+    result.tool_call_id = Some(first.tool_calls[0].id.clone());
+    request.messages.push(result);
+    provider.endpoint_failover().unwrap().move_to(1, true);
+    let bound = provider.execution_bounds(&request).unwrap();
+    let outcome = provider.chat_with_accounting(request).await;
+    assert_eq!(outcome.response.unwrap().content, "It is noon in Oslo.");
+    let (body, sent_bytes) = posted(&server.received_requests().await.unwrap()).remove(1);
+    assert_eq!(body["provider"]["only"], json!(["amazon-bedrock"]));
+    assert_eq!(
+        body["messages"][1]["reasoning_details"],
+        json!([{"type":"reasoning.text","text":"Oslo is east of Lima.","signature":"sig-1",
+            "format":"anthropic-claude-v1","index":0}])
+    );
+    let prompt = (PROMPT_TEMPLATE_ALLOWANCE + sent_bytes + 443) as u64;
+    assert_eq!(bound.token_limit, prompt + 5120);
+}
+
 #[tokio::test]
 async fn summary_and_encrypted_reasoning_blocks_merge_by_index() {
     let server = MockServer::start().await;
@@ -1679,13 +1764,23 @@ async fn provider_over(server: &MockServer) -> NativeOpenRouterProvider {
         .unwrap()
 }
 
+/// The failure opening `request` on `provider` meets.
+async fn open_failure(provider: &NativeOpenRouterProvider, request: ChatRequest) -> FailedCall {
+    match provider.open_chat_stream(request).await {
+        Err(failed) => failed,
+        Ok(_) => panic!("the call must fail before its answer"),
+    }
+}
+
 /// A refusal is said in plain words: which endpoint of which model, what
 /// OpenRouter reports and what to do. Never OpenRouter's raw JSON, its
-/// upstream's text with the hint to add a provider key, or the account id.
-/// Nothing was generated, so the call is known to have cost nothing.
+/// upstream's text with the hint to add a provider key, the account id, or a
+/// body that is not OpenRouter's JSON (an HTML error page). Nothing was
+/// generated, so the call is known to have cost nothing; whether the
+/// failure is the endpoint's own is said with it, never read from words.
 #[tokio::test]
 async fn refusals_are_said_in_plain_words_and_known_to_cost_nothing() {
-    for (status, body, retry_after, expected, endpoints) in [
+    for (status, body, retry_after, expected, endpoint_failure) in [
         (
             429,
             UPSTREAM_LIMITED,
@@ -1720,9 +1815,17 @@ async fn refusals_are_said_in_plain_words_and_known_to_cost_nothing() {
             "upstream busy",
             None,
             "OpenRouter reports endpoint finite/exact (FiniteProvider) of \
-             meta-llama/test-instruct as unavailable right now (HTTP 503: upstream busy), a \
-             provider outage, not your setup: try again later, or choose another model; nothing \
-             was generated",
+             meta-llama/test-instruct as unavailable right now (HTTP 503), a provider outage, \
+             not your setup: try again later, or choose another model; nothing was generated",
+            true,
+        ),
+        (
+            524,
+            "<!DOCTYPE html><html><head><title>openrouter.ai | 524: A timeout occurred</title></head><body>add your own key</body></html>",
+            None,
+            "OpenRouter reports endpoint finite/exact (FiniteProvider) of \
+             meta-llama/test-instruct as unavailable right now (HTTP 524), a provider outage, \
+             not your setup: try again later, or choose another model; nothing was generated",
             true,
         ),
         (
@@ -1748,22 +1851,20 @@ async fn refusals_are_said_in_plain_words_and_known_to_cost_nothing() {
             .mount(&server)
             .await;
         let provider = provider(&server).await;
-        let error = match provider.chat_stream(ChatRequest::simple("one call")).await {
-            Err(error) => error,
-            Ok(_) => panic!("{status} must be refused"),
-        };
+        let failed = open_failure(&provider, ChatRequest::simple("one call")).await;
         let ProviderError::ApiError {
             status: got,
             message,
             ..
-        } = &error
+        } = &failed.error
         else {
-            panic!("{status}: {error:?}")
+            panic!("{status}: {:?}", failed.error)
         };
         assert_eq!(*got, status);
         assert_eq!(message, expected);
         for leaked in [
             "{",
+            "<",
             "own key",
             "user_",
             "integrations",
@@ -1772,23 +1873,91 @@ async fn refusals_are_said_in_plain_words_and_known_to_cost_nothing() {
         ] {
             assert!(!message.contains(leaked), "{leaked}: {message}");
         }
-        assert!(provider.failed_without_charge(&error), "{message}");
-        assert_eq!(failover::endpoint_failure(&error), endpoints, "{message}");
+        assert!(failed.facts.cost_nothing, "{message}");
+        assert_eq!(failed.facts.endpoint_failure, endpoint_failure, "{message}");
+        assert!(!failed.facts.summary.is_empty(), "{message}");
     }
-    // A transport failure after the request left is not known to be free.
-    assert!(!failover::charge_free(&ProviderError::Network(
-        "timed out: the answer did not start".into()
-    )));
-    assert!(failover::endpoint_failure(&ProviderError::Network(
-        "timed out: the answer did not start".into()
-    )));
+    // A transport failure after the request may have left is not known to
+    // be free; one where no connection was made is.
+    let timed_out = failover::transport(
+        ProviderError::Network("timed out: the answer did not start".into()),
+        false,
+        true,
+    );
+    assert!(!timed_out.facts.cost_nothing);
+    assert!(timed_out.facts.endpoint_failure);
+    assert_eq!(timed_out.facts.summary, "timed out");
+    // A connection to OpenRouter never made is every endpoint's, even one
+    // that timed out.
+    for interrupted in [false, true] {
+        let refused = failover::transport(
+            ProviderError::Network("error sending request: connection refused".into()),
+            true,
+            interrupted,
+        );
+        assert!(refused.facts.cost_nothing);
+        assert!(!refused.facts.endpoint_failure);
+    }
 }
 
-/// A provider over several endpoints starts on the first. After a failure
-/// that is the endpoint's own, `fail_over` moves calls to the next one that
-/// can carry the request and says so; calls then stay there, each request
-/// pins its one endpoint, and the endpoint that answered is recorded. A
-/// limit OpenRouter puts on the account, or a rejection, moves nothing.
+/// An error OpenRouter reports inside an answer is never known to be free,
+/// whatever its message says: the endpoint may have generated (and billed)
+/// reasoning before it, which a native answer does not show until later.
+/// Its status alone says whether it is the endpoint's own; the endpoint is
+/// not counted as having answered the call.
+#[tokio::test]
+async fn an_error_inside_the_answer_is_never_known_to_be_free() {
+    let server = MockServer::start().await;
+    metadata(&server).await;
+    let reasoning = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+        "choices":[{"index":0,"delta":{"reasoning":"thinking about it"}}]});
+    let failure = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+        "error":{"code":502,"message":"Upstream aborted: nothing was generated after the cutoff; \
+                 OpenRouter is limiting this account's requests"},"choices":[]});
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("data: {reasoning}\n\ndata: {failure}\n\n"),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+    let served = Arc::new(NativeOpenRouterServed::default());
+    let provider = provider(&server)
+        .await
+        .with_served_endpoints(served.clone());
+    let mut stream = provider
+        .open_chat_stream(ChatRequest::simple("one call"))
+        .await
+        .unwrap();
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert!(matches!(error, ProviderError::ApiError { status: 502, .. }));
+    let failed = provider.failed_answer(error);
+    assert!(!failed.facts.cost_nothing);
+    assert!(failed.facts.endpoint_failure, "a 502 is the endpoint's own");
+    assert_eq!(failed.facts.summary, "unavailable (HTTP 502)");
+    // The same words as a protocol failure (no numeric status) move nothing.
+    let quoted = failover::answer_failure(protocol(
+        "endpoint finite/exact reported an error in its answer: upstream timed out",
+    ));
+    assert!(!quoted.facts.endpoint_failure && !quoted.facts.cost_nothing);
+    // The non-streaming path says the same.
+    let (outcome, facts) = provider
+        .chat_with_accounting_and_facts(ChatRequest::simple("one call"))
+        .await;
+    assert!(outcome.response.is_err());
+    assert!(!outcome.usage.complete);
+    assert!(!facts.cost_nothing && facts.endpoint_failure);
+    assert!(served.endpoints().is_empty(), "{:?}", served.endpoints());
+}
+
+/// A provider over several endpoints starts on the first. The candidates a
+/// call can move to are the endpoints after the current one, wrapping
+/// around, that can carry the request and were not excluded; each reserves
+/// at its own prices. A move takes effect only when the host makes it, and
+/// counts against the endpoint it left only when that endpoint failed the
+/// call. Calls then stay there, each request pins its one endpoint, and the
+/// endpoint that answered each call to the end is recorded.
 #[tokio::test]
 async fn a_failover_moves_calls_to_the_next_endpoint_that_fits() {
     let server = endpoints_server(vec![
@@ -1805,17 +1974,21 @@ async fn a_failover_moves_calls_to_the_next_endpoint_that_fits() {
         .respond_with(ResponseTemplate::new(429).set_body_string(UPSTREAM_LIMITED))
         .mount(&server)
         .await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .and(wiremock::matchers::body_partial_json(
-            json!({"provider":{"only":["other/exact"]}}),
-        ))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_raw(reply_from("OtherProvider"), "text/event-stream"),
-        )
-        .mount(&server)
-        .await;
+    for (tag, provider) in [
+        ("other/exact", "OtherProvider"),
+        ("third/exact", "ThirdProvider"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(wiremock::matchers::body_partial_json(
+                json!({"provider":{"only":[tag]}}),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(reply_from(provider), "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+    }
     let served = Arc::new(NativeOpenRouterServed::default());
     let provider = provider_over(&server)
         .await
@@ -1825,35 +1998,30 @@ async fn a_failover_moves_calls_to_the_next_endpoint_that_fits() {
     assert_eq!(failover.current_endpoint(), 0);
     let request = ChatRequest::simple("one call");
     let cheap = provider.execution_bounds(&request).unwrap();
-    let error = provider.chat(request.clone()).await.unwrap_err();
-    assert!(matches!(error, ProviderError::ApiError { status: 429, .. }));
+    let failed = open_failure(&provider, request.clone()).await;
+    assert!(matches!(
+        failed.error,
+        ProviderError::ApiError { status: 429, .. }
+    ));
+    assert!(failed.facts.endpoint_failure && failed.facts.cost_nothing);
 
-    // Nothing moves for the account's own limit or a rejection.
-    for kept in [
-        ProviderError::ApiError {
-            provider: PROVIDER.into(),
-            status: 429,
-            message: failover::refusal(provider.endpoint(), 429, ACCOUNT_LIMITED_BODY),
-        },
-        ProviderError::ApiError {
-            provider: PROVIDER.into(),
-            status: 401,
-            message: failover::refusal(provider.endpoint(), 401, "no such key"),
-        },
-    ] {
-        assert_eq!(failover.fail_over(&request, &kept, &[0]), None);
-    }
-    let (next, words) = failover.fail_over(&request, &error, &[0]).unwrap();
-    assert_eq!(next, 1);
-    assert_eq!(
-        words,
-        "from endpoint finite/exact (FiniteProvider) to endpoint other/exact (OtherProvider)"
-    );
-    assert_eq!(failover.current_endpoint(), 1);
-    // The next call reserves at the new endpoint's prices.
-    let pricier = provider.execution_bounds(&request).unwrap();
+    assert_eq!(failover.candidates(&request, &[0]), [1, 2]);
+    assert_eq!(failover.candidates(&request, &[1]), [2]);
+    let pricier = failover.execution_bounds_on(1, &request).unwrap();
     assert!(pricier.cost_microunits > cheap.cost_microunits);
     assert_eq!(pricier.token_limit, cheap.token_limit);
+    assert_eq!(failover.execution_bounds_on(0, &request), Some(cheap));
+    assert_eq!(failover.execution_bounds_on(3, &request), None);
+    assert_eq!(
+        failover.describe_move(0, 1),
+        "from endpoint finite/exact (FiniteProvider) to endpoint other/exact (OtherProvider)"
+    );
+    // Nothing moves until the host moves it.
+    assert_eq!(failover.current_endpoint(), 0);
+    failover.move_to(1, true);
+    assert_eq!(failover.current_endpoint(), 1);
+    // The next call reserves at the new endpoint's prices.
+    assert_eq!(provider.execution_bounds(&request), Some(pricier));
     // The capabilities the Agent's context is fitted to stay the first's.
     assert_eq!(provider.capabilities().max_context_tokens, 2048);
     let outcome = provider.chat_with_accounting(request.clone()).await;
@@ -1862,9 +2030,15 @@ async fn a_failover_moves_calls_to_the_next_endpoint_that_fits() {
     assert_eq!(outcome.cost_microunits, Some(8));
     // Later calls stay on the endpoint calls were moved to.
     provider.chat(request.clone()).await.unwrap();
+    // The order wraps around from the current endpoint.
+    assert_eq!(failover.candidates(&request, &[]), [2, 0]);
+    assert_eq!(failover.candidates(&request, &[2, 0]), Vec::<usize>::new());
+    // A move the host chose (not a failure) is not counted as one.
+    failover.move_to(2, false);
+    provider.chat(request.clone()).await.unwrap();
     assert_eq!(
         pinned(&server).await,
-        ["finite/exact", "other/exact", "other/exact"]
+        ["finite/exact", "other/exact", "other/exact", "third/exact"]
     );
     assert_eq!(
         served.endpoints(),
@@ -1880,22 +2054,20 @@ async fn a_failover_moves_calls_to_the_next_endpoint_that_fits() {
                 provider: "OtherProvider".into(),
                 calls: 2,
                 moved: 0,
+            },
+            ServedOpenRouterEndpoint {
+                endpoint: "third/exact".into(),
+                provider: "ThirdProvider".into(),
+                calls: 1,
+                moved: 0,
             }
         ]
     );
-    // An endpoint the call was already sent to is never chosen again; the
-    // order wraps around.
-    assert_eq!(
-        failover.fail_over(&request, &error, &[1, 2, 0]),
-        None,
-        "every endpoint tried"
-    );
-    let (next, _) = failover.fail_over(&request, &error, &[1, 2]).unwrap();
-    assert_eq!(next, 0);
 }
 
 /// An answer from another provider than the endpoint the call pinned is
-/// refused, on an endpoint retained for failover as on the first.
+/// refused, on an endpoint retained for failover as on the first, and is
+/// not the endpoint's own failure: the call is not moved again.
 #[tokio::test]
 async fn an_answer_from_another_provider_is_refused_on_a_fallback_too() {
     let server = endpoints_server(vec![
@@ -1911,27 +2083,37 @@ async fn an_answer_from_another_provider_is_refused_on_a_fallback_too() {
         )
         .mount(&server)
         .await;
-    let provider = provider_over(&server).await;
+    let served = Arc::new(NativeOpenRouterServed::default());
+    let provider = provider_over(&server)
+        .await
+        .with_served_endpoints(served.clone());
     let failover = provider.endpoint_failover().unwrap();
-    let request = ChatRequest::simple("one call");
-    let limited = ProviderError::ApiError {
-        provider: PROVIDER.into(),
-        status: 429,
-        message: failover::refusal(provider.endpoint(), 429, UPSTREAM_LIMITED),
-    };
-    assert_eq!(failover.fail_over(&request, &limited, &[0]).unwrap().0, 1);
-    let outcome = provider.chat_with_accounting(request).await;
+    failover.move_to(1, true);
+    let (outcome, facts) = provider
+        .chat_with_accounting_and_facts(ChatRequest::simple("one call"))
+        .await;
     let message = outcome.response.unwrap_err().to_string();
     assert!(
         message.contains("response changed the exact admitted provider"),
         "{message}"
+    );
+    assert!(!facts.endpoint_failure && !facts.cost_nothing);
+    assert_eq!(
+        served.endpoints(),
+        [ServedOpenRouterEndpoint {
+            endpoint: "finite/exact".into(),
+            provider: "FiniteProvider".into(),
+            calls: 0,
+            moved: 1,
+        }]
     );
 }
 
 /// An endpoint retained for failover whose contract no longer matches the
 /// catalog (here its price rose) is never sent to: the call fails before
 /// anything is sent, says which endpoint changed, is known to have cost
-/// nothing, and moves on to the next endpoint that still matches.
+/// nothing and to be that endpoint's own failure, and moves on to the next
+/// endpoint that still matches.
 #[tokio::test]
 async fn a_fallback_whose_contract_changed_is_never_sent_to() {
     let server = MockServer::start().await;
@@ -1971,17 +2153,9 @@ async fn a_fallback_whose_contract_changed_is_never_sent_to() {
     let provider = provider_over(&server).await;
     let failover = provider.endpoint_failover().unwrap();
     let request = ChatRequest::simple("one call");
-    let limited = ProviderError::ApiError {
-        provider: PROVIDER.into(),
-        status: 429,
-        message: failover::refusal(provider.endpoint(), 429, UPSTREAM_LIMITED),
-    };
-    assert_eq!(failover.fail_over(&request, &limited, &[0]).unwrap().0, 1);
-    let changed = match provider.chat_stream(request.clone()).await {
-        Err(error) => error,
-        Ok(_) => panic!("a changed endpoint must not be sent to"),
-    };
-    let message = changed.to_string();
+    failover.move_to(1, true);
+    let changed = open_failure(&provider, request.clone()).await;
+    let message = changed.error.to_string();
     assert!(
         message.contains(
             "the retained OpenRouter endpoint other/exact (OtherProvider) of \
@@ -1989,16 +2163,67 @@ async fn a_fallback_whose_contract_changed_is_never_sent_to() {
         ),
         "{message}"
     );
-    assert!(provider.failed_without_charge(&changed));
-    assert!(pinned(&server).await.is_empty(), "nothing was sent");
-    let (next, words) = failover.fail_over(&request, &changed, &[0, 1]).unwrap();
-    assert_eq!(next, 2);
-    assert!(
-        words.ends_with("to endpoint third/exact (ThirdProvider)"),
-        "{words}"
+    assert!(changed.facts.cost_nothing && changed.facts.endpoint_failure);
+    assert_eq!(
+        changed.facts.summary,
+        "its contract changed since Team & budget reviewed it"
     );
+    assert!(pinned(&server).await.is_empty(), "nothing was sent");
+    assert_eq!(failover.candidates(&request, &[0, 1]), [2]);
+    failover.move_to(2, true);
     provider.chat(request).await.unwrap();
     assert_eq!(pinned(&server).await, ["third/exact"]);
+}
+
+/// When OpenRouter's catalog no longer lists any endpoint of the model that
+/// native Sessions can use, the call is refused before it is sent, saying so
+/// once, and no other endpoint is tried for it: every one would say the same.
+#[tokio::test]
+async fn a_model_with_no_usable_endpoint_now_is_said_once_and_moves_nothing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/models")).respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{"id":MODEL,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},"supported_parameters":["max_tokens","tools"]}]}))).mount(&server).await;
+    let rows = |rows: Vec<Value>| json!({"data":{"id":MODEL,"endpoints":rows}});
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{MODEL}/endpoints")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(rows(vec![endpoint_row(
+                "finite/exact",
+                "FiniteProvider",
+                1,
+                0,
+            )])),
+        )
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{MODEL}/endpoints")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(rows(vec![endpoint_row(
+                "other/exact",
+                "OtherProvider",
+                2,
+                -5,
+            )])),
+        )
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    let provider = provider(&server).await;
+    let failed = open_failure(&provider, ChatRequest::simple("one call")).await;
+    let message = failed.error.to_string();
+    assert!(
+        message.contains("OpenRouter reports every endpoint that could serve"),
+        "{message}"
+    );
+    assert_eq!(
+        message.matches(failover::NOTHING_SENT).count(),
+        1,
+        "{message}"
+    );
+    assert!(failed.facts.cost_nothing && !failed.facts.endpoint_failure);
+    assert!(pinned(&server).await.is_empty());
 }
 
 /// A provider over several endpoints opens while at least one of them can
@@ -2066,8 +2291,8 @@ async fn opening_needs_one_usable_endpoint_and_names_each_otherwise() {
         message.contains(
             "OpenRouter reports every endpoint of meta-llama/test-instruct that this Agent may \
              use as rate-limited or unavailable right now (finite/exact (FiniteProvider): \
-             reported unavailable or degraded (HTTP 503); other/exact (OtherProvider): reported \
-             unavailable or degraded (HTTP 503)). This is a provider outage, not your setup: try \
+             reported unavailable or degraded right now; other/exact (OtherProvider): reported \
+             unavailable or degraded right now). This is a provider outage, not your setup: try \
              again later, or choose another model"
         ),
         "{message}"
@@ -2086,9 +2311,11 @@ async fn opening_needs_one_usable_endpoint_and_names_each_otherwise() {
     }
 }
 
-/// After every endpoint failed one call, the error names each endpoint once
-/// with its last failure. Outages alone are said as OpenRouter's outage,
-/// with what to do and the last `Retry-After`; anything else is not.
+/// After the endpoints failed one call, the error names each endpoint once
+/// with its last failure, in the words its failure gave. Outages alone are
+/// said as OpenRouter's outage, with what to do and the last `Retry-After`;
+/// a changed contract is not an outage, and a last failure that is not the
+/// endpoint's own ends the call as it is.
 #[test]
 fn an_exhausted_call_names_every_endpoint_once() {
     let endpoint = |tag: &str, provider: &str| NativeOpenRouterObservation {
@@ -2101,18 +2328,21 @@ fn an_exhausted_call_names_every_endpoint_once() {
         endpoint("deepinfra/bf16", "DeepInfra"),
         endpoint("groq", "Groq"),
     ];
-    let status = |status: u16, message: &str| ProviderError::ApiError {
-        provider: PROVIDER.into(),
-        status,
-        message: message.into(),
-    };
+    let limited =
+        |retry_after| failover::refusal(&endpoints[0], 429, UPSTREAM_LIMITED, retry_after);
+    let busy = failover::refusal(&endpoints[2], 503, "", None);
+    let timed_out = failover::transport(
+        ProviderError::Network("timed out: no answer".into()),
+        false,
+        true,
+    );
     let error = failover::exhausted(
         &endpoints,
         vec![
-            (0, status(429, "limited")),
-            (1, ProviderError::Network("timed out: no answer".into())),
-            (2, status(503, "busy")),
-            (0, status(429, "limited again (Retry-After: 5 s)")),
+            (0, limited(None)),
+            (1, timed_out),
+            (2, busy),
+            (0, limited(Some(5))),
         ],
     );
     let ProviderError::ApiError {
@@ -2131,8 +2361,23 @@ fn an_exhausted_call_names_every_endpoint_once() {
          This is a provider outage, not your setup: try again later, or choose another model; \
          nothing from them reached the Agent (Retry-After: 5 s)"
     );
-    let changed = invalid(format!("other/exact {}", failover::CONTRACT_CHANGED));
-    let error = failover::exhausted(&endpoints, vec![(0, status(429, "limited")), (1, changed)]);
+    // An in-answer failure's quoted words never set its Retry-After.
+    let quoted = failover::answer_failure(ProviderError::ApiError {
+        provider: PROVIDER.into(),
+        status: 503,
+        message: "native OpenRouter: endpoint groq (Groq) reported an error in its answer: \
+                  busy (Retry-After: 99 s); its accounting remains partial"
+            .into(),
+    });
+    let message =
+        failover::exhausted(&endpoints, vec![(0, limited(None)), (2, quoted)]).to_string();
+    assert!(!message.contains("Retry-After"), "{message}");
+    let changed = failover::unsent(
+        invalid(format!("other/exact {}", failover::CONTRACT_CHANGED)),
+        true,
+        "its contract changed since Team & budget reviewed it",
+    );
+    let error = failover::exhausted(&endpoints, vec![(0, limited(None)), (1, changed)]);
     let message = error.to_string();
     assert!(
         matches!(error, ProviderError::InvalidRequest { .. })
@@ -2142,6 +2387,14 @@ fn an_exhausted_call_names_every_endpoint_once() {
                  (DeepInfra): its contract changed since Team & budget reviewed it)"
             ),
         "{message}"
+    );
+    let account = failover::refusal(&endpoints[1], 429, ACCOUNT_LIMITED_BODY, Some(3));
+    let error = failover::exhausted(&endpoints, vec![(0, limited(None)), (1, account)]);
+    assert!(
+        error
+            .to_string()
+            .starts_with("openrouter API error: 429 - OpenRouter is limiting this account's"),
+        "{error}"
     );
 }
 
@@ -2188,17 +2441,14 @@ async fn a_refused_catalog_read_is_said_plainly_and_moves_nothing() {
         )
         .mount(&server)
         .await;
-    let error = match provider.chat_stream(ChatRequest::simple("one call")).await {
-        Err(error) => error,
-        Ok(_) => panic!("an unreadable catalog must refuse the call"),
-    };
+    let failed = open_failure(&provider, ChatRequest::simple("one call")).await;
     let ProviderError::ApiError {
         status: 429,
         message,
         ..
-    } = &error
+    } = &failed.error
     else {
-        panic!("{error:?}");
+        panic!("{:?}", failed.error);
     };
     assert_eq!(
         message,
@@ -2206,14 +2456,14 @@ async fn a_refused_catalog_read_is_said_plainly_and_moves_nothing() {
          available credits for this request in time. Retry shortly.); nothing was sent to the \
          model (Retry-After: 3 s)"
     );
-    assert!(provider.failed_without_charge(&error));
-    assert!(!failover::endpoint_failure(&error));
+    assert!(failed.facts.cost_nothing);
+    assert!(!failed.facts.endpoint_failure);
     assert!(pinned(&server).await.is_empty());
-    // A body that is not OpenRouter's JSON is quoted as text; JSON that is
-    // not OpenRouter's, or cut short, is not quoted.
+    // A body that is not OpenRouter's JSON (a gateway's text, an HTML page,
+    // JSON cut short) is never quoted.
     assert_eq!(
         failover::catalog_refusal(502, "bad gateway"),
-        "OpenRouter's model catalog could not be read (HTTP 502: bad gateway)"
+        "OpenRouter's model catalog could not be read (HTTP 502)"
     );
     assert_eq!(
         failover::catalog_refusal(502, r#"{"error":{"message":"Provider ret"#),

@@ -7157,6 +7157,7 @@ impl AxocoatlDaemon {
     pub async fn close_session(&self, id: &str) -> Result<(), DaemonError> {
         let gone = self.session_folder_gone(id).await;
         self.close_session_inner(id).await?;
+        self.loadout_runs.forget_served(id);
         self.after_session_folder_lifecycle(id, "closed", gone);
         Ok(())
     }
@@ -7307,6 +7308,7 @@ impl AxocoatlDaemon {
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
         let gone = self.session_folder_gone(id).await;
         self.delete_session_inner(id).await?;
+        self.loadout_runs.forget_served(id);
         self.after_session_folder_lifecycle(id, "deleted", gone);
         Ok(())
     }

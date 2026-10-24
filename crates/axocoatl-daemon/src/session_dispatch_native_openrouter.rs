@@ -110,8 +110,10 @@ impl NativeDefinitionPreparation {
 }
 
 /// At most this many endpoints besides the selected one are retained for
-/// failover, cheapest first, so a call that every endpoint refuses ends
-/// after a bounded number of free refusals.
+/// failover in a profile, cheapest first: the endpoints a call can move to
+/// when OpenRouter's catalog cannot be read as its activation opens. An
+/// activation adds every other one that fits then
+/// ([`NativeOpenRouterRuntimeConfiguration::connectable_endpoints`]).
 const OPENROUTER_FAILOVER_ENDPOINTS: usize = 3;
 
 /// Run one provider metadata request (an endpoint or model observation, no
@@ -412,22 +414,24 @@ impl NativeOpenRouterRuntimeConfiguration {
     }
 
     /// The endpoints an activation of the definition `config` may send
-    /// calls to: those this profile retains. A profile retained before
-    /// 1.5.0's failover lists none besides its own, so its activation adds
-    /// up to [`OPENROUTER_FAILOVER_ENDPOINTS`] that OpenRouter's catalog
-    /// lists healthy now and that pass the checks Team & budget applies to a
-    /// failover endpoint (the same model, at least the context and prompt
-    /// limit, the same output and reasoning setting, the smallest call
-    /// within the approved budget), cheapest first. Each is checked against
-    /// the catalog again before each call, as every endpoint is. A catalog
-    /// that cannot be read now adds none.
+    /// calls to: those this profile retains, then every other endpoint of
+    /// the model that OpenRouter's catalog lists healthy now and that passes
+    /// the checks Team & budget applies to a failover endpoint (the same
+    /// model, at least the context and prompt limit, the same output and
+    /// reasoning setting, the smallest call within the approved budget),
+    /// cheapest first. So a call can move to any endpoint of the model that
+    /// fits, not only those retained when Team & budget was applied, and a
+    /// profile retained before 1.5.0's failover (which lists none besides
+    /// its own) fails over too. Each is checked against the catalog again
+    /// before each call, as every endpoint is. A catalog that cannot be read
+    /// now adds none.
     async fn connectable_endpoints(
         &self,
         config: Option<&AgentConfig>,
         key: &str,
     ) -> Vec<axocoatl_llm_openai::NativeOpenRouterObservation> {
         let mut endpoints = self.endpoints();
-        let (None, Some(config)) = (&self.failover_observations, config) else {
+        let Some(config) = config else {
             return endpoints;
         };
         let selected = &self.openrouter_observation;
@@ -440,11 +444,15 @@ impl NativeOpenRouterRuntimeConfiguration {
         else {
             return endpoints;
         };
-        endpoints.extend(
-            live.into_iter()
-                .filter(|candidate| self.validate_failover(config, candidate).is_ok())
-                .take(OPENROUTER_FAILOVER_ENDPOINTS),
-        );
+        for candidate in live {
+            if !endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_tag == candidate.endpoint_tag)
+                && self.validate_failover(config, &candidate).is_ok()
+            {
+                endpoints.push(candidate);
+            }
+        }
         endpoints
     }
 }

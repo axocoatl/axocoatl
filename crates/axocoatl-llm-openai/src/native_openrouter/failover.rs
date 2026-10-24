@@ -1,13 +1,13 @@
 //! What a native OpenRouter call says when it fails before producing
-//! anything, which failures another endpoint of the same model may avoid,
-//! and which endpoints answered.
+//! anything, what is known of it, and which endpoints answered.
 //!
 //! Every failure is said in plain words: OpenRouter's own message at most,
 //! never its raw JSON, its upstream's raw text (which carries a hint to add a
-//! provider key, BYOK, that native Sessions refuse) or account data. A
-//! failure where nothing reached the model, or that OpenRouter refused with
-//! an HTTP status before generating anything, says so in words a metered
-//! host reads to settle the call at zero ([`charge_free`]).
+//! provider key, BYOK, that native Sessions refuse), a body that is not
+//! OpenRouter's JSON (such as an HTML error page) or account data. What is
+//! known of a failure ([`FailureFacts`]: that it cost nothing, that it was
+//! the endpoint's own) is set where it happened, never read back from the
+//! words, which can quote OpenRouter's message.
 use super::*;
 
 /// Every failure this provider writes where nothing was sent to the model.
@@ -54,8 +54,9 @@ fn quoted(text: &str) -> String {
 
 /// What an error body of OpenRouter's says: its message (none for an
 /// upstream's bare "Provider returned error") and whether it names the
-/// upstream provider that refused. A body that is not OpenRouter's JSON is
-/// quoted as text; other JSON is not quoted.
+/// upstream provider that refused. A body that is not OpenRouter's JSON (an
+/// HTML error page, a gateway's text, JSON cut at the bounded body) says
+/// nothing: it may carry an upstream's raw text.
 struct Said {
     message: Option<String>,
     upstream: bool,
@@ -64,12 +65,8 @@ struct Said {
 impl Said {
     fn parse(body: &str) -> Self {
         let Ok(value) = serde_json::from_str::<Value>(body) else {
-            // JSON cut at the bounded body, or other structured text, is
-            // never quoted: it may carry the upstream's raw text.
-            let text = quoted(body);
-            let structured = text.starts_with('{') || text.starts_with('[');
             return Self {
-                message: (!text.is_empty() && !structured).then_some(text),
+                message: None,
                 upstream: false,
             };
         };
@@ -94,38 +91,112 @@ impl Said {
     }
 }
 
-/// What a request to `observation` that OpenRouter refused with `status`
-/// and `body` says, before its `Retry-After`.
+/// A failure before anything was sent: it cost nothing.
+pub(super) fn unsent(error: ProviderError, endpoint_failure: bool, summary: &str) -> FailedCall {
+    FailedCall {
+        error,
+        facts: FailureFacts {
+            cost_nothing: true,
+            endpoint_failure,
+            summary: summary.into(),
+        },
+    }
+}
+
+/// A request to `observation` that OpenRouter refused with `status`, `body`
+/// and `retry_after`: generated nothing, so it cost nothing. An upstream's
+/// rate limit (a 429 that names the provider), a 408 and a 5xx are the
+/// endpoint's own; OpenRouter's limit on the account and a rejection of the
+/// request or key are not.
 pub(super) fn refusal(
     observation: &NativeOpenRouterObservation,
     status: u16,
     body: &str,
-) -> String {
+    retry_after: Option<u64>,
+) -> FailedCall {
     let said = Said::parse(body);
     let endpoint = describe(observation);
     let model = &observation.model;
-    match status {
-        429 if !said.upstream => format!(
-            "{ACCOUNT_LIMITED} right now (HTTP 429{}); this is OpenRouter's limit on the \
-             account, not one endpoint's: wait and try again; {NOTHING_GENERATED}",
-            said.detail()
+    let (message, endpoint_failure, summary) = match status {
+        429 if !said.upstream => (
+            format!(
+                "{ACCOUNT_LIMITED} right now (HTTP 429{}); this is OpenRouter's limit on the \
+                 account, not one endpoint's: wait and try again; {NOTHING_GENERATED}",
+                said.detail()
+            ),
+            false,
+            "OpenRouter limited the account (HTTP 429)".to_owned(),
         ),
-        429 => format!(
-            "OpenRouter reports endpoint {endpoint} of {model} as rate-limited upstream right \
-             now (HTTP 429), a provider outage, not your setup: try again later, or choose \
-             another model; {NOTHING_GENERATED}"
+        429 => (
+            format!(
+                "OpenRouter reports endpoint {endpoint} of {model} as rate-limited upstream \
+                 right now (HTTP 429), a provider outage, not your setup: try again later, or \
+                 choose another model; {NOTHING_GENERATED}"
+            ),
+            true,
+            "rate-limited (HTTP 429)".to_owned(),
         ),
-        408 | 500..=599 => format!(
-            "OpenRouter reports endpoint {endpoint} of {model} as unavailable right now (HTTP \
-             {status}{}), a provider outage, not your setup: try again later, or choose another \
-             model; {NOTHING_GENERATED}",
-            said.detail()
+        408 | 500..=599 => (
+            format!(
+                "OpenRouter reports endpoint {endpoint} of {model} as unavailable right now \
+                 (HTTP {status}{}), a provider outage, not your setup: try again later, or \
+                 choose another model; {NOTHING_GENERATED}",
+                said.detail()
+            ),
+            true,
+            if status == 408 {
+                "timed out (HTTP 408)".to_owned()
+            } else {
+                format!("unavailable (HTTP {status})")
+            },
         ),
-        _ => format!(
-            "OpenRouter refused the call to endpoint {endpoint} of {model} (HTTP \
-             {status}{}); {NOTHING_GENERATED}",
-            said.detail()
+        _ => (
+            format!(
+                "OpenRouter refused the call to endpoint {endpoint} of {model} (HTTP \
+                 {status}{}); {NOTHING_GENERATED}",
+                said.detail()
+            ),
+            false,
+            format!("refused (HTTP {status})"),
         ),
+    };
+    FailedCall {
+        error: ProviderError::ApiError {
+            provider: PROVIDER.into(),
+            status,
+            message: with_retry_after(message, retry_after),
+        },
+        facts: FailureFacts {
+            cost_nothing: true,
+            endpoint_failure,
+            summary,
+        },
+    }
+}
+
+/// A request to an endpoint whose transport failed: `error`, after the
+/// request may have reached OpenRouter, so it is not known to be free,
+/// unless the connection to OpenRouter was never made (`connect`), which
+/// every endpoint shares. A timeout or a closed connection once connected
+/// (`interrupted`) is the endpoint's own.
+pub(super) fn transport(error: ProviderError, connect: bool, interrupted: bool) -> FailedCall {
+    let interrupted = interrupted && !connect;
+    let summary = match &error {
+        _ if !interrupted => String::new(),
+        ProviderError::Network(message) | ProviderError::Stream(message)
+            if message.to_ascii_lowercase().contains("time") =>
+        {
+            "timed out".to_owned()
+        }
+        _ => "closed the connection".to_owned(),
+    };
+    FailedCall {
+        error,
+        facts: FailureFacts {
+            cost_nothing: connect,
+            endpoint_failure: interrupted,
+            summary,
+        },
     }
 }
 
@@ -162,6 +233,73 @@ pub(super) fn answer_error(
         },
         None => protocol(words),
     }
+}
+
+/// What is known of a call whose answer failed with `error` before any
+/// output: never that it cost nothing, since the answer had started. A 408,
+/// a 429 or a 5xx the answer reported, a timeout or a closed connection is
+/// the endpoint's own; anything else (a protocol violation, an answer from
+/// another provider) is not, and is never moved.
+pub(super) fn answer_failure(error: ProviderError) -> FailedCall {
+    FailedCall {
+        facts: answer_facts(&error),
+        error,
+    }
+}
+
+/// [`answer_failure`]'s facts.
+pub(super) fn answer_facts(error: &ProviderError) -> FailureFacts {
+    let summary = match error {
+        ProviderError::ApiError { status: 429, .. } => "rate-limited (HTTP 429)".to_owned(),
+        ProviderError::ApiError { status: 408, .. } => "timed out (HTTP 408)".to_owned(),
+        ProviderError::ApiError { status, .. } if (500..=599).contains(status) => {
+            format!("unavailable (HTTP {status})")
+        }
+        ProviderError::Network(message) => interrupted_words(message),
+        // This provider's own account of a malformed answer quotes the
+        // answer; only its transport's words are read.
+        ProviderError::Stream(message) if !message.starts_with(PROTOCOL_PREFIX) => {
+            interrupted_words(message)
+        }
+        _ => String::new(),
+    };
+    FailureFacts {
+        cost_nothing: false,
+        endpoint_failure: !summary.is_empty(),
+        summary,
+    }
+}
+
+/// `timed out` or `closed the connection` when the words of a transport
+/// failure (this provider's deadlines, or the HTTP client's) name one;
+/// empty otherwise.
+fn interrupted_words(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    if !provider_transport_interrupted(&lower) {
+        return String::new();
+    }
+    if lower.contains("time") {
+        "timed out".to_owned()
+    } else {
+        "closed the connection".to_owned()
+    }
+}
+
+/// Whether the lowercase words of a transport failure name a timeout or a
+/// connection the peer closed.
+fn provider_transport_interrupted(lower: &str) -> bool {
+    [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "broken pipe",
+        "unexpected eof",
+        "reset by peer",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 /// `error` with `extra` added to its words, before any `Retry-After` an
@@ -203,144 +341,31 @@ pub(super) fn catalog_refusal(status: u16, body: &str) -> String {
 }
 
 /// A failure to read OpenRouter's catalog, or to find the model in it,
-/// before a call: the call was never sent. A refused read already says what
-/// it is ([`catalog_refusal`]); a transport failure is said as one of the
-/// catalog's.
-pub(super) fn catalog_unreadable(error: ProviderError) -> ProviderError {
-    match error {
+/// before a call: the call was never sent, so it cost nothing, and the
+/// catalog is every endpoint's, so no other endpoint avoids it. A refused
+/// read already says what it is ([`catalog_refusal`]); a transport failure
+/// is said as one of the catalog's.
+pub(super) fn catalog_unreadable(error: ProviderError) -> FailedCall {
+    let error = match error {
         ProviderError::ApiError { .. } | ProviderError::InvalidRequest { .. } => {
             with_words(error, &format!("; {NOTHING_SENT}"))
         }
         other => with_words(other, &format!("; {CATALOG_UNREADABLE}; {NOTHING_SENT}")),
-    }
+    };
+    unsent(error, false, "its catalog could not be read")
 }
 
-/// The text of a failure, whatever its kind.
-fn words(error: &ProviderError) -> &str {
-    match error {
-        ProviderError::ApiError { message, .. }
-        | ProviderError::InvalidRequest { message, .. }
-        | ProviderError::Network(message)
-        | ProviderError::Stream(message) => message,
-        _ => "",
-    }
+/// The `Retry-After` a message states at its very end, as
+/// [`with_retry_after`] writes it.
+fn retry_after_of(message: &str) -> Option<u64> {
+    let (_, rest) = message.rsplit_once(RETRY_AFTER_SUFFIX)?;
+    rest.strip_suffix(" s)")?.parse().ok()
 }
 
-/// Whether a transport failure's words name a timeout or a connection the
-/// peer closed before the answer.
-fn timed_out_or_closed(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    [
-        "timed out",
-        "timeout",
-        "connection reset",
-        "connection closed",
-        "connection aborted",
-        "broken pipe",
-        "unexpected eof",
-        "reset by peer",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-/// Whether a call that failed with `error` is known to have cost nothing:
-/// it was never sent, or OpenRouter refused it with an HTTP status before
-/// generating anything.
-pub(super) fn charge_free(error: &ProviderError) -> bool {
-    let text = words(error);
-    match error {
-        ProviderError::ApiError { provider, .. }
-        | ProviderError::InvalidRequest { provider, .. }
-            if provider != PROVIDER =>
-        {
-            false
-        }
-        ProviderError::ApiError { .. }
-        | ProviderError::InvalidRequest { .. }
-        | ProviderError::Network(_)
-        | ProviderError::Stream(_) => {
-            text.contains(NOTHING_SENT) || text.contains(NOTHING_GENERATED)
-        }
-        _ => false,
-    }
-}
-
-/// Whether `error` is one endpoint's own failure, which another endpoint of
-/// the same model may not share: an upstream rate limit, an outage, a
-/// timeout or a closed connection, an endpoint OpenRouter reports degraded,
-/// or one whose retained contract changed. Not OpenRouter's limit on the
-/// account, a catalog it could not read, or a rejection of the request.
-pub(super) fn endpoint_failure(error: &ProviderError) -> bool {
-    let text = words(error);
-    if text.contains(ACCOUNT_LIMITED) || text.contains(CATALOG_UNREADABLE) {
-        return false;
-    }
-    match error {
-        ProviderError::ApiError { status, .. } => {
-            matches!(status, 408 | 429) || (500..=599).contains(status)
-        }
-        ProviderError::InvalidRequest { message, .. } => message.contains(CONTRACT_CHANGED),
-        ProviderError::Network(message) | ProviderError::Stream(message) => {
-            timed_out_or_closed(message)
-        }
-        _ => false,
-    }
-}
-
-/// One endpoint's failure in a few words.
-fn short(error: &ProviderError) -> String {
-    match error {
-        ProviderError::ApiError {
-            status: 429,
-            message,
-            ..
-        } if message.contains(ACCOUNT_LIMITED) => {
-            "OpenRouter limited the account (HTTP 429)".into()
-        }
-        ProviderError::ApiError { status: 429, .. } => "rate-limited (HTTP 429)".into(),
-        ProviderError::ApiError { status: 408, .. } => "timed out (HTTP 408)".into(),
-        ProviderError::ApiError {
-            status, message, ..
-        } if message.contains("degraded") => {
-            format!("reported unavailable or degraded (HTTP {status})")
-        }
-        ProviderError::ApiError { status, .. } if (500..=599).contains(status) => {
-            format!("unavailable (HTTP {status})")
-        }
-        ProviderError::InvalidRequest { message, .. } if message.contains(CONTRACT_CHANGED) => {
-            "its contract changed since Team & budget reviewed it".into()
-        }
-        ProviderError::Network(message) | ProviderError::Stream(message)
-            if timed_out_or_closed(message) =>
-        {
-            if message.to_ascii_lowercase().contains("time") {
-                "timed out".into()
-            } else {
-                "closed the connection".into()
-            }
-        }
-        other => quoted(&other.to_string()),
-    }
-}
-
-/// Whether `error` is an outage: a rate limit, a server error, a timeout or
-/// a closed connection, or an endpoint OpenRouter reports degraded.
-fn outage(error: &ProviderError) -> bool {
-    match error {
-        ProviderError::ApiError { status, .. } => {
-            matches!(status, 408 | 429) || (500..=599).contains(status)
-        }
-        ProviderError::Network(message) | ProviderError::Stream(message) => {
-            timed_out_or_closed(message)
-        }
-        _ => false,
-    }
-}
-
-/// The error of one call that every endpoint it was sent to failed before
-/// producing anything. Each endpoint is named once, with its last failure.
-/// When all of them were outages, it says that OpenRouter reports them
+/// The error of one call that the endpoints it was sent to failed before
+/// it produced anything. Each endpoint is named once, with its last
+/// failure. When all of them were outages (the endpoint's own failure that
+/// is not a changed contract), it says that OpenRouter reports them
 /// rate-limited or unavailable, which is a provider outage, with what to do,
 /// as an API error with the last status and `Retry-After`, so a review
 /// round can still be run again after it. A call that ended on a failure
@@ -348,14 +373,14 @@ fn outage(error: &ProviderError) -> bool {
 /// rejection of the request or the key) ends with that failure as it is.
 pub(super) fn exhausted(
     endpoints: &[NativeOpenRouterObservation],
-    mut failures: Vec<(usize, ProviderError)>,
+    mut failures: Vec<(usize, FailedCall)>,
 ) -> ProviderError {
     if failures
         .last()
-        .is_some_and(|(_, last)| !endpoint_failure(last))
+        .is_some_and(|(_, last)| !last.facts.endpoint_failure)
     {
         if let Some((_, last)) = failures.pop() {
-            return last;
+            return last.error;
         }
     }
     let model = endpoints
@@ -364,11 +389,16 @@ pub(super) fn exhausted(
         .unwrap_or_default();
     let mut order: Vec<usize> = Vec::new();
     let mut last: BTreeMap<usize, String> = BTreeMap::new();
-    for (index, error) in &failures {
+    for (index, failed) in &failures {
         if !order.contains(index) {
             order.push(*index);
         }
-        last.insert(*index, short(error));
+        let summary = if failed.facts.summary.is_empty() {
+            quoted(&failed.error.to_string())
+        } else {
+            failed.facts.summary.clone()
+        };
+        last.insert(*index, summary);
     }
     let list = order
         .iter()
@@ -381,29 +411,40 @@ pub(super) fn exhausted(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let retry_after = failures.last().and_then(|(_, error)| {
-        words(error)
-            .rsplit_once(RETRY_AFTER_SUFFIX)
-            .map(|(_, after)| format!("{RETRY_AFTER_SUFFIX}{after}"))
+    let retry_after = failures.last().and_then(|(_, failed)| match &failed.error {
+        ProviderError::ApiError { message, .. } => retry_after_of(message),
+        _ => None,
     });
-    if failures.iter().all(|(_, error)| outage(error)) {
+    // A changed contract is the endpoint's own, but not an outage.
+    let outage = |failed: &FailedCall| {
+        failed.facts.endpoint_failure
+            && matches!(
+                failed.error,
+                ProviderError::ApiError { .. }
+                    | ProviderError::Network(_)
+                    | ProviderError::Stream(_)
+            )
+    };
+    if failures.iter().all(|(_, failed)| outage(failed)) {
         let status = failures
             .iter()
             .rev()
-            .find_map(|(_, error)| match error {
-                ProviderError::ApiError { status, .. } => Some(*status),
+            .find_map(|(_, failed)| match failed.error {
+                ProviderError::ApiError { status, .. } => Some(status),
                 _ => None,
             })
             .unwrap_or(503);
         return ProviderError::ApiError {
             provider: PROVIDER.into(),
             status,
-            message: format!(
-                "OpenRouter reports every endpoint of {model} that this Agent may use as \
-                 rate-limited or unavailable right now ({list}). This is a provider outage, \
-                 not your setup: try again later, or choose another model; nothing from them \
-                 reached the Agent{}",
-                retry_after.unwrap_or_default()
+            message: with_retry_after(
+                format!(
+                    "OpenRouter reports every endpoint of {model} that this Agent may use as \
+                     rate-limited or unavailable right now ({list}). This is a provider outage, \
+                     not your setup: try again later, or choose another model; nothing from \
+                     them reached the Agent"
+                ),
+                retry_after,
             ),
         };
     }
@@ -422,7 +463,7 @@ pub struct ServedOpenRouterEndpoint {
     pub endpoint: String,
     /// The provider OpenRouter names for it, `DeepInfra`.
     pub provider: String,
-    /// The calls it answered.
+    /// The calls it answered to the end.
     pub calls: u32,
     /// The calls it failed before producing anything, each of which moved
     /// to another endpoint of the model.
@@ -430,9 +471,10 @@ pub struct ServedOpenRouterEndpoint {
 }
 
 /// The endpoints one model's native OpenRouter calls went to, in the order
-/// each was first counted: a call is counted as answered once its answer
-/// names the provider of the endpoint it pinned, and as moved when it moves
-/// to another endpoint after that one failed it. A loadout run's Outcome,
+/// each was first counted: a call is counted as answered once its answer,
+/// named as the provider of the endpoint it pinned, completed, and as moved
+/// when it moves to another endpoint after that one failed it. A call that
+/// failed after its answer started is neither. A loadout run's Outcome,
 /// notes and receipt name them.
 #[derive(Debug, Default)]
 pub struct NativeOpenRouterServed(std::sync::Mutex<Vec<ServedOpenRouterEndpoint>>);
@@ -462,7 +504,7 @@ impl NativeOpenRouterServed {
         add(&mut served[index]);
     }
 
-    /// A call `observation`'s endpoint answered.
+    /// A call `observation`'s endpoint answered to the end.
     pub(super) fn record(&self, observation: &NativeOpenRouterObservation) {
         self.count(observation, |served| {
             served.calls = served.calls.saturating_add(1)

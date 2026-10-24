@@ -199,18 +199,45 @@ pub fn retry_note(
 /// `HTTP <status>` when the failure was a provider status, which
 /// [`retry_status`] reads back.
 pub fn switch_note(failure: &ProviderFailure, provider: &str, model: &str, moved: &str) -> String {
-    let what = match failure {
-        ProviderFailure::Status { status, .. } => format!("HTTP {status} from {provider}"),
-        ProviderFailure::Timeout => format!("{provider} timed out"),
-        ProviderFailure::ConnectionReset => format!("{provider} closed the connection"),
-        ProviderFailure::Refusal => format!("{provider} refused"),
-        ProviderFailure::Other(message) => message.chars().take(200).collect(),
-    };
+    let what = failure_words(failure, provider);
     let note = format!(
         "{what}; the call was sent again at once, {moved} of the same model ({model}), as a \
          new, separately reserved call"
     );
     note.chars().take(512).collect()
+}
+
+/// The note recorded on the activation when a call is sent again once,
+/// after waiting `wait`, to another endpoint of the same model than the one
+/// that failed it last: that one asked to wait longer than the policy
+/// allows. `moved` says from which endpoint to which. It starts with
+/// `HTTP <status>` when the failure was a provider status, which
+/// [`retry_status`] reads back.
+pub fn retry_moved_note(
+    failure: &ProviderFailure,
+    wait: Duration,
+    provider: &str,
+    model: &str,
+    moved: &str,
+) -> String {
+    let note = format!(
+        "{}; retrying once in {} s, {moved} of the same model ({model}), as a new, separately \
+         reserved call",
+        failure_words(failure, provider),
+        wait.as_secs()
+    );
+    note.chars().take(512).collect()
+}
+
+/// What failed, as a note begins.
+fn failure_words(failure: &ProviderFailure, provider: &str) -> String {
+    match failure {
+        ProviderFailure::Status { status, .. } => format!("HTTP {status} from {provider}"),
+        ProviderFailure::Timeout => format!("{provider} timed out"),
+        ProviderFailure::ConnectionReset => format!("{provider} closed the connection"),
+        ProviderFailure::Refusal => format!("{provider} refused"),
+        ProviderFailure::Other(message) => message.chars().take(200).collect(),
+    }
 }
 
 /// The provider status a recorded retry note names, if any.

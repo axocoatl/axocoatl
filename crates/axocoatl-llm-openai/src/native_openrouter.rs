@@ -23,8 +23,9 @@ use axocoatl_llm::transport::{
 };
 use axocoatl_llm::{
     provider_tool_metadata, validate_chat_response, validate_response_tool_call,
-    AccountedChatOutcome, ChatRequest, ChatResponse, EndpointFailover, FinishReason, LlmProvider,
-    ProviderCapabilities, ProviderError, ProviderExecutionBounds, StreamEvent, ToolCall,
+    AccountedChatOutcome, ChatRequest, ChatResponse, EndpointFailover, FailedCall, FailureFacts,
+    FinishReason, LlmProvider, ProviderCapabilities, ProviderError, ProviderExecutionBounds,
+    StreamEvent, ToolCall,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -64,8 +65,11 @@ fn invalid(reason: impl Into<String>) -> ProviderError {
         message: reason.into(),
     }
 }
+/// How this provider's own account of a malformed or refused answer
+/// begins.
+const PROTOCOL_PREFIX: &str = "native OpenRouter: ";
 fn protocol(reason: impl Into<String>) -> ProviderError {
-    ProviderError::Stream(format!("native OpenRouter: {}", reason.into()))
+    ProviderError::Stream(format!("{PROTOCOL_PREFIX}{}", reason.into()))
 }
 
 /// How a refused request states its `Retry-After` at the end of the error
@@ -270,7 +274,7 @@ impl NativeOpenRouterProvider {
     }
     /// What OpenRouter's catalog says of this model's endpoints now. A
     /// failure is OpenRouter's, before anything was sent.
-    async fn live_endpoints(&self) -> Result<NativeOpenRouterEndpoints, ProviderError> {
+    async fn live_endpoints(&self) -> Result<NativeOpenRouterEndpoints, FailedCall> {
         observe_native_openrouter_endpoints(
             &self.primary().base_url,
             &self.inner.api_key,
@@ -280,12 +284,13 @@ impl NativeOpenRouterProvider {
         .map_err(failover::catalog_unreadable)
     }
     /// Whether `observation` still matches `live` and OpenRouter reports it
-    /// healthy; why not, in plain words, when it does not.
+    /// healthy; why not, in plain words, when it does not. Nothing was sent:
+    /// it costs nothing.
     fn contract_now(
         &self,
         observation: &NativeOpenRouterObservation,
         live: &NativeOpenRouterEndpoints,
-    ) -> Result<(), ProviderError> {
+    ) -> Result<(), FailedCall> {
         if live
             .profiles
             .iter()
@@ -300,52 +305,69 @@ impl NativeOpenRouterProvider {
             .iter()
             .find(|endpoint| observation.same_contract(&endpoint.profile))
         {
-            return Err(ProviderError::ApiError {
-                provider: PROVIDER.into(),
-                status: 503,
-                message: format!(
-                    "OpenRouter reports the endpoint this Session uses for {} as unavailable or \
-                     degraded right now ({}). This is OpenRouter's provider status: try again \
-                     later, or choose another model; {}",
-                    observation.model,
-                    down.describe(),
-                    failover::NOTHING_SENT
-                ),
-            });
-        }
-        if let Some(refusal) = live.refusal(&observation.model) {
-            return Err(failover::with_words(
-                refusal,
-                &format!("; {}", failover::NOTHING_SENT),
+            return Err(failover::unsent(
+                ProviderError::ApiError {
+                    provider: PROVIDER.into(),
+                    status: 503,
+                    message: format!(
+                        "OpenRouter reports the endpoint this Session uses for {} as \
+                         unavailable or degraded right now ({}). This is OpenRouter's provider \
+                         status: try again later, or choose another model; {}",
+                        observation.model,
+                        down.describe(),
+                        failover::NOTHING_SENT
+                    ),
+                },
+                true,
+                "reported unavailable or degraded right now",
             ));
         }
-        Err(invalid(format!(
-            "the retained OpenRouter endpoint {} of {} {}: its capabilities, price ceiling or \
-             token limits differ now; apply Team & budget again to review a new profile; {}",
-            failover::describe(observation),
-            observation.model,
-            failover::CONTRACT_CHANGED,
-            failover::NOTHING_SENT
-        )))
+        // No endpoint of the model can be used now: every other one would
+        // say the same.
+        if let Some(refusal) = live.refusal(&observation.model) {
+            let refusal = match &refusal {
+                ProviderError::ApiError { message, .. }
+                | ProviderError::InvalidRequest { message, .. }
+                    if message.contains(failover::NOTHING_SENT) =>
+                {
+                    refusal
+                }
+                _ => failover::with_words(refusal, &format!("; {}", failover::NOTHING_SENT)),
+            };
+            return Err(failover::unsent(refusal, false, ""));
+        }
+        Err(failover::unsent(
+            invalid(format!(
+                "the retained OpenRouter endpoint {} of {} {}: its capabilities, price ceiling \
+                 or token limits differ now; apply Team & budget again to review a new profile; \
+                 {}",
+                failover::describe(observation),
+                observation.model,
+                failover::CONTRACT_CHANGED,
+                failover::NOTHING_SENT
+            )),
+            true,
+            "its contract changed since Team & budget reviewed it",
+        ))
     }
     /// Check the current endpoint against the catalog before a call.
-    async fn verify(&self, observation: &NativeOpenRouterObservation) -> Result<(), ProviderError> {
+    async fn verify(&self, observation: &NativeOpenRouterObservation) -> Result<(), FailedCall> {
         let live = self.live_endpoints().await?;
         self.contract_now(observation, &live)
     }
     /// At least one retained endpoint can be used now: the first that
     /// cannot says why when none can, or, with several, each one does.
     async fn verify_any(&self) -> Result<(), ProviderError> {
-        let live = self.live_endpoints().await?;
+        let live = self.live_endpoints().await.map_err(|failed| failed.error)?;
         let mut failures = Vec::new();
         for (index, observation) in self.endpoints.iter().enumerate() {
             match self.contract_now(observation, &live) {
                 Ok(()) => return Ok(()),
-                Err(error) => failures.push((index, error)),
+                Err(failed) => failures.push((index, failed)),
             }
         }
         Err(match failures.len() {
-            1 => failures.remove(0).1,
+            1 => failures.remove(0).1.error,
             _ => failover::exhausted(&self.endpoints, failures),
         })
     }
@@ -486,34 +508,43 @@ impl EndpointFailover for NativeOpenRouterProvider {
     fn current_endpoint(&self) -> usize {
         self.active()
     }
-    fn fail_over(
-        &self,
-        request: &ChatRequest,
-        error: &ProviderError,
-        tried: &[usize],
-    ) -> Option<(usize, String)> {
-        if !failover::endpoint_failure(error) {
-            return None;
-        }
+    fn candidates(&self, request: &ChatRequest, excluded: &[usize]) -> Vec<usize> {
         let from = self.active();
         let count = self.endpoints.len();
-        let next = (1..count)
+        (1..count)
             .map(|step| (from + step) % count)
-            .find(|index| !tried.contains(index) && self.carries(*index, request))?;
-        self.active.store(next, Ordering::Release);
-        if let Some(served) = &self.served {
+            .filter(|index| !excluded.contains(index) && self.carries(*index, request))
+            .collect()
+    }
+    fn execution_bounds_on(
+        &self,
+        index: usize,
+        request: &ChatRequest,
+    ) -> Option<ProviderExecutionBounds> {
+        let observation = self.endpoints.get(index)?;
+        let (_, shape) = self.body_for(observation, request).ok()?;
+        observation.call_bounds(shape, self.max_response_bytes).ok()
+    }
+    fn describe_move(&self, from: usize, to: usize) -> String {
+        let name = |index: usize| {
+            self.endpoints
+                .get(index)
+                .map(failover::describe)
+                .unwrap_or_else(|| format!("{index}"))
+        };
+        format!("from endpoint {} to endpoint {}", name(from), name(to))
+    }
+    fn move_to(&self, to: usize, failed: bool) {
+        let from = self.active();
+        if to == from || to >= self.endpoints.len() {
+            return;
+        }
+        self.active.store(to, Ordering::Release);
+        if let (true, Some(served)) = (failed, &self.served) {
             served.moved_from(&self.endpoints[from]);
         }
-        Some((
-            next,
-            format!(
-                "from endpoint {} to endpoint {}",
-                failover::describe(&self.endpoints[from]),
-                failover::describe(&self.endpoints[next])
-            ),
-        ))
     }
-    fn exhausted(&self, failures: Vec<(usize, ProviderError)>) -> ProviderError {
+    fn exhausted(&self, failures: Vec<(usize, FailedCall)>) -> ProviderError {
         failover::exhausted(&self.endpoints, failures)
     }
 }
@@ -652,8 +683,8 @@ impl LlmProvider for NativeOpenRouterProvider {
     fn endpoint_failover(&self) -> Option<&dyn EndpointFailover> {
         (self.endpoints.len() > 1).then_some(self as &dyn EndpointFailover)
     }
-    fn failed_without_charge(&self, error: &ProviderError) -> bool {
-        failover::charge_free(error)
+    fn failed_answer(&self, error: ProviderError) -> FailedCall {
+        failover::answer_failure(error)
     }
     /// The shared estimate plus the reasoning tokens the request replays,
     /// which its text does not show.
@@ -665,6 +696,12 @@ impl LlmProvider for NativeOpenRouterProvider {
         self.chat_with_accounting(request).await.response
     }
     async fn chat_with_accounting(&self, request: ChatRequest) -> AccountedChatOutcome {
+        stream::collect(self, request).await.0
+    }
+    async fn chat_with_accounting_and_facts(
+        &self,
+        request: ChatRequest,
+    ) -> (AccountedChatOutcome, FailureFacts) {
         stream::collect(self, request).await
     }
     async fn chat_stream(
@@ -672,17 +709,44 @@ impl LlmProvider for NativeOpenRouterProvider {
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
     {
+        self.open(request).await.map_err(|failed| failed.error)
+    }
+    async fn open_chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, FailedCall>
+    {
+        self.open(request).await
+    }
+}
+
+impl NativeOpenRouterProvider {
+    /// Send `request` to the current endpoint and open its answer. A
+    /// failure says what is known of it where it happened: nothing sent (a
+    /// request the endpoint's contract refuses, a catalog that cannot be
+    /// read, an endpoint reported unavailable now or whose contract changed),
+    /// a transport failure (after the request may have left, unless no
+    /// connection was made), or OpenRouter's refusal with a status.
+    async fn open(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, FailedCall>
+    {
         // One endpoint for the whole call, whatever moves later calls.
         let observation = self.endpoint().clone();
-        let (body, shape) = self.body_for(&observation, &request)?;
-        let bounds = observation.call_bounds(shape, self.max_response_bytes)?;
+        let refused = |error| failover::unsent(error, false, "");
+        let (body, shape) = self.body_for(&observation, &request).map_err(refused)?;
+        let bounds = observation
+            .call_bounds(shape, self.max_response_bytes)
+            .map_err(refused)?;
         self.verify(&observation).await?;
+        let url = self.inner.endpoint().map_err(refused)?;
         let deadlines = StreamDeadlines::start(self.inner.stream_timeouts);
         let response = deadlines
             .headers(
                 self.inner
                     .client
-                    .post(self.inner.endpoint()?)
+                    .post(url)
                     .bearer_auth(&self.inner.api_key)
                     .header("HTTP-Referer", "https://axocoatl.ai")
                     .header("X-OpenRouter-Title", "Axocoatl")
@@ -690,20 +754,26 @@ impl LlmProvider for NativeOpenRouterProvider {
                     .send(),
                 PROVIDER,
             )
-            .await?
-            .map_err(|e| transport_error(&e, &[&self.inner.api_key]))?;
+            .await
+            // The answer did not start in time.
+            .map_err(|error| failover::transport(error, false, true))?
+            .map_err(|error| {
+                failover::transport(
+                    transport_error(&error, &[&self.inner.api_key]),
+                    error.is_connect(),
+                    error.is_timeout() || connection_reset(&error),
+                )
+            })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let retry_after = retry_after_secs(response.headers());
             let detail = read_error_text(response, &[&self.inner.api_key]).await;
-            return Err(ProviderError::ApiError {
-                provider: PROVIDER.into(),
+            return Err(failover::refusal(
+                &observation,
                 status,
-                message: with_retry_after(
-                    failover::refusal(&observation, status, &detail),
-                    retry_after,
-                ),
-            });
+                &detail,
+                retry_after,
+            ));
         }
         Ok(stream::decode(
             response,

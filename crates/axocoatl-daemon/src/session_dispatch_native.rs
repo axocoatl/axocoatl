@@ -56,8 +56,9 @@ pub(crate) struct NativeOpenRouterRuntimeConfiguration {
     /// context and prompt limit and fits the same output, reasoning setting
     /// and approved budget. Empty when no other endpoint fits. Absent
     /// (`None`) in profiles written before 1.5.0's failover, which stay
-    /// byte-identical; their activations find such endpoints in the catalog
-    /// as they open ([`NativeRuntimeConfiguration::verify_credentials`]).
+    /// byte-identical. Every activation adds the other endpoints the
+    /// catalog lists healthy as it opens and that fit the same way
+    /// ([`NativeRuntimeConfiguration::verify_credentials`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failover_observations: Option<Vec<axocoatl_llm_openai::NativeOpenRouterObservation>>,
 }

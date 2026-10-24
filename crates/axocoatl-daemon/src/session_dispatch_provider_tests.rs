@@ -1241,8 +1241,8 @@ async fn a_second_failure_and_every_rejection_end_the_call() {
 }
 
 /// The retry is admitted like any call: when the grant cannot pay for it
-/// after the failed call kept its reservation, the original failure stands
-/// and nothing more is sent.
+/// after the failed call kept its reservation, the original failure stands,
+/// nothing more is sent, and no retry is recorded.
 #[tokio::test]
 async fn a_retry_the_grant_cannot_pay_is_not_sent() {
     let (fixture, wrapped, inner) = scripted_fixture(
@@ -1260,6 +1260,7 @@ async fn a_retry_the_grant_cannot_pay_is_not_sent() {
     assert!(matches!(error, ProviderError::ApiError { status: 503, .. }));
     assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
     assert_eq!(provider_usage(&fixture).calls, 1);
+    assert!(recorded_retries(&fixture).is_empty());
 }
 
 /// The non-streaming path follows the same policy.
@@ -1381,6 +1382,22 @@ async fn openrouter_session(
 /// every endpoint `server`'s catalog lists for [`OPENROUTER_MODEL`],
 /// cheapest first, as Team & budget retains them for failover.
 async fn openrouter_session_on(server: &wiremock::MockServer) -> (Fixture, SessionProvider) {
+    let (fixture, wrapped, _, _) = openrouter_session_served(server, |_| 100_000).await;
+    (fixture, wrapped)
+}
+
+/// [`openrouter_session_on`] with a grant of `cost(executor)` microdollars,
+/// also returning the executor and where it records the endpoints that
+/// answered.
+async fn openrouter_session_served(
+    server: &wiremock::MockServer,
+    cost: impl FnOnce(&axocoatl_llm_openai::NativeOpenRouterProvider) -> u64,
+) -> (
+    Fixture,
+    SessionProvider,
+    Arc<axocoatl_llm_openai::NativeOpenRouterProvider>,
+    Arc<axocoatl_llm_openai::NativeOpenRouterServed>,
+) {
     let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
         &server.uri(),
         "fixture-inference-key",
@@ -1388,6 +1405,7 @@ async fn openrouter_session_on(server: &wiremock::MockServer) -> (Fixture, Sessi
     )
     .await
     .unwrap();
+    let served = Arc::new(axocoatl_llm_openai::NativeOpenRouterServed::default());
     let executor = Arc::new(
         axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed_endpoints(
             profiles,
@@ -1397,20 +1415,43 @@ async fn openrouter_session_on(server: &wiremock::MockServer) -> (Fixture, Sessi
             None,
         )
         .await
-        .unwrap(),
+        .unwrap()
+        .with_served_endpoints(served.clone()),
     );
-    session_over(executor, OPENROUTER_MODEL)
+    let cost = cost(&executor);
+    let (fixture, wrapped) = session_over_with(executor.clone(), OPENROUTER_MODEL, cost);
+    (fixture, wrapped, executor, served)
+}
+
+/// Each endpoint calls went to: (tag, calls answered, calls moved away).
+fn served_counts(
+    served: &axocoatl_llm_openai::NativeOpenRouterServed,
+) -> Vec<(String, u32, u32)> {
+    served
+        .endpoints()
+        .into_iter()
+        .map(|served| (served.endpoint, served.calls, served.moved))
+        .collect()
 }
 
 /// The Session boundary of one activation of an OpenRouter Agent on `model`
 /// over `executor`, with a grant of 100,000 tokens and $0.10.
 fn session_over(executor: Arc<dyn LlmProvider>, model: &str) -> (Fixture, SessionProvider) {
+    session_over_with(executor, model, 100_000)
+}
+
+/// [`session_over`] with a grant of `cost_microunits`.
+fn session_over_with(
+    executor: Arc<dyn LlmProvider>,
+    model: &str,
+    cost_microunits: u64,
+) -> (Fixture, SessionProvider) {
     let fixture = fixture_with_config(
         GrantLimits {
             activations: 8,
             invocations: 32,
             tokens: 100_000,
-            cost_microunits: 100_000,
+            cost_microunits,
         },
         "in-process-test",
         AgentConfig {
@@ -1767,10 +1808,11 @@ async fn native_openrouter_429_on_one_endpoint_moves_the_call_to_the_next_at_onc
 
 /// Every endpoint is rate-limited: after each one refused the call, the
 /// Session waits once, as long as the longest `Retry-After` they stated (at
-/// most 30 s), tries each again, and then ends the call saying plainly that
-/// OpenRouter reports every endpoint as rate-limited, a provider outage,
-/// with what to do; never OpenRouter's raw JSON or its hint to add a
-/// provider key. Every refusal costs nothing, so the usage stays exact.
+/// most 30 s; here the first endpoint's, not the latest's), tries each
+/// again, and then ends the call saying plainly that OpenRouter reports
+/// every endpoint as rate-limited, a provider outage, with what to do;
+/// never OpenRouter's raw JSON or its hint to add a provider key. Every
+/// refusal costs nothing, so the usage stays exact.
 #[tokio::test]
 async fn native_openrouter_every_endpoint_limited_waits_once_then_says_it_is_an_outage() {
     let server = wiremock::MockServer::start().await;
@@ -1787,7 +1829,7 @@ async fn native_openrouter_every_endpoint_limited_waits_once_then_says_it_is_an_
         &server,
         "finite/exact",
         wiremock::ResponseTemplate::new(429)
-            .insert_header("Retry-After", "1")
+            .insert_header("Retry-After", "2")
             .set_body_string(UPSTREAM_LIMITED),
     )
     .await;
@@ -1795,11 +1837,11 @@ async fn native_openrouter_every_endpoint_limited_waits_once_then_says_it_is_an_
         &server,
         "other/exact",
         wiremock::ResponseTemplate::new(429)
-            .insert_header("Retry-After", "2")
+            .insert_header("Retry-After", "1")
             .set_body_string(UPSTREAM_LIMITED.replace("FiniteProvider", "OtherProvider")),
     )
     .await;
-    let (fixture, wrapped) = openrouter_session_on(&server).await;
+    let (fixture, wrapped, _, served) = openrouter_session_served(&server, |_| 100_000).await;
     let started = std::time::Instant::now();
     let error = wrapped
         .chat_stream(ChatRequest::simple("Answer once"))
@@ -1826,12 +1868,20 @@ async fn native_openrouter_every_endpoint_limited_waits_once_then_says_it_is_an_
              rate-limited or unavailable right now (finite/exact (FiniteProvider): rate-limited \
              (HTTP 429); other/exact (OtherProvider): rate-limited (HTTP 429)). This is a \
              provider outage, not your setup: try again later, or choose another model; nothing \
-             from them reached the Agent (Retry-After: 1 s)"
+             from them reached the Agent (Retry-After: 2 s)"
         )
     );
     for leaked in ["{", "own key", "integrations", "user_"] {
         assert!(!message.contains(leaked), "{leaked}: {message}");
     }
+    // No endpoint answered; each failed the call that then moved on once.
+    assert_eq!(
+        served_counts(&served),
+        [
+            ("finite/exact".to_owned(), 0, 1),
+            ("other/exact".to_owned(), 0, 1)
+        ]
+    );
     let usage = provider_usage(&fixture);
     assert_eq!(usage.calls, 4);
     assert_eq!(usage.unreported_calls, 0);
@@ -1886,6 +1936,373 @@ async fn native_openrouter_account_limit_is_waited_out_on_the_same_endpoint() {
     assert_eq!(notes.len(), 1);
     assert!(notes[0].starts_with("HTTP 429 from openrouter; retrying once in 1 s"), "{notes:?}");
     assert!(provider_usage(&fixture).tokens.complete);
+}
+
+/// Inference requests pinned to `tag` answer `first` `times` times, then
+/// `then`.
+async fn openrouter_answers_then(
+    server: &wiremock::MockServer,
+    tag: &str,
+    first: wiremock::ResponseTemplate,
+    times: u64,
+    then: wiremock::ResponseTemplate,
+) {
+    use wiremock::matchers::{body_partial_json, method, path};
+    wiremock::Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"provider":{"only":[tag]}})))
+        .respond_with(first)
+        .up_to_n_times(times)
+        .with_priority(1)
+        .mount(server)
+        .await;
+    wiremock::Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_partial_json(serde_json::json!({"provider":{"only":[tag]}})))
+        .respond_with(then)
+        .with_priority(2)
+        .mount(server)
+        .await;
+}
+
+/// Two endpoints of [`OPENROUTER_MODEL`]: `finite/exact` and, at `scale`
+/// (at most 4) times its prices, `other/exact`.
+async fn two_endpoints(server: &wiremock::MockServer, scale: u32) {
+    openrouter_catalog(
+        server,
+        vec![
+            openrouter_endpoint("finite/exact", "FiniteProvider", 1),
+            openrouter_endpoint("other/exact", "OtherProvider", scale),
+        ],
+        None,
+    )
+    .await;
+}
+
+/// An upstream 429 of `provider` that asks to wait `seconds`.
+fn limited_for(provider: &str, seconds: u64) -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(429)
+        .insert_header("Retry-After", seconds.to_string().as_str())
+        .set_body_string(UPSTREAM_LIMITED.replace("FiniteProvider", provider))
+}
+
+/// An endpoint whose `Retry-After` is longer than the 30 s the policy
+/// allows sits the next round out: it is never sent to again before that
+/// time. The round waits for the others' longest `Retry-After` and resumes
+/// on the latest endpoint; the call ends once that one fails again.
+#[tokio::test]
+async fn native_openrouter_an_endpoint_asking_to_wait_too_long_sits_the_next_round_out() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 2).await;
+    openrouter_answers(&server, "finite/exact", limited_for("FiniteProvider", 60)).await;
+    openrouter_answers(&server, "other/exact", limited_for("OtherProvider", 1)).await;
+    let (fixture, wrapped) = openrouter_session_on(&server).await;
+    let started = std::time::Instant::now();
+    let error = wrapped
+        .chat_stream(ChatRequest::simple("Answer once"))
+        .await
+        .err()
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_secs(1)
+            && elapsed < std::time::Duration::from_secs(20),
+        "{elapsed:?}"
+    );
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "other/exact", "other/exact"],
+        "the endpoint that asked for 60 s is not sent to again"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(
+            "OpenRouter reports every endpoint of meta-llama/test-instruct that this Agent may \
+             use as rate-limited or unavailable right now (finite/exact (FiniteProvider): \
+             rate-limited (HTTP 429); other/exact (OtherProvider): rate-limited (HTTP 429))"
+        ) && message.ends_with("(Retry-After: 1 s)"),
+        "{message}"
+    );
+    let notes = recorded_retries(&fixture);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes[1].starts_with("HTTP 429 from openrouter; retrying once in 1 s on the same"));
+    let usage = provider_usage(&fixture);
+    assert_eq!((usage.calls, usage.unreported_calls), (3, 0));
+}
+
+/// When the latest endpoint asks to wait longer than the policy allows but
+/// an earlier one of the round does not, the call waits for that one and
+/// is sent to it again, recorded as one retry that names the move.
+#[tokio::test]
+async fn native_openrouter_a_round_resumes_on_an_endpoint_that_may_be_sent_to_again() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 2).await;
+    openrouter_answers_then(
+        &server,
+        "finite/exact",
+        limited_for("FiniteProvider", 1),
+        1,
+        openrouter_reply_from("FiniteProvider"),
+    )
+    .await;
+    openrouter_answers(&server, "other/exact", limited_for("OtherProvider", 60)).await;
+    let (fixture, wrapped, executor, served) =
+        openrouter_session_served(&server, |_| 100_000).await;
+    let mut stream = wrapped
+        .chat_stream(ChatRequest::simple("Answer once"))
+        .await
+        .unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "other/exact", "finite/exact"]
+    );
+    assert_eq!(executor.endpoint_failover().unwrap().current_endpoint(), 0);
+    let notes = recorded_retries(&fixture);
+    assert_eq!(
+        notes[1],
+        format!(
+            "HTTP 429 from openrouter; retrying once in 1 s, from endpoint other/exact \
+             (OtherProvider) to endpoint finite/exact (FiniteProvider) of the same model \
+             ({OPENROUTER_MODEL}), as a new, separately reserved call"
+        )
+    );
+    assert_eq!(notes.len(), 2);
+    assert_eq!(
+        served_counts(&served),
+        [
+            ("finite/exact".to_owned(), 1, 1),
+            ("other/exact".to_owned(), 0, 1)
+        ]
+    );
+    let usage = provider_usage(&fixture);
+    assert_eq!((usage.calls, usage.unreported_calls), (3, 0));
+    assert!(usage.tokens.complete && usage.cost_known);
+}
+
+/// The failover analogue of `a_retry_the_grant_cannot_pay_is_not_sent`:
+/// the next endpoint costs four times as much, more than the grant has
+/// left, so the call is not moved there (and calls do not stay there).
+/// Instead the retry policy sends it to the same endpoint again after its
+/// wait, and the activation's next call is admitted there too.
+#[tokio::test]
+async fn native_openrouter_a_move_the_grant_cannot_pay_is_not_made() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 4).await;
+    openrouter_answers_then(
+        &server,
+        "finite/exact",
+        limited_for("FiniteProvider", 0),
+        1,
+        openrouter_reply_from("FiniteProvider"),
+    )
+    .await;
+    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    let request = ChatRequest::simple("Answer once");
+    let (fixture, wrapped, executor, _) = openrouter_session_served(&server, |executor| {
+        3 * executor.execution_bounds(&request).unwrap().cost_microunits
+    })
+    .await;
+    let failover = executor.endpoint_failover().unwrap();
+    let cheap = executor.execution_bounds(&request).unwrap();
+    let pricier = failover.execution_bounds_on(1, &request).unwrap();
+    assert!(
+        pricier.cost_microunits > 3 * cheap.cost_microunits,
+        "{cheap:?} {pricier:?}"
+    );
+    let mut stream = wrapped.chat_stream(request.clone()).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    assert_eq!(failover.current_endpoint(), 0);
+    let notes = recorded_retries(&fixture);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].starts_with("HTTP 429 from openrouter; retrying once in 0 s on the same"),
+        "{notes:?}"
+    );
+    // The next call is admitted on the endpoint calls stayed on.
+    let mut stream = wrapped.chat_stream(request).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "finite/exact", "finite/exact"]
+    );
+    let usage = provider_usage(&fixture);
+    assert_eq!((usage.calls, usage.unreported_calls), (3, 0));
+}
+
+/// Calls moved to a pricier endpoint, and the grant can no longer pay for
+/// the next call there: it is admitted on the cheaper endpoint that can
+/// carry it, and calls go there, rather than being refused as if the
+/// budget were used up.
+#[tokio::test]
+async fn native_openrouter_a_call_the_grant_cannot_pay_where_calls_moved_goes_to_a_cheaper_one() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 2).await;
+    openrouter_answers_then(
+        &server,
+        "finite/exact",
+        limited_for("FiniteProvider", 0),
+        1,
+        openrouter_reply_from("FiniteProvider"),
+    )
+    .await;
+    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    let request = ChatRequest::simple("Answer once");
+    // Enough for one call on the pricier endpoint, not for two.
+    let (fixture, wrapped, executor, served) = openrouter_session_served(&server, |executor| {
+        executor
+            .endpoint_failover()
+            .unwrap()
+            .execution_bounds_on(1, &request)
+            .unwrap()
+            .cost_microunits
+            + 4
+    })
+    .await;
+    let mut stream = wrapped.chat_stream(request.clone()).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    let failover = executor.endpoint_failover().unwrap();
+    assert_eq!(failover.current_endpoint(), 1);
+    let mut stream = wrapped.chat_stream(request).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    assert_eq!(failover.current_endpoint(), 0);
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "other/exact", "finite/exact"]
+    );
+    assert_eq!(recorded_retries(&fixture).len(), 1, "a new call is no retry");
+    assert_eq!(
+        served_counts(&served),
+        [
+            ("finite/exact".to_owned(), 1, 1),
+            ("other/exact".to_owned(), 1, 0)
+        ]
+    );
+}
+
+/// OpenRouter's stream for `provider`: its keep-alive comment, then an
+/// error inside the answer with `code`.
+fn error_in_answer(provider: &str, chunks: &[serde_json::Value]) -> wiremock::ResponseTemplate {
+    let mut body = String::from(": OPENROUTER PROCESSING\n\n");
+    for chunk in chunks {
+        let mut chunk = chunk.clone();
+        chunk["id"] = "gen-failed".into();
+        chunk["model"] = OPENROUTER_MODEL.into();
+        chunk["provider"] = provider.into();
+        body.push_str(&format!("data: {chunk}\n\n"));
+    }
+    wiremock::ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+}
+
+/// Every endpoint reports a 429 inside its answer (HTTP 200, then an error
+/// chunk), the form OpenRouter uses once it started the stream. The calls
+/// move and wait as for a refused one, the last attempt's failure included,
+/// and the call ends with the same plain words: never one endpoint's error.
+/// An answer had started on each, so none is known to be free: each call
+/// keeps its reservation and is named as one that did not report.
+#[tokio::test]
+async fn native_openrouter_errors_inside_every_answer_are_said_as_an_outage() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 2).await;
+    let failure = |provider: &str| {
+        error_in_answer(
+            provider,
+            &[serde_json::json!({"error":{"code":429,"message":"Rate limit exceeded"},"choices":[]})],
+        )
+    };
+    openrouter_answers(&server, "finite/exact", failure("FiniteProvider")).await;
+    openrouter_answers(&server, "other/exact", failure("OtherProvider")).await;
+    let (fixture, wrapped, _, served) = openrouter_session_served(&server, |_| 100_000).await;
+    let error = wrapped
+        .chat_stream(ChatRequest::simple("Answer once"))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "other/exact", "other/exact", "finite/exact"]
+    );
+    let ProviderError::ApiError {
+        status: 429,
+        message,
+        ..
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        message,
+        &format!(
+            "OpenRouter reports every endpoint of {OPENROUTER_MODEL} that this Agent may use as \
+             rate-limited or unavailable right now (finite/exact (FiniteProvider): rate-limited \
+             (HTTP 429); other/exact (OtherProvider): rate-limited (HTTP 429)). This is a \
+             provider outage, not your setup: try again later, or choose another model; nothing \
+             from them reached the Agent"
+        )
+    );
+    assert_eq!(recorded_retries(&fixture).len(), 3);
+    assert_eq!(
+        served_counts(&served),
+        [
+            ("finite/exact".to_owned(), 0, 1),
+            ("other/exact".to_owned(), 0, 1)
+        ]
+    );
+    let usage = provider_usage(&fixture);
+    assert_eq!((usage.calls, usage.unreported_calls), (4, 4));
+    assert!(!usage.tokens.complete);
+}
+
+/// An error inside an answer is never taken as proof that the call cost
+/// nothing, whatever its message says: here the endpoint streamed
+/// reasoning (which OpenRouter bills) before an error whose message says
+/// "nothing was generated". The call keeps its whole reservation, is named
+/// as one that did not report, and moves to the next endpoint.
+#[tokio::test]
+async fn native_openrouter_an_error_inside_an_answer_keeps_its_reservation() {
+    let server = wiremock::MockServer::start().await;
+    two_endpoints(&server, 2).await;
+    openrouter_answers(
+        &server,
+        "finite/exact",
+        error_in_answer(
+            "FiniteProvider",
+            &[
+                serde_json::json!({"choices":[{"index":0,"delta":{"reasoning":"thinking it over"}}]}),
+                serde_json::json!({"error":{"code":502,"message":"Upstream aborted: nothing was \
+                    generated after the cutoff; nothing was sent to the model"},"choices":[]}),
+            ],
+        ),
+    )
+    .await;
+    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    let request = ChatRequest::simple("Answer once");
+    let (fixture, wrapped, executor, served) =
+        openrouter_session_served(&server, |_| 100_000).await;
+    let reservation = executor.execution_bounds(&request).unwrap();
+    let mut stream = wrapped.chat_stream(request).await.unwrap();
+    drain(&mut stream).await.unwrap();
+    drop(stream);
+    assert_eq!(
+        pinned_endpoints(&server).await,
+        ["finite/exact", "other/exact"]
+    );
+    let usage = provider_usage(&fixture);
+    assert_eq!((usage.calls, usage.unreported_calls), (2, 1));
+    assert!(!usage.tokens.complete);
+    let charged = charged(&fixture);
+    assert_eq!(charged.tokens, reservation.token_limit + 6);
+    assert_eq!(charged.cost_microunits, reservation.cost_microunits + 8);
+    assert_eq!(
+        served_counts(&served),
+        [
+            ("finite/exact".to_owned(), 0, 1),
+            ("other/exact".to_owned(), 1, 0)
+        ]
+    );
 }
 
 /// The endpoint a call moves to is checked against the catalog before the

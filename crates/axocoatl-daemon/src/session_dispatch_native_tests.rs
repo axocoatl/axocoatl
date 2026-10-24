@@ -1172,8 +1172,8 @@ fn openrouter_runtime_retains_up_to_three_endpoints_that_can_take_over_each_call
             .contains("more than the approved $0.010000 cost budget")
     );
 
-    // With no other endpoint that fits, the profile says so: an empty list,
-    // which an activation never extends.
+    // With no other endpoint that fits, the profile says so: an empty list.
+    // An activation adds what the catalog lists then.
     let alone = prepare()
         .openrouter_runtime(vec![
             endpoint("a/fp8", 32_768, "0.36"),
@@ -1232,9 +1232,10 @@ async fn failover_catalog(endpoints: &[(&str, &str, u32, usize)]) -> MockServer 
 /// no failover list) still loads, validates and keeps its exact bytes. Its
 /// activation opens with the endpoints of the model that OpenRouter lists
 /// healthy now and that pass the checks Team & budget applies to a failover
-/// endpoint, so a rate-limited endpoint does not end its runs either. A
-/// profile retained with a failover list never gains an endpoint it does
-/// not list.
+/// endpoint, so a rate-limited endpoint does not end its runs either. Every
+/// activation does so: one of a profile retained with a failover list (even
+/// an empty one) also holds every other endpoint that fits now, each once,
+/// however many there are; the profile alone connects as retained.
 #[tokio::test]
 async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_fail_over() {
     let server = failover_catalog(&[
@@ -1244,6 +1245,11 @@ async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_f
     ])
     .await;
     let config = openrouter_config(FAILOVER_MODEL, 32);
+    let endpoints_of = |provider: &Arc<dyn LlmProvider>| {
+        provider
+            .endpoint_failover()
+            .map_or(1, |failover| failover.endpoint_count())
+    };
     let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
         &server.uri(),
         "fixture-inference-key",
@@ -1287,8 +1293,9 @@ async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_f
         .await
         .unwrap();
 
-    // A profile retained with its (here empty) failover list connects with
-    // exactly the endpoints it lists.
+    // A profile retained with its (here empty) failover list: its
+    // activation holds the other endpoint that fits now too; the profile
+    // alone holds what it lists.
     let preparation = NativeDefinitionPreparation::new(
         config.clone(),
         AgentDefinitionId::new("writer").unwrap(),
@@ -1302,18 +1309,49 @@ async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_f
     let alone = preparation
         .openrouter_runtime(vec![profiles[0].clone()])
         .unwrap();
+    assert!(alone.openrouter_failover_endpoints().is_empty());
     let provider = alone
         .verify_credentials(&credentials, Some(&config))
         .await
         .unwrap();
-    assert!(provider.endpoint_failover().is_none());
+    assert_eq!(endpoints_of(&provider), 2);
+    let provider = alone.verify_credentials(&credentials, None).await.unwrap();
+    assert_eq!(endpoints_of(&provider), 1);
     let retained = preparation.openrouter_runtime(profiles).unwrap();
     assert_eq!(retained.openrouter_failover_endpoints(), ["other/exact"]);
     let provider = retained
         .verify_credentials(&credentials, Some(&config))
         .await
         .unwrap();
-    assert_eq!(provider.endpoint_failover().unwrap().endpoint_count(), 2);
+    assert_eq!(endpoints_of(&provider), 2, "each endpoint once");
+
+    // More endpoints fit than a profile retains: an activation holds all.
+    let many = failover_catalog(&[
+        ("a/exact", "A", 1, 2048),
+        ("b/exact", "B", 1, 2048),
+        ("c/exact", "C", 2, 2048),
+        ("d/exact", "D", 2, 2048),
+        ("e/exact", "E", 3, 2048),
+        ("f/exact", "F", 3, 2048),
+    ])
+    .await;
+    let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
+        &many.uri(),
+        "fixture-inference-key",
+        FAILOVER_MODEL,
+    )
+    .await
+    .unwrap();
+    let retained = preparation.openrouter_runtime(profiles).unwrap();
+    assert_eq!(
+        retained.openrouter_failover_endpoints(),
+        ["b/exact", "c/exact", "d/exact"]
+    );
+    let provider = retained
+        .verify_credentials(&credentials, Some(&config))
+        .await
+        .unwrap();
+    assert_eq!(endpoints_of(&provider), 6);
 }
 
 /// Each native OpenRouter provider of a Session records, in the Session's
