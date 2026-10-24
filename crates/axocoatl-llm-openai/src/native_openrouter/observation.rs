@@ -479,7 +479,10 @@ pub(super) async fn metadata(
         return Err(ProviderError::ApiError {
             provider: PROVIDER.into(),
             status,
-            message: super::with_retry_after(detail, retry_after),
+            message: super::with_retry_after(
+                super::failover::catalog_refusal(status, &detail),
+                retry_after,
+            ),
         });
     }
     tokio::time::timeout(RESPONSE_TIMEOUT, read_json(response, PROVIDER))
@@ -766,8 +769,9 @@ pub fn catalog_call_floor(
 
 /// An endpoint that could serve a model as native Sessions need, but that
 /// OpenRouter reports as unavailable or degraded right now: its `status` is
-/// not 0. Native requests pin one endpoint with no fallback, so a Session
-/// starts on one only while OpenRouter reports it healthy.
+/// not 0. A Session uses an endpoint only while OpenRouter reports it
+/// healthy: a degraded one fails part of its calls, some part way and after
+/// they cost credits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnavailableOpenRouterEndpoint {
     /// The endpoint, as an observation would have retained it.
@@ -840,8 +844,8 @@ impl NativeOpenRouterEndpoints {
                  degraded right now ({}). This is OpenRouter's provider status, not your \
                  setup: try again later, or choose another model (https://openrouter.ai/{model} \
                  shows its providers). Axocoatl uses an endpoint only while OpenRouter reports \
-                 it healthy (status 0), since a run stays on one endpoint with no fallback; \
-                 nothing was sent to the model.{others}",
+                 it healthy (status 0): a degraded one fails part of its calls, some part way \
+                 and after they cost credits; nothing was sent to the model.{others}",
                 self.unavailable
                     .iter()
                     .map(UnavailableOpenRouterEndpoint::describe)

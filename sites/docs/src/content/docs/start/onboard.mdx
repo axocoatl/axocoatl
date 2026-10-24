@@ -399,13 +399,13 @@ configuration file, the backup onboarding makes leaves that key out (it is no lo
 used; delete it at `https://openrouter.ai/settings/keys`).
 
 Onboarding then reads each model's endpoints as a run does. A run uses an endpoint
-only while OpenRouter reports it healthy (status 0), since it stays on one endpoint
-with no fallback, so a model whose every usable endpoint OpenRouter reports
-unavailable or degraded right now, or that has no endpoint native Sessions can use,
-cannot run now. Onboarding says so, with each endpoint's status and its success rate
-over the last 30 minutes for OpenRouter's status (which can pass, so running
-onboarding again later may work), or why no endpoint fits (which waiting does not
-change); at a terminal you can name another model (Enter takes the
+only while OpenRouter reports it healthy (status 0), since a degraded one fails part of
+its calls after they cost credits, so a model whose every usable endpoint OpenRouter
+reports unavailable or degraded right now, or that has no endpoint native Sessions can
+use, cannot run now. Onboarding says so, with each endpoint's status and its success rate
+over the last 30 minutes for OpenRouter's status (which can pass, so running onboarding
+again later may work), or why no endpoint fits (which waiting does not change); at a
+terminal you can name another model (Enter takes the
 first of `qwen/qwen3-coder-30b-a3b-instruct`, `z-ai/glm-4.6`,
 `deepseek/deepseek-chat-v3.1`, `qwen/qwen3-coder` and `openai/gpt-oss-120b` that can
 run now and is not the other role's model), and with `--yes` it is a step left that

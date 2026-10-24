@@ -260,6 +260,14 @@ impl RunHost for Host {
         self.daemon.loadout_ollama_versions(session_id)
     }
 
+    async fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>>
+    {
+        self.daemon.loadout_openrouter_endpoints(session_id)
+    }
+
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.daemon.loadout_run_stop_requested(run_id)
     }

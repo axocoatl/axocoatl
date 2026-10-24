@@ -156,6 +156,17 @@ pub trait RunHost: Send + Sync {
         BTreeMap::new()
     }
 
+    /// The OpenRouter endpoints that answered the Session's native
+    /// OpenRouter calls, by model, each with the calls it answered. Daemon:
+    /// what each native provider recorded as each answer started. A host
+    /// without native OpenRouter has none.
+    async fn openrouter_endpoints(
+        &self,
+        _session_id: &str,
+    ) -> BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>> {
+        BTreeMap::new()
+    }
+
     /// Whether a person asked to stop the run (`POST /api/runs/{id}/stop`,
     /// Ctrl-C in `axocoatl run`). Daemon: the server's run registry (core).
     async fn stop_requested(&self, _run_id: &str) -> bool {

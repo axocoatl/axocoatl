@@ -144,9 +144,14 @@ async fn child_body() {
     assert!(error.contains("not found"), "{error}");
 
     // Close releases the record with the rest of the Session's stores, so
-    // Reopen can take the Session's directory lock again.
+    // Reopen can take the Session's directory lock again. What its native
+    // providers recorded of the models that served them goes too.
+    daemon.loadout_runs.ollama_served(&id);
+    daemon.loadout_runs.openrouter_served(&id);
+    assert_eq!(daemon.loadout_runs.served_sessions(), (1, 1));
     daemon.close_session(&id).await.unwrap();
     assert!(!daemon.session_network_records.is_open(&id).await);
+    assert_eq!(daemon.loadout_runs.served_sessions(), (0, 0));
     // A closed Session's record stays readable without a writer.
     let closed = daemon.session_network(&id, None, None).await.unwrap();
     assert_eq!(closed.events.len(), 3);
@@ -168,8 +173,10 @@ async fn child_body() {
     let view = daemon.session_network(&id, Some(3), None).await.unwrap();
     assert_eq!(view.events.len(), 1);
 
+    daemon.loadout_runs.openrouter_served(&id);
     daemon.delete_session(&id).await.unwrap();
     assert!(!daemon.session_network_records.is_open(&id).await);
+    assert_eq!(daemon.loadout_runs.served_sessions(), (0, 0));
     daemon.shutdown().await.unwrap();
 }
 

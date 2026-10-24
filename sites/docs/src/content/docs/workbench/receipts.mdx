@@ -29,9 +29,12 @@ pre-authentication encoding of the statement's exact bytes.
     then, and the `origin` remote as `https://host/path` without credentials (absent when
     there is none or it is a local path);
   - `loadout`: id, version, kind, digest, built-in or yours;
-  - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), the
-    pinned program version of an external writer, provider and model, and the name (never
-    the value) of the credential an external writer's route sends;
+  - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), its
+    `program_version` (the pinned version of an external writer; for a native Agent the
+    Ollama that served its calls, `ollama 0.40.6`, or the OpenRouter endpoints that
+    answered them in the order they first answered, `openrouter endpoint deepinfra/fp8
+    (DeepInfra)`), provider and model, and the name (never the value) of the credential an
+    external writer's route sends;
   - `sandbox`: the backend, the Session's network (`egress` or `none`), the `hardened`
     workload, and the last network policy the Session's record holds for each scope: its
     revision, digest, and the allowlist hosts and routes as the record renders them, and
@@ -48,8 +51,9 @@ pre-authentication encoding of the statement's exact bytes.
   - `network`: the Outcome's network summary;
   - `checks`: each required check's name, state, exit code, timeout, command and the tree
     it ran on;
-  - `review` (model, verdict, rounds, number of findings) and `adjudications` (each
-    finding id and the writer's decision);
+  - `review` (model, the `program_version` of a native reviewer as for an Agent, verdict,
+    rounds, number of findings) and `adjudications` (each finding id and the writer's
+    decision);
   - `verdict`, `exit_code`, `attention`, `not_covered` (count and areas) and the warning
     codes;
   - `usage`: tokens and cost, with whether they are complete and whether the cost is

@@ -151,25 +151,10 @@ impl ReasoningDetails {
     }
 }
 
-/// An error OpenRouter reported inside the stream. Its numeric `code` is
-/// the upstream's HTTP status when it is one, so a Session can tell a
-/// transient failure (429, 5xx) from a rejection.
-fn stream_error(failure: &Value) -> ProviderError {
-    const PARTIAL: &str = "provider reported an error; retained accounting remains partial";
-    match failure
-        .get("code")
-        .and_then(Value::as_u64)
-        .filter(|code| (400..600).contains(code))
-    {
-        Some(status) => ProviderError::ApiError {
-            provider: PROVIDER.into(),
-            status: status as u16,
-            message: format!("native OpenRouter: {PARTIAL}"),
-        },
-        None => protocol(PARTIAL),
-    }
-}
-
+/// The answer of `profile`'s endpoint. Once the answer, named as that
+/// endpoint's provider, completed, the endpoint is recorded in `served` as
+/// one that answered a call; an answer that fails is not.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decode(
     response: reqwest::Response,
     mut deadlines: StreamDeadlines,
@@ -178,6 +163,7 @@ pub(super) fn decode(
     shape: CallShape,
     bounds: ProviderExecutionBounds,
     key: String,
+    served: Option<Arc<NativeOpenRouterServed>>,
 ) -> Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>> {
     Box::pin(async_stream::try_stream! {
         let mut bytes = response.bytes_stream();
@@ -285,7 +271,7 @@ pub(super) fn decode(
                     }
                 }
                 if let Some(failure) = value.get("error").filter(|v| !v.is_null()) {
-                    Err(stream_error(failure))?;
+                    Err(failover::answer_error(&profile, failure))?;
                 }
                 let choices = value
                     .get("choices")
@@ -484,19 +470,31 @@ pub(super) fn decode(
                 metadata,
             };
         }
-        yield StreamEvent::Done {
-            finish_reason: finished.ok_or_else(|| protocol("terminal finish missing"))?,
-        };
+        let finish_reason = finished.ok_or_else(|| protocol("terminal finish missing"))?;
+        if let Some(served) = &served {
+            served.record(&profile);
+        }
+        yield StreamEvent::Done { finish_reason };
     })
 }
+/// One call's whole answer, with what is known of the call when it failed:
+/// what opening it said, or, once its answer started, never that it cost
+/// nothing.
 pub(super) async fn collect(
     provider: &NativeOpenRouterProvider,
     request: ChatRequest,
-) -> AccountedChatOutcome {
+) -> (AccountedChatOutcome, FailureFacts) {
     let mut usage = MeasuredTokenUsage::lower_bound(TokenUsageStats::default());
     let mut cost_microunits = None;
+    let mut facts = None;
     let response = async {
-        let mut stream = provider.chat_stream(request).await?;
+        let mut stream = match provider.open(request).await {
+            Ok(stream) => stream,
+            Err(failed) => {
+                facts = Some(failed.facts);
+                return Err(failed.error);
+            }
+        };
         let mut content = String::new();
         let mut calls = BTreeMap::<usize, ToolCall>::new();
         let mut raw = BTreeMap::<usize, String>::new();
@@ -565,12 +563,19 @@ pub(super) async fn collect(
         Ok(response)
     }
     .await;
+    let facts = match &response {
+        Ok(_) => FailureFacts::default(),
+        Err(error) => facts.unwrap_or_else(|| failover::answer_facts(error)),
+    };
     if response.is_err() {
         usage.complete = false;
     }
-    AccountedChatOutcome {
-        response,
-        usage,
-        cost_microunits,
-    }
+    (
+        AccountedChatOutcome {
+            response,
+            usage,
+            cost_microunits,
+        },
+        facts,
+    )
 }

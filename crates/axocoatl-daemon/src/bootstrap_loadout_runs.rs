@@ -24,7 +24,7 @@ use axocoatl_session::record_bundle::{BundleHeader, RECORD_BUNDLE_SCHEMA};
 use axocoatl_session::run_outcome::{
     exit_code, CheckResult, CheckState, GenerationObservation, LoadoutRef, ModelIdentity,
     NetworkSummary, NodeFailure, NodeObservation, NodeState, ReviewOutcome, RunOutcome, RunUsage,
-    RunVerdict, RunWarning, TurnObservation, TurnState,
+    RunVerdict, RunWarning, ServedEndpoint, TurnObservation, TurnState,
 };
 use axocoatl_session::run_record::{
     RunEvent, RunManifest, RunRecordError, RunRecordStore, SessionLoadoutBinding,
@@ -70,6 +70,9 @@ pub(crate) struct LoadoutRuns {
     /// Session id → the Ollama versions that served its native calls, for
     /// the run's Outcome and receipt.
     ollama_served: StdMutex<HashMap<String, Arc<crate::session_dispatch::OllamaServedLog>>>,
+    /// Session id → the OpenRouter endpoints that answered its native
+    /// calls, for the run's Outcome, notes and receipt.
+    openrouter_served: StdMutex<HashMap<String, Arc<crate::session_dispatch::OpenRouterServedLog>>>,
     /// Where a test's admission reads OpenRouter's model catalog.
     #[cfg(test)]
     pub(crate) openrouter_catalog: StdMutex<Option<String>>,
@@ -101,6 +104,7 @@ impl LoadoutRuns {
             stops: StdMutex::new(HashSet::new()),
             e2e_runs: StdMutex::new(HashSet::new()),
             ollama_served: StdMutex::new(HashMap::new()),
+            openrouter_served: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             openrouter_catalog: StdMutex::new(None),
         }
@@ -131,6 +135,82 @@ impl LoadoutRuns {
             .unwrap_or_else(|poison| poison.into_inner())
             .get(session_id)
             .map(|log| log.versions())
+            .unwrap_or_default()
+    }
+
+    /// Forget what `session_id`'s native providers recorded (the Ollama
+    /// versions and OpenRouter endpoints that served them) once the Session
+    /// is closed or deleted, so the daemon holds them only for Sessions that
+    /// exist. A run reads them when it writes its Outcome, before then; a
+    /// Session opened again records anew.
+    pub(crate) fn forget_served(&self, session_id: &str) {
+        self.ollama_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+    }
+
+    /// The Sessions whose served logs the daemon holds: (Ollama, OpenRouter).
+    #[cfg(test)]
+    pub(crate) fn served_sessions(&self) -> (usize, usize) {
+        (
+            self.ollama_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+            self.openrouter_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+        )
+    }
+
+    /// Where `session_id`'s native OpenRouter providers record the
+    /// endpoints that answered them.
+    pub(crate) fn openrouter_served(
+        &self,
+        session_id: &str,
+    ) -> Arc<crate::session_dispatch::OpenRouterServedLog> {
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(session_id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// The OpenRouter endpoints `session_id`'s native calls went to, by
+    /// model, each with the calls it answered and those that moved away from
+    /// it; empty when none did.
+    pub(crate) fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<ServedEndpoint>> {
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(session_id)
+            .map(|log| {
+                log.endpoints()
+                    .into_iter()
+                    .map(|(model, endpoints)| {
+                        let endpoints = endpoints
+                            .into_iter()
+                            .map(|served| ServedEndpoint {
+                                endpoint: served.endpoint,
+                                provider: served.provider,
+                                calls: served.calls,
+                                moved: served.moved,
+                            })
+                            .collect();
+                        (model, endpoints)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -484,6 +564,7 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         // Usage not recorded: neither its tokens nor its cost are known.
         return RunUsage {
             cost_known: false,
+            unreported: vec![USAGE_NOT_RECORDED.into()],
             ..RunUsage::default()
         };
     };
@@ -507,8 +588,17 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         cost_known: complete,
         cost_computed: false,
         retries: 0,
+        unreported: if complete {
+            Vec::new()
+        } else {
+            vec![USAGE_NOT_RECORDED.into()]
+        },
     }
 }
+
+/// What the usage line says of an activation whose calls the run cannot
+/// count one by one: its usage as the Session recorded it was not complete.
+const USAGE_NOT_RECORDED: &str = "its usage as recorded";
 
 fn node_state(state: &str) -> NodeState {
     match state {
@@ -674,6 +764,14 @@ pub fn observation_from_control_plane(
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
                 usage.cost_known &= activation_usage.cost_known;
+                // Which calls did not report, by Agent and generation.
+                if !activation_usage.complete || !activation_usage.cost_known {
+                    usage.unreported.extend(
+                        activation_usage.unreported.iter().map(|what| {
+                            format!("{} (generation {generation}): {what}", node.label)
+                        }),
+                    );
+                }
             }
             if computes_cost
                 && activation_usage.cost_known
@@ -1080,6 +1178,7 @@ fn ended_outcome(manifest: &RunManifest, error: String, warnings: Vec<RunWarning
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: Some(error),
     };
@@ -3375,6 +3474,15 @@ impl AxocoatlDaemon {
         self.loadout_runs.ollama_versions(session_id)
     }
 
+    /// The OpenRouter endpoints that answered the Session's native calls,
+    /// by model (the run's Outcome, notes and receipt name them).
+    pub fn loadout_openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<ServedEndpoint>> {
+        self.loadout_runs.openrouter_endpoints(session_id)
+    }
+
     pub async fn loadout_network_summary(&self, session_id: &str) -> NetworkSummary {
         use axocoatl_session::network_record::{Decision, NetworkEvent};
         let mut summary = NetworkSummary::default();
@@ -3562,6 +3670,15 @@ impl AxocoatlDaemon {
                             cost_known: usage.cost_known,
                             cost_computed: false,
                             retries: 0,
+                            unreported: (usage.unreported_calls > 0)
+                                .then(|| {
+                                    format!(
+                                        "{} of {} model calls",
+                                        usage.unreported_calls, usage.calls
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
                         },
                     );
                 }
@@ -4437,6 +4554,7 @@ mod tests {
                 cost_known: true,
                 cost_computed: false,
                 retries: 0,
+                unreported: Vec::new(),
             },
         )]
         .into_iter()
@@ -4552,6 +4670,7 @@ mod tests {
                     cost_known,
                     cost_computed: false,
                     retries: 0,
+                    unreported: Vec::new(),
                 },
             )]
             .into_iter()

@@ -167,11 +167,18 @@ Axocoatl cannot prevent changes made in your OpenRouter account.
 Before Send, review **Team & budget**. Axocoatl reads the model's entry in OpenRouter's
 catalog and its endpoints, selects the cheapest qualifying endpoint that accepts the
 Agent's sampling settings and fits its budget, and retains its capabilities, context
-and output limits, prices and, for a reasoning model, its reasoning contract. Every
-request pins that endpoint, disables automatic retries and fallbacks, and carries its
-prompt, completion and per-request price ceilings as `max_price`. The retained contract
-is checked again before each request; a changed or unsupported profile is refused
-before inference.
+and output limits, prices and, for a reasoning model, its reasoning contract. It also
+retains, cheapest first, up to three more of the model's healthy endpoints that can
+take over each of its calls: at least the selected endpoint's context and prompt limit,
+the same output limit and reasoning setting, and the smallest call within the approved
+budget. Each activation adds, as it opens, every other endpoint of the model that
+OpenRouter lists healthy then and that passes the same checks
+([When an endpoint is rate-limited or down](#when-an-endpoint-is-rate-limited-or-down)).
+Every request pins one of them, disables OpenRouter's automatic retries and fallbacks,
+and carries that endpoint's prompt, completion and per-request price ceilings as
+`max_price`. The contract of the endpoint a request goes to is checked against the
+catalog again before each request; a changed or unsupported profile is refused before
+inference.
 
 ### What each request reserves
 
@@ -278,14 +285,66 @@ are unsupported. A model Axocoatl cannot run says why when Team & budget is appl
 
 An eligible endpoint is used only while OpenRouter reports it healthy (its `status` is
 0). A degraded or unavailable one is never used, even when no healthy endpoint is
-left: every request pins one endpoint with no fallback, so a run on it would fail part
-way and still cost credits. When OpenRouter reports every eligible endpoint of a model
-unavailable or degraded, the Session or run stops before any model call and says so:
-each endpoint's status and its share of requests that succeeded over the last 30
-minutes, that this is OpenRouter's provider status and not your setup, and to try again
-later or choose another model. A Session whose retained endpoint has become degraded is
-told the same when it opens the provider again. Onboarding reads the endpoints of the
-models you choose before it writes the setup.
+left: it fails part of its calls, some part way through an answer and after they cost
+credits, which no move to another endpoint can undo. When OpenRouter reports every
+eligible endpoint of a model unavailable or degraded, the Session or run stops before
+any model call and says so: each endpoint's status and its share of requests that
+succeeded over the last 30 minutes, that this is OpenRouter's provider status and not
+your setup, and to try again later or choose another model. An endpoint that has
+become degraded since is not sent to; the call moves to the next endpoint, and when
+none is left the Session is told the same. Onboarding reads the endpoints of the models
+you choose before it writes the setup.
+
+### When an endpoint is rate-limited or down
+
+A call that an endpoint fails before it produced anything moves at once to the next
+endpoint of the same model that can carry it: the endpoint's upstream rate-limited it
+(HTTP 429), it was unavailable (408 or 5xx), it timed out or closed the connection
+before its answer started, it reported a 429, 408 or 5xx inside an answer that had
+produced nothing yet, OpenRouter reports it degraded now, or its contract changed since
+Team & budget reviewed it. The endpoints are the one Team & budget selected, those it
+retained, and every other one the catalog listed healthy as the activation opened and
+that passes the same checks. The call is sent again as a new call, reserved at that
+endpoint's own prices against the same approved budget (budgets are never raised), and
+that endpoint's contract is checked against the catalog before it is sent. The move
+happens only when the grant can pay for the call there; otherwise the next endpoint is
+tried, and then the wait below. Later calls of the same activation stay on the endpoint
+the call moved to, unless the grant can no longer pay for a call there: then that call
+goes to the endpoint that reserves least of those that can carry it. Each activation
+starts again on the selected endpoint.
+
+- OpenRouter's own limit on the account (a 429 that names no upstream provider) applies
+  to every endpoint: the call is not moved, but waits its `Retry-After` and is sent
+  again to the same endpoint.
+- When no endpoint is left to move to, the Session waits once, as long as the longest
+  `Retry-After` the endpoints that failed the call stated (2 seconds without one), and
+  tries them again, starting on the one that failed it last, or on the next one when
+  that one asked to wait longer than 30 seconds: an endpoint that did is not sent to
+  again for that call. If every endpoint fails again, the call ends. Its error says that OpenRouter reports every endpoint of the model that the
+  Agent may use as rate-limited or unavailable right now, with each endpoint and its
+  failure, that this is a provider outage and not your setup, and to try again later or
+  choose another model. It never quotes OpenRouter's raw error, which can carry a hint
+  to add your own provider key (BYOK, which native Sessions refuse), or an error page
+  that is not OpenRouter's JSON.
+- An answer that names another provider than the endpoint its request pinned is refused
+  on every endpoint, and the call is not moved again.
+- A request OpenRouter refused with an HTTP status before generating anything, or one
+  never sent, is counted as costing nothing: it settles at zero tokens and $0 and gives
+  its reservation back, so the run's usage stays exact. OpenRouter bills the tokens a
+  provider processed, and such a request processed none. A call whose answer had
+  started (an error inside it included, whatever its message says), or that timed out
+  after it was sent, keeps its reservation, and the run's usage line names the Agent
+  and how many of its calls did not report.
+- The run record shows each move as a provider retry (`from endpoint A to endpoint B`),
+  the run's notes name the endpoints that answered each model to the end and how many
+  calls each answered, and the receipt names them in the Agent's or reviewer's
+  `program_version` (`openrouter endpoint deepinfra/fp8 (DeepInfra)`).
+- A tool-calling turn's reasoning goes back unchanged to the endpoint the next call goes
+  to, as OpenRouter documents for tool use, whichever endpoint produced it.
+
+A Session whose Team was applied by Axocoatl 1.4 or by a 1.5.0 build before this
+failover retained one endpoint. Its profile still loads unchanged, and its activations
+add the other endpoints as every activation does.
 
 ## Configure Ollama
 

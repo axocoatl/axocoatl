@@ -12,10 +12,28 @@ use axocoatl_core::ReasoningEffort;
 use axocoatl_llm_openai::{REASONING_DETAILS_METADATA, REASONING_TOKENS_METADATA};
 
 /// Forwards to the real provider and keeps each request the actor sent, so
-/// the test can see the reasoning the actor's history carried back.
+/// the test can see the reasoning the actor's history carried back. With
+/// `move_after_first`, calls after the first go to the provider's next
+/// endpoint, as after a failover.
 struct Recording {
     inner: Arc<dyn LlmProvider>,
     requests: Mutex<Vec<ChatRequest>>,
+    move_after_first: bool,
+}
+
+impl Recording {
+    fn record(&self, request: &ChatRequest) {
+        let mut requests = self.requests.lock().unwrap();
+        if self.move_after_first && requests.len() == 1 {
+            let failover = self
+                .inner
+                .endpoint_failover()
+                .expect("a second endpoint of the model to move to");
+            let next = (failover.current_endpoint() + 1) % failover.endpoint_count();
+            failover.move_to(next, false);
+        }
+        requests.push(request.clone());
+    }
 }
 
 #[async_trait]
@@ -55,13 +73,26 @@ impl LlmProvider for Recording {
     fn count_tokens(&self, request: &ChatRequest) -> usize {
         self.inner.count_tokens(request)
     }
+    fn endpoint_failover(&self) -> Option<&dyn axocoatl_llm::EndpointFailover> {
+        self.inner.endpoint_failover()
+    }
+    fn failed_answer(&self, error: ProviderError) -> axocoatl_llm::FailedCall {
+        self.inner.failed_answer(error)
+    }
     async fn chat(&self, request: ChatRequest) -> std::result::Result<ChatResponse, ProviderError> {
-        self.requests.lock().unwrap().push(request.clone());
+        self.record(&request);
         self.inner.chat(request).await
     }
     async fn chat_with_accounting(&self, request: ChatRequest) -> axocoatl_llm::AccountedChatOutcome {
-        self.requests.lock().unwrap().push(request.clone());
+        self.record(&request);
         self.inner.chat_with_accounting(request).await
+    }
+    async fn chat_with_accounting_and_facts(
+        &self,
+        request: ChatRequest,
+    ) -> (axocoatl_llm::AccountedChatOutcome, axocoatl_llm::FailureFacts) {
+        self.record(&request);
+        self.inner.chat_with_accounting_and_facts(request).await
     }
     async fn chat_stream(
         &self,
@@ -70,8 +101,18 @@ impl LlmProvider for Recording {
         Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
         ProviderError,
     > {
-        self.requests.lock().unwrap().push(request.clone());
+        self.record(&request);
         self.inner.chat_stream(request).await
+    }
+    async fn open_chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> std::result::Result<
+        Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
+        axocoatl_llm::FailedCall,
+    > {
+        self.record(&request);
+        self.inner.open_chat_stream(request).await
     }
 }
 
@@ -81,6 +122,13 @@ const SYSTEM: &str = "You are checking a tool. Before calling it, reason step by
     result arrives, reply with the single word: done.";
 
 async fn live_turn(model: &str, effort: ReasoningEffort) {
+    live_turn_on(model, effort, false).await;
+}
+
+/// [`live_turn`]; with `move_after_first`, the call that sends the tool
+/// turn's reasoning back goes to another endpoint of the model than the one
+/// that returned it, and the run checks that endpoint answered it.
+async fn live_turn_on(model: &str, effort: ReasoningEffort, move_after_first: bool) {
     let key = std::env::var("OPENROUTER_API_KEY")
         .expect("the live OpenRouter test needs OPENROUTER_API_KEY in its environment");
     // A modest grant: 100,000 tokens and $0.50. Reserving the 1,000,000-token
@@ -122,14 +170,20 @@ async fn live_turn(model: &str, effort: ReasoningEffort) {
     .unwrap();
     let runtime = preparation.openrouter_runtime(profiles).unwrap();
     let endpoint = runtime.openrouter_endpoint().unwrap().to_owned();
+    let served = Arc::new(crate::session_dispatch::OpenRouterServedLog::default());
     let credentials = NativeProviderCredentials {
         openrouter_api_key: Some(key),
         openrouter_credits_only: true,
+        openrouter_served: Some(served.clone()),
         ..Default::default()
     };
     let provider = Arc::new(Recording {
-        inner: runtime.verify_credentials(&credentials).await.unwrap(),
+        inner: runtime
+            .verify_credentials(&credentials, Some(&node.config))
+            .await
+            .unwrap(),
         requests: Mutex::new(Vec::new()),
+        move_after_first,
     });
 
     start_input(&fixture.controller, node);
@@ -196,8 +250,21 @@ async fn live_turn(model: &str, effort: ReasoningEffort) {
             "largest_reservation_tokens": largest.tokens,
             "largest_reservation_microusd": largest.cost_microunits,
             "succeeded_tools": tools,
+            "served": served.endpoints().get(model).map(|endpoints| endpoints.iter().map(|served| serde_json::json!({
+                "endpoint": served.endpoint, "provider": served.provider,
+                "calls": served.calls, "moved": served.moved,
+            })).collect::<Vec<_>>()),
         })
     );
+    if move_after_first {
+        // The tool turn's endpoint answered the first call, another one
+        // answered the call that carried its reasoning back.
+        let endpoints = served.endpoints().remove(model).unwrap_or_default();
+        assert!(
+            endpoints.len() >= 2 && endpoints.iter().all(|served| served.calls > 0),
+            "{model}: {endpoints:?}"
+        );
+    }
 
     // The answer's request carried the tool turn's reasoning back: the
     // actor kept it on the tool call, with the tokens it reported.
@@ -249,4 +316,14 @@ async fn openrouter_live_claude_sonnet_reasoning_tool_turn_settles_the_grant() {
 #[ignore = "live: needs OPENROUTER_API_KEY and spends OpenRouter credit"]
 async fn openrouter_live_gpt_sol_reasoning_tool_turn_settles_the_grant() {
     live_turn("openai/gpt-5.6-sol", ReasoningEffort::Low).await;
+}
+
+/// The default reviewer's model, `openai/gpt-oss-120b`: its tool turn's
+/// reasoning, returned by one endpoint, goes back to another endpoint of
+/// the model (as after a failover), which takes it and answers. Spends well
+/// under $0.001.
+#[tokio::test]
+#[ignore = "live: needs OPENROUTER_API_KEY and spends OpenRouter credit"]
+async fn openrouter_live_gpt_oss_reasoning_goes_back_to_another_endpoint() {
+    live_turn_on("openai/gpt-oss-120b", ReasoningEffort::Low, true).await;
 }

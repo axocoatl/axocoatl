@@ -142,7 +142,7 @@ pub(crate) use native::connect_retained_profile;
 pub(crate) use native::{
     retained_call_reservation, retained_profile_refused, with_provider_retry,
     CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
-    OllamaServedLog,
+    OllamaServedLog, OpenRouterServedLog,
 };
 #[path = "session_dispatch_native_turn.rs"]
 mod native_turn;

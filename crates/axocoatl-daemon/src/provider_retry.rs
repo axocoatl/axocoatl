@@ -1,7 +1,11 @@
 //! Provider error policy for native Sessions: retry a transient failure
 //! (429, 5xx, timeout, connection reset) once with backoff on the same
 //! pinned model; never retry 400, 401, 402 or 403, a refusal or a safety
-//! stop. Owner: workstream `runtime`.
+//! stop. A provider that holds several endpoints of the model, each under
+//! its own retained contract, first moves a call that failed before it
+//! produced anything to its next endpoint, at once
+//! ([`axocoatl_llm::EndpointFailover`]); the backoff applies once every
+//! endpoint failed. Owner: workstream `runtime`.
 //!
 //! The policy is applied at the Session's provider boundary
 //! (`session_dispatch_provider.rs`), where every call is admitted against
@@ -58,6 +62,16 @@ pub enum RetryDecision {
 /// and every server error.
 fn transient_status(status: u16) -> bool {
     status == 408 || status == 429 || (500..=599).contains(&status)
+}
+
+/// Whether `failure` is one a later attempt may not meet: a 408, a 429 or a
+/// 5xx, a timeout or a reset connection, whatever `Retry-After` it states.
+pub fn is_transient(failure: &ProviderFailure) -> bool {
+    match failure {
+        ProviderFailure::Status { status, .. } => transient_status(*status),
+        ProviderFailure::Timeout | ProviderFailure::ConnectionReset => true,
+        ProviderFailure::Refusal | ProviderFailure::Other(_) => false,
+    }
 }
 
 /// Decide whether attempt `attempt` (0 = the first) is retried.
@@ -177,6 +191,53 @@ pub fn retry_note(
         wait.as_secs()
     );
     note.chars().take(512).collect()
+}
+
+/// The note recorded on the activation when a call that failed before its
+/// provider produced anything is sent again at once to another endpoint of
+/// the same model: `moved` says from which endpoint to which. It starts with
+/// `HTTP <status>` when the failure was a provider status, which
+/// [`retry_status`] reads back.
+pub fn switch_note(failure: &ProviderFailure, provider: &str, model: &str, moved: &str) -> String {
+    let what = failure_words(failure, provider);
+    let note = format!(
+        "{what}; the call was sent again at once, {moved} of the same model ({model}), as a \
+         new, separately reserved call"
+    );
+    note.chars().take(512).collect()
+}
+
+/// The note recorded on the activation when a call is sent again once,
+/// after waiting `wait`, to another endpoint of the same model than the one
+/// that failed it last: that one asked to wait longer than the policy
+/// allows. `moved` says from which endpoint to which. It starts with
+/// `HTTP <status>` when the failure was a provider status, which
+/// [`retry_status`] reads back.
+pub fn retry_moved_note(
+    failure: &ProviderFailure,
+    wait: Duration,
+    provider: &str,
+    model: &str,
+    moved: &str,
+) -> String {
+    let note = format!(
+        "{}; retrying once in {} s, {moved} of the same model ({model}), as a new, separately \
+         reserved call",
+        failure_words(failure, provider),
+        wait.as_secs()
+    );
+    note.chars().take(512).collect()
+}
+
+/// What failed, as a note begins.
+fn failure_words(failure: &ProviderFailure, provider: &str) -> String {
+    match failure {
+        ProviderFailure::Status { status, .. } => format!("HTTP {status} from {provider}"),
+        ProviderFailure::Timeout => format!("{provider} timed out"),
+        ProviderFailure::ConnectionReset => format!("{provider} closed the connection"),
+        ProviderFailure::Refusal => format!("{provider} refused"),
+        ProviderFailure::Other(message) => message.chars().take(200).collect(),
+    }
 }
 
 /// The provider status a recorded retry note names, if any.
