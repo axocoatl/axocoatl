@@ -1535,10 +1535,16 @@ esac"#,
     .await;
     assert!(!sandbox::run(&mut o).await);
     let calls = shims.calls();
+    // With what Podman's readiness was after the reinstall and what
+    // onboarding said: one full run of the suite failed here once, after a
+    // `podman machine list` that was not read as a running machine.
     assert_eq!(
         calls.iter().filter(|call| call.starts_with("sudo")).count(),
         1,
-        "{calls:?}"
+        "{calls:?}\nreadiness: {:?}\nsteps: {:?}\noutput:\n{}",
+        o.facts.podman.readiness,
+        o.steps,
+        o.ui.output()
     );
     assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
     assert!(
