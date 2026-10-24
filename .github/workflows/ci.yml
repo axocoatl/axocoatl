@@ -435,7 +435,11 @@ jobs:
     # point names why, never Podman failing.
     name: Podman and live suites (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    # On an 8-core aarch64 Ubuntu 24.04 VM with Podman 4.9.3 and warm
+    # dependencies, the daemon group took 75 minutes (11 of them building),
+    # isolation 10, cli 6 and other 7; a runner is slower and its first
+    # build is cold.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
