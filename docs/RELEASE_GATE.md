@@ -319,7 +319,8 @@ runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
 - "Live Ollama suites" installs Ollama 0.40.6, the audited release, serves it
   with cloud models off and runs the contract probes and a native Session's
   provider against `qwen3:0.6b`: plain, JSON, a tool round-trip and an
-  over-long input.
+  over-long input. It also serves a second Ollama with its cloud features on,
+  for the live test that the host route to Ollama refuses such a server.
 - `test-podman-suites.sh check`, in the "Workflow contracts" job, fails when
   an ignored test is in no group or one is left out without a reason. Left
   out: the four live E2B tests (E2B's hosted service with a key; the project

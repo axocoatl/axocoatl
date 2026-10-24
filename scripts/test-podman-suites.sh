@@ -14,7 +14,8 @@
 #                                         exists and says why
 #   test-podman-suites.sh serve-ollama VERSION
 #                                         CI only: install that Ollama release and
-#                                         serve it as this user, cloud models off
+#                                         serve it as this user, cloud models off,
+#                                         and a second server with them on
 #
 # Groups:
 #   isolation  axocoatl-isolation (but supervisor_runtime, which
@@ -26,7 +27,9 @@
 #   ollama     axocoatl-llm-ollama's and axocoatl-daemon's live Ollama tests,
 #              against an Ollama at OLLAMA_URL (default http://127.0.0.1:11434)
 #              serving PROBE_MODEL, with cloud models off (the native Session
-#              test once plain, once with JSON, once with a tool round-trip)
+#              test once plain, once with JSON, once with a tool round-trip),
+#              and one with its cloud features on, serving nothing, on
+#              127.0.0.1:OLLAMA_CLOUD_ON_PORT (default 11435)
 #
 # prepare and run need Podman (rootless, the default connection or
 # CONTAINER_CONNECTION) and the internet; prepare for daemon and cli builds
@@ -212,6 +215,21 @@ serve_ollama() {
     fail "Ollama $version does not answer on 127.0.0.1:11434 (it answers: ${served:-nothing})"
   }
   echo "Ollama $served answers on 127.0.0.1:11434, cloud models off."
+  # A second server with its cloud features on (a new HOME: Ollama's
+  # default), which the host route to Ollama must refuse; it serves no model.
+  local cloud_home
+  cloud_home=$(mktemp -d "${RUNNER_TEMP:-/tmp}/ollama-cloud-on.XXXXXX")
+  HOME=$cloud_home OLLAMA_HOST=127.0.0.1:11435 nohup ollama serve \
+    >"${RUNNER_TEMP:-/tmp}/ollama-serve-cloud-on.log" 2>&1 &
+  for _ in $(seq 1 30); do
+    curl -fsS --max-time 5 http://127.0.0.1:11435/api/version >/dev/null 2>&1 && break
+    sleep 2
+  done
+  curl -fsS --max-time 5 http://127.0.0.1:11435/api/version >/dev/null 2>&1 || {
+    cat "${RUNNER_TEMP:-/tmp}/ollama-serve-cloud-on.log" >&2 || true
+    fail "the second Ollama, cloud features on, does not answer on 127.0.0.1:11435"
+  }
+  echo "A second Ollama, cloud features on, answers on 127.0.0.1:11435."
 }
 
 run() {
@@ -226,6 +244,11 @@ run() {
     local url=${OLLAMA_URL:-http://127.0.0.1:11434}
     export AXOCOATL_WATCH_OLLAMA_URL=$url AXOCOATL_WATCH_OLLAMA_MODEL=$PROBE_MODEL
     export AXOCOATL_TEST_OLLAMA_URL=$url AXOCOATL_TEST_OLLAMA_MODEL=$PROBE_MODEL
+    # The host route's live test: the port of the server above, and of one
+    # with its cloud features on.
+    local port=${url##*:}
+    export AXO_LIVE_OLLAMA_CLOUD_OFF_PORT=${port%%/*}
+    export AXO_LIVE_OLLAMA_CLOUD_ON_PORT=${OLLAMA_CLOUD_ON_PORT:-11435}
   fi
   local work
   work=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-suites.XXXXXX")
