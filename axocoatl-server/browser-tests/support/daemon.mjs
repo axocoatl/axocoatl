@@ -117,8 +117,8 @@ function hasCredential(headers) {
 }
 
 // Adds the bearer token to requests for a registered daemon unless the caller
-// chose a credential itself. The workbench redirects `/` from a loopback IP to
-// `localhost`; fetch would drop Authorization on that cross-origin hop, so
+// chose a credential itself. The workbench redirects `/` from `localhost` to
+// `127.0.0.1`; fetch would drop Authorization on that cross-origin hop, so
 // redirects between registered origins are followed here with the header kept.
 async function authorizedFetch(input, init = undefined) {
   if (typeof input !== 'string' && !(input instanceof URL)) return unauthenticatedFetch(input, init);
@@ -155,28 +155,27 @@ function unregisterDaemon(port) {
 }
 
 // Give a Playwright context the sign-in cookies of every daemon running in
-// this process, exactly as `/?token=` would set them: the token cookie and the
-// secret-free "signed in" cookie, with which `/` gets Safari (WebKit) past the
-// `127.0.0.1` -> `localhost` redirect. Component-mode runtimes
+// this process, exactly as `/?token=` would set them, for `127.0.0.1`, the
+// workbench's one address: the token cookie and the secret-free "signed in"
+// cookie, with which `/` gets Safari (WebKit) past the `localhost` ->
+// `127.0.0.1` redirect. Component-mode runtimes
 // (AXOCOATL_COMPONENT_BASE_URL) register nothing, so this is then a no-op.
 export async function authorizeContext(context) {
   const cookies = [];
   for (const { port, token } of new Set(authorizedDaemons.values())) {
-    for (const host of ['localhost', '127.0.0.1']) {
-      cookies.push({
-        name: `axocoatl-token-${port}`,
-        value: token,
-        url: `http://${host}:${port}/`,
-        httpOnly: true,
-        sameSite: 'Strict',
-      }, {
-        name: `axocoatl-token-${port}-signed-in`,
-        value: '1',
-        url: `http://${host}:${port}/`,
-        httpOnly: true,
-        sameSite: 'Lax',
-      });
-    }
+    cookies.push({
+      name: `axocoatl-token-${port}`,
+      value: token,
+      url: `http://127.0.0.1:${port}/`,
+      httpOnly: true,
+      sameSite: 'Strict',
+    }, {
+      name: `axocoatl-token-${port}-signed-in`,
+      value: '1',
+      url: `http://127.0.0.1:${port}/`,
+      httpOnly: true,
+      sameSite: 'Lax',
+    });
   }
   if (cookies.length) {
     await context.addCookies(cookies);
@@ -622,7 +621,7 @@ consolidation:
       logs,
       get token() { return token; },
       cookieName: `axocoatl-token-${port}`,
-      get signInUrl() { return `http://localhost:${port}/?token=${token}`; },
+      get signInUrl() { return `http://127.0.0.1:${port}/?token=${token}`; },
       // A plain fetch that sends no Axocoatl credential.
       fetchWithoutToken(pathname, init) {
         return unauthenticatedFetch(`${baseUrl}${pathname}`, init);

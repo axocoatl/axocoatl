@@ -5,7 +5,7 @@ pub use session_knowledge_routes::*;
 use axum::{
     extract::{
         ws::{Message as AxumWsMessage, WebSocket as AxumWebSocket},
-        ConnectInfo, FromRequestParts, OriginalUri, Path, Query, State, WebSocketUpgrade,
+        ConnectInfo, FromRequestParts, Path, Query, State, WebSocketUpgrade,
     },
     http::{header, uri::Authority, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::Next,
@@ -27,21 +27,10 @@ use crate::AppState;
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 
 /// The app. One route, because there is one product: a session, its chat, and
-/// modules that open around it.
-pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Response {
-    if let Some(location) = canonical_workbench_location(&headers, &uri) {
-        let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
-        let response_headers = response.headers_mut();
-        response_headers.insert(header::LOCATION, location);
-        // The query may hold a sign-in token; keep it out of Referer and
-        // caches on the way to the canonical host.
-        response_headers.insert(
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("no-referrer"),
-        );
-        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return response;
-    }
+/// modules that open around it. With the local API token, the token check
+/// in front of it first moves other loopback names to [`WORKBENCH_HOST`]
+/// ([`workbench_address_redirect`]).
+pub async fn dashboard() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         DASHBOARD_HTML,
@@ -49,33 +38,66 @@ pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Res
         .into_response()
 }
 
-/// Keep the browser workbench and its `<session>-p<port>.localhost` Preview
-/// frames on the same browser site so ordinary app cookies keep working. Only
-/// the exact dashboard route calls this helper: API, health, asset, CLI, and
-/// non-loopback operator hosts never redirect. Local token auth calls it too,
-/// so sign-in always happens on the canonical host.
+/// The redirect to [`canonical_workbench_location`].
+pub(crate) fn workbench_address_redirect(location: HeaderValue) -> Response {
+    let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::LOCATION, location);
+    // The query may hold a sign-in token; keep it out of Referer and caches
+    // on the way to the canonical host.
+    response_headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// The one address the browser workbench is served at.
+///
+/// A page on a `*.localhost` address can set a cookie for `Domain=localhost`
+/// in Safari on macOS, and Safari then sends it to `localhost` on every
+/// port. A cookie for `localhost` never matches an IP address, so at
+/// `127.0.0.1` the workbench never receives one, in any browser, while every
+/// Preview keeps its own `<session>-p<port>.localhost` origin.
+pub(crate) const WORKBENCH_HOST: &str = "127.0.0.1";
+
+/// Move a workbench opened at `localhost` or another loopback address to
+/// [`WORKBENCH_HOST`] on the same listener port, query included. Only local
+/// token auth calls this, for the exact dashboard route, so sign-in always
+/// happens on the canonical host: API, health, asset, CLI, and non-loopback
+/// operator hosts never redirect. Configured credentials and
+/// `allow_unauthenticated` set no cookie for a page to shadow, and a proxy
+/// on the same host may send any loopback name, `Host: localhost` included,
+/// so the workbench is served at the name the request used.
 pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
     let authority = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| Authority::from_str(value).ok())?;
-    let host = authority
-        .host()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    let ip = host.parse::<std::net::IpAddr>().ok()?;
-    if !ip.is_loopback() {
+    if !host_is_other_loopback_name(authority.host()) {
         return None;
     }
     let listener = authority
         .port_u16()
-        .map(|port| format!("localhost:{port}"))
-        .unwrap_or_else(|| "localhost".to_string());
+        .map(|port| format!("{WORKBENCH_HOST}:{port}"))
+        .unwrap_or_else(|| WORKBENCH_HOST.to_string());
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or("/");
     HeaderValue::from_str(&format!("http://{listener}{path_and_query}")).ok()
+}
+
+/// Whether a `Host` name is `localhost` or a loopback IP address other than
+/// [`WORKBENCH_HOST`]. A Preview's `*.localhost` name is not: the Preview
+/// Host boundary answers those before the workbench router.
+pub(crate) fn host_is_other_loopback_name(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() && host != WORKBENCH_HOST)
 }
 
 // --- @axocoatl/lattice — embedded graph-canvas ES modules ---
@@ -7019,14 +7041,24 @@ pub async fn run_automation(
 
 // --- Browser-pane proxy (DOM-picker enabler) ---
 
-fn session_preview_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+/// The Session app's URL at the loopback address and port Podman published
+/// its port on (`[::1]` or `127.0.0.2`, beside the workbench's address).
+fn session_preview_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("http://127.0.0.1:{host_port}/{tail}{query}")
+    format!("http://{published}/{tail}{query}")
 }
 
-fn session_preview_websocket_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+fn session_preview_websocket_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("ws://127.0.0.1:{host_port}/{tail}{query}")
+    format!("ws://{published}/{tail}{query}")
 }
 
 const LEGACY_PREVIEW_SANDBOX_CSP: &str =
@@ -7332,8 +7364,9 @@ fn rewrite_preview_location(value: &HeaderValue) -> HeaderValue {
 /// An upstream `Set-Cookie` without its `Domain` attributes, so the browser
 /// stores the cookie host-only on the Preview origin that answered. Safari
 /// on macOS accepts `Domain=localhost` from a top-level `<name>.localhost`
-/// page and then sends that cookie to the workbench and to every other
-/// Session's Preview; Chromium refuses it. A `Domain` naming the Preview's
+/// page and then sends that cookie to every other Session's Preview and to
+/// every other app on a `localhost` address (never to the workbench, at
+/// [`WORKBENCH_HOST`]); Chromium refuses it. A `Domain` naming the Preview's
 /// own host only adds subdomains, which no Preview has. One naming another
 /// site (an app's production domain) was refused by every browser and is
 /// now stored host-only on the Preview origin instead. The name, the value
@@ -7395,17 +7428,17 @@ fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
     html
 }
 
-async fn resolve_preview_host_port(
+async fn resolve_preview_address(
     state: &AppState,
     target: &PreviewHostTarget,
-) -> Result<u16, Box<Response>> {
+) -> Result<std::net::SocketAddr, Box<Response>> {
     if let Err(error) = require_ready_session(state, &target.session_id).await {
         return Err(Box::new(error.into_response()));
     }
     state
         .read()
         .await
-        .session_preview_host_port(&target.session_id, target.logical_port)
+        .session_preview_address(&target.session_id, target.logical_port)
         .await
         .map_err(|error| {
             let status = if matches!(
@@ -7437,11 +7470,11 @@ async fn proxy_preview_http(
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    proxy_preview_http_to_port(target, tail, request, mode, host_port).await
+    proxy_preview_http_to_port(target, tail, request, mode, published).await
 }
 
 async fn proxy_preview_http_to_port(
@@ -7449,7 +7482,7 @@ async fn proxy_preview_http_to_port(
     tail: String,
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let method = request.method().clone();
     let query = request.uri().query().map(str::to_string);
@@ -7464,7 +7497,7 @@ async fn proxy_preview_http_to_port(
                 .into_response();
         }
     };
-    let upstream = session_preview_upstream(host_port, &tail, query.as_deref());
+    let upstream = session_preview_upstream(published, &tail, query.as_deref());
     // The Preview's port is on this computer's loopback: never through a
     // proxy, which would see the Preview's requests in plain text.
     let client = match reqwest::Client::builder()
@@ -7697,20 +7730,20 @@ async fn preview_websocket_proxy(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    preview_websocket_proxy_to_port(target, request, host_port).await
+    preview_websocket_proxy_to_port(target, request, published).await
 }
 
 async fn preview_websocket_proxy_to_port(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let tail = request.uri().path().trim_start_matches('/');
-    let upstream = session_preview_websocket_upstream(host_port, tail, request.uri().query());
+    let upstream = session_preview_websocket_upstream(published, tail, request.uri().query());
     let (mut parts, _) = request.into_parts();
     let requested_protocol = parts
         .headers
@@ -9127,13 +9160,19 @@ mod tests {
         const TERMINAL_JS: &str = include_str!("../static/ui/terminal.js");
         const AXO_TAP_JS: &str = include_str!("../static/axo-tap.js");
 
+        let ipv4: std::net::SocketAddr = "127.0.0.2:43117".parse().unwrap();
+        let ipv6: std::net::SocketAddr = "[::1]:43117".parse().unwrap();
         assert_eq!(
-            session_preview_upstream(43117, "assets/app.js", Some("v=2")),
-            "http://127.0.0.1:43117/assets/app.js?v=2"
+            session_preview_upstream(ipv4, "assets/app.js", Some("v=2")),
+            "http://127.0.0.2:43117/assets/app.js?v=2"
         );
         assert_eq!(
-            session_preview_websocket_upstream(43117, "@vite/client", Some("token=2")),
-            "ws://127.0.0.1:43117/@vite/client?token=2"
+            session_preview_upstream(ipv6, "assets/app.js", None),
+            "http://[::1]:43117/assets/app.js"
+        );
+        assert_eq!(
+            session_preview_websocket_upstream(ipv6, "@vite/client", Some("token=2")),
+            "ws://[::1]:43117/@vite/client?token=2"
         );
 
         let mut headers = HeaderMap::new();
@@ -9257,22 +9296,32 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_canonicalizes_only_loopback_ip_literals_and_preserves_query() {
+    fn dashboard_canonicalizes_other_loopback_names_to_127_0_0_1_and_preserves_query() {
         let uri: Uri = "/?session=ses-123&review=preview".parse().unwrap();
         for (host, expected) in [
             (
-                "127.0.0.1:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                "localhost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "LocalHost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "localhost",
+                Some("http://127.0.0.1/?session=ses-123&review=preview"),
             ),
             (
                 "127.42.3.9:8080",
-                Some("http://localhost:8080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:8080/?session=ses-123&review=preview"),
             ),
             (
                 "[::1]:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
             ),
-            ("localhost:18080", None),
+            ("127.0.0.1:18080", None),
+            ("127.0.0.1", None),
+            ("ses-123-p5173.localhost:18080", None),
             ("operator.example:18080", None),
             ("192.0.2.10:18080", None),
             ("0.0.0.0:18080", None),
@@ -9289,12 +9338,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn dashboard_canonical_redirect_sends_no_referrer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "127.0.0.1:18080".parse().unwrap());
-        let response = dashboard(headers, OriginalUri("/?token=abc".parse().unwrap())).await;
+    #[test]
+    fn workbench_address_redirect_sends_no_referrer() {
+        let response =
+            workbench_address_redirect(HeaderValue::from_static("http://127.0.0.1:18080/"));
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("http://127.0.0.1:18080/")
+        );
         assert_eq!(
             response
                 .headers()
@@ -9526,13 +9581,14 @@ mod tests {
             received
         }
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview upstream");
-        let host_port = listener
+        // Where Podman publishes Session ports on this platform.
+        let listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview upstream");
+        let published = listener
             .local_addr()
-            .expect("real Preview upstream address")
-            .port();
+            .expect("real Preview upstream address");
         let upstream = tokio::spawn(async move {
             let (mut html_socket, _) = listener.accept().await.expect("accept HTML request");
             let html_request = read_request(&mut html_socket).await;
@@ -9587,7 +9643,7 @@ mod tests {
             "forms/save".to_string(),
             request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(html_response.status(), StatusCode::CREATED);
@@ -9651,7 +9707,7 @@ mod tests {
             "assets/blob.bin".to_string(),
             binary_request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(binary_response.status(), StatusCode::OK);
@@ -9715,7 +9771,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real legacy Preview upstream");
-        let host_port = listener.local_addr().expect("upstream address").port();
+        let published = listener.local_addr().expect("upstream address");
         let upstream = tokio::spawn(async move {
             let mut answered = Vec::new();
             for (location, body) in [
@@ -9782,7 +9838,7 @@ mod tests {
                 path.to_string(),
                 request(path),
                 legacy.clone(),
-                host_port,
+                published,
             )
             .await;
             assert_eq!(response.status(), status, "{path}");
@@ -9832,13 +9888,14 @@ mod tests {
     // response; this test needs that callback to inspect and select protocols.
     #[allow(clippy::result_large_err)]
     async fn preview_websocket_proxy_bridges_real_clients_and_upstream() {
-        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        // Where Podman publishes Session ports on this platform.
+        let upstream_listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview WebSocket upstream");
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -9932,7 +9989,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -10031,10 +10088,9 @@ mod tests {
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (cookie_tx, cookie_rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -10089,7 +10145,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

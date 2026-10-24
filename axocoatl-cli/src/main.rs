@@ -1691,8 +1691,16 @@ fn bind_failure_message(
 async fn bind_or_exit(
     host: &str,
     port: u16,
+    auth: &axocoatl_config::ServerAuthYaml,
     config_path: &std::path::Path,
 ) -> axocoatl_server::BoundListeners {
+    if let Err(error) = axocoatl_server::check_workbench_address(host, auth) {
+        eprintln!(
+            "✗ Axocoatl did not start: {error} ({})",
+            shell_word(config_path)
+        );
+        std::process::exit(1);
+    }
     match axocoatl_server::bind_server(host, port).await {
         Ok(listeners) => listeners,
         Err(error) => {
@@ -1718,7 +1726,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     let port = config.server.port;
     // The port is held before the banner: a taken port fails here, not
     // after "Axocoatl is running".
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
 
     println!("Axocoatl dev mode");
@@ -1799,7 +1807,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
     let ollama_url = config.providers.ollama.as_ref().map(|o| o.base_url.clone());
 
@@ -3800,6 +3808,7 @@ mod tests {
         assert!(steps.contains("chat --config axocoatl.yaml"));
         assert!(steps.contains("axocoatl url --config\naxocoatl.yaml"));
         assert!(!steps.contains("http://localhost:8080"));
+        assert!(!steps.contains("http://127.0.0.1:8080"));
         assert!(!steps.contains("cp .env.example .env"));
     }
 
@@ -4282,7 +4291,7 @@ mod tests {
     #[test]
     fn sign_in_link_is_printed_only_to_a_terminal() {
         let config = std::path::Path::new("/tmp/project/axocoatl.yaml");
-        let link = "http://localhost:8080/?token=secret-token";
+        let link = "http://127.0.0.1:8080/?token=secret-token";
         assert_eq!(
             sign_in_lines(Some(link), true, config),
             vec![format!("  Sign in: {link}")]
@@ -4298,7 +4307,7 @@ mod tests {
     fn sign_in_hint_quotes_a_config_path_with_spaces() {
         let config =
             std::path::Path::new("/Users/alex/Library/Application Support/Axocoatl/config.yaml");
-        let captured = sign_in_lines(Some("http://localhost:8080/?token=t"), false, config);
+        let captured = sign_in_lines(Some("http://127.0.0.1:8080/?token=t"), false, config);
         assert!(captured[0].contains(
             "axocoatl url --config '/Users/alex/Library/Application Support/Axocoatl/config.yaml'"
         ));

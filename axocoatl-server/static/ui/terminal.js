@@ -93,6 +93,31 @@ const CSS = `
 // The cap prevents an unavailable daemon from turning into a tight loop.
 const TERMINAL_RECONNECT_DELAYS_MS = [100, 250, 500, 1000, 2000];
 
+/**
+ * Dispose `term` once the work xterm.js has already queued has run.
+ *
+ * xterm.js 5.3.0 (and @xterm/xterm 5.5.0) queues work it never cancels: its
+ * viewport syncs its scroll area on a timer after the terminal opens and on
+ * the next frame after `reset()`, and each sync can queue one more frame.
+ * That work reads the renderer, which `dispose()` removes, so a terminal
+ * disposed with it pending threw "undefined is not an object (evaluating
+ * 'this._renderer.value.dimensions')" in WebKit ("Cannot read properties of
+ * undefined (reading 'dimensions')" in Chromium) as an uncaught page error,
+ * for example when another tab closed the Session. So output already written
+ * is parsed first, then a timer turn and two frames pass, which runs that
+ * work in the order it was queued, and only then is it disposed. The caller
+ * has already detached it and no longer writes to, resizes or resets it.
+ */
+function disposeWhenIdle(term) {
+  const dispose = () => {
+    try { term.dispose(); } catch { /* already disposed */ }
+  };
+  const afterQueuedWork = () => setTimeout(() => {
+    requestAnimationFrame(() => requestAnimationFrame(dispose));
+  });
+  try { term.write('', afterQueuedWork); } catch { afterQueuedWork(); }
+}
+
 export class AxTerminal extends HTMLElement {
   static get observedAttributes() { return ['session', 'task']; }
 
@@ -300,10 +325,11 @@ export class AxTerminal extends HTMLElement {
     }
     try { this.#dataSubscription?.dispose?.(); } catch { /* already disposed */ }
     this.#dataSubscription = null;
-    try { this.#term?.dispose(); } catch { /* already disposed */ }
+    const term = this.#term;
     this.#term = null;
     this.#fit = null;
     this.#screen.replaceChildren();
+    if (term) disposeWhenIdle(term);
   }
 
   #ro = null;

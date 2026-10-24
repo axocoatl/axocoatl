@@ -23,6 +23,7 @@
 //! `Arc<dyn Sandbox>` and never need to know the concrete backend.
 
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
@@ -421,6 +422,62 @@ const DROPPED_CAPS: &[&str] = &[
 /// case) into the container, where any command can read them, including a
 /// proxy URL's user name and password.
 const NO_HOST_PROXY_ENV: &str = "--http-proxy=false";
+
+/// The loopback address this platform publishes Session ports on
+/// ([`session_port_address`]).
+///
+/// Never `127.0.0.1`: the browser workbench is served there and keeps its
+/// sign-in cookie there. Cookies ignore ports, so a Session's app on another
+/// `127.0.0.1` port receives that cookie and can set cookies the workbench
+/// receives, with no click: its Preview's code can navigate its own frame
+/// there, and Chromium and WebKit send that frame the workbench's
+/// SameSite=Strict cookie (WebKit whatever frames lie between, so a frame
+/// nested in the Preview too). On macOS the Podman machine's forwarder
+/// listens on the Mac, which has no IPv4 loopback address but `127.0.0.1`,
+/// and can listen on `[::1]`. Linux routes all of 127.0.0.0/8 to loopback,
+/// and rootful Podman there cannot forward from `[::1]`.
+#[cfg(target_os = "macos")]
+const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+#[cfg(not(target_os = "macos"))]
+const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+/// The loopback address Session ports are published on: this platform's
+/// preferred one ([`PREFERRED_SESSION_PORT_ADDRESS`]) when this computer can
+/// listen there, else `127.0.0.1`. Decided once per process.
+pub fn session_port_address() -> IpAddr {
+    static ADDRESS: std::sync::OnceLock<IpAddr> = std::sync::OnceLock::new();
+    *ADDRESS.get_or_init(|| {
+        choose_session_port_address(PREFERRED_SESSION_PORT_ADDRESS, |address| {
+            std::net::TcpListener::bind((address, 0)).is_ok()
+        })
+    })
+}
+
+fn choose_session_port_address(preferred: IpAddr, can_listen: impl Fn(IpAddr) -> bool) -> IpAddr {
+    if can_listen(preferred) {
+        return preferred;
+    }
+    tracing::warn!(
+        address = %preferred,
+        "this computer cannot listen on {preferred}, so Session ports are published on \
+         127.0.0.1, the workbench's address: a Session's app opened there receives the \
+         workbench's sign-in cookie"
+    );
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
+/// The `podman run -p` value for one Session port: on [`session_port_address`],
+/// on a host port Podman picks.
+pub(crate) fn session_port_publish_arg(port: u16) -> String {
+    publish_arg(session_port_address(), port)
+}
+
+fn publish_arg(address: IpAddr, port: u16) -> String {
+    match address {
+        IpAddr::V4(address) => format!("{address}::{port}"),
+        IpAddr::V6(address) => format!("[{address}]::{port}"),
+    }
+}
 
 /// Network posture for a session container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1063,9 +1120,10 @@ pub struct SessionSandbox {
     /// the container, and the confinement root for the structured file tools.
     working_dir: std::path::PathBuf,
     /// User/config ports remain container-local identities (3000 means the
-    /// app's port inside this Session). Podman assigns a unique loopback host
-    /// port per Session and the browser proxy resolves through this map.
-    published_ports: HashMap<u16, u16>,
+    /// app's port inside this Session). Podman assigns a unique host port on
+    /// [`session_port_address`] per Session and the browser proxy resolves
+    /// through this map.
+    published_ports: HashMap<u16, SocketAddr>,
     /// The image that actually backs this handle. `None` is reserved for a
     /// non-owning handle attached to an already-running named container.
     effective_image: Option<String>,
@@ -2577,8 +2635,9 @@ impl SessionSandbox {
         helper_workspace_outcome(outcome, &printed).map(Some)
     }
 
-    /// Host loopback port assigned to one logical container port.
-    pub fn published_host_port(&self, container_port: u16) -> Option<u16> {
+    /// Host loopback address and port assigned to one logical container
+    /// port.
+    pub fn published_address(&self, container_port: u16) -> Option<SocketAddr> {
         self.published_ports.get(&container_port).copied()
     }
 
@@ -3715,15 +3774,23 @@ impl SessionSandbox {
     }
 
     /// Parse `podman port <container>` output, for example:
-    /// `3000/tcp -> 127.0.0.1:43117`.
-    fn parse_published_ports(stdout: &str) -> HashMap<u16, u16> {
+    /// `3000/tcp -> 127.0.0.2:43117` or `3000/tcp -> ::1:43117`. A mapping on
+    /// an address that is not loopback is left out.
+    fn parse_published_ports(stdout: &str) -> HashMap<u16, SocketAddr> {
         stdout
             .lines()
             .filter_map(|line| {
                 let (container, host) = line.trim().split_once(" -> ")?;
                 let container_port = container.split('/').next()?.parse::<u16>().ok()?;
-                let host_port = host.rsplit(':').next()?.parse::<u16>().ok()?;
-                (container_port > 0 && host_port > 0).then_some((container_port, host_port))
+                let (address, host_port) = host.rsplit_once(':')?;
+                let address = address
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                    .ok()?;
+                let host_port = host_port.parse::<u16>().ok()?;
+                (container_port > 0 && host_port > 0 && address.is_loopback())
+                    .then_some((container_port, SocketAddr::new(address, host_port)))
             })
             .collect()
     }
@@ -3734,7 +3801,7 @@ impl SessionSandbox {
     async fn discover_published_ports(
         container: &str,
         expected: &[u16],
-    ) -> Result<HashMap<u16, u16>, String> {
+    ) -> Result<HashMap<u16, SocketAddr>, String> {
         if expected.is_empty() {
             return Ok(HashMap::new());
         }
@@ -4012,8 +4079,9 @@ impl SessionSandbox {
             args.push("-p".into());
             // Keep configured URLs container-local and stable while Podman
             // assigns an independent host port for every Session. Loopback
-            // binding also avoids exposing dev servers on the LAN.
-            args.push(format!("127.0.0.1::{p}"));
+            // binding also avoids exposing dev servers on the LAN, and an
+            // address other than the workbench's keeps its cookies away.
+            args.push(session_port_publish_arg(*p));
         }
         if policy.passive_start {
             args.push("--entrypoint".into());
@@ -5591,9 +5659,10 @@ pub trait Sandbox: Send + Sync {
         true
     }
 
-    /// Host loopback port for a configured container port, when this backend
-    /// exposes local Preview transport. Remote backends may return `None`.
-    fn published_host_port(&self, _container_port: u16) -> Option<u16> {
+    /// Host loopback address and port for a configured container port, when
+    /// this backend exposes local Preview transport. Remote backends may
+    /// return `None`.
+    fn published_address(&self, _container_port: u16) -> Option<SocketAddr> {
         None
     }
 
@@ -5862,8 +5931,8 @@ impl Sandbox for SessionSandbox {
     fn root(&self) -> &Path {
         self.root()
     }
-    fn published_host_port(&self, container_port: u16) -> Option<u16> {
-        self.published_host_port(container_port)
+    fn published_address(&self, container_port: u16) -> Option<SocketAddr> {
+        self.published_address(container_port)
     }
     fn execution_boundary_usable(&self) -> bool {
         self.execution_boundary_usable()
@@ -6750,11 +6819,47 @@ mod tests {
     #[test]
     fn published_port_parser_keeps_container_and_host_identity_separate() {
         let mappings = SessionSandbox::parse_published_ports(
-            "3000/tcp -> 127.0.0.1:43117\n5173/tcp -> [::1]:43118\n",
+            "3000/tcp -> 127.0.0.2:43117\n5173/tcp -> ::1:43118\n8080/tcp -> [::1]:43119\n\
+             9000/tcp -> 127.0.0.1:43120\n",
         );
-        assert_eq!(mappings.get(&3000), Some(&43117));
-        assert_eq!(mappings.get(&5173), Some(&43118));
-        assert_eq!(mappings.len(), 2);
+        let address = |text: &str| Some(text.parse::<SocketAddr>().unwrap());
+        assert_eq!(mappings.get(&3000).copied(), address("127.0.0.2:43117"));
+        assert_eq!(mappings.get(&5173).copied(), address("[::1]:43118"));
+        assert_eq!(mappings.get(&8080).copied(), address("[::1]:43119"));
+        assert_eq!(mappings.get(&9000).copied(), address("127.0.0.1:43120"));
+        assert_eq!(mappings.len(), 4);
+        // A port Podman published beyond loopback is never a Preview's.
+        assert!(SessionSandbox::parse_published_ports(
+            "3000/tcp -> 0.0.0.0:43117\n3000/tcp -> 192.0.2.4:43118\n"
+        )
+        .is_empty());
+    }
+
+    /// Session ports are published on a loopback address other than
+    /// `127.0.0.1`, where the workbench keeps its sign-in cookie: `[::1]` on
+    /// macOS, `127.0.0.2` elsewhere, and `127.0.0.1` only where this computer
+    /// cannot listen on that one.
+    #[test]
+    fn session_ports_are_published_beside_the_workbench_address_not_on_it() {
+        let ipv6: IpAddr = "::1".parse().unwrap();
+        let other_ipv4: IpAddr = "127.0.0.2".parse().unwrap();
+        assert_eq!(publish_arg(ipv6, 3000), "[::1]::3000");
+        assert_eq!(publish_arg(other_ipv4, 5173), "127.0.0.2::5173");
+        if cfg!(target_os = "macos") {
+            assert_eq!(PREFERRED_SESSION_PORT_ADDRESS, ipv6);
+        } else {
+            assert_eq!(PREFERRED_SESSION_PORT_ADDRESS, other_ipv4);
+        }
+        assert_eq!(choose_session_port_address(ipv6, |_| true), ipv6);
+        assert_eq!(
+            choose_session_port_address(ipv6, |_| false),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        // This computer can listen on the preferred address (CI and
+        // development hosts have both), so that is the one used.
+        assert_eq!(session_port_address(), PREFERRED_SESSION_PORT_ADDRESS);
+        assert!(session_port_address().is_loopback());
+        assert_ne!(session_port_address(), IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 
     #[test]
@@ -7616,10 +7721,12 @@ mod tests {
         assert!(args.windows(2).any(|w| w[0] == "--pids-limit"));
         assert!(args.iter().any(|a| a == "--memory"));
         // Bridge network preserves the logical container port while asking
-        // Podman for a unique, loopback-only host port.
+        // Podman for a unique, loopback-only host port, never on the
+        // workbench's address.
         assert!(args
             .windows(2)
-            .any(|w| w[0] == "-p" && w[1] == "127.0.0.1::3000"));
+            .any(|w| w[0] == "-p" && w[1] == session_port_publish_arg(3000)));
+        assert!(!args.iter().any(|arg| arg.starts_with("127.0.0.1:")));
         assert!(!args.iter().any(|arg| arg == "3000:3000"));
         assert!(!args
             .windows(2)

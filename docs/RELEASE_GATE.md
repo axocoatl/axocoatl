@@ -870,7 +870,8 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   tries `Domain=localhost` cookies (one that is not ASCII, a forged
   `axocoatl-token-<port>` and `-signed-in`, and 40 of 1 KB), and asserts the
   browser refuses them. In every engine it asserts that the workbench's own
-  token cookie never reaches a Preview origin, and that the workbench still
+  token cookie never reaches a Preview origin, that no `Domain=localhost`
+  cookie reaches the workbench at `127.0.0.1`, and that the workbench still
   opens, connects and reads the API. `preview-cookies.test.mjs` needs Podman and
   `docker.io/library/node:20-slim`. On a developer machine it is skipped
   without that image. CI's product-browser legs and `release.yml`'s browser
@@ -892,10 +893,11 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
     WebSocket upgrade (outside Safari, from Preview pages opened top-level
     with forged `Domain=localhost` cookies set from a top-level page; in
     Safari, from a page on another `*.localhost` address, since the daemon
-    refuses the Preview there);
+    refuses the Preview there), and none of those cookies reaches the
+    workbench at `127.0.0.1`;
   - an app's `Set-Cookie` with `Domain=localhost` stays host-only;
-  - a forged signed-in cookie gives a signed-out browser the retry page at
-    most once per navigation;
+  - a forged signed-in cookie that a page on another `127.0.0.1` port sets
+    gives a signed-out browser the retry page once, which clears it;
   - the workbench shows that Preview in its frame, where in WebKit on a Mac
     it offers no Open full preview, the frame has no `allow-popups`, and the
     Preview's `window.open` of its address returns null and opens nothing.
@@ -904,52 +906,61 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   shell and the API answers 401, the workbench reloads once and then shows
   "This browser is signed out": no further automatic reload in the 3 seconds
   it then waits, nor after a click on the message's Reload button, and no
-  reload at all without sessionStorage. It does not pin the one-minute window
-  the page's code uses (`ONE_MINUTE`). In WebKit on a Mac it sets, from a
-  page on another `*.localhost` address opened top-level (Playwright serves
-  it), 60 `Path=/api` cookies for `localhost` (51 of
-  4,000 bytes, then 9 from 2,048 down to 8 bytes; the large ones alone leave
-  room for the token cookie), and asserts:
-  - the token cookie stays stored but API requests get 401;
-  - the workbench loads twice, then shows the message, and does not reload in
-    the next 5 seconds, nor in the 3 seconds after the sign-in link is opened
-    again;
-  - the same cookies with `Path=/ws` leave the live connection reconnecting.
-- Closed in 1.5.0 for Previews in Safari on macOS (measured in Playwright's
-  WebKit), and by the same user-agent rule on iPhone and iPad (not measured):
-  a Preview page that ran top-level could set a `Domain=localhost` cookie from
-  script that reaches the workbench and every other Preview
-  ([Safari shares `Domain=localhost` cookies][safari-cookies]).
+  reload at all without sessionStorage. With Playwright's clock fixing
+  `Date.now()` it pins the one-minute window (`ONE_MINUTE`): a 401 59 seconds
+  after the automatic reload shows the message, one 61 seconds after it
+  reloads. The message closes an open modal dialog and stays on top. Against
+  the real daemon, with real pages: 60 cookies a top-level page on another
+  `*.localhost` address sets for `Domain=localhost` (51 of 4,000 bytes, then
+  9 from 2,048 down to 8 bytes), with `Path=/api`, `Path=/` and `Path=/ws`,
+  never reach the workbench at `127.0.0.1`, in every engine. The same cookies
+  set for `127.0.0.1` by a page on another `127.0.0.1` port, in WebKit on a
+  Mac:
+  - with `Path=/api`, the token cookie stays stored but API requests get 401;
+    the workbench loads twice, then shows the message, and does not reload
+    in the next 5 seconds, nor in the 3 seconds after the sign-in link is
+    opened again;
+  - with `Path=/`, every request gets the sign-in page, which names the
+    remedy, and the sign-in link opened again a second later signs the
+    browser back in (the token cookie is then the newest of its path);
+  - with `Path=/ws`, the live connection fails, the workbench's check of
+    `/ws` gets 401, and it shows the message.
+  In each case clearing `127.0.0.1`'s cookies and signing in again restores
+  the workbench. In Chromium the workbench keeps working.
+- Closed in 1.5.0 in every browser: the workbench is served at `127.0.0.1`,
+  so no `Domain=localhost` cookie reaches it (measured in Playwright's
+  Chromium and WebKit on macOS). Closed in 1.5.0 for Previews in Safari on
+  macOS (measured in Playwright's WebKit), and by the same user-agent rule on
+  iPhone and iPad (not measured): a Preview page that ran top-level could set
+  a `Domain=localhost` cookie from script that reaches every other Preview
+  ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
   The daemon now refuses, in Safari's engine (by user agent), every request for
   a Preview page that would run top-level, whatever led there (a link, a
   redirect, Command-click inside the Preview, the context menu, a typed
   address), and the legacy proxy path refuses every browser page in every
   engine. The macOS WebKit journeys assert the typed, redirected and
-  Command-clicked cases, and the workbench path checks them in Safari itself
-  on every release; iPhone and iPad are decided the same way by user agent
-  and are not measured.
-- Known gap: a page Axocoatl does not serve that runs top-level on a
-  `*.localhost` address in Safari on macOS can still set such cookies: a
-  development server the person runs, a Session's app opened directly at the
-  loopback port it is published on (the workbench never shows that port), or
-  a service worker a Preview registered while it ran top-level before 1.5.0
-  (not measured). From such a page:
-  - Such cookies with `Path=/api`, 51 of 4,000 bytes and then smaller ones
-    that fill what is left of the about 200 KB Safari sends, sign that browser
-    out of the workbench's API until localhost's data is removed in Safari's
-    settings. The workbench then says "This browser is signed out" instead of
-    reloading without end.
-  - With `Path=/` they sign that browser out of the workbench entirely (the
-    sign-in page, not the signed-out message) until the cookies are removed
-    and that page is closed; signing in again works until it writes them
-    again. No journey asserts this case yet.
-  - With `Path=/ws` they keep its live connection from opening.
-
-  The macOS WebKit journeys assert the `Path=/api` and `Path=/ws` cases, with
-  the cookies set from a page Playwright serves on another `*.localhost`
-  address. Any page in Safari can also sign out a browser that signed in
-  seconds earlier and has no workbench page open, by writing about 1,000
-  cookies, because WebKit drops its whole cookie jar.
+  Command-clicked cases, and with Playwright's iPhone and iPad user agents a
+  typed Preview gets the refusal page and a framed one is served; a real
+  iPhone, iPad and Safari itself are not measured.
+- Remaining: a page Axocoatl does not serve that runs top-level on a
+  `*.localhost` address in Safari on macOS can still set such cookies, which
+  reach other `localhost` apps but not the workbench: a development server
+  the person runs, a Session's app opened directly at its published port
+  through a `*.localhost` name (the workbench never shows that port; on macOS
+  it is published on `[::1]`), or a service worker a Preview registered while
+  it ran top-level before 1.5.0 (measured once in Playwright's WebKit: it
+  answers a later top-level navigation without the server). A page on another
+  `127.0.0.1` port (never a Session's app, whose ports are published on
+  `[::1]` or `127.0.0.2`; a journey asserts that a frame its Preview nests at
+  that port gets none of the workbench's cookies), in any browser, sets cookies
+  the workbench receives; in Safari it can sign the workbench out with the
+  floods above, and the workbench then says what to do: remove `127.0.0.1`'s
+  website data and open the sign-in link again. That `127.0.0.1` is listed in
+  Safari's Manage Website Data and that removing it removes those cookies was
+  measured with the system WebKit's `WKWebsiteDataStore` on macOS 26.6, not in
+  Safari's own settings. Any page in Safari can also sign out a browser that
+  signed in seconds earlier and has no workbench page open, by writing about
+  1,000 cookies, because WebKit drops its whole cookie jar.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the

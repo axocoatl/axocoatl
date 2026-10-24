@@ -188,7 +188,9 @@ export class AxBrowser extends HTMLElement {
       const u = new URL(logical);
       const local = ['localhost', '127.0.0.1', '0.0.0.0'].includes(u.hostname);
       // Never put a workbench-origin document into a script-capable iframe.
-      if (u.origin === location.origin) return 'about:blank';
+      // A local address is a Session port, which the Preview Host below
+      // serves whatever its number: the workbench's own port included.
+      if (!local && u.origin === location.origin) return 'about:blank';
       if (!local) return logical;
       const port = u.port || (u.protocol === 'https:' ? '443' : '80');
       const listenerPort = location.port ? `:${location.port}` : '';

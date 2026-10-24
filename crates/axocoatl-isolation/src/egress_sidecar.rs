@@ -315,7 +315,7 @@ pub fn build_preview_args(spec: &SidecarSpec, ports: &[u16]) -> Vec<String> {
     ]);
     for port in ports {
         args.push("-p".into());
-        args.push(format!("127.0.0.1::{port}"));
+        args.push(crate::session_sandbox::session_port_publish_arg(*port));
     }
     args.extend([
         "--mount".into(),
@@ -1145,7 +1145,13 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.starts_with("run -d --name axo-pvw-ses-1234 --pull=never"));
         assert!(joined.contains("--label io.axocoatl.role=preview"));
-        assert!(joined.contains("-p 127.0.0.1::3000 -p 127.0.0.1::5173"));
+        // Beside the workbench's address, never on it.
+        assert!(joined.contains(&format!(
+            "-p {} -p {}",
+            crate::session_sandbox::session_port_publish_arg(3000),
+            crate::session_sandbox::session_port_publish_arg(5173)
+        )));
+        assert!(!joined.contains("127.0.0.1::"));
         assert!(joined.contains(
             "--mount type=volume,source=axo-svc-ses-1234,destination=/run/axocoatl-svc,ro=true"
         ));

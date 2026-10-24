@@ -3,8 +3,10 @@
 //! **In Safari, a Preview never runs top-level.** Safari's engine (WebKit on
 //! macOS, iOS and iPadOS) lets a page on a `*.localhost` address that runs
 //! top-level set a `Domain=localhost` cookie from script, and then sends it to
-//! the workbench on `localhost` and to every Session's Preview
-//! (operate/security.mdx, "Safari shares `Domain=localhost` cookies").
+//! every other Session's Preview that runs top-level and to every other app
+//! on a `localhost` address (operate/security.mdx, "Safari shares
+//! `Domain=localhost` cookies"). The workbench, at `127.0.0.1`
+//! ([`crate::routes::WORKBENCH_HOST`]), never receives such a cookie.
 //! Embedded in the workbench's frame, Safari gives a Preview no cookies at
 //! all. So where the request comes from Safari's engine on an Apple platform
 //! ([`is_safari_engine_on_apple`]) and asks for a page of its own
@@ -18,7 +20,7 @@
 //! workbench also offers no way to open one (static/ui/preview-embedding.js),
 //! so this is what someone who tries anyway sees.
 //!
-//! **The legacy path answers only fetch and programs.**
+//! **The legacy path answers only data requests and programs.**
 //! `/api/sessions/{id}/proxy/{port}` serves a Session's app from the
 //! workbench's own origin, behind its sign-in. Its responses carry
 //! `Content-Security-Policy: sandbox` without `allow-same-origin`, so a page
@@ -26,10 +28,12 @@
 //! it was still a page of the app's at the workbench's address, and the app's
 //! redirects and cookies reached the browser from there.
 //! [`refuse_legacy_preview_page`] now refuses, in every browser, any request
-//! for something the browser would show, run or embed (a page, frame, script,
-//! style sheet, image, worker…): only `fetch()` and `XMLHttpRequest`
-//! (`Sec-Fetch-Dest: empty`) and clients that send no Fetch Metadata reach the
-//! app, and the proxy no longer forwards the app's `Set-Cookie` there.
+//! for something the browser would show, run or embed (a page, frame, embed,
+//! object, fenced frame, script, style sheet, image, worker…): only requests
+//! the browser marks `Sec-Fetch-Dest: empty` that are not navigations
+//! (`fetch()`, `XMLHttpRequest`, `EventSource`, `navigator.sendBeacon`) and
+//! clients that send no Fetch Metadata reach the app, and the proxy no longer
+//! forwards the app's `Set-Cookie` there.
 
 use axum::{
     extract::{ConnectInfo, Request},
@@ -142,12 +146,14 @@ fn checked_session_id(session_id: &str) -> Option<&str> {
     .then_some(session_id)
 }
 
-/// The workbench's own address for this Session: `localhost` on the port the
-/// Preview's Host names, which is the daemon's listener.
+/// The workbench's own address for this Session: `127.0.0.1`
+/// ([`crate::routes::WORKBENCH_HOST`]) on the port the Preview's Host names,
+/// which is the daemon's listener.
 fn workbench_url(session_id: &str, listener_port: Option<u16>) -> String {
+    let workbench = crate::routes::WORKBENCH_HOST;
     let host = listener_port
-        .map(|port| format!("localhost:{port}"))
-        .unwrap_or_else(|| "localhost".to_string());
+        .map(|port| format!("{workbench}:{port}"))
+        .unwrap_or_else(|| workbench.to_string());
     match checked_session_id(session_id) {
         Some(session_id) => format!("http://{host}/?session={session_id}"),
         None => format!("http://{host}/"),
@@ -187,16 +193,17 @@ pub(crate) fn top_level_preview_refusal(
             "<h1>This Preview opens only in the workbench</h1>\n\
 <p>In Safari, Axocoatl does not show a Preview in a tab or window of its own. \
 A page on a <code>*.localhost</code> address that runs in its own tab can set cookies \
-that Safari then sends to the workbench and to every Session's Preview. In the \
-workbench's Preview pane Safari gives it no cookies at all, so in Safari a Preview \
-opens only there.</p>\n"
+that Safari then sends to every other app on a <code>localhost</code> address, other \
+Sessions' Previews included. In the workbench's Preview pane Safari gives it no cookies \
+at all, so in Safari a Preview opens only there.</p>\n"
         }
         PageRequest::Unlabelled => {
             "<h1>This Safari cannot show Previews</h1>\n\
 <p>Safari 16.4 and later say whether a page is for the workbench's Preview pane or \
 for a tab of its own; this one did not. A Preview in a tab of its own can set cookies \
-that Safari then sends to the workbench and to every Session's Preview, so Axocoatl \
-shows no Preview in this Safari. Update Safari.</p>\n"
+that Safari then sends to every other app on a <code>localhost</code> address, other \
+Sessions' Previews included, so Axocoatl shows no Preview in this Safari. Update \
+Safari.</p>\n"
         }
     };
     let body = format!(
@@ -261,12 +268,14 @@ pub async fn refuse_top_level_preview(request: Request, next: Next) -> Response 
     top_level_preview_refusal(request.method(), &target.session_id, listener_port, kind)
 }
 
-/// Whether a browser asked the legacy Preview path for anything other than
-/// `fetch()` or `XMLHttpRequest`: a page, a frame or any other navigation
-/// (`Sec-Fetch-Mode: navigate`), or a script, style sheet, image, worker or
-/// other subresource (any `Sec-Fetch-Dest` but `empty`). A client that sends
-/// no Fetch Metadata (a program, or a browser too old to send it) is not
-/// refused; there the response's CSP `sandbox` still applies.
+/// Whether a browser asked the legacy Preview path for anything but a data
+/// request (`Sec-Fetch-Dest: empty` without `Sec-Fetch-Mode: navigate`, what
+/// `fetch()`, `XMLHttpRequest`, `EventSource` and `navigator.sendBeacon`
+/// send): a page, a frame or any other navigation, or an embed, object,
+/// script, style sheet, image, worker or other subresource (any other
+/// `Sec-Fetch-Dest`). A client that sends no Fetch Metadata (a program, or a
+/// browser too old to send it) is not refused; there the response's CSP
+/// `sandbox` still applies.
 pub(crate) fn legacy_preview_request_is_refused(headers: &HeaderMap) -> bool {
     let dest = header_text(headers, "sec-fetch-dest");
     let mode = header_text(headers, "sec-fetch-mode");
@@ -274,10 +283,10 @@ pub(crate) fn legacy_preview_request_is_refused(headers: &HeaderMap) -> bool {
 }
 
 const LEGACY_REFUSAL: &str = "The legacy Preview path serves a Session's app only to \
-fetch() and XMLHttpRequest, and to programs that call the Axocoatl API. It is the \
-workbench's own origin, so a browser cannot open it as a page or frame, or load a \
-script, style sheet, image or anything else from it. The workbench shows a Preview at \
-its own address, <session>-p<port>.localhost.\n";
+data requests such as fetch() and XMLHttpRequest, and to programs that call the \
+Axocoatl API. It is the workbench's own origin, so a browser cannot open it as a page \
+or frame, or embed or load a script, style sheet, image or anything else from it. The \
+workbench shows a Preview at its own address, <session>-p<port>.localhost.\n";
 
 /// Route middleware of `/api/sessions/{id}/proxy/{port}[/…]`: a request
 /// [`legacy_preview_request_is_refused`] refuses gets status 403 and a line of
@@ -566,7 +575,7 @@ mod tests {
             "{body}"
         );
         assert!(
-            body.contains(r#"<a href="http://localhost:18080/?session=ses-123e4567-e89b-12d3-a456-426614174000">Open the workbench</a>"#),
+            body.contains(r#"<a href="http://127.0.0.1:18080/?session=ses-123e4567-e89b-12d3-a456-426614174000">Open the workbench</a>"#),
             "{body}"
         );
         assert!(!body.contains("<script"), "{body}");
@@ -718,11 +727,11 @@ mod tests {
     fn the_refusal_links_only_to_the_workbench_on_the_listener_port() {
         assert_eq!(
             workbench_url("ses-abc-123", Some(18080)),
-            "http://localhost:18080/?session=ses-abc-123"
+            "http://127.0.0.1:18080/?session=ses-abc-123"
         );
         assert_eq!(
             workbench_url("ses-abc", None),
-            "http://localhost/?session=ses-abc"
+            "http://127.0.0.1/?session=ses-abc"
         );
         // Nothing but a validated Session id reaches the page.
         for invalid in [
@@ -734,14 +743,14 @@ mod tests {
         ] {
             assert_eq!(
                 workbench_url(invalid, Some(1)),
-                "http://localhost:1/",
+                "http://127.0.0.1:1/",
                 "{invalid}"
             );
         }
     }
 
     #[test]
-    fn the_legacy_path_refuses_every_browser_request_but_fetch() {
+    fn the_legacy_path_refuses_every_browser_request_but_data_requests() {
         let refused = |dest: &str, mode: &str| {
             legacy_preview_request_is_refused(&headers(&[
                 ("sec-fetch-dest", dest),
@@ -753,7 +762,9 @@ mod tests {
             ("iframe", "navigate"),
             ("frame", "navigate"),
             ("embed", "navigate"),
+            ("embed", "no-cors"),
             ("object", "no-cors"),
+            ("fencedframe", "navigate"),
             ("script", "no-cors"),
             ("style", "no-cors"),
             ("image", "no-cors"),
@@ -765,6 +776,8 @@ mod tests {
         ] {
             assert!(refused(dest, mode), "{dest} {mode}");
         }
+        // fetch() and XMLHttpRequest (cors, same-origin), EventSource (cors)
+        // and navigator.sendBeacon (no-cors).
         assert!(!refused("empty", "cors"));
         assert!(!refused("empty", "same-origin"));
         assert!(!refused("empty", "no-cors"));
@@ -824,7 +837,7 @@ mod tests {
                 assert!(!body.contains("app content"), "{user_agent} {dest}");
                 assert!(
                     body.starts_with(
-                        "The legacy Preview path serves a Session's app only to fetch()"
+                        "The legacy Preview path serves a Session's app only to data requests such as fetch()"
                     ),
                     "{body}"
                 );

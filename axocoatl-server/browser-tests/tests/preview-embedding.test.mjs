@@ -52,7 +52,8 @@ for (const [name, nav, expected] of BROWSERS) {
 }
 
 test('only a page on a subdomain of localhost counts as a Preview\'s address', () => {
-  const base = 'http://localhost:8300/?session=ses-1';
+  // The workbench's own address.
+  const base = 'http://127.0.0.1:8300/?session=ses-1';
   for (const url of [
     'http://ses-123e4567-e89b-12d3-a456-426614174000-p3000.localhost:8300/app',
     'HTTP://SES-1-P3000.LOCALHOST:8300/',
@@ -64,6 +65,7 @@ test('only a page on a subdomain of localhost counts as a Preview\'s address', (
     'http://localhost:8300/',
     'http://localhost:3000/app',
     'http://127.0.0.1:3000/',
+    'http://127.0.0.1:8300/',
     'http://[::1]:3000/',
     'https://docs.axocoatl.ai/operate/security/',
     'http://localhost.example.com/',
@@ -82,7 +84,7 @@ function fakeWindow(navigator) {
   const opened = [];
   return {
     navigator,
-    location: { href: 'http://localhost:8300/' },
+    location: { href: 'http://127.0.0.1:8300/' },
     listeners,
     opened,
     addEventListener(type, listener, capture) { listeners.push({ type, listener, capture }); },

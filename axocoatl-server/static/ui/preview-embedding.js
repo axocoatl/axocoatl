@@ -3,9 +3,10 @@
  *
  * Safari's engine on macOS lets a page on a `*.localhost` address that runs
  * top-level set a cookie for `Domain=localhost` from script, and then sends it
- * to the workbench on `localhost` and to every Session's Preview
- * (operate/security.mdx, "Safari shares Domain=localhost cookies"). Embedded
- * in the workbench's frame, Safari gives a Preview no cookies at all. So where
+ * to every other app on a `localhost` address, other Sessions' Previews
+ * included (operate/security.mdx, "Safari shares Domain=localhost cookies").
+ * The workbench, at `127.0.0.1`, never receives it. Embedded in the
+ * workbench's frame, Safari gives a Preview no cookies at all. So where
  * the browser is Safari's engine on an Apple platform, the workbench never
  * runs a Preview top-level:
  * - `<ax-browser>` does not offer Open full preview, and its frame may not
@@ -23,7 +24,7 @@
 
 /** Why, in the words the workbench shows. */
 export const PREVIEW_STAYS_EMBEDDED = 'In Safari, a Preview in its own tab could set cookies '
-  + 'for the workbench and for other Sessions, so Previews stay in this pane. For a full-page '
+  + 'for other Sessions and other apps on localhost, so Previews stay in this pane. For a full-page '
   + 'Preview, open the workbench in another browser.';
 
 /** The event the shell turns into a notice when a link was not opened. */
@@ -63,7 +64,7 @@ export function isSafariEngineOnApple(nav) {
 /**
  * True when `url`, resolved against `base`, is a page on a subdomain of
  * `localhost`, where every Preview runs (`<session>-p<port>.localhost`).
- * `localhost` itself, the workbench's host, is not one.
+ * `localhost` itself is not one.
  *
  * @param {string} url
  * @param {string} [base]

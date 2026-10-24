@@ -1493,7 +1493,9 @@ agent:**
   reaches the Session's exposed ports and, through the egress proxy, the hosts under
   `browser.allow`. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
-  own loopback host mapping, and the Session-aware proxy resolves that mapping
+  own loopback host mapping, on `[::1]` on macOS and `127.0.0.2` on Linux, never
+  on `127.0.0.1`, where the workbench keeps its sign-in cookie that every port of
+  the address receives, and the Session-aware proxy resolves that mapping
   without exposing arbitrary host services. Under `egress` the Session container
   publishes nothing: a service forwarder serves each port as a socket and a separate
   Preview container publishes it.

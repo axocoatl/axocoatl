@@ -39,11 +39,11 @@ Browsers get the cookie by opening the sign-in link that `axocoatl dev`,
 `axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, same path and
 age), and sends `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 A wrong token, or `/` without a credential, returns `401` with a short sign-in
-page. One exception: a `GET /` on `localhost` without `?token=` and without a
+page. One exception: a `GET /` on `127.0.0.1` without `?token=` and without a
 valid credential, marked `Sec-Fetch-Site: none` and `Sec-Fetch-Mode: navigate`
 with `Sec-Fetch-Dest: document` or no `Sec-Fetch-Dest`, that carries
 `axocoatl-token-<port>-signed-in=1` (Safari after the redirect from
-`127.0.0.1`, or a token cookie from before the token changed) returns `200`
+`localhost`, or a token cookie from before the token changed) returns `200`
 with a page that opens the same address again from its own origin and clears
 the signed-in cookie. The token cookie is ignored on requests marked
 `Sec-Fetch-Site: cross-site` or `same-site`; the signed-in cookie is never a
@@ -87,15 +87,22 @@ cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
 cookies work without becoming shared sibling cookies. Safari on macOS also
 lets a top-level page's script on a `*.localhost` address set a
-`Domain=localhost` cookie, and sends it to the workbench and to every Preview,
+`Domain=localhost` cookie, and sends it to every Preview and every other
+`localhost` address (never to the workbench, which is served at `127.0.0.1`),
 so in Safari a Preview never runs top-level: the daemon answers a request for
 a Preview page Safari would show in a tab or window of its own with `403` and a
 page that says why, and the workbench keeps Previews embedded and offers no
 **Open full preview**
-([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
-for the exact `/` workbench document on a loopback IP literal redirects to
-`localhost` on the same listener and preserves the query. API, health, and
-asset URLs do not redirect.
+([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). With the local
+token, a browser GET or HEAD for the exact `/` workbench document on
+`localhost` or a loopback IP literal other than `127.0.0.1` answers
+`307 Temporary Redirect` to `127.0.0.1` on the same listener and preserves the
+query; from `localhost` it also removes this daemon's two sign-in cookies there
+(`Max-Age=0`), where sign-in links before 1.5.0 stored them. API, health, and
+asset URLs do not redirect. With configured credentials or
+`allow_unauthenticated` there is no sign-in cookie and no redirect: `/` is
+served at the loopback name the request used, so a proxy on the same host may
+send `Host: localhost` or `Host: 127.0.0.1`.
 
 ## App, assets, and health
 
@@ -862,7 +869,9 @@ directories. Terminal resize is `{"kind":"resize","rows":30,"cols":100}`.
 
 The workbench opens the virtual Preview Host, not the legacy path. The Host
 boundary validates the exact Session and logical port, resolves that pair to
-the sandbox's dynamically assigned loopback transport, and forwards normal app
+the sandbox's dynamically assigned loopback transport (a port Podman publishes
+on `[::1]` on macOS or `127.0.0.2` on Linux, never on the workbench's
+`127.0.0.1`), and forwards normal app
 HTTP methods, query strings, request bodies, cookies, module/root assets, and
 WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
 non-HTML bodies stream without whole-response buffering. The upstream app sees
@@ -874,7 +883,8 @@ attribute, so the browser keeps each one host-only on that Preview origin; the
 rest of the header is unchanged. Whether a page's script may set a
 parent-domain cookie such as `Domain=localhost` is browser policy: Chromium and
 WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level page
-on a `*.localhost` address and sends it to the workbench and to every Preview.
+on a `*.localhost` address and sends it to every Preview and every other
+`localhost` address (not to the workbench, at `127.0.0.1`).
 So when the request comes from Safari's engine (by its `User-Agent`: Safari on
 a Mac, and every browser on iPhone and iPad) and is for a page of its own
 (`Sec-Fetch-Dest: document`, or any navigation that is not a frame; from a
@@ -888,10 +898,12 @@ carry. Both proxies remove `axocoatl-token-*` cookies
 from forwarded requests and drop upstream `Set-Cookie` headers that would set
 one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
 authentication and never forwards Axocoatl credential headers. It shares the
-workbench's origin, so in every browser it answers only `fetch()` and
-`XMLHttpRequest` (`Sec-Fetch-Dest: empty`): a page, frame, script, image or
-other request a browser would show or run gets `403` and a line of text, and
-the app is not asked. Programs that send no Fetch Metadata are served; use a
+workbench's origin, so in every browser it answers only requests the browser
+marks `Sec-Fetch-Dest: empty` that are not navigations (`fetch()`,
+`XMLHttpRequest`, `EventSource`, `navigator.sendBeacon`): any other request a
+browser marks with Fetch Metadata, for something it would show, run or embed
+(a page, frame, embed, object, fenced frame, script, style sheet, image or
+worker), gets `403` and a line of text, and the app is not asked. Programs that send no Fetch Metadata are served; use a
 header credential. It forwards none of the app's `Set-Cookie` headers, and every
 response carries `Content-Security-Policy: sandbox` without
 `allow-same-origin`.
