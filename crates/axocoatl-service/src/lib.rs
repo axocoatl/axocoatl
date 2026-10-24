@@ -122,7 +122,7 @@ pub trait ServiceManager {
         LogMark::default()
     }
 
-    /// What the daemon logged after `mark` (its first [`LOG_TAIL_BYTES`]),
+    /// What the daemon logged after `mark` (its last [`LOG_TAIL_BYTES`]),
     /// or `None` when the log cannot be read.
     fn log_since(&self, _mark: &LogMark) -> Option<String> {
         None
@@ -160,9 +160,12 @@ pub enum DaemonStart {
 }
 
 /// Wait up to `timeout` for the daemon a service start began after `mark`
-/// to say it started, or to fail: the log after the mark says so, or the
-/// daemon exited. launchd and systemd start a failing daemon again, so a
-/// start that fails never ends on its own.
+/// to say it started, or to fail: it said it started, or it exited, with
+/// the line it logged after the mark. launchd and systemd start a failing
+/// daemon again, so a start that fails never ends on its own. The last
+/// such line counts, and a failure only once this start's daemon exited:
+/// the daemon of the definition the start replaced may have been started
+/// again, and failed, just after the mark.
 pub fn wait_for_daemon(
     manager: &dyn ServiceManager,
     mark: &LogMark,
@@ -173,15 +176,18 @@ pub fn wait_for_daemon(
     let mut exited_at: Option<Instant> = None;
     loop {
         let log = manager.log_since(mark).unwrap_or_default();
-        match start_lines(&log).next() {
-            Some(StartLine::Started) => return DaemonStart::Started,
-            Some(StartLine::Failed(line)) => return DaemonStart::Failed(line),
-            None => {}
+        let last = start_lines(&log).last();
+        if matches!(last, Some(StartLine::Started)) {
+            return DaemonStart::Started;
         }
         let now = Instant::now();
-        match exited_at {
+        if exited_at.is_none() && manager.exited_since_start() {
+            exited_at = Some(now);
+        }
+        match (exited_at, last) {
+            (Some(_), Some(StartLine::Failed(line))) => return DaemonStart::Failed(line),
             // The journal may get its last lines after systemd saw it exit.
-            Some(exited) if now >= exited + EXITED_LOG_GRACE => {
+            (Some(exited), _) if now >= exited + EXITED_LOG_GRACE => {
                 let last = log
                     .lines()
                     .rev()
@@ -192,10 +198,12 @@ pub fn wait_for_daemon(
                     last.unwrap_or_else(|| "the daemon exited before it said anything".to_string()),
                 );
             }
-            Some(_) => {}
-            None if manager.exited_since_start() => exited_at = Some(now),
-            None if now >= deadline => return DaemonStart::StillStarting,
-            None => {}
+            // launchd or systemd did not say it exited.
+            (None, Some(StartLine::Failed(line))) if now >= deadline => {
+                return DaemonStart::Failed(line)
+            }
+            (None, _) if now >= deadline => return DaemonStart::StillStarting,
+            _ => {}
         }
         std::thread::sleep(poll);
     }
@@ -275,18 +283,21 @@ pub fn last_start_failure(log: &str) -> Option<String> {
 /// Used by the launchd backend, whose log is a file.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn read_log_tail(path: &Path) -> std::io::Result<String> {
-    let length = std::fs::metadata(path)?.len();
-    read_log_from(path, length.saturating_sub(LOG_TAIL_BYTES))
+    read_log_from(path, 0)
 }
 
-/// Up to [`LOG_TAIL_BYTES`] of the file at `path` from `offset` (from its
-/// start when it is shorter, as after it was emptied), lossily decoded.
+/// The last [`LOG_TAIL_BYTES`] of what the file at `path` holds after
+/// `offset` (of all of it when it is shorter, as after it was emptied),
+/// lossily decoded: where a started daemon said last how its start ended.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn read_log_from(path: &Path, offset: u64) -> std::io::Result<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
-    file.seek(SeekFrom::Start(if offset > length { 0 } else { offset }))?;
+    let offset = if offset > length { 0 } else { offset };
+    file.seek(SeekFrom::Start(
+        offset.max(length.saturating_sub(LOG_TAIL_BYTES)),
+    ))?;
     let mut bytes = Vec::new();
     file.take(LOG_TAIL_BYTES).read_to_end(&mut bytes)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -407,13 +418,14 @@ mod start_failure_tests {
             last_start_failure(&tail).as_deref(),
             Some(format!("{START_FAILED}newest").as_str())
         );
-        // From an offset: what came after it; from the start of a file
-        // emptied since.
+        // From an offset: what came after it, or its end when more came
+        // after it than is read; from the start of a file emptied since.
         let offset = log.len() as u64 - 30;
         assert_eq!(
             read_log_from(&path, offset).unwrap(),
             &log[log.len() - 30..]
         );
+        assert_eq!(read_log_from(&path, 4).unwrap(), tail);
         std::fs::write(&path, "fresh\n").unwrap();
         assert_eq!(read_log_from(&path, offset).unwrap(), "fresh\n");
     }
@@ -495,10 +507,11 @@ mod start_failure_tests {
         started
     }
 
-    /// The wait ends when the daemon says it started, when it says why it
-    /// failed (`service start` said it started while launchd or systemd
-    /// started a failing daemon again), or when it exits without saying
-    /// (its last line); without either, at the timeout.
+    /// The wait ends when the daemon says it started, or when it exits
+    /// having said why it failed (`service start` said it started while
+    /// launchd or systemd started a failing daemon again) or not (its last
+    /// line); without either, at the timeout. The last line that says how a
+    /// start ended counts.
     #[test]
     fn the_wait_reads_what_the_started_daemon_says() {
         let started = Daemon::new(
@@ -530,6 +543,35 @@ mod start_failure_tests {
         assert_eq!(
             wait(&silent, Duration::from_secs(5)),
             DaemonStart::Failed("the daemon exited before it said anything".to_string())
+        );
+
+        // The daemon of the definition a start replaced, started again just
+        // after the mark, failed; this start's daemon then started, or
+        // failed too.
+        let old = "Failed to bootstrap daemon: the replaced definition's";
+        let replaced = Daemon::new(
+            &[
+                old,
+                "2026-10-23T01:00:00Z  INFO opening",
+                "Axocoatl server starting on 127.0.0.1:8080",
+            ],
+            None,
+        );
+        assert_eq!(
+            wait(&replaced, Duration::from_secs(5)),
+            DaemonStart::Started
+        );
+        let again = Daemon::new(&[old, failed], Some(2));
+        assert_eq!(
+            wait(&again, Duration::from_secs(5)),
+            DaemonStart::Failed(failed.to_string())
+        );
+        // A failure whose exit launchd or systemd did not show is reported
+        // at the end of the wait.
+        let unseen = Daemon::new(&[failed], None);
+        assert_eq!(
+            wait(&unseen, Duration::from_millis(50)),
+            DaemonStart::Failed(failed.to_string())
         );
 
         let slow = Daemon::new(

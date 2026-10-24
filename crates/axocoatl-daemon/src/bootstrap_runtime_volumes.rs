@@ -221,18 +221,46 @@ pub(super) fn record_previous_runtime_authority(
 /// The data root this one was copied from was deleted: make the
 /// authorities kept in [`COPIED_FROM_AUTHORITIES`] previous ones, as a
 /// move's, so the next start treats the volumes of its Sessions that carry
-/// them as its own. How many it made previous.
-pub(super) fn adopt_copied_from(data_root: &SecureDir, own: &str) -> Result<usize, DaemonError> {
+/// them as its own. One at whose path a daemon runs now (it holds that
+/// path's lease) was not deleted: it stays one this data root was copied
+/// from. How many it made previous, and how many it left.
+pub(super) fn adopt_copied_from(
+    data_root: &SecureDir,
+    own: &str,
+) -> Result<(usize, usize), DaemonError> {
     let copied_from = copied_from_runtime_authorities(data_root);
     let previous = previous_runtime_authorities(data_root);
-    let adopted = copied_from
+    // Held until they are recorded, so no daemon starts at those paths
+    // meanwhile.
+    let mut leases = Vec::new();
+    let mut in_use = Vec::new();
+    for authority in copied_from.iter().filter(|authority| *authority != own) {
+        match PathLease::hold(authority) {
+            Ok(Some(lease)) => leases.push(lease),
+            Ok(None) => in_use.push(authority.clone()),
+            Err(error) => {
+                return Err(DaemonError::Session(format!(
+                    "checking whether a daemon runs on the data directory '{}' was copied \
+                     from: {error}",
+                    data_root.path().display()
+                )))
+            }
+        }
+    }
+    let deleted: Vec<String> = copied_from
+        .iter()
+        .filter(|authority| !in_use.contains(authority))
+        .cloned()
+        .collect();
+    let adopted = deleted
         .iter()
         .filter(|authority| *authority != own && !previous.contains(authority))
         .count();
-    write_previous(data_root, &joined(previous, &copied_from, own))
-        .and_then(|()| write_copied_from(data_root, &[]))
+    write_previous(data_root, &joined(previous, &deleted, own))
+        .and_then(|()| write_copied_from(data_root, &in_use))
         .map_err(|error| recording_failed(data_root, error))?;
-    Ok(adopted)
+    drop(leases);
+    Ok((adopted, in_use.len()))
 }
 
 /// What the daemon did about leaked Session runtime volumes.
@@ -508,7 +536,7 @@ mod tests {
 
         // Adopted once the original is deleted: the copy's own previous
         // ones, written for its directory.
-        assert_eq!(adopt_copied_from(&copy, &own).unwrap(), 2);
+        assert_eq!(adopt_copied_from(&copy, &own).unwrap(), (2, 0));
         assert_eq!(
             previous_runtime_authorities(&copy),
             [old.clone(), older.clone()]

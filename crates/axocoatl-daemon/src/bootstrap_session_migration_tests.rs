@@ -953,14 +953,15 @@ async fn record_location_records_a_copied_root_and_changes_nothing_else() {
         super::super::AxocoatlDaemon::record_data_root_location(&copy, false).unwrap(),
         super::RecordedLocation {
             location: None,
-            adopted: None
+            adopted: None,
+            in_use: 0,
         }
     );
     // The data root it was copied from was deleted: its authority becomes
     // this one's previous one, as a move's.
     let adopted = super::super::AxocoatlDaemon::record_data_root_location(&copy, true).unwrap();
     assert_eq!(adopted.location, None);
-    assert_eq!(adopted.adopted, Some(1));
+    assert_eq!((adopted.adopted, adopted.in_use), (Some(1), 0));
     assert!(!copy.join(copied_from).exists());
     let data_copy = SecureDir::open(&copy).unwrap();
     assert_eq!(
