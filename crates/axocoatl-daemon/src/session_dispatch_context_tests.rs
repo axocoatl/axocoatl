@@ -378,3 +378,60 @@ fn assert_capture_refused(fixture: Fixture, label: &str) {
     );
     assert!(snapshot.contract().invocations().is_empty(), "{label}");
 }
+
+/// The tokens one attachment takes in a reviewer's request, as the host
+/// counts them beside the change: a text attachment its record with its
+/// text, an image the visual allowance with its extracted text, and a
+/// document without extracted text its own text.
+#[test]
+fn a_reviewer_attachment_counts_its_text_and_an_image_its_visual_allowance() {
+    use crate::session_dispatch::turn_review::review_tokens;
+    let fixture = captured_fixture(vec![], vec![]);
+    let text = "The last page is short when the total is a multiple of the page size. "
+        .repeat(30);
+    let notes = attachment("notes", "text/plain", &text);
+    let (_, image) = binary_image();
+    let document = ActivationEvidenceContent::from_attachment(&axocoatl_core::AgentAttachment {
+        id: "document".into(),
+        name: "Captured document".into(),
+        mime: "text/markdown".into(),
+        bytes: text.clone().into_bytes(),
+        size: text.len() as u64,
+        extracted_text: None,
+    })
+    .unwrap();
+    let references: Vec<EvidenceRef> = {
+        let mut state = fixture.controller.lock().unwrap();
+        [notes.clone(), image, document]
+            .into_iter()
+            .map(|evidence| {
+                state
+                    .content
+                    .retain_activation_evidence(evidence)
+                    .unwrap()
+                    .reference()
+                    .clone()
+            })
+            .collect()
+    };
+    let counted: Vec<usize> = references
+        .iter()
+        .map(|reference| fixture.controller.counted_attachment_tokens(reference).unwrap())
+        .collect();
+    assert_eq!(
+        counted[0],
+        review_tokens(&serde_json::to_string(&notes).unwrap())
+    );
+    assert!(counted[0] > review_tokens(&text));
+    let ocr = review_tokens("RETAINED_OCR_ONCE");
+    assert!(
+        (1_024 + ocr..1_024 + ocr + 200).contains(&counted[1]),
+        "{}",
+        counted[1]
+    );
+    assert!(
+        (review_tokens(&text)..review_tokens(&text) + 200).contains(&counted[2]),
+        "{}",
+        counted[2]
+    );
+}

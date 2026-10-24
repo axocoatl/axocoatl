@@ -15,7 +15,11 @@ pub const REPOSITORY_CAPTURE_SCRIPT: &str =
 /// patch larger than [`MAX_RECORDED_PATCH_BYTES`] is recorded by its digest,
 /// its size and its first [`MAX_PATCH_PREFIX_BYTES`], read as Git writes it
 /// and never stored whole, so a patch of any size is captured. What it writes
-/// to standard error is bounded too: its first and last 8 KiB.
+/// to standard error is bounded too: its first and last 8 KiB. A submodule
+/// or nested checkout is one record (kind `repository`) whose digest covers
+/// its files, Git settings and checked-out commit. A file it cannot read
+/// fails it (exit 65), as does a listing that reaches the 1 GiB limit on its
+/// temporary files (exit 69).
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot.sh")
@@ -906,7 +910,7 @@ mod tests {
     /// A repository of thousands of files, far more than one batch of records
     /// holds, is recorded whole: the manifest's size and tree digest are the
     /// ones its files' records give, computed here, each record once. A
-    /// submodule and a nested checkout, which have no record, cost no other
+    /// submodule and a nested checkout are one record each and cost no other
     /// path its own: when records were read one at a time, a submodule first
     /// in its batch lost every record after it in that batch.
     #[test]
@@ -948,15 +952,208 @@ mod tests {
         let nested = root.join("0-nested");
         std::fs::create_dir(&nested).unwrap();
         git(&nested, &["init", "--quiet"]);
+        let output = capture(root, "capture_mode=observe\n").unwrap();
+        // The two records every capture lists with the changed paths.
+        let nested: Vec<_> = changed_lines(&output)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, _, kind, _)| kind == "repository")
+            .collect();
+        assert_eq!(
+            nested
+                .iter()
+                .map(|(path, ..)| path.as_str())
+                .collect::<Vec<_>>(),
+            ["0-nested", "0-sub"]
+        );
+        for (path, mode, kind, digest) in &nested {
+            lines.push(format!(
+                "{}\t{mode}\t{kind}\t{digest}\n",
+                base64::engine::general_purpose::STANDARD.encode(path)
+            ));
+        }
         lines.sort();
         let manifest = lines.concat();
-        let output = capture(root, "capture_mode=observe\n").unwrap();
         assert_eq!(field(&output, "manifest_bytes"), manifest.len().to_string());
         assert_eq!(field(&output, "tree"), sha256_text(&manifest));
         // In every mode.
         let kept = capture(root, "capture_mode=keep\n").unwrap();
         assert_eq!(field(&kept, "tree"), sha256_text(&manifest));
         let _ = std::fs::remove_dir_all(field(&kept, "baseline"));
+    }
+
+    /// A capture that cannot read a file it records fails, and says so (exit
+    /// 65), in every mode: a file in `.git/hooks` the capture's user cannot
+    /// read, or any record that does not come out whole. Before, the records
+    /// went straight into `sort -u`, which hid the failure, so the capture
+    /// succeeded without the rest of that batch: with an unreadable hook,
+    /// the kept manifest had none of Git's own files, and a later change to
+    /// `.git/config` was not judged.
+    #[test]
+    fn a_capture_that_cannot_read_a_record_fails_and_says_so() {
+        use std::os::unix::fs::PermissionsExt;
+        let repo = sizeable_repository();
+        let root = repo.path();
+        // Every record coming out of step.
+        let broken = REPOSITORY_CAPTURE_SCRIPT.replace("  if (failed) exit 70\n", "  exit 70\n");
+        assert_ne!(broken, REPOSITORY_CAPTURE_SCRIPT);
+        for mode in ["capture_mode=observe\n", "capture_mode=keep\n"] {
+            let (code, stdout, stderr) = run_command(root, &format!("{mode}{broken}"));
+            assert_eq!(code, 65, "{mode}: {stderr}");
+            assert_eq!(stdout, "");
+            assert!(
+                stderr.ends_with("the capture could not read every file it records\n"),
+                "{stderr}"
+            );
+        }
+        // A hook its user cannot read; root reads any file.
+        let hook = root.join(".git/hooks/zz-locked");
+        std::fs::write(&hook, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&hook).is_err() {
+            let (code, _, stderr) = run_command(
+                root,
+                &format!("capture_mode=keep\n{REPOSITORY_CAPTURE_SCRIPT}"),
+            );
+            assert_eq!(code, 65, "{stderr}");
+            assert!(stderr.contains("zz-locked: Permission denied"), "{stderr}");
+            // Observing reads no file of Git's own.
+            assert!(capture(root, "capture_mode=observe\n").is_ok());
+        }
+    }
+
+    /// A listing that reaches the limit on a capture's temporary files fails
+    /// the capture, which says so (exit 69), whatever command was writing.
+    #[test]
+    fn a_listing_past_the_temporary_file_limit_says_so() {
+        let repo = sizeable_repository();
+        let small = REPOSITORY_CAPTURE_SCRIPT.replace("\nfile_limit=2097152\n", "\nfile_limit=8\n");
+        assert_ne!(small, REPOSITORY_CAPTURE_SCRIPT);
+        let (code, stdout, stderr) =
+            run_command(repo.path(), &format!("capture_mode=observe\n{small}"));
+        assert_eq!(code, 69, "{stderr}");
+        assert_eq!(stdout, "");
+        assert!(
+            stderr.ends_with(
+                "a listing of the repository's files reached the 1 GiB a capture may write\n"
+            ),
+            "{stderr}"
+        );
+        // The real limit holds the same repository.
+        assert!(capture(repo.path(), "capture_mode=observe\n").is_ok());
+    }
+
+    /// A submodule and a nested checkout are each one record, as Git lists
+    /// them, whose digest covers all of each: a change to a file inside one
+    /// changes the tree, and a comparison names the submodule. Every capture
+    /// lists them with the paths that differ from HEAD. Git does not look
+    /// inside a submodule for the patch, so nothing it configures runs: a
+    /// clean filter its configuration named ran as the capture read it.
+    #[test]
+    fn a_submodule_or_nested_checkout_is_one_record_that_any_change_inside_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let committer = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+        let upstream = tempfile::tempdir().unwrap();
+        git(upstream.path(), &["init", "--quiet"]);
+        std::fs::write(upstream.path().join("x"), "x\n").unwrap();
+        std::fs::write(upstream.path().join(".gitattributes"), "* filter=evil\n").unwrap();
+        git(upstream.path(), &["add", "-A"]);
+        git(
+            upstream.path(),
+            &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
+        );
+        let repo = sizeable_repository();
+        let root = repo.path();
+        git(
+            root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--quiet",
+                upstream.path().to_str().unwrap(),
+                "sub",
+            ],
+        );
+        git(
+            root,
+            &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
+        );
+        let markers = tempfile::tempdir().unwrap();
+        let filter = markers.path().join("filter.sh");
+        std::fs::write(
+            &filter,
+            format!(
+                "#!/bin/sh\ntouch '{}'\ncat\n",
+                markers.path().join("ran").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(
+            &root.join("sub"),
+            &["config", "filter.evil.clean", filter.to_str().unwrap()],
+        );
+        let kept = capture(root, "capture_mode=keep\n").unwrap();
+        let baseline = field(&kept, "baseline").to_owned();
+        let expected = field(&kept, "judged").to_owned();
+        let repository = |output: &str, path: &str| {
+            changed_lines(output)
+                .unwrap()
+                .into_iter()
+                .find(|(listed, ..)| listed == path)
+                .map(|(_, mode, kind, digest)| (mode, kind, digest))
+        };
+        let (_, kind, before) = repository(&kept, "sub").unwrap();
+        assert_eq!(kind, "repository");
+        // The same size, a second later: Git would read it again to tell.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(root.join("sub/x"), "y\n").unwrap();
+        let compared = capture(
+            root,
+            &format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&baseline);
+        assert_ne!(field(&compared, "tree"), field(&kept, "tree"));
+        assert_eq!(
+            field(&compared, "changed"),
+            base64::engine::general_purpose::STANDARD.encode("sub")
+        );
+        let (_, _, after) = repository(&compared, "sub").unwrap();
+        assert_ne!(after, before);
+        assert!(
+            !markers.path().join("ran").exists(),
+            "the capture ran the submodule's filter"
+        );
+        // Its commit moved: the patch shows that, as Git does.
+        git(
+            &root.join("sub"),
+            &[&committer[..], &["commit", "--quiet", "-am", "moved"]].concat(),
+        );
+        let moved = capture(root, "capture_mode=observe\n").unwrap();
+        let patch = String::from_utf8(decoded(&moved, "patch_b64")).unwrap();
+        assert!(
+            patch.starts_with("diff --git a/sub b/sub\nindex ")
+                && patch.contains("+Subproject commit "),
+            "{patch}"
+        );
+        assert!(!patch.contains("-dirty"), "{patch}");
+        // A nested checkout the turn makes: one record, never a deleted path,
+        // no patch section, and a change inside it changes the tree.
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        git(&nested, &["init", "--quiet"]);
+        std::fs::write(nested.join("payload.sh"), "secret\n").unwrap();
+        let made = capture(root, "capture_mode=observe\n").unwrap();
+        let (mode, kind, _) = repository(&made, "nested").unwrap();
+        assert_eq!((mode.as_str(), kind.as_str()), ("755", "repository"));
+        let patch = String::from_utf8(decoded(&made, "patch_b64")).unwrap();
+        assert!(!patch.contains("nested"), "{patch}");
+        std::fs::write(nested.join("payload.sh"), "changed\n").unwrap();
+        let changed = capture(root, "capture_mode=observe\n").unwrap();
+        assert_ne!(field(&changed, "tree"), field(&made, "tree"));
     }
 
     /// `len` bytes no compressor shrinks, as a compiled test program's would

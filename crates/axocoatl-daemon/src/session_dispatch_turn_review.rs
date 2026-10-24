@@ -11,9 +11,9 @@ use axocoatl_session::execution_content::{ActivationRepositorySnapshot, Reposito
 use axocoatl_session::turn_checks::{group_of, CheckGroup};
 use axocoatl_session::turn_review::{
     binding_failure, bounded, describe_change, describe_partial_change, earlier_changes,
-    fit_description, parse_verdict, review_condition_id, review_criterion, review_node,
-    ChangeBudget, DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof, ReviewVerdict,
-    MAX_ANSWER_BYTES,
+    fit_description, nested_repositories, parse_verdict, review_condition_id, review_criterion,
+    review_node, ChangeBudget, DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof,
+    ReviewVerdict, MAX_ANSWER_BYTES,
 };
 use base64::Engine;
 
@@ -80,9 +80,10 @@ const UNNUMBERED: &str = "The reviewer did not number its findings, so they are 
 /// it.
 pub(crate) const PARTIAL_CHANGE_RULE: &str = "Not all of the change is shown below: the \
      notes in the Change section say what was left out (the data of binary files, which are \
-     named with their sizes, or text cut to fit your context). You have not seen that part. \
-     Read the files those notes name before you judge them, and do not approve code you have \
-     not read.";
+     named with their sizes, text cut to fit your context, or the files of a submodule or \
+     nested Git checkout). You have not seen that part. Read the text files those notes name \
+     before you judge them, and do not approve code you have not read. Judge a binary file by \
+     its name and size; do not read its data.";
 
 /// The opening of the reviewer's prompt about the result whose repository
 /// tree is `tree`: what to judge, the verdict line, how to write findings,
@@ -165,6 +166,32 @@ pub(crate) fn reask_room(context: usize, output: usize) -> usize {
     let limit = (context as f32 * axocoatl_token::COMPRESSION_TRIGGER_PCT) as usize;
     (limit.saturating_sub(output) / 16).min(MAX_REASK_ANSWER_TOKENS)
 }
+
+/// The tokens of a reviewer's request beside the change, whose model holds
+/// `context` tokens and reserves `output` of them for each answer: the
+/// prompt's `head` (counted with the note a partial change adds), the
+/// Agents' `answers`, the change's heading, `request_tokens` (what the host
+/// counts where it builds the request: the turn's request with its context,
+/// the reviewer's instructions and attachments), and the room a request
+/// asking the reviewer again for a verdict keeps for its previous answer.
+pub(crate) fn review_spent(
+    head: &str,
+    answers: &str,
+    request_tokens: usize,
+    context: usize,
+    output: usize,
+) -> usize {
+    review_tokens(head)
+        + review_tokens(answers)
+        + review_tokens(CHANGE_HEADING)
+        + request_tokens
+        + reask_room(context, output)
+        + REASK_ANSWER_FRAME
+        + review_tokens(REASK_UNSHOWN)
+}
+
+/// The heading the change follows in the reviewer's prompt.
+const CHANGE_HEADING: &str = "\n## Change\n";
 
 /// The tokens the change may take in the request of a reviewer whose model
 /// holds `context` tokens and reserves `output` of them for each answer,
@@ -584,18 +611,15 @@ impl DispatchState {
             ));
         }
         // The change fits the reviewer's context beside the rest of its
-        // request: the head (counted with the note a partial change adds),
-        // the answers, the turn's request, the reviewer's instructions and
-        // attachments, and the room a request asking it again for a verdict
-        // keeps for its previous answer.
+        // request (`review_spent`).
         let (context, output) = self.reviewer_window(graph)?;
-        let spent = review_tokens(&reviewer_prompt_head(tree.as_deref(), true))
-            + review_tokens(&answers)
-            + review_tokens("\n## Change\n")
-            + self.review_request_tokens(snapshot, graph)?
-            + reask_room(context, output)
-            + REASK_ANSWER_FRAME
-            + review_tokens(REASK_UNSHOWN);
+        let spent = review_spent(
+            &reviewer_prompt_head(tree.as_deref(), true),
+            &answers,
+            self.review_request_tokens(snapshot, graph)?,
+            context,
+            output,
+        );
         let budget = ChangeBudget {
             tokens: change_budget(context, output, spent),
             count: &review_tokens,
@@ -619,7 +643,26 @@ impl DispatchState {
                     let Some(after_patch) = patch(after) else {
                         return Ok(Err(NOT_CAPTURED));
                     };
-                    match earlier.filter(|before| !before.patch_complete) {
+                    // The patch shows a submodule only by its commit and a
+                    // nested checkout not at all: those the turn changed are
+                    // named after the change, to be read.
+                    let earlier_lines =
+                        earlier.and_then(|before| before.changed_manifest.as_deref());
+                    let nested = match after.changed_manifest.as_deref() {
+                        Some(lines) => fit_description(
+                            nested_repositories(earlier_lines, lines),
+                            ChangeBudget {
+                                tokens: budget.tokens / 4,
+                                count: &review_tokens,
+                            },
+                        ),
+                        None => String::new(),
+                    };
+                    let budget = ChangeBudget {
+                        tokens: budget.tokens.saturating_sub(review_tokens(&nested)),
+                        count: &review_tokens,
+                    };
+                    let mut change = match earlier.filter(|before| !before.patch_complete) {
                         None => describe_change(
                             earlier.and_then(patch).as_deref(),
                             &after_patch,
@@ -660,7 +703,12 @@ impl DispatchState {
                             change.text = format!("{head}{}{earlier}", change.text);
                             change
                         }
+                    };
+                    if !nested.is_empty() {
+                        change.text.push_str(&nested);
+                        change.partial = true;
                     }
+                    change
                 } else {
                     let named = before
                         .as_ref()
@@ -708,7 +756,7 @@ impl DispatchState {
         };
         let mut prompt = reviewer_prompt_head(tree.as_deref(), change.partial);
         prompt.push_str(&answers);
-        prompt.push_str(&format!("\n## Change\n{}", change.text));
+        prompt.push_str(&format!("{CHANGE_HEADING}{}", change.text));
         Ok(Ok(ReviewCandidate { tree, prompt }))
     }
 
@@ -1629,6 +1677,28 @@ impl DispatchState {
     }
 }
 
+#[cfg(test)]
+impl SessionDispatchController {
+    /// What a reviewer's request takes beside its prompt, as the host counts
+    /// it for this turn's reviewer (`review_request_tokens`).
+    pub(crate) fn counted_review_request_tokens(&self) -> Result<usize> {
+        let state = self.lock()?;
+        let snapshot = state.canonical.snapshot(&state.turn_id).map_err(error)?;
+        let graph = snapshot
+            .contract()
+            .graph()
+            .ok_or_else(|| error("a reviewed turn has no graph"))?
+            .clone();
+        state.review_request_tokens(&snapshot, &graph)
+    }
+
+    /// The tokens the retained attachment `reference` takes in a reviewer's
+    /// request, as the host counts them (`attachment_tokens`).
+    pub(crate) fn counted_attachment_tokens(&self, reference: &EvidenceRef) -> Result<usize> {
+        self.lock()?.attachment_tokens(reference)
+    }
+}
+
 impl SessionDispatchController {
     /// The turn driver's review step after the required checks: start the
     /// next round of the required reviewer, or record its verdict. Whether
@@ -1900,8 +1970,8 @@ mod tests {
     }
 
     /// The reviewer is told, before the change, when what it is shown is not
-    /// all of it, and that it has not seen the rest; a change shown whole
-    /// adds nothing.
+    /// all of it, and that it has not seen the rest, which it is to read,
+    /// except a binary file's data; a change shown whole adds nothing.
     #[test]
     fn the_reviewer_prompt_says_what_it_did_not_see() {
         let partial = reviewer_prompt_head(Some("tree-1"), true);
@@ -1915,7 +1985,10 @@ mod tests {
         for said in [
             "Not all of the change is shown below",
             "You have not seen that part.",
+            "Read the text files those notes name",
             "do not approve code you have not read",
+            "Judge a binary file by its name and size; do not read its data.",
+            "the files of a submodule or nested Git checkout",
         ] {
             assert!(PARTIAL_CHANGE_RULE.contains(said), "{said}");
         }
@@ -2007,9 +2080,12 @@ mod tests {
     /// host counts a request: binary files named with their sizes and none
     /// of their data, 400 KB of base64 text left out and listed, and 30 KiB
     /// of Rust shown whole to a 32,768-token reviewer. Fitted to the
-    /// smallest context onboarding configures, the Rust is left out and
-    /// listed instead. In 1.4 and the 1.5.0 candidate a 24 KiB binary file
-    /// was shown as its base85 data and that reviewer could not start.
+    /// smallest context onboarding configures, the Rust is cut after a whole
+    /// line and listed with the bytes left out. In 1.4 and the 1.5.0
+    /// candidate a 24 KiB binary file was shown as its base85 data and that
+    /// reviewer could not start. The rest of the request is counted as
+    /// `review_candidate` counts it (`review_spent`), and checked here part
+    /// by part.
     #[test]
     fn a_whole_change_is_shown_within_the_reviewer_context() {
         use axocoatl_session::turn_review::MAX_CHANGE_BYTES;
@@ -2026,14 +2102,23 @@ mod tests {
                        multiple of the page size.\n";
         let task = "Paging skips the last item when the total is a multiple of the page size\n";
         let spent = |context: usize, output: usize| {
-            review_tokens(&head)
+            let parts = review_tokens(&head)
                 + review_tokens(answers)
                 + review_tokens("\n## Change\n")
                 + review_tokens(task)
                 + review_tokens(&instructions)
                 + reask_room(context, output)
                 + REASK_ANSWER_FRAME
-                + review_tokens(REASK_UNSHOWN)
+                + review_tokens(REASK_UNSHOWN);
+            let counted = review_spent(
+                &head,
+                answers,
+                review_tokens(task) + review_tokens(&instructions),
+                context,
+                output,
+            );
+            assert_eq!(counted, parts, "{context}");
+            counted
         };
         let rust = rust_patch("src/pages.rs", 30 * 1024);
         assert!(rust.len() > 29 * 1024, "{}", rust.len());
@@ -2139,14 +2224,50 @@ mod tests {
                 partial: false
             }
         );
+        // Fitted to the smallest context, the Rust's first lines are shown,
+        // cut after a whole line, and it is listed with the bytes left out.
         let (context, output) = FALLBACK_REVIEWER_WINDOW;
         let change = shown(context, output, &scenarios[3].1);
         assert!(change.partial);
+        assert!(change.text.contains(GATE_FIX), "{}", change.text);
         assert!(
-            change.text.contains("\nsrc/pages.rs: left out, "),
+            change
+                .text
+                .contains("\n+//! Host-enforced review of a turn."),
             "{}",
             change.text
         );
+        assert!(
+            change.text.contains("\nsrc/pages.rs: cut after "),
+            "{}",
+            change.text
+        );
+    }
+
+    /// The rest of a reviewer's request is counted part by part: a re-ask
+    /// keeps its room in every round, and the turn's request, instructions
+    /// and attachments count as given.
+    #[test]
+    fn the_rest_of_a_reviewer_request_counts_every_part() {
+        for (context, output) in [(32_768, 8_192), FALLBACK_REVIEWER_WINDOW] {
+            let fixed = review_tokens("\n## Change\n")
+                + reask_room(context, output)
+                + REASK_ANSWER_FRAME
+                + review_tokens(REASK_UNSHOWN);
+            assert!(reask_room(context, output) > 0);
+            // An empty text is `""` in the reviewer's JSON input.
+            let empty = 2 * review_tokens("");
+            assert_eq!(review_spent("", "", 0, context, output), fixed + empty);
+            assert_eq!(
+                review_spent("", "", 1_234, context, output),
+                fixed + empty + 1_234
+            );
+            let head = reviewer_prompt_head(None, true);
+            assert_eq!(
+                review_spent(&head, "answers", 0, context, output),
+                fixed + review_tokens(&head) + review_tokens("answers")
+            );
+        }
     }
 
     /// A re-ask shows the previous answer only within a sixteenth of what a

@@ -1160,15 +1160,30 @@ pub(crate) fn judged_changed_paths(
 
 /// Why a capture stopped at its time limit (`limit`) recorded nothing. It
 /// reads every file of the repository, so the time grows with the files the
-/// repository and the change hold.
+/// repository and the change hold: on a 6-CPU Podman machine a capture of
+/// 500,000 files took 53 seconds.
 pub(super) fn capture_timed_out(limit: std::time::Duration) -> String {
     format!(
         "The repository capture did not finish within its {} seconds: it reads every file in \
-         the repository, so a very large repository or change (hundreds of thousands of \
-         files), or a busy computer, can take longer",
+         the repository, so a very large repository or change (a million files or more), or \
+         a busy computer, can take longer",
         limit.as_secs()
     )
 }
+
+/// Why a capture that could not read a file it records (exit 65) recorded
+/// nothing: a file in the repository or its Git directory that the Agents'
+/// user cannot read, or that changed as the capture read it.
+pub(super) const CAPTURE_UNREADABLE: &str = "The repository capture could not read every file \
+     it records, so the candidate is not verified: a file in the repository or in its .git \
+     directory that the Agents' user cannot read (its permissions, say), or one that changed \
+     while the capture read it";
+
+/// Why a capture whose listing of the repository's files reached the limit
+/// on its temporary files (exit 69) recorded nothing.
+pub(super) const CAPTURE_LISTING_TOO_LARGE: &str = "The repository capture's listing of the \
+     repository's files reached the 1 GiB a capture may write, so the candidate is not \
+     verified: the repository holds more files, or longer names, than one capture lists";
 
 /// Read one capture's result. A capture around the checks that ran past its
 /// time limit carries that limit as `timed_out_after_ms`.
@@ -1190,6 +1205,11 @@ pub(super) fn parse_capture(
     // records (`MAX_COMPARED_PATH_BYTES` in base64) refuses it.
     if matches!(mode, CaptureMode::Compare { .. }) && exit_code == Some(67) {
         return Err(error("Repository capture changed too many paths to record"));
+    }
+    match exit_code {
+        Some(65) => return Err(error(CAPTURE_UNREADABLE)),
+        Some(69) => return Err(error(CAPTURE_LISTING_TOO_LARGE)),
+        _ => {}
     }
     if exit_code != Some(0)
         || value
@@ -1352,7 +1372,9 @@ pub(super) fn parse_capture(
 
 /// The lines of the paths that differ from HEAD a capture recorded: each
 /// `<base64 path>\t<mode>\t<kind>\t<digest>`, of a file or link with its
-/// SHA-256 or a deleted path. `None` when the capture left them out.
+/// SHA-256, a deleted path, or a submodule or nested checkout
+/// ([`axocoatl_session::turn_review::REPOSITORY`]) with the digest of all of
+/// it. `None` when the capture left them out.
 fn changed_manifest(complete: &str, encoded: &str) -> Result<Option<String>> {
     match complete {
         "0" if encoded.is_empty() => return Ok(None),
@@ -1377,7 +1399,9 @@ fn changed_manifest(complete: &str, encoded: &str) -> Result<Option<String>> {
                     && mode.len() <= 4
                     && mode.bytes().all(|byte| (b'0'..=b'7').contains(&byte))
                     && match *kind {
-                        "file" | "link" => is_digest(digest),
+                        "file" | "link" | axocoatl_session::turn_review::REPOSITORY => {
+                            is_digest(digest)
+                        }
                         "deleted" => *digest == "missing",
                         _ => false,
                     }
@@ -1535,19 +1559,22 @@ mod judgement_tests {
         assert!(parse_capture(&output(&other), &mut observation(), &compare).is_err());
     }
 
-    /// Format 2 records the lines of the paths that differ from HEAD (or
-    /// says it left them out); format 1, which a check group admitted before
-    /// still runs, has none; a malformed line refuses the capture.
+    /// Format 2 records the lines of the paths that differ from HEAD, a
+    /// submodule's or nested checkout's among them (or says it left them
+    /// out); format 1, which a check group admitted before still runs, has
+    /// none; a malformed line refuses the capture.
     #[test]
     fn the_lines_of_the_changed_paths_are_read_from_format_2() {
         let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
         let lines = format!(
-            "{}\t644\tfile\t{}\n{}\t0\tdeleted\tmissing\n{}\t777\tlink\t{}\n",
+            "{}\t644\tfile\t{}\n{}\t0\tdeleted\tmissing\n{}\t777\tlink\t{}\n{}\t755\trepository\t{}\n",
             encode("lib/a.rs"),
             digest('1'),
             encode("old.rs"),
             encode("docs/link"),
-            digest('2')
+            digest('2'),
+            encode("vendor/sub"),
+            digest('4')
         );
         let format2 = |complete: &str, encoded: &str| {
             let mut value = output(&format!(
@@ -1587,6 +1614,14 @@ changed_b64={encoded}
             format2(
                 "1",
                 &encode(&format!("{}\t0\tdeleted\t{}\n", encode("a"), digest('3'))),
+            ),
+            format2(
+                "1",
+                &encode(&format!("{}\t755\trepository\tmissing\n", encode("a"))),
+            ),
+            format2(
+                "1",
+                &encode(&format!("{}\t0\tspecial\t{}\n", encode("a"), digest('3'))),
             ),
             format2("1", "!!"),
             // Format 2 without its fields, format 1 with them.
@@ -1737,6 +1772,34 @@ changed_b64={encoded}
                 "{failure}"
             );
         }
+        // A capture that could not read a file it records, and one whose
+        // listing reached the limit on its temporary files, say so in every
+        // mode.
+        for (code, reason) in [(65, CAPTURE_UNREADABLE), (69, CAPTURE_LISTING_TOO_LARGE)] {
+            let failed =
+                serde_json::json!({"stdout": "", "exit_code": code, "stdout_truncated": false});
+            for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
+                let failure = parse_capture(&failed, &mut observation(), mode)
+                    .unwrap_err()
+                    .to_string();
+                assert_eq!(failure, format!("Session dispatch: {reason}"));
+            }
+        }
+        assert!(CAPTURE_UNREADABLE.starts_with(
+            "The repository capture could not read every file it records, so the candidate is \
+             not verified: "
+        ));
+        assert!(CAPTURE_LISTING_TOO_LARGE.contains("reached the 1 GiB a capture may write"));
+        // The capture names those failures with those codes, and the limit
+        // is 1 GiB of 512-byte blocks.
+        let script = axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND;
+        for said in [
+            "file_limit=2097152\nulimit -f \"$file_limit\"\n",
+            "    exit 69\n",
+            "    exit 65\n",
+        ] {
+            assert!(script.contains(said), "{said}");
+        }
         // A capture around the checks that ran past its time limit says so,
         // with the limit, in every mode.
         let timed_out = serde_json::json!({"stdout": "", "exit_code": null,
@@ -1749,7 +1812,7 @@ changed_b64={encoded}
                 failure,
                 "Session dispatch: The repository capture did not finish within its 180 \
                  seconds: it reads every file in the repository, so a very large repository or \
-                 change (hundreds of thousands of files), or a busy computer, can take longer"
+                 change (a million files or more), or a busy computer, can take longer"
             );
         }
         let finished = serde_json::json!({"stdout": "", "exit_code": 1,

@@ -102,6 +102,52 @@ fn subjects_come_from_the_tree_the_checks_judged() {
     assert!(files.facts.unattributed[1].starts_with(".git/config: one of Git's own files"));
 }
 
+/// A submodule or nested Git checkout the turn changed is one entry of the
+/// capture: the receipt names it as one it does not cover, and why, in a
+/// whole manifest and in a large repository's changed lines alike.
+#[test]
+fn a_changed_submodule_makes_the_receipt_incomplete_and_says_why() {
+    let manifest = format!(
+        "{}{}",
+        line("a.txt", "file", &"1".repeat(64)),
+        line("vendor/sub", "repository", &"5".repeat(64)),
+    );
+    let whole = tree(&manifest);
+    let lines = CapturedTree {
+        tree_sha256: "c".repeat(64),
+        manifest: None,
+        changed: Some(manifest.clone()),
+    };
+    for (judged, candidate) in [
+        (whole, sha256_hex(manifest.as_bytes())),
+        (lines, "c".repeat(64)),
+    ] {
+        let attribution = RunAttribution {
+            paths: paths(&["a.txt", "vendor/sub"]),
+            checked: vec![judged],
+            ..RunAttribution::default()
+        };
+        let files = receipt_files(
+            &attribution,
+            &[check(Some(&candidate))],
+            Path::new("/nonexistent"),
+        );
+        assert_eq!(files.facts.source, source::JUDGED_CAPTURE);
+        assert_eq!(
+            files.subject,
+            vec![Subject::sha256("a.txt", "1".repeat(64))]
+        );
+        assert!(!files.facts.complete);
+        assert_eq!(
+            files.facts.unattributed,
+            vec![
+                "vendor/sub: a submodule or nested Git checkout, which a capture records as one \
+                 entry; a receipt does not cover the files inside it"
+            ]
+        );
+    }
+}
+
 /// Without one judged tree (no check named one, or the checks named two),
 /// the last writer's After capture; a manifest whose digest is not its
 /// tree's is never read.

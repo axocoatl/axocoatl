@@ -668,6 +668,11 @@ pub fn receipt_files(
             "file" => PathState::File(entry.digest.clone()),
             "link" => PathState::Link(entry.digest.clone()),
             "deleted" => PathState::Absent,
+            axocoatl_session::turn_review::REPOSITORY => PathState::Other(
+                "a submodule or nested Git checkout, which a capture records as one entry; a \
+                 receipt does not cover the files inside it"
+                    .into(),
+            ),
             kind => PathState::Other(format!("recorded as {kind:?}")),
         }
     };

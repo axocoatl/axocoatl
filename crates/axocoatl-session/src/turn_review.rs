@@ -262,7 +262,9 @@ const BINARY_LEFT_OUT: &str = "[binary data left out";
 /// [`MAX_CHANGE_BYTES`]. Otherwise a note first says the change is not shown
 /// in full, and the files a reviewer needs most are shown first: source,
 /// then generated or dense text, then binary files, each whole when it fits
-/// and else cut at a hunk boundary, saying there what of it was left out.
+/// and else cut at a hunk boundary (a source file that not one whole hunk of
+/// fits, after the last whole line of its first hunk that does), saying there
+/// what of it was left out.
 /// Every file left out in whole or in part is listed at the end with its
 /// bytes not shown, as many as fit, the rest counted by directory. The
 /// description, notes included, stays within `budget` as it counts, unless
@@ -433,11 +435,13 @@ impl FileChange {
     }
 }
 
-/// How much of each file is shown: all of it, its first hunks, or none.
+/// How much of each file is shown: all of it, its first hunks, its first
+/// bytes up to a line's end inside its first hunk, or none.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shown {
     Whole,
     Hunks(usize),
+    Lines(usize),
     None,
 }
 
@@ -449,7 +453,9 @@ struct Choice {
 
 /// The files to show within `room` tokens and [`MAX_CHANGE_BYTES`], rank by
 /// rank: each file of a rank whole when it fits, in the patch's order, then
-/// as many first hunks as fit of each one that did not.
+/// as many first hunks as fit of each one that did not, then, of each source
+/// file that not one whole hunk of fits (a new file has only one), its header
+/// and as many whole lines of its first hunk as fit.
 fn choose_shown(files: &[FileChange], room: usize, count: &dyn Fn(&str) -> usize) -> Choice {
     let mut shown = vec![Shown::None; files.len()];
     let (mut tokens, mut bytes) = (0usize, 0usize);
@@ -486,8 +492,80 @@ fn choose_shown(files: &[FileChange], room: usize, count: &dyn Fn(&str) -> usize
                 bytes += size;
             }
         }
+        // Only source is cut inside a hunk: the first lines of a lock file,
+        // minified code or base64 tell a reviewer little.
+        for (index, file) in files.iter().enumerate() {
+            if rank != 0 || file.rank != 0 || shown[index] != Shown::None || file.hunks.is_empty() {
+                continue;
+            }
+            // Its note where it is cut and its line in the listing of what
+            // was left out keep their room, at their longest.
+            let (lines, len) = (file.shown.lines().count(), file.shown.len());
+            let marker = count(&lines_cut(lines, lines, len));
+            let listed = count(&format!(
+                "{}: {}\n",
+                file.name,
+                lines_left_out(lines, lines, len)
+            ));
+            if let Some((end, cost)) = first_lines(
+                file,
+                room.saturating_sub(tokens + marker + listed),
+                MAX_CHANGE_BYTES.saturating_sub(bytes),
+                count,
+            ) {
+                shown[index] = Shown::Lines(end);
+                tokens += cost + marker;
+                bytes += end;
+            }
+        }
     }
     Choice { shown, tokens }
+}
+
+/// The note where a file is cut after `kept` of its `lines` lines, `rest`
+/// bytes left out.
+fn lines_cut(kept: usize, lines: usize, rest: usize) -> String {
+    format!(
+        "[This file is cut after {kept} of its {lines} lines; the other {rest} bytes are left \
+         out.]\n"
+    )
+}
+
+/// What the listing of what was left out says of such a file.
+fn lines_left_out(kept: usize, lines: usize, rest: usize) -> String {
+    format!("cut after {kept} of its {lines} lines, {rest} bytes left out")
+}
+
+/// Where the most of `file` that fits `room` tokens and `max` bytes ends, at
+/// a line's end inside its first hunk and past that hunk's first line, and
+/// its tokens; `None` when not one line of the hunk fits beside its header.
+fn first_lines(
+    file: &FileChange,
+    room: usize,
+    max: usize,
+    count: &dyn Fn(&str) -> usize,
+) -> Option<(usize, usize)> {
+    let start = file.hunks[0];
+    let hunk_end = file.hunks.get(1).copied().unwrap_or(file.shown.len());
+    let mut ends = file.shown[start..hunk_end]
+        .match_indices('\n')
+        .map(|(at, _)| start + at + 1);
+    // The hunk's own `@@` line is never shown alone.
+    ends.next()?;
+    let ends: Vec<usize> = ends.filter(|end| *end < file.shown.len()).collect();
+    let fits = |end: usize| end <= max && count(&file.shown[..end]) <= room;
+    // The most lines that fit; a prefix's count grows with its lines.
+    let (mut fit, mut over) = (0usize, ends.len());
+    while fit < over {
+        let middle = (fit + over).div_ceil(2);
+        if fits(ends[middle - 1]) {
+            fit = middle;
+        } else {
+            over = middle - 1;
+        }
+    }
+    let end = *ends.get(fit.checked_sub(1)?)?;
+    Some((end, count(&file.shown[..end])))
 }
 
 /// The description of a change not all of which is shown: a note saying
@@ -507,7 +585,7 @@ fn cut_description(
     let total: usize = files.iter().map(|file| file.shown.len()).sum();
     let mut body = String::new();
     let mut left_out: Vec<(&str, String)> = Vec::new();
-    let (mut whole, mut cut, mut omitted) = (0usize, 0usize, 0usize);
+    let (mut whole, mut cut, mut cut_lines, mut omitted) = (0usize, 0usize, 0usize, 0usize);
     for (file, shown) in files.iter().zip(&choice.shown) {
         match *shown {
             Shown::Whole => {
@@ -532,6 +610,16 @@ fn cut_description(
                         file.hunks.len()
                     ),
                 ));
+            }
+            Shown::Lines(end) => {
+                let rest = file.shown.len() - end;
+                let lines = file.shown.lines().count();
+                let kept = file.shown[..end].lines().count();
+                body.push_str(&file.shown[..end]);
+                body.push_str(&lines_cut(kept, lines, rest));
+                cut_lines += 1;
+                omitted += rest;
+                left_out.push((&file.name, lines_left_out(kept, lines, rest)));
             }
             Shown::None => {
                 omitted += file.shown.len();
@@ -558,13 +646,24 @@ fn cut_description(
             files_word(cut)
         ));
     }
-    let none = files.len() - whole - cut;
+    if cut_lines > 0 {
+        note.push_str(&format!(
+            ", {cut_lines} {} cut after a whole line",
+            files_word(cut_lines)
+        ));
+    }
+    let none = files.len() - whole - cut - cut_lines;
     if none > 0 {
         note.push_str(&format!(", {none} {} left out", files_word(none)));
     }
+    let binary = if files.iter().any(|file| file.rank == 2) {
+        " (a binary file is judged by its name and size; do not read its data)"
+    } else {
+        ""
+    };
     note.push_str(&format!(
         ". You have not seen the other {omitted} bytes, listed at the end: read those files \
-         themselves before you judge them.]\n"
+         themselves before you judge them{binary}.]\n"
     ));
     let mut listing = format!("\n[Left out of the change shown above, {omitted} bytes:]\n");
     // Room left for names, beside the counts by directory.
@@ -808,8 +907,11 @@ pub fn describe_partial_change(
             };
             let mut changed: Vec<(&[u8], &str)> = Vec::new();
             let mut earlier: Vec<(&[u8], &str)> = Vec::new();
+            let mut nested: Vec<(&[u8], &str)> = Vec::new();
             for (path, (kind, _)) in &after {
-                if named.contains(String::from_utf8_lossy(path).as_ref()) {
+                if kind == REPOSITORY {
+                    nested.push((path.as_slice(), kind.as_str()));
+                } else if named.contains(String::from_utf8_lossy(path).as_ref()) {
                     earlier.push((path.as_slice(), kind.as_str()));
                 } else {
                     changed.push((path.as_slice(), kind.as_str()));
@@ -824,7 +926,8 @@ pub fn describe_partial_change(
                 .filter(|name| !now.contains(*name))
                 .map(|name| (name.as_bytes(), "file"))
                 .collect();
-            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() {
+            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() && nested.is_empty()
+            {
                 text.push_str("\nThe turn changed no files.\n");
             }
             if !changed.is_empty() {
@@ -863,6 +966,7 @@ pub fn describe_partial_change(
                     &mut room,
                 );
             }
+            list_nested(&mut text, nested, &in_head, &mut room);
         }
         (Some(before), Some(after)) => {
             let changed: Vec<(&[u8], &str)> = after
@@ -902,10 +1006,15 @@ pub fn describe_partial_change(
             }
         }
         (None, Some(after)) => {
-            let differing: Vec<(&[u8], &str)> = after
-                .iter()
-                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
-                .collect();
+            let mut nested: Vec<(&[u8], &str)> = Vec::new();
+            let mut differing: Vec<(&[u8], &str)> = Vec::new();
+            for (path, (kind, _)) in &after {
+                if kind == REPOSITORY {
+                    nested.push((path.as_slice(), kind.as_str()));
+                } else {
+                    differing.push((path.as_slice(), kind.as_str()));
+                }
+            }
             if differing.is_empty() {
                 text.push_str("\nNo path differs from HEAD.\n");
             } else {
@@ -927,6 +1036,7 @@ pub fn describe_partial_change(
                     &mut room,
                 );
             }
+            list_nested(&mut text, nested, &in_head, &mut room);
         }
     }
     let (shown, covered, binary_left_out) = shown_prefix(prefix, MAX_SHOWN_PREFIX_BYTES);
@@ -1005,8 +1115,15 @@ pub fn fit_description(text: String, budget: ChangeBudget<'_>) -> String {
 /// `before` and `after`; empty when there is nothing to say. Bounded as
 /// [`describe_partial_change`] bounds its lists.
 pub fn earlier_changes(before: &str, after: &str) -> String {
-    let before = differing_paths(before);
-    let after = differing_paths(after);
+    // A submodule or nested checkout is listed whether it differs from HEAD
+    // or not; [`nested_repositories`] names those the turn changed.
+    let files = |lines: &str| {
+        let mut paths = differing_paths(lines);
+        paths.retain(|_, (kind, _)| kind != REPOSITORY);
+        paths
+    };
+    let before = files(before);
+    let after = files(after);
     let mut text = String::new();
     let mut room = Listing {
         names: MAX_LISTED_PATHS,
@@ -1053,6 +1170,102 @@ pub fn earlier_changes(before: &str, after: &str) -> String {
     text
 }
 
+/// The kind of a capture's line for a submodule or nested Git checkout:
+/// one entry for all of it, whose digest covers its files, its Git settings
+/// and the commit it has checked out. A capture lists every one beside the
+/// paths that differ from HEAD, changed or not, and the patch shows a
+/// submodule only by that commit and a nested checkout not at all.
+pub const REPOSITORY: &str = "repository";
+
+/// Append `nested`, submodules and nested Git checkouts whose change no
+/// earlier capture's lines can tell, under a heading that says so.
+fn list_nested(
+    text: &mut String,
+    nested: Vec<(&[u8], &str)>,
+    in_head: &std::collections::BTreeSet<Vec<u8>>,
+    room: &mut Listing,
+) {
+    if nested.is_empty() {
+        return;
+    }
+    let count = nested.len();
+    list_paths(
+        text,
+        &format!(
+            "{count} submodule{} or nested Git checkout{}, whose files the patch does not show; \
+             the turn may have changed {}, which the capture taken when it began cannot tell \
+             apart, so read {} files yourself:",
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "it" } else { "them" },
+            if count == 1 { "its" } else { "their" },
+        ),
+        nested,
+        in_head,
+        room,
+    );
+}
+
+/// What a change shown from its patch must add about submodules and nested
+/// Git checkouts: the patch shows a submodule only by the commit it has
+/// checked out and a nested checkout not at all. From the lines of the paths
+/// that differ from HEAD the captures recorded on one HEAD, `before` when the
+/// turn began (`None` when that capture recorded none, or HEAD moved) and
+/// `after`: those whose line differs from `before`'s, or every one without
+/// `before`, named to be read. Empty when there is none. Bounded as
+/// [`describe_partial_change`] bounds its lists.
+pub fn nested_repositories(before: Option<&str>, after: &str) -> String {
+    let after = differing_paths(after);
+    let nested = |paths: &std::collections::BTreeMap<Vec<u8>, (String, String)>| {
+        paths
+            .iter()
+            .filter(|(_, (kind, _))| kind == REPOSITORY)
+            .map(|(path, entry)| (path.clone(), entry.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let mut text = String::new();
+    let mut room = Listing {
+        names: MAX_LISTED_PATHS,
+        bytes: MAX_LISTED_PATH_BYTES,
+    };
+    let none = std::collections::BTreeSet::new();
+    let now = nested(&after);
+    match before.map(differing_paths) {
+        Some(before) => {
+            let then = nested(&before);
+            let changed: Vec<(&[u8], &str)> = now
+                .iter()
+                .filter(|(path, entry)| then.get(*path) != Some(entry))
+                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+                .collect();
+            if !changed.is_empty() {
+                list_paths(
+                    &mut text,
+                    &format!(
+                        "[Not shown above: the turn changed files in {} submodule{} or nested Git \
+                         checkout{}, which the patch shows only by a submodule's commit. You \
+                         have not seen those changes; read the files yourself:]",
+                        changed.len(),
+                        if changed.len() == 1 { "" } else { "s" },
+                        if changed.len() == 1 { "" } else { "s" },
+                    ),
+                    changed,
+                    &none,
+                    &mut room,
+                );
+            }
+        }
+        None => {
+            let all: Vec<(&[u8], &str)> = now
+                .iter()
+                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+                .collect();
+            list_nested(&mut text, all, &none, &mut room);
+        }
+    }
+    text
+}
+
 /// `count` files, as a heading names them: `1 file`, `2 files`.
 fn file_count(count: usize) -> String {
     format!("{count} file{}", if count == 1 { "" } else { "s" })
@@ -1084,6 +1297,10 @@ fn list_paths(
         let line = match *kind {
             "deleted" => format!("{} (deleted)\n", quote_path(path)),
             "link" => format!("{} (symbolic link)\n", quote_path(path)),
+            REPOSITORY => format!(
+                "{} (a submodule or nested Git checkout)\n",
+                quote_path(path)
+            ),
             _ => format!("{}\n", quote_path(path)),
         };
         if room.names == 0 || line.len() > room.bytes {
@@ -1912,7 +2129,10 @@ mod tests {
             text.contains("in 5 files, more than fits beside the rest of your request. Shown: "),
             "{text}"
         );
-        assert!(text.contains("read those files themselves before you judge them.]\n"));
+        assert!(text.contains(
+            "read those files themselves before you judge them (a binary file is judged by its \
+             name and size; do not read its data).]\n"
+        ));
         // The small source file whole, the large one's first hunks, cut at
         // a hunk boundary, in the patch's order.
         assert!(text.contains(&small), "{text}");
@@ -1995,6 +2215,75 @@ mod tests {
         let change = describe_change(None, &many, true, budget(10_000_000));
         assert!(change.text.len() <= MAX_CHANGE_BYTES + MAX_LISTED_PATH_BYTES + 4096);
         assert!(change.text.starts_with("[Not all of the change is shown"));
+    }
+
+    /// A source file that not one whole hunk of fits, as a new file has only
+    /// one, is shown up to the last whole line of that hunk that fits, says
+    /// there what was left out, and is listed with its bytes not shown; a
+    /// dense file is never cut inside a hunk, and a file with not one line
+    /// of room is left out whole.
+    #[test]
+    fn a_source_file_with_one_hunk_too_large_to_show_is_cut_after_a_whole_line() {
+        let mut new_file = String::from(
+            "diff --git a/src/pages.rs b/src/pages.rs\nnew file mode 100644\nindex \
+             0000000..5c6d7e8\n--- /dev/null\n+++ b/src/pages.rs\n@@ -0,0 +1,600 @@\n",
+        );
+        for line in 0..600 {
+            new_file.push_str(&format!(
+                "+pub fn page_{line}(items: &[u32]) -> usize {{ items.len() / {} }}\n",
+                line + 1
+            ));
+        }
+        assert!(new_file.len() > 30 * 1024);
+        let change = describe_change(None, &new_file, true, budget(3_000));
+        let text = &change.text;
+        assert!(change.partial);
+        assert!(approximate(text) <= 3_000, "{}", approximate(text));
+        assert!(
+            text.contains("Shown: 0 files whole, 1 file cut after a whole line."),
+            "{text}"
+        );
+        let start = text.find("diff --git a/src/pages.rs").unwrap();
+        let marker = text.find("[This file is cut after ").unwrap();
+        let shown = &text[start..marker];
+        assert!(
+            new_file.starts_with(shown),
+            "the shown part is the file's start"
+        );
+        assert!(shown.ends_with('\n') && shown.contains("\n+pub fn page_0("));
+        let kept = shown.lines().count();
+        let rest = new_file.len() - shown.len();
+        assert!((7..606).contains(&kept), "{kept}");
+        assert!(
+            text[marker..].starts_with(&format!(
+                "[This file is cut after {kept} of its 606 lines; the other {rest} bytes are \
+                 left out.]\n"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "\nsrc/pages.rs: cut after {kept} of its 606 lines, {rest} bytes left out\n"
+            )),
+            "{text}"
+        );
+        // Dense text is never cut inside its hunk: left out and listed.
+        let blob = base64_section("data/blob.b64", 40_000);
+        let change = describe_change(None, &blob, true, budget(3_000));
+        assert!(!change.text.contains("+ABC") && !change.text.contains("cut after"));
+        assert!(change.text.contains("\ndata/blob.b64: left out, "));
+        // A small budget shows fewer lines; with no room for one line beside
+        // its header, the file is left out.
+        let change = describe_change(None, &new_file, true, budget(400));
+        assert!(change.text.contains("\n+pub fn page_0("), "{}", change.text);
+        assert!(
+            !change.text.contains("\n+pub fn page_40("),
+            "{}",
+            change.text
+        );
+        let change = describe_change(None, &new_file, true, budget(64));
+        assert!(!change.text.contains("+pub fn"), "{}", change.text);
+        assert!(change.text.contains("1 file left out"), "{}", change.text);
     }
 
     /// The name a description lists a file by is the one Git's header
@@ -2212,6 +2501,98 @@ mod tests {
              file):\nscratch.txt\n"
         );
         assert_eq!(earlier_changes("", &after), "");
+        // A submodule is listed by every capture, changed or not: it is no
+        // file with uncommitted changes, and a nested checkout is no file
+        // the patch would show.
+        let with = |lines: &str, digest: char| {
+            format!(
+                "{lines}{}{}",
+                changed_line(b"vendor/sub", REPOSITORY, digest),
+                changed_line(b"tools", REPOSITORY, 'f')
+            )
+        };
+        assert_eq!(
+            earlier_changes(&with(&before, '1'), &with(&after, '2')),
+            earlier_changes(&before, &after)
+        );
+    }
+
+    /// The patch shows a submodule only by its commit and a nested checkout
+    /// not at all. A change shown from the patch names, after it, those
+    /// whose capture line the turn changed, or, when the capture taken as it
+    /// began listed none, every one as one the turn may have changed; a
+    /// change too large to show lists them by what the captures tell.
+    #[test]
+    fn submodules_and_nested_checkouts_the_patch_does_not_show_are_named() {
+        let before = [
+            changed_line(b"src/lib.rs", "file", 'a'),
+            changed_line(b"vendor/sub", REPOSITORY, '1'),
+            changed_line(b"tools", REPOSITORY, 'f'),
+        ]
+        .concat();
+        let after = [
+            changed_line(b"src/lib.rs", "file", 'c'),
+            changed_line(b"vendor/sub", REPOSITORY, '2'),
+            changed_line(b"tools", REPOSITORY, 'f'),
+            changed_line(b"nested", REPOSITORY, '3'),
+        ]
+        .concat();
+        assert_eq!(
+            nested_repositories(Some(&before), &after),
+            "\n[Not shown above: the turn changed files in 2 submodules or nested Git \
+             checkouts, which the patch shows only by a submodule's commit. You have not seen \
+             those changes; read the files yourself:]\nnested (a submodule or nested Git \
+             checkout)\nvendor/sub (a submodule or nested Git checkout)\n"
+        );
+        assert_eq!(nested_repositories(Some(&after), &after), "");
+        let unknown = nested_repositories(None, &before);
+        assert_eq!(
+            unknown,
+            "\n2 submodules or nested Git checkouts, whose files the patch does not show; the \
+             turn may have changed them, which the capture taken when it began cannot tell \
+             apart, so read their files yourself:\ntools (a submodule or nested Git \
+             checkout)\nvendor/sub (a submodule or nested Git checkout)\n"
+        );
+        assert_eq!(
+            nested_repositories(None, &changed_line(b"src/lib.rs", "file", 'c')),
+            ""
+        );
+        // Too large to show: from both captures' lines, only the changed
+        // ones, among the turn's files.
+        let listed = describe_partial_change(EarlierPaths::Listed(&before), Some(&after), "", 9);
+        assert!(
+            listed.contains(
+                "The 3 files the turn changed:\nnested (a submodule or nested Git checkout)\n"
+            ),
+            "{listed}"
+        );
+        assert!(listed.contains("\nvendor/sub (a submodule or nested Git checkout)\n"));
+        assert!(!listed.contains("tools"), "{listed}");
+        // Without the earlier lines, every one apart, as one the turn may
+        // have changed, never as a path that differs from HEAD.
+        for earlier in [
+            EarlierPaths::NotListed,
+            EarlierPaths::OtherHead,
+            EarlierPaths::Patched(&std::collections::BTreeSet::new()),
+        ] {
+            let text = describe_partial_change(earlier, Some(&after), "", 9);
+            assert!(
+                text.contains(
+                    "\n3 submodules or nested Git checkouts, whose files the patch does not \
+                     show; the turn may have changed them"
+                ),
+                "{text}"
+            );
+            assert!(
+                !text.contains("files the turn changed:") || text.contains("The 1 file the turn"),
+                "{text}"
+            );
+            assert!(
+                !text.contains("files the turn changed:\nnested")
+                    && !text.contains("files the turn changed:\ntools"),
+                "{text}"
+            );
+        }
     }
 
     /// Thousands of changed paths, the most one capture lists (3,072 small
