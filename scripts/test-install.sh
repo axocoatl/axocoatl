@@ -668,11 +668,11 @@ reset_path_case() {
 # after a line that ends in &&, ||, | or \, not in a string, a function, a
 # subshell or a block for another OS, and not after a return, an exec or
 # anything the reader cannot follow. What it cannot see (set -e and a failing
-# command, a sourced file that exits, a syntax error it does not notice) is
-# not tested here: such a file can count without running the line. Counting
-# a file that only seems to add it would leave new terminals without
-# axocoatl; an extra line is harmless. A bash login file counts as reading
-# ~/.profile by the same rule.
+# command, a sourced file, an eval or a function call that stops the shell, a
+# syntax error it does not notice) is not tested here: such a file can count
+# without running the line. Counting a file that only seems to add it would
+# leave new terminals without axocoatl; an extra line is harmless. A bash
+# login file counts as reading ~/.profile by the same rule.
 install_helpers="$work_dir/install-helpers.sh"
 sed -n '/^# A path as the user knows it/,/^# The startup files a new shell/p' "$installer" >"$install_helpers"
 grep '^adds_to_path()' "$install_helpers" >/dev/null && grep '^reads_dot_profile()' "$install_helpers" >/dev/null \

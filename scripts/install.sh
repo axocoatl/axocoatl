@@ -14,9 +14,9 @@
 # installer can tell nothing before them keeps them from running, the export
 # line 1.4.0 printed, fish's line, or the lines Debian's and Ubuntu's
 # ~/.profile use to add ~/.local/bin (adds_to_path, which also says what the
-# installer cannot see, such as set -e and a failing command, a sourced file
-# that exits, or a syntax error); next to such a ~/.profile the ~/.bashrc
-# line skips login shells.
+# installer cannot see, such as set -e and a failing command, a sourced file,
+# an eval or a function call that stops the shell, or a syntax error); next to
+# such a ~/.profile the ~/.bashrc line skips login shells.
 # Without a terminal (or when the answer is end of input) it only prints that
 # line. In a GitHub Actions step it adds the directory to $GITHUB_PATH
 # instead, for the job's later steps.
@@ -146,13 +146,16 @@ own_fish_lines() {
 # in {, but closes one only at a } where a command starts, so after zsh's
 # `f() { cmd }` no later line counts. So sure() means only that the installer
 # can tell nothing before the line keeps it from running. What it cannot see:
-# a command that stops the shell another way (set -e and a failing command, a
-# sourced file or an eval that returns or exits), a syntax error it does not
-# notice, after which the shell stops reading the file, and a later line that
-# takes the directory out of PATH again; a valid file it misreads in some
-# other way can make a line count too. It also numbers each block it opens
-# (bid), sets branched after an else or elif of a block at the top level, and
-# sets cmtat to where a comment starts on the line it read (0 for none).
+# a command that stops the shell another way (set -e and a failing command, or
+# a sourced file, an eval or a function call that stops it: it reads neither
+# the sourced file nor the text an eval runs, and does not follow a call into
+# the function's body, so `f() { exec zsh; }; f` is not seen), a syntax error
+# it does not notice, after which the shell stops reading the file, and a
+# later line that takes the directory out of PATH again; a valid file it
+# misreads in some other way can make a line count too. It also numbers each
+# block it opens (bid), sets branched after an else or elif of a block at the
+# top level, and sets cmtat to where a comment starts on the line it read (0
+# for none).
 # It sets stopped at a return, exit, exec, logout or bye where a command
 # starts (an exec only when a command follows it), unless that word is in a
 # function's body or a ( ) subshell, which it ends instead of the shell, or
@@ -521,13 +524,14 @@ function track(s,    i, n, c, t, two, three, op, bs, esc, before, escaped) {
 # out of PATH or names it in a comment, an own line with more on its line,
 # nor an unmarked own line or Debian's lines in a block, after a line that
 # ends in && or \, or after a return. Neither reader can see what the
-# startup_awk comment lists (set -e and a failing command, a sourced file
-# that exits, a syntax error, a later line that takes the directory out of
-# PATH again), so in such a file a line can count that does not run. The
-# installer's line does nothing when PATH has the directory, so one line too
-# many costs at most a second listing of it (where a later line adds it
-# whether or not PATH has it, as Debian's lines do), while counting a file
-# wrongly would leave new terminals without axocoatl.
+# startup_awk comment lists (set -e and a failing command, a sourced file, an
+# eval or a function call that stops the shell, a syntax error, a later line
+# that takes the directory out of PATH again), so in such a file a line can
+# count that does not run. The installer's line does nothing when PATH has
+# the directory, so one line too many costs at most a second listing of it
+# (where a later line adds it whether or not PATH has it, as Debian's lines
+# do), while counting a file wrongly would leave new terminals without
+# axocoatl.
 adds_to_path() {
   [ -f "$1" ] || return 1
   case "$dest" in
