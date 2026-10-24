@@ -3573,7 +3573,11 @@ mod tests {
     ) -> Result<ExecutionContentStore, ExecutionContentError> {
         let dir = SecureDir::open_existing_all(path).unwrap();
         dir.restrict_owner_only().unwrap();
-        dir.try_lock_exclusive().unwrap();
+        // As `open` takes it: a process another test starts while this store
+        // still holds the lock shares it until that process execs, so a store
+        // reopened at once can find its own lock held for a moment.
+        dir.lock_exclusive_waiting(axocoatl_core::LOCK_INHERITANCE_GRACE)
+            .unwrap();
         ExecutionContentStore::open_at(Storage::Standalone(dir), identity)
     }
     /// Every file of the store, by path: equal before and after an operation
