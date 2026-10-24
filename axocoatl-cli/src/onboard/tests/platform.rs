@@ -132,9 +132,10 @@ async fn step_0_names_an_unverified_platform_and_an_unused_proxy() {
              verified yet",
             "Proxy: HTTPS_PROXY is set, but Axocoatl does not support a proxy for Sessions and \
              runs: a Session's network (a run's dependency install, web tools, Claude Code's and \
-             Codex's model calls) connects directly, and its containers do not get the variables; \
-             only the daemon's own model calls to OpenRouter or another hosted provider follow \
-             them, untested behind a proxy",
+             Codex's model calls) connects directly, and its containers do not get the \
+             variables. Requests to this computer and to Ollama never use a proxy; Axocoatl's \
+             other requests (hosted model providers, onboarding's OpenRouter checks, webhooks \
+             and MCP servers on other computers) follow them, untested behind a proxy",
         ]
     );
     // Apple silicon and nothing set: nothing to say.

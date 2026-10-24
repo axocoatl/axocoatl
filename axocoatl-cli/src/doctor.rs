@@ -209,8 +209,9 @@ pub(crate) fn proxy_variables(lookup: impl Fn(&str) -> Option<String>) -> Vec<St
 
 /// The warning for a proxy set in the environment: Axocoatl 1.5.0 has no
 /// proxy support for Sessions and runs, whose network connects directly
-/// whatever it says (only the daemon's own requests to hosted model
-/// providers follow it, as its HTTP library reads the variables).
+/// whatever it says. Requests to this computer (`proxy_env`) and to Ollama
+/// never use one; Axocoatl's other requests follow it, as its HTTP library
+/// reads the variables.
 pub(crate) fn proxy_item(variables: &[String]) -> Option<Item> {
     if variables.is_empty() {
         return None;
@@ -226,8 +227,10 @@ pub(crate) fn proxy_item(variables: &[String]) -> Option<Item> {
             "{names} {verb} set, but Axocoatl does not support a proxy for Sessions and runs: \
              a Session's network (a run's dependency install, web tools, Claude Code's and \
              Codex's model calls) connects directly, and its containers do not get the \
-             variables; only the daemon's own model calls to OpenRouter or another hosted \
-             provider follow them, untested behind a proxy"
+             variables. Requests to this computer and to Ollama never use a proxy; \
+             Axocoatl's other requests (hosted model providers, onboarding's OpenRouter \
+             checks, webhooks and MCP servers on other computers) follow them, untested \
+             behind a proxy"
         ),
         Some(
             "On a network that reaches the internet only through a proxy, a run cannot install \

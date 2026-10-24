@@ -1085,32 +1085,30 @@ model download dominates unless models are cached.
 
 ## Restating what was verified
 
-The public statements of what was verified live describe the release's
-final live runs, never an earlier build. While those runs are outstanding,
-each such place holds a pending marker (the string `pendingMarker` names in
-`sites/marketing/scripts/validate.mjs`): the CHANGELOG's Verified section and
-its other entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`, the marketing
-home, install and changelog pages, and the docs' install, onboarding,
-security and Fix/QA/Audit pages. Except in `llms.txt`, which has the marker
-alone and points to the CHANGELOG, the earlier text is commented out below
-each marker as a template. Restating replaces the marker and its commented
-template with the final text: the release-bound check looks for the marker
-only, so a template left behind would ship in the page source.
+The public statements about the release gate are the CHANGELOG's Verified
+section and its other entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`,
+the marketing home, install and changelog pages, and the docs' install,
+onboarding, security and Fix/QA/Audit pages. Each of their sentences about
+what the gate verifies says, in the present tense, what one of the required
+steps above requires (see "Required steps"), and nothing those steps do not
+check: the evidence check refuses a bundle without them, so the text cannot
+outrun the runs, and it holds before and after them with no pending marker.
+What no step checks is not named: the machine and its memory, the account,
+the Linux release and architecture, and the models onboarding chose. The
+text says that the evidence records them, and who answered each question
+(the person, or `safari-workbench.mjs`). A step added later (for example
+that the Mac has 48 GB of memory or more, or which models onboarding
+configured) lets the text name what it checks.
 
-Each sentence of the final text says what one of the required steps above
-shows (see "Required steps"), and nothing those steps do not show: the
-evidence check refuses a bundle without them, so the text cannot outrun
-the runs. Say who answered (the person, or `safari-workbench.mjs`), on
-which machine and account the runs were made, and which models were used,
-as the evidence records them.
-
+A place may still hold a pending marker (the string `pendingMarker` names
+in `sites/marketing/scripts/validate.mjs`) while its text is being written.
 `release.yml`'s marketing job runs `./scripts/verify-marketing-gate.sh
 source-bound`, whose release-bound validation refuses every file in that list
 that still holds a marker, and the build needs that job; a release-tag
 marketing deploy runs the same check. CI on pull requests and
 `scripts/preflight.sh` run the portable mode, which does not look for
-markers, so a green CI does not mean the markers are gone. The restatement
-therefore has to land before the tag. Check it before tagging with:
+markers, so a green CI does not mean no marker is left. Check it before
+tagging with:
 
 ```bash
 ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
@@ -1119,10 +1117,9 @@ therefore has to land before the tag. Check it before tagging with:
 The evidence check accepts a bundle only for the tagged commit, or an
 ancestor that differs from it in evidence files alone (see above), so text
 changed after the live runs needs the runs again on the new commit. Write
-the restated text, and remove the markers, in the candidate commit before
-Tier C and D1 run on it, stating what those runs are to show; if a run fails
-or shows something else, correct the text and run again on the corrected
-commit.
+the text, with no marker left, in the candidate commit before Tier C and D1
+run on it; if a run fails or shows something else, correct the text and run
+again on the corrected commit.
 
 ## Keeping the gate honest
 
