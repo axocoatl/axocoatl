@@ -388,9 +388,17 @@ pub(super) fn prepare_admission(
         for grant in &request.grants {
             grant.validate().map_err(failure)?;
             if grant.expires_at_ms as u128 <= now {
-                return Err(failure(
-                    "approved Session grant expired before Begin; review the team budget",
-                ));
+                // Team & budget's Edit fills in a new expiry for an Agent
+                // whose budget expiry has passed.
+                let name = selected_slots
+                    .iter()
+                    .find(|slot| slot.node_id == grant.holder)
+                    .and_then(|slot| slot_agent_name(content, slot))
+                    .unwrap_or_else(|| grant.holder.as_str().to_owned());
+                return Err(failure(format!(
+                    "{name}'s budget expired before this request could start; open Team & \
+                     budget and select Edit: it fills in a new expiry. Then Preview and Apply"
+                )));
             }
             if grant.revision != 1
                 || grants.insert(grant.holder.clone(), grant.clone()).is_some()
@@ -1008,6 +1016,24 @@ pub(super) fn verify_selected_team(
         ));
     }
     memory.validate_starting_savepoints(graph).map_err(failure)
+}
+
+/// The name the person gave the Agent of `slot`, when its definition is
+/// retained.
+fn slot_agent_name(
+    content: &axocoatl_session::execution_content::ExecutionContentStore,
+    slot: &axocoatl_session::session_team::SessionTeamSlot,
+) -> Option<String> {
+    let ActivationEvidenceContent::Definition { configuration, .. } = content
+        .resolve_activation_evidence(&slot.definition.snapshot)
+        .ok()?
+    else {
+        return None;
+    };
+    serde_json::from_str::<AgentConfig>(&configuration)
+        .ok()
+        .map(|config| config.name)
+        .filter(|name| !name.is_empty())
 }
 
 fn selected_slots<'a>(

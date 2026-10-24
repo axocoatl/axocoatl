@@ -1075,3 +1075,73 @@ fn openrouter_admission_refuses_unsent_parameters_and_unfit_responses_by_name() 
     assert_eq!(derived, 5242);
     assert_eq!(observation.response_allowance(derived, reasoning), 104_840);
 }
+
+/// Whether a retained profile's model changed is asked for only as long as
+/// Team & budget waits: an Ollama or an OpenRouter that accepts the
+/// connection and does not answer is not taken for a change, and Preview
+/// does not wait for its own timeouts (two minutes a request).
+#[tokio::test]
+async fn a_provider_that_does_not_answer_is_not_taken_for_a_change() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let (server, _) = metadata_server().await;
+    let observed = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    let mut ollama = serde_json::to_value(NativeRuntimeConfiguration::Ollama(
+        NativeOllamaRuntimeConfiguration {
+            schema_version: 1,
+            observation: observed,
+            max_output_tokens: 128,
+            max_response_bytes: NATIVE_RESPONSE_BYTES,
+            initial_limits: limits(100_000),
+        },
+    ))
+    .unwrap();
+    ollama["observation"]["base_url"] = serde_json::json!(silent);
+    let mut observation = legacy_openrouter_observation("meta-llama/test-instruct");
+    observation.base_url = silent.clone();
+    let openrouter = serde_json::to_value(NativeRuntimeConfiguration::OpenRouter(
+        NativeOpenRouterRuntimeConfiguration {
+            schema_version: 2,
+            openrouter_observation: observation,
+            max_output_tokens: 128,
+            max_response_bytes: NATIVE_RESPONSE_BYTES,
+            initial_limits: limits(100_000),
+            reasoning: None,
+        },
+    ))
+    .unwrap();
+    let credentials = NativeProviderCredentials {
+        ollama_base_url: Some(silent),
+        ollama_timeouts: None,
+        ollama_served: None,
+        openrouter_api_key: Some("fixture-key".into()),
+        openrouter_credits_only: true,
+        openrouter_configuration_error: None,
+        openrouter_timeouts: None,
+    };
+    for configuration in [ollama, openrouter] {
+        let started = std::time::Instant::now();
+        assert_eq!(
+            retained_profile_observation_within(
+                &configuration.to_string(),
+                &credentials,
+                std::time::Duration::from_millis(300),
+            )
+            .await,
+            None
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+}

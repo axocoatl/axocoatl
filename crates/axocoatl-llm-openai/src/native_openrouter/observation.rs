@@ -394,6 +394,158 @@ impl NativeOpenRouterObservation {
         current == *self
     }
 
+    /// How this retained profile compares with `endpoints`, what OpenRouter
+    /// lists for its model now.
+    pub(super) fn compare<'a>(&self, endpoints: &'a NativeOpenRouterEndpoints) -> Retained<'a> {
+        if endpoints
+            .profiles
+            .iter()
+            .any(|profile| self.same_contract(profile))
+        {
+            return Retained::Serves;
+        }
+        if let Some(down) = endpoints
+            .unavailable
+            .iter()
+            .find(|endpoint| self.same_contract(&endpoint.profile))
+        {
+            return Retained::Unavailable(down);
+        }
+        if let Some(refusal) = endpoints.refusal(&self.model) {
+            return Retained::NoEndpoint(refusal);
+        }
+        let (model, tag) = (&self.model, &self.endpoint_tag);
+        let listed = endpoints
+            .profiles
+            .iter()
+            .chain(
+                endpoints
+                    .unavailable
+                    .iter()
+                    .map(|endpoint| &endpoint.profile),
+            )
+            .find(|profile| profile.endpoint_tag == *tag);
+        let prefix = format!("{tag}: ");
+        Retained::Changed(match listed {
+            Some(current) => format!(
+                "OpenRouter lists other terms for {model}'s endpoint {tag} than when this Team \
+                 was reviewed ({})",
+                self.changed_terms(current).join("; ")
+            ),
+            None => match endpoints
+                .rejected
+                .iter()
+                .find_map(|reason| reason.strip_prefix(&prefix))
+            {
+                Some(reason) => format!(
+                    "{model}'s endpoint {tag}, which this Team was reviewed with, can no longer \
+                     be used: {reason}"
+                ),
+                None => format!(
+                    "OpenRouter no longer lists {model}'s endpoint {tag}, which this Team was \
+                     reviewed with"
+                ),
+            },
+        })
+    }
+
+    /// Each term OpenRouter lists for this profile's endpoint that differs
+    /// in `current`, its listing now: what it was and what it is.
+    fn changed_terms(&self, current: &Self) -> Vec<String> {
+        let price = |value: &str| format!("${value}/M");
+        let fee =
+            |value: Option<&str>| value.map_or_else(|| "none".to_owned(), |fee| format!("${fee}"));
+        let tokens = |value: usize| format!("{value} tokens");
+        // A 1.2.0 profile records no prompt limit (`same_contract`).
+        let limit = |value: Option<usize>| match value {
+            Some(limit) if self.schema_version != LEGACY_SCHEMA => tokens(limit),
+            _ => "none".to_owned(),
+        };
+        let list = |items: &[String]| {
+            if items.is_empty() {
+                "none".to_owned()
+            } else {
+                items.join(", ")
+            }
+        };
+        let mut changed: Vec<String> = [
+            (
+                "provider",
+                self.provider_name.clone(),
+                current.provider_name.clone(),
+            ),
+            (
+                "input price",
+                price(&self.prompt_price_per_million),
+                price(&current.prompt_price_per_million),
+            ),
+            (
+                "output price",
+                price(&self.completion_price_per_million),
+                price(&current.completion_price_per_million),
+            ),
+            (
+                "request price",
+                fee(self.request_price.as_deref()),
+                fee(current.request_price.as_deref()),
+            ),
+            (
+                "context window",
+                tokens(self.context_tokens),
+                tokens(current.context_tokens),
+            ),
+            (
+                "output limit",
+                tokens(self.max_output_tokens),
+                tokens(current.max_output_tokens),
+            ),
+            (
+                "prompt limit",
+                limit(self.max_prompt_tokens),
+                limit(current.max_prompt_tokens),
+            ),
+            (
+                "parameters",
+                list(&self.supported_parameters),
+                list(&current.supported_parameters),
+            ),
+            (
+                "priced features",
+                list(&self.unrequested_priced_features),
+                list(&current.unrequested_priced_features),
+            ),
+        ]
+        .into_iter()
+        .filter(|(_, was, now)| was != now)
+        .map(|(term, was, now)| format!("{term} {was}, now {now}"))
+        .collect();
+        if self.reasoning != current.reasoning {
+            changed.push("its reasoning contract".into());
+        }
+        if changed.is_empty() {
+            changed.push("its recorded terms".into());
+        }
+        changed
+    }
+
+    /// What changed on OpenRouter since this profile was observed, when
+    /// observing the model's endpoints again is the remedy: its endpoint
+    /// lists other terms (a price, a limit, its parameters) or can no longer
+    /// be used, while another endpoint can serve the model. `None` when the
+    /// profile still serves, when its endpoint is only unavailable or
+    /// degraded right now, and when no endpoint can serve the model: a
+    /// request then says why. Reads OpenRouter's metadata only (no inference,
+    /// no charge); an OpenRouter that does not answer is an error, never a
+    /// change.
+    pub async fn contract_change(&self, api_key: &str) -> Result<Option<String>, ProviderError> {
+        let endpoints =
+            observe_native_openrouter_endpoints(&self.base_url, api_key, &self.model).await?;
+        Ok(match self.compare(&endpoints) {
+            Retained::Changed(change) => Some(change),
+            Retained::Serves | Retained::Unavailable(_) | Retained::NoEndpoint(_) => None,
+        })
+    }
+
     /// This observation in the 1.2.0 form, when that form can express it.
     fn as_legacy(&self) -> Option<Self> {
         if self.reasoning.is_some()
@@ -762,6 +914,21 @@ pub fn catalog_call_floor(
         reasoning_tokens: reasoning.map_or(0, |request| request.allowance(output)),
         reasoning,
     })
+}
+
+/// How a retained profile compares with the endpoints OpenRouter lists for
+/// its model now.
+pub(super) enum Retained<'a> {
+    /// Its endpoint is listed, healthy, with the terms it was observed with.
+    Serves,
+    /// Its endpoint is listed with those terms, but OpenRouter reports it
+    /// unavailable or degraded right now.
+    Unavailable(&'a UnavailableOpenRouterEndpoint),
+    /// No endpoint can serve the model now, and why.
+    NoEndpoint(ProviderError),
+    /// Its endpoint lists other terms or can no longer be used, while
+    /// another can serve the model: what changed.
+    Changed(String),
 }
 
 /// An endpoint that could serve a model as native Sessions need, but that

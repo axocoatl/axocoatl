@@ -322,8 +322,14 @@ unset TEST_CURL_SNAP
 #   P_BIN         the directory of tools on PATH (default: the stubs)
 #   P_EXISTING    a version: an axocoatl that reports it is already where
 #                 the case installs
-#   P_PS          lines a `ps` on PATH prints for `ps -A -o args=` (the
-#                 processes running); default: no ps
+#   P_PS          the processes running, one a line, for a `ps` on PATH
+#                 (`ps -A -o pid=,comm=` and `ps -A -o pid=,args=`): each
+#                 its arguments, separated by "|" (argv[0] may hold
+#                 spaces) or, without a "|", by spaces; default: no ps
+#   P_PS_STYLE    macos (default): comm is argv[0]; linux: comm is its
+#                 file name and /proc/PID/cmdline (under the case's stand-in
+#                 for /) holds the arguments; bare: comm is the file name
+#                 and there is no /proc
 #   P_XDG_CONFIG_HOME, P_ZDOTDIR  those variables (default: unset)
 run_path_case() {
   name=$1
@@ -380,8 +386,36 @@ run_path_case() {
   if [ -n "${P_PS:-}" ]; then
     ps_dir="$work_dir/$name-ps"
     mkdir -p "$ps_dir"
-    printf '%s\n' "$P_PS" > "$ps_dir/processes"
-    printf '%s\n' '#!/bin/sh' '[ "$*" = "-A -o args=" ] || exit 2' "/bin/cat '$ps_dir/processes'" > "$ps_dir/ps"
+    : > "$ps_dir/comm"
+    : > "$ps_dir/args"
+    case "${P_PS_STYLE:-macos}" in
+      macos|linux|bare) ;;
+      *) fail "invalid P_PS_STYLE for $name" ;;
+    esac
+    pid=100
+    printf '%s\n' "$P_PS" | while IFS= read -r process; do
+      pid=$((pid + 1))
+      case "$process" in
+        *'|'*) argv0=${process%%|*} separator='|' ;;
+        *) argv0=${process%% *} separator=' ' ;;
+      esac
+      case "${P_PS_STYLE:-macos}" in
+        macos) comm=$argv0 ;;
+        *) comm=${argv0##*/} ;;
+      esac
+      printf '%5d %s\n' "$pid" "$comm" >> "$ps_dir/comm"
+      printf '%5d %s\n' "$pid" "$(printf '%s' "$process" | tr '|' ' ')" >> "$ps_dir/args"
+      if [ "${P_PS_STYLE:-macos}" = linux ]; then
+        mkdir -p "$case_root/proc/$pid"
+        { printf '%s' "$process" | tr "$separator" '\000'; printf '\000'; } > "$case_root/proc/$pid/cmdline"
+      fi
+    done
+    {
+      printf '%s\n' '#!/bin/sh' 'case "$*" in'
+      printf '%s\n' "  '-A -o pid=,comm=') /bin/cat '$ps_dir/comm' ;;"
+      printf '%s\n' "  '-A -o pid=,args=') /bin/cat '$ps_dir/args' ;;"
+      printf '%s\n' '  *) exit 2 ;;' 'esac'
+    } > "$ps_dir/ps"
     chmod 0755 "$ps_dir/ps"
     case_path="$case_path:$ps_dir"
   fi
@@ -673,7 +707,7 @@ path_reinstall_twice() {
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
   P_GITHUB_PATH=no P_PODMAN=no P_PODMAN_AT='' P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
-  P_EXISTING='' P_PS=''
+  P_EXISTING='' P_PS='' P_PS_STYLE=macos
 }
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
@@ -1624,19 +1658,21 @@ path_expect_text "an Axocoatl daemon is running (axocoatl dev); it runs the bina
 path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service restart')"
 
 # A pre-release where this one goes is named, and daemons started by a
-# relative path (from the folder the binary is in, or a source build's) are
-# found. Which copy they run depends on the folder they were started in,
-# which ps does not show, and the note says so.
+# relative path (from the folder the binary is in, or a source build's, in
+# a folder whose name holds a space) are found. Which copy they run depends
+# on the folder they were started in, which ps does not show, and the note
+# says so.
 reset_path_case
 P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$current_version-rc.1" \
   P_PS="./axocoatl dev
-target/debug/axocoatl serve --config /home/a/config.yaml"
+target/debug/axocoatl serve --config /home/a/config.yaml
+My Projects/axocoatl/target/debug/axocoatl|dev"
 run_path_case prerelease-with-relative-daemons
 path_expect_status 0
 path_expect_text "replacing Axocoatl $current_version-rc.1 at $case_system/axocoatl"
 path_refuse_text 'upgrading from'
 path_refuse_text 'going back'
-for daemon in './axocoatl dev' 'target/debug/axocoatl serve'; do
+for daemon in './axocoatl dev' 'target/debug/axocoatl serve' 'My Projects/axocoatl/target/debug/axocoatl dev'; do
   path_expect_text "an Axocoatl daemon runs a copy named by a path relative to the folder it was started in ($daemon); it keeps running the binary it started from, and this install changes it only if that copy is $case_system/axocoatl. To run v$current_version, stop it and start $case_system/axocoatl"
 done
 path_refuse_text 'another copy'
@@ -1651,22 +1687,50 @@ path_expect_text "replacing Axocoatl $previous_minor-rc.2 at $case_system/axocoa
 path_expect_text "upgrading from Axocoatl $previous_minor-rc.2: before Axocoatl starts again, back up its data"
 
 # Other programs and other axocoatl commands are not daemons, nor is a
-# program given a path to axocoatl, and a file that does not report a
-# version is not named.
-reset_path_case
-P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="unknown build" \
-  P_PS="/opt/tools/axocoatl-helper serve
+# program given a path to axocoatl, nor an axocoatl command whose argument
+# names one, and a file that does not report a version is not named.
+for style in macos linux bare; do
+  reset_path_case
+  P_PS_STYLE=$style P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="unknown build" \
+    P_PS="/opt/tools/axocoatl-helper serve
 /usr/local/bin/axocoatl run fix
 vim axocoatl serve
 vim x/axocoatl serve
 less ./axocoatl dev
 /usr/bin/vim /x/axocoatl serve"
-run_path_case no-daemon-running
-path_expect_status 0
-path_refuse_text 'replacing Axocoatl'
-path_refuse_text 'upgrading from'
-path_refuse_text 'daemon is running'
-path_refuse_text 'daemon runs'
+  [ "$style" = bare ] || P_PS="$P_PS
+/usr/local/bin/axocoatl|session|send|fix ./axocoatl dev now
+axocoatl|session|send|serve the docs"
+  run_path_case "no-daemon-running-$style"
+  path_expect_status 0
+  path_refuse_text 'replacing Axocoatl'
+  path_refuse_text 'upgrading from'
+  path_refuse_text 'daemon is running'
+  path_refuse_text 'daemon runs'
+done
+
+# On Linux, where ps's comm is the program's name, /proc/PID/cmdline says
+# where its path ends: a relative path with a space is found, and so is an
+# absolute one. Without /proc, an absolute path is the words up to
+# /axocoatl and a relative one is one word.
+for style in linux bare; do
+  reset_path_case
+  P_PS_STYLE=$style P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$current_version" \
+    P_PS="$work_dir/daemons-on-$style-system/axocoatl|serve|--config|/x/config.yaml
+/home/a b/src/axocoatl/target/debug/axocoatl|dev
+./axocoatl|dev
+My Projects/axocoatl/target/debug/axocoatl|dev"
+  run_path_case "daemons-on-$style"
+  path_expect_status 0
+  path_expect_text "an Axocoatl daemon is running ($case_system/axocoatl serve); it runs the binary it started from until it restarts"
+  path_expect_text "an Axocoatl daemon runs another copy (/home/a b/src/axocoatl/target/debug/axocoatl dev); this install does not change it"
+  path_expect_text "an Axocoatl daemon runs a copy named by a path relative to the folder it was started in (./axocoatl dev)"
+  if [ "$style" = linux ]; then
+    path_expect_text "an Axocoatl daemon runs a copy named by a path relative to the folder it was started in (My Projects/axocoatl/target/debug/axocoatl dev)"
+  else
+    path_refuse_text 'My Projects'
+  fi
+done
 
 # Going back: an older release installed over a newer one is not called an
 # upgrade, and needs no backup to return to the newer one. The copy is in a
@@ -1674,7 +1738,7 @@ path_refuse_text 'daemon runs'
 next_minor="$(printf '%s' "$current_version" | awk -F. '{print $1 "." ($2 + 1) ".0"}')"
 reset_path_case
 P_HOME_NAME='home dir' P_ON_PATH=yes P_EXISTING="$next_minor" \
-  P_PS="$work_dir/downgrade-with-a-daemon-in-a-folder-with-a-space/home dir/.local/bin/axocoatl serve --config /x/config.yaml"
+  P_PS="$work_dir/downgrade-with-a-daemon-in-a-folder-with-a-space/home dir/.local/bin/axocoatl|serve|--config|/x/config.yaml"
 run_path_case downgrade-with-a-daemon-in-a-folder-with-a-space
 path_expect_status 0
 path_expect_text "replacing Axocoatl $next_minor at $case_dest/axocoatl"

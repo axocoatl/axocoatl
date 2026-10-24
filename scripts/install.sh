@@ -849,13 +849,58 @@ if [ -x "${dest}/${BIN}" ]; then
   printf '%s\n' "$previous" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
     || previous=""
 fi
-# A daemon is `axocoatl serve` or `axocoatl dev` run by name or by a path.
-# An absolute path may hold spaces (a home folder's name can): it is words
-# up to `/axocoatl`, none of them an option or another absolute path. A
-# relative path (./axocoatl, target/debug/axocoatl) is one word.
-daemons="$(ps -A -o args= 2>/dev/null | awk -v bin="$BIN" '
-  BEGIN { daemon = "^((/[^ ]*( [^ /-][^ ]*)*)/|[^ /-][^ ]*/)?" bin " (serve|dev) " }
-  match($0 " ", daemon) { print substr($0 " ", RSTART, RLENGTH - 1) }
+# A daemon is a process of a program named axocoatl started as `axocoatl
+# serve` or `axocoatl dev`, by name or by a path, absolute or relative, which
+# may hold spaces (a home folder's name can). Where the path ends: on macOS,
+# ps's comm is the path the program was started by (its argv[0]), which its
+# command line begins with; on Linux, comm is the program's name and
+# /proc/PID/cmdline keeps each argument apart. Elsewhere the path is taken
+# to be the words up to `/axocoatl`, none of them an option or another
+# absolute path, or one relative word. Another program given a path to
+# axocoatl (vim x/axocoatl serve) is never one.
+daemons="$(awk -v bin="$BIN" -v proc="${root_dir}/proc" '
+  function daemon(path, command) {
+    if (command == "serve" || command == "dev") print path " " command
+  }
+  # Take the pid off a `ps -o pid=,...=` line: `pid` is the pid and `line`
+  # the rest.
+  function take_pid() {
+    pid = line
+    sub(/^ *[0-9]+ ?/, "", line)
+    sub(/^ */, "", pid)
+    sub(/ .*/, "", pid)
+  }
+  BEGIN {
+    list = "ps -A -o pid=,comm= 2>/dev/null"
+    while ((list | getline line) > 0) {
+      take_pid()
+      n = split(line, parts, "/")
+      if (parts[n] == bin) program[pid] = line
+    }
+    close(list)
+    list = "ps -A -o pid=,args= 2>/dev/null"
+    while ((list | getline line) > 0) {
+      take_pid()
+      if (!(pid in program)) continue
+      path = program[pid]
+      if (index(line " ", path " ") == 1) {
+        split(substr(line, length(path) + 2), words, " ")
+        daemon(path, words[1])
+        continue
+      }
+      cmdline = "tr \"\\000\" \"\\n\" < \"" proc "/" pid "/cmdline\" 2>/dev/null"
+      got = (cmdline | getline argv0) > 0
+      if (got && (cmdline | getline argv1) <= 0) argv1 = ""
+      close(cmdline)
+      if (got) {
+        n = split(argv0, parts, "/")
+        if (parts[n] == bin) daemon(argv0, argv1)
+      } else if (match(line " ", "^((/[^ ]*( [^ /-][^ ]*)*)/|[^ /-][^ ]*/)?" bin " (serve|dev) ")) {
+        print substr(line " ", RSTART, RLENGTH - 1)
+      }
+    }
+    close(list)
+  }
 ' || true)"
 [ -z "$previous" ] || info "replacing Axocoatl ${previous} at ${dest}/${BIN}"
 

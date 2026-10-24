@@ -32,7 +32,6 @@ mod money;
 mod observation;
 #[path = "native_openrouter/stream.rs"]
 mod stream;
-use observation::CallShape;
 pub use observation::{
     catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
     CatalogCallFloor, NativeOpenRouterEfforts, NativeOpenRouterEndpoints,
@@ -40,6 +39,7 @@ pub use observation::{
     UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
     STREAMED_BYTES_PER_RESPONSE_TOKEN,
 };
+use observation::{CallShape, Retained};
 
 const PROVIDER: &str = "openrouter";
 /// The exact reasoning blocks of a tool-calling response, as OpenRouter
@@ -205,21 +205,11 @@ impl NativeOpenRouterProvider {
             &self.observation.model,
         )
         .await?;
-        if endpoints
-            .profiles
-            .iter()
-            .any(|profile| self.observation.same_contract(profile))
-        {
-            return Ok(());
-        }
-        // The endpoint is the same, but OpenRouter reports it unavailable
-        // or degraded right now: said as that, not as a changed contract.
-        if let Some(down) = endpoints
-            .unavailable
-            .iter()
-            .find(|endpoint| self.observation.same_contract(&endpoint.profile))
-        {
-            return Err(ProviderError::ApiError {
+        match self.observation.compare(&endpoints) {
+            Retained::Serves => Ok(()),
+            // The endpoint is the same, but OpenRouter reports it unavailable
+            // or degraded right now: said as that, not as a changed contract.
+            Retained::Unavailable(down) => Err(ProviderError::ApiError {
                 provider: PROVIDER.into(),
                 status: 503,
                 message: format!(
@@ -229,12 +219,16 @@ impl NativeOpenRouterProvider {
                     self.observation.model,
                     down.describe()
                 ),
-            });
+            }),
+            Retained::NoEndpoint(refusal) => Err(refusal),
+            // Applying the Team again observes the model's endpoints again
+            // (`contract_change`), and the Agent continues on one of them.
+            Retained::Changed(change) => Err(invalid(format!(
+                "{change}; review Team & budget again: applying the Team observes {}'s \
+                 endpoints again",
+                self.observation.model
+            ))),
         }
-        if let Some(refusal) = endpoints.refusal(&self.observation.model) {
-            return Err(refusal);
-        }
-        Err(invalid("the retained OpenRouter endpoint, capabilities, price ceiling or token limits changed; review a new profile"))
     }
     /// The exact request body and its bounds. Every byte of the body counts
     /// toward the prompt bound: the provider renders the messages and tools,

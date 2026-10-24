@@ -23837,6 +23837,10 @@ mod native_session_test_support;
 #[path = "bootstrap_retained_profile_tests.rs"]
 mod retained_profile_tests;
 
+#[cfg(all(test, unix))]
+#[path = "bootstrap_expired_budget_tests.rs"]
+mod expired_budget_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

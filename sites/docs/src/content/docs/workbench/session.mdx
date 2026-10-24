@@ -29,8 +29,9 @@ local Ollama model, an expiry 24 hours away); change any of them, preview the te
 and **Apply** it. Preview refuses a token limit that cannot pay for a model call
 and the one after it, and says how many tokens the Agent needs. This creates a
 durable Session configuration for future turns. Once an applied team's budget expiry
-has passed, **Team & budget** says so and **Edit** fills in a new one, 24 hours from
-then, for you to review in Preview before **Apply**.
+has passed, a request says so before any model is asked, **Team & budget** says when it
+expired, and **Edit** fills in a new one, 24 hours from when you select it, for you to
+review in Preview before **Apply**; the Agents keep their conversations.
 [Provider eligibility](/configure/providers/) is checked during that review.
 Existing legacy data roots keep compatibility execution until explicitly upgraded.
 

@@ -192,18 +192,24 @@ Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
 7. Start the daemon: `axocoatl service start`, or `axocoatl dev`. If the binary is at
    another path than before, run `axocoatl service install` first.
 8. In each Session you continue, open **Team & budget**, select **Edit**, then
-   **Preview** and **Apply**. A Team reviewed on Ollama 0.20.6 says "Ollama was upgraded
-   from 0.20.6 to 0.40.6; review Team & budget again" until then, and so does each helper
-   an Agent delegates to. You type nothing:
-   - A budget expires 24 hours after it was approved unless you chose another time, so
-     the Team's has usually passed. Team & budget says so, and **Edit** fills in a new
-     expiry, 24 hours from then, which Preview shows before **Apply** approves it. The
-     limits stay as they were.
-   - Apply observes each of the Team's Ollama Agents and their Ollama helpers again on
-     the Ollama that runs now. Preview names each one with the reason ("this Team was
-     reviewed on Ollama 0.20.6, which native Sessions no longer accept") and shows each
-     such Agent as replaced, with a new conversation, since Ollama 0.40 runs the model in
-     another engine; a helper starts a new conversation each time it is given work.
+   **Preview** and **Apply**; you type nothing. Until then, a request to the Session is
+   refused before any model is asked:
+   - When the Team's budget expiry has passed, as it usually has, the request says
+     "NAME's budget expired before this request could start; open Team & budget and
+     select Edit: it fills in a new expiry. Then Preview and Apply". Team & budget says
+     when it expired, and **Edit** fills in a new expiry, 24 hours from when you select
+     it, which Preview shows beside the approved one before **Apply** approves it. The
+     limits stay as they were. Team & budget suggests an expiry 24 hours ahead when it
+     fills in an Agent, unless you chose another time; a run's Team, continued in the
+     workbench, expires when the run's `wall_clock` ends (60 minutes for `fix`).
+   - Otherwise it says "Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget
+     again", and so does each helper an Agent delegates to.
+
+   Apply observes each of the Team's Ollama Agents and their Ollama helpers again on the
+   Ollama that runs now. Preview names each one with the reason ("this Team was reviewed
+   on Ollama 0.20.6, which native Sessions no longer accept") and shows each such Agent
+   as replaced, with a new conversation, since Ollama 0.40 runs the model in another
+   engine; a helper starts a new conversation each time it is given work.
 
    `axocoatl run` needs nothing: every run applies its loadout's team in a new Session.
 

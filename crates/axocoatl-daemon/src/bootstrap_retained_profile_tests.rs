@@ -1,12 +1,13 @@
-//! A Team's retained Ollama profile that can no longer serve a turn for a
+//! A Team's retained provider profile that can no longer serve a turn for a
 //! reason that observing the model again resolves: `providers.ollama.base_url`
-//! names another Ollama than the one the Team was reviewed with, or the model
-//! was pulled again (another digest). Each turn says which, and to review
-//! Team & budget again. Applied again with nothing changed, the Team observes
-//! the model again, Preview says why (the Agent starts a new conversation),
-//! and the next turn runs; applied once more, the new profile is kept. These
-//! refusals used to repeat after every unchanged Apply. (A profile recorded on
-//! Ollama 0.20.6 is the third such reason: `upgrade_from_1_4_tests`.)
+//! names another Ollama than the one the Team was reviewed with, the Ollama
+//! model was pulled again (another digest), or the OpenRouter endpoint lists
+//! other terms (a price). Each turn says which, and to review Team & budget
+//! again. Applied again with nothing changed, the Team observes the model
+//! again, Preview says why (the Agent starts a new conversation), and the
+//! next turn runs; applied once more, the new profile is kept. These refusals
+//! used to repeat after every unchanged Apply. (A profile recorded on Ollama
+//! 0.20.6 is another such reason: `upgrade_from_1_4_tests`.)
 //!
 //! Each daemon runs in a child process (bootstrap reads `AXOCOATL_DATA_DIR`
 //! from the process environment) with a fake Podman, and the Session's Ready
@@ -25,7 +26,9 @@ use wiremock::MockServer;
 
 const CHILD: &str = "AXOCOATL_RETAINED_PROFILE_TEST_CHILD";
 const TEST: &str = "bootstrap::retained_profile_tests::a_changed_endpoint_or_a_model_pulled_again_is_observed_again_on_apply";
+const OPENROUTER_TEST: &str = "bootstrap::retained_profile_tests::an_openrouter_endpoint_whose_terms_changed_is_observed_again_on_apply";
 const MODEL: &str = "retained-model:latest";
+const OPENROUTER_MODEL: &str = "fixture/coder";
 
 /// How many times the model was loaded (each observation loads it once).
 async fn loads(server: &MockServer) -> usize {
@@ -244,4 +247,159 @@ async fn a_changed_endpoint_or_a_model_pulled_again_is_observed_again_on_apply()
     ];
     succeeded(&run_child(TEST, CHILD, "first", &root, &data, &envs).await);
     succeeded(&run_child(TEST, CHILD, "restarted", &root, &data, &envs).await);
+}
+
+/// `server`'s OpenRouter: the catalog row of [`OPENROUTER_MODEL`], its one
+/// endpoint at `prompt` dollars per input token, and inference that answers
+/// every request "Done.".
+async fn serve_openrouter(server: &MockServer, prompt: &str) {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": [{
+                "id": OPENROUTER_MODEL,
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                "supported_parameters": ["max_tokens", "tools"]
+            }]})),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/models/{OPENROUTER_MODEL}/endpoints")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                "id": OPENROUTER_MODEL,
+                "endpoints": [{
+                    "model_id": OPENROUTER_MODEL, "provider_name": "FiniteProvider",
+                    "tag": "finite/exact", "context_length": 32768, "max_completion_tokens": 4096,
+                    "supported_parameters": ["max_tokens", "tools"],
+                    "pricing": {"prompt": prompt, "completion": "0.000002"},
+                    "status": 0, "supports_implicit_caching": false
+                }]
+            }})),
+        )
+        .mount(server)
+        .await;
+    let delta = serde_json::json!({"id": "gen-fixture", "model": OPENROUTER_MODEL,
+        "provider": "FiniteProvider", "choices": [{"index": 0,
+        "delta": {"content": "Done."}, "finish_reason": "stop"}]});
+    let usage = serde_json::json!({"id": "gen-fixture", "model": OPENROUTER_MODEL,
+        "provider": "FiniteProvider", "choices": [], "usage": {"prompt_tokens": 40,
+        "completion_tokens": 2, "total_tokens": 42, "cost": 0.000044, "is_byok": false}});
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("data: {delta}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+            "text/event-stream",
+        ))
+        .mount(server)
+        .await;
+}
+
+/// How many inference requests `server` received.
+async fn inferences(server: &MockServer) -> usize {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/chat/completions")
+        .count()
+}
+
+async fn openrouter_body() {
+    log_warnings_to_stderr();
+    // A stand-in for OpenRouter, where the daemon observes its endpoints.
+    let server = MockServer::start().await;
+    serve_openrouter(&server, "0.000001").await;
+    crate::session_dispatch::use_openrouter_stand_in(server.uri());
+    let config = format!(
+        r#"
+agents:
+  - id: lead
+    name: "Lead"
+    provider: openrouter
+    model: "{OPENROUTER_MODEL}"
+    role: autonomous
+    tools: []
+    sampling:
+      max_tokens: 1024
+providers:
+  openrouter_billing: credits
+  openrouter:
+    api_key: fixture-openrouter-key
+sandbox:
+  backend: podman
+  network: bridge
+consolidation:
+  enabled: false
+"#
+    );
+    let config =
+        axocoatl_config::parse_config(&config, std::path::Path::new("openrouter.yaml")).unwrap();
+    let repo =
+        std::path::PathBuf::from(std::env::var_os("AXOCOATL_RETAINED_PROFILE_REPO").unwrap());
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    let session = native_session_with_team(&daemon, &repo, "OpenRouter", "first-team").await;
+    ready(&daemon, &session).await;
+    completes(&daemon, &session.id).await;
+
+    // OpenRouter's endpoint now lists another input price: the turn says
+    // so, and nothing is sent to the model.
+    server.reset().await;
+    serve_openrouter(&server, "0.000002").await;
+    let changed = format!(
+        "OpenRouter lists other terms for {OPENROUTER_MODEL}'s endpoint finite/exact than when \
+         this Team was reviewed (input price $1/M, now $2/M)"
+    );
+    let refused = send(&daemon, &session.id)
+        .await
+        .expect_err("the endpoint's terms changed")
+        .to_string();
+    assert!(
+        refused.contains(&format!(
+            "{changed}; review Team & budget again: applying the Team observes \
+             {OPENROUTER_MODEL}'s endpoints again"
+        )),
+        "{refused}"
+    );
+    assert_eq!(
+        inferences(&server).await,
+        0,
+        "nothing was sent to the model"
+    );
+    // Applied again unchanged, the endpoints are observed again, Preview
+    // says why, and the next turn runs at the price listed now.
+    let preview = apply_unchanged(&daemon, &session.id, "endpoint-terms-changed").await;
+    assert_eq!(
+        reviewed(&preview),
+        (("replaced", "new conversation"), vec![changed.as_str()])
+    );
+    completes(&daemon, &session.id).await;
+    assert_eq!(inferences(&server).await, 1);
+    // Applied once more, the new profile is kept.
+    let preview = apply_unchanged(&daemon, &session.id, "kept").await;
+    assert_eq!(reviewed(&preview), (("retained", "preserved"), vec![]));
+    completes(&daemon, &session.id).await;
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_openrouter_endpoint_whose_terms_changed_is_observed_again_on_apply() {
+    if std::env::var_os(CHILD).is_some() {
+        openrouter_body().await;
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let data = root.join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let repo = root.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# repo\n").unwrap();
+    let envs = [("AXOCOATL_RETAINED_PROFILE_REPO", repo.as_os_str())];
+    succeeded(&run_child(OPENROUTER_TEST, CHILD, "openrouter", &root, &data, &envs).await);
 }

@@ -9,8 +9,8 @@ use axocoatl_session::control_authority::GrantLimits;
 use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 
 /// A native Session on `lead` in the Workspace at `repo`, with its Team
-/// applied (the suggested limits at no cost, expiring in the suggested
-/// lifetime) as `command`.
+/// applied (the suggested limits, at no cost for a free provider's model,
+/// expiring in the suggested lifetime) as `command`.
 pub(super) async fn native_session_with_team(
     daemon: &AxocoatlDaemon,
     repo: &std::path::Path,
@@ -59,8 +59,13 @@ pub(super) async fn native_session_with_team(
         + budget.expires_in_ms;
     let mut slots = view.slots.clone();
     for slot in &mut slots {
+        let free = budget.free_providers.contains(&slot.provider.as_str());
         slot.limits = Some(GrantLimits {
-            cost_microunits: 0,
+            cost_microunits: if free {
+                0
+            } else {
+                budget.agent.cost_microunits
+            },
             ..budget.agent.clone()
         });
         slot.expires_at_ms = Some(expires_at_ms);

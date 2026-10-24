@@ -490,8 +490,10 @@ pub struct SessionTeamChange {
 }
 /// An Agent, or a helper it delegates to, kept as it was whose model this
 /// Apply observes again, and why: its retained profile can no longer serve
-/// (recorded on Ollama 0.20.6, at another endpoint, or of a model that
-/// changed since). An Agent observed again starts a new conversation.
+/// (an Ollama profile recorded on Ollama 0.20.6, at another endpoint, or of a
+/// model that changed since; an OpenRouter endpoint that lists other terms
+/// or can no longer be used). An Agent observed again starts a new
+/// conversation.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct SessionTeamObservedAgain {
     pub slot_id: String,
@@ -1144,9 +1146,10 @@ impl AxocoatlDaemon {
     /// remedy its turns name ("review Team & budget again"): an Ollama
     /// profile recorded on Ollama 0.20.6 (by Axocoatl 1.4), at another
     /// endpoint than `providers.ollama.base_url` names now, or of a model
-    /// pulled again or with other capabilities since. Applying the Team
-    /// observes such an Agent or helper again even when nothing else about it
-    /// changed, and Preview says why.
+    /// pulled again or with other capabilities since; an OpenRouter profile
+    /// whose endpoint lists other terms or can no longer be used. Applying
+    /// the Team observes such an Agent or helper again even when nothing else
+    /// about it changed, and Preview says why.
     async fn retained_profile_observation(
         &self,
         token: &super::session_dispatch::SessionTeamToken,

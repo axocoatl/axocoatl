@@ -311,19 +311,44 @@ impl NativeCallReservation {
 /// a version native Sessions refuse now (every profile Axocoatl 1.4 or
 /// earlier recorded, on Ollama 0.20.6), at another endpoint than
 /// `providers.ollama.base_url` names now, or of a model that changed on its
-/// Ollama since (pulled again, other capabilities). Applying the Team
-/// observes such an Agent or helper again even when nothing else about it
-/// changed, and Preview shows the reason. `None` when the profile still
-/// serves, and when its Ollama cannot say whether the model changed: a turn
-/// then names what is wrong.
+/// Ollama since (pulled again, other capabilities); an OpenRouter profile
+/// whose endpoint lists other terms or can no longer be used while another
+/// endpoint serves the model. Applying the Team observes such an Agent or
+/// helper again even when nothing else about it changed, and Preview shows
+/// the reason. `None` when the profile still serves, and when its provider
+/// cannot say whether anything changed, or has not said so within
+/// [`RETAINED_PROFILE_CHECK`]: a turn then names what is wrong.
 pub(crate) async fn retained_profile_observation(
     configuration: &str,
     credentials: &NativeProviderCredentials,
 ) -> Option<String> {
-    let Ok(NativeRuntimeConfiguration::Ollama(runtime)) =
-        serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
-    else {
-        return None;
+    retained_profile_observation_within(configuration, credentials, RETAINED_PROFILE_CHECK).await
+}
+
+/// How long Team & budget waits for a provider to say whether a retained
+/// profile's model changed, so that Preview and Apply never wait for a
+/// provider that does not answer.
+const RETAINED_PROFILE_CHECK: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// [`retained_profile_observation`], waiting at most `limit` for the
+/// provider.
+async fn retained_profile_observation_within(
+    configuration: &str,
+    credentials: &NativeProviderCredentials,
+    limit: std::time::Duration,
+) -> Option<String> {
+    let runtime = match serde_json::from_str::<NativeRuntimeConfiguration>(configuration) {
+        Ok(NativeRuntimeConfiguration::Ollama(runtime)) => runtime,
+        Ok(NativeRuntimeConfiguration::OpenRouter(runtime)) => {
+            let key = credentials.openrouter_key().ok()?;
+            let change = runtime.openrouter_observation.contract_change(key);
+            return tokio::time::timeout(limit, change)
+                .await
+                .ok()?
+                .ok()
+                .flatten();
+        }
+        Err(_) => return None,
     };
     let observation = &runtime.observation;
     if observation.refused_when_retained() {
@@ -345,7 +370,11 @@ pub(crate) async fn retained_profile_observation(
     {
         return Some(endpoint_change(configured, &observation.base_url));
     }
-    observation.model_change().await.ok().flatten()
+    tokio::time::timeout(limit, observation.model_change())
+        .await
+        .ok()?
+        .ok()
+        .flatten()
 }
 
 /// A value from a retained profile as a message shows it.

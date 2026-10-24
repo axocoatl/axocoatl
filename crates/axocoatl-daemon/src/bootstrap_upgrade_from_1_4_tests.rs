@@ -2,13 +2,16 @@
 //! it (`tests/fixtures/data-root-1.4.0`, which the released 1.4.0 binary
 //! made with Ollama 0.20.6; its README says how). This daemon starts on a
 //! copy of it whose Sessions find their Workspace folder, as after an
-//! upgrade in place, and keeps every Session, turn and run. A Team reviewed
-//! on Ollama 0.20.6 refuses its turns and its helpers' delegated work with
-//! the 0.20.6 message until it is applied again. Applied again the way Team
-//! and budget's Edit drafts it (nothing changed but a new budget expiry,
-//! since the one 1.4.0 approved has passed), its Agents and the helpers they
-//! delegate to are observed again on the Ollama that runs now, Preview says
-//! why, and they connect; applied once more, they are kept as they are.
+//! upgrade in place, and keeps every Session, turn and run. Each profile of
+//! a Team reviewed on Ollama 0.20.6, its Agents' and the helpers they
+//! delegate to, refuses to connect with the 0.20.6 message (the step at which
+//! a turn or a delegated helper connects its model) until the Team is
+//! applied again; a request whose budget expiry has passed is refused before
+//! that step (`expired_budget_tests`). Applied again the way Team and
+//! budget's Edit drafts it (nothing changed but a new budget expiry where the
+//! approved one has passed), its Agents and helpers are observed again on
+//! the Ollama that runs now, Preview says why, and they connect; applied once
+//! more, they are kept as they are.
 //!
 //! The daemon runs in a child process (bootstrap reads `AXOCOATL_DATA_DIR`
 //! from the process environment) with a fake Podman, so no container starts.
@@ -479,7 +482,7 @@ fn make_repository(repo: &std::path::Path) {
     )
     .unwrap();
     for args in [
-        &["init", "--quiet"][..],
+        &["init", "--quiet", "--initial-branch=main"][..],
         &["add", "README.md"],
         &[
             "-c",
