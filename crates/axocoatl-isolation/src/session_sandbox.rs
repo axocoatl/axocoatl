@@ -9058,11 +9058,10 @@ mod tests {
             .join("node_modules");
         let first_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
         let second_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
-        // A failed assertion leaves no container or volume behind.
-        let _leftovers = [
-            SessionLeftovers(first_id.clone()),
-            SessionLeftovers(second_id.clone()),
-        ];
+        // A failed assertion still removes both Sessions' containers and
+        // dependency volumes.
+        let _first_leftovers = SessionLeftovers(first_id.clone());
+        let _second_leftovers = SessionLeftovers(second_id.clone());
         let start = |id: String| {
             let path = directory.path().to_path_buf();
             async move {
