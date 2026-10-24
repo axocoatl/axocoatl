@@ -1105,6 +1105,46 @@ impl AxocoatlDaemon {
         )
     }
 
+    /// The Agent configuration `definition` retains.
+    fn retained_agent_config(
+        &self,
+        token: &super::session_dispatch::SessionTeamToken,
+        definition: &DefinitionSnapshotRef,
+    ) -> Result<AgentConfig, DaemonError> {
+        self.session_dispatch_lifecycles
+            .with_session_team_stores(token, |_, content, _| {
+                let ActivationEvidenceContent::Definition { configuration, .. } = &content
+                    .resolve_activation_evidence(&definition.snapshot)
+                    .map_err(team_error)?
+                else {
+                    return Err(team_error("Retained Agent definition is missing"));
+                };
+                serde_json::from_str::<AgentConfig>(configuration).map_err(team_error)
+            })
+    }
+
+    /// Whether the retained provider profile of `definition` can no longer
+    /// serve a turn or delegated work: an Ollama profile Axocoatl 1.4
+    /// recorded on Ollama 0.20.6, whose turns say to review Team & budget
+    /// again. Applying the Team observes such an Agent or helper again even
+    /// when nothing else about it changed.
+    fn retained_profile_refused(
+        &self,
+        token: &super::session_dispatch::SessionTeamToken,
+        definition: &DefinitionSnapshotRef,
+    ) -> Result<bool, DaemonError> {
+        self.session_dispatch_lifecycles
+            .with_session_team_stores(token, |canonical, content, _| {
+                Ok(matches!(
+                    content.resolve_provider_profile(canonical, &definition.snapshot),
+                    Ok(Some((_, profile)))
+                        if crate::session_dispatch::retained_profile_refused(
+                            profile.configuration()
+                        )
+                ))
+            })
+    }
+
     async fn prepare_coordinator_approvals(
         &self,
         session_id: &str,
@@ -1145,18 +1185,7 @@ impl AxocoatlDaemon {
             } else {
                 let prior =
                     prior.ok_or_else(|| team_error("New Agent needs an explicit template"))?;
-                self.session_dispatch_lifecycles.with_session_team_stores(
-                    token,
-                    |_, content, _| {
-                        let ActivationEvidenceContent::Definition { configuration, .. } = &content
-                            .resolve_activation_evidence(&prior.definition.snapshot)
-                            .map_err(team_error)?
-                        else {
-                            return Err(team_error("Retained Agent definition is missing"));
-                        };
-                        serde_json::from_str::<AgentConfig>(configuration).map_err(team_error)
-                    },
-                )?
+                self.retained_agent_config(token, &prior.definition)?
             };
             let Some(proposal) = &slot.delegation else {
                 if parent_config.role == AgentRole::Coordinator {
@@ -1244,20 +1273,37 @@ impl AxocoatlDaemon {
                 } else {
                     None
                 };
+                // A helper kept as it was keeps its definition, unless its
+                // retained profile can no longer serve delegated work (an
+                // Ollama profile Axocoatl 1.4 recorded on Ollama 0.20.6): the
+                // same definition is then prepared again, which observes its
+                // model on the Ollama that runs now.
+                let (preserved, observe_again) = match preserved {
+                    Some(definition) if self.retained_profile_refused(token, &definition)? => {
+                        (None, Some(definition))
+                    }
+                    preserved => (preserved, None),
+                };
                 let definition = if let Some(definition) = preserved {
                     definition
                 } else {
-                    let mut config = self
-                        .config
-                        .agents
-                        .iter()
-                        .find(|agent| agent.id == worker.template_id)
-                        .ok_or_else(|| team_error("Selected Worker template is missing"))?
-                        .to_core();
+                    let mut config = match &observe_again {
+                        Some(definition) => self.retained_agent_config(token, definition)?,
+                        None => {
+                            let mut config = self
+                                .config
+                                .agents
+                                .iter()
+                                .find(|agent| agent.id == worker.template_id)
+                                .ok_or_else(|| team_error("Selected Worker template is missing"))?
+                                .to_core();
+                            config.sampling.max_tokens = worker.max_output_tokens;
+                            config
+                        }
+                    };
                     if config.role != AgentRole::Worker {
                         return Err(team_error("Helpers must use an actual Worker template"));
                     }
-                    config.sampling.max_tokens = worker.max_output_tokens;
                     let identity = digest(&(session_id, &edit.command_id, &slot.slot_id, worker))?;
                     config.id = AgentId::new(format!("approved-worker-{identity}"));
                     self.prepare_native_session_team_definition(
@@ -1700,6 +1746,18 @@ impl AxocoatlDaemon {
                 && old_config.as_ref().is_some_and(|old| {
                     serde_json::to_value(old).ok() == serde_json::to_value(&config).ok()
                 });
+            // A slot kept as it was keeps its retained profile, unless that
+            // profile can no longer serve a turn (an Ollama profile Axocoatl
+            // 1.4 recorded on Ollama 0.20.6): its turns ask for this review,
+            // so it is observed again, as a changed Agent is, and starts a
+            // new conversation.
+            let refused_profile = match prior {
+                Some(slot) if unchanged => {
+                    self.retained_profile_refused(&token, &slot.definition)?
+                }
+                _ => false,
+            };
+            let unchanged = unchanged && !refused_profile;
             let identity = digest(&(session_id, &edit.command_id, &slot_id))?;
             let conversation_id = if unchanged {
                 prior
@@ -2164,6 +2222,80 @@ impl AxocoatlDaemon {
         Err(team_error(
             "the Session's team kept changing while it was read",
         ))
+    }
+}
+
+#[cfg(test)]
+impl AxocoatlDaemon {
+    /// Each helper the current Team of `session_id` approved, by Worker
+    /// template, with its definition, the Ollama version its retained
+    /// provider profile recorded, and what connecting that profile with the
+    /// configured credentials gives, as the helper's activation connects it
+    /// when the lead delegates to it.
+    pub(crate) async fn connect_approved_helpers(
+        &self,
+        session_id: &str,
+    ) -> Vec<(String, DefinitionSnapshotRef, String, Result<(), String>)> {
+        let token = self
+            .session_dispatch_lifecycles
+            .session_team_token(session_id)
+            .unwrap();
+        let helpers = self
+            .session_dispatch_lifecycles
+            .with_session_team_stores(&token, |canonical, content, _| {
+                let store = SessionTeamStore::open_owned(
+                    canonical
+                        .component_namespace(ExecutionComponent::SessionTeam)
+                        .map_err(team_error)?,
+                    canonical,
+                    content,
+                    None,
+                )
+                .map_err(team_error)?;
+                let current = store
+                    .current()
+                    .map_err(team_error)?
+                    .ok_or_else(|| team_error("no Team is applied"))?;
+                let mut helpers = Vec::new();
+                for slot in &current.graph.slots {
+                    let Some(approval) = approval_for_slot(content, slot)? else {
+                        continue;
+                    };
+                    for (id, policy) in approval.coordinators {
+                        if id != slot.slot_id.as_str() {
+                            continue;
+                        }
+                        for worker in policy.workers {
+                            let (_, profile) = content
+                                .resolve_provider_profile(canonical, &worker.definition.snapshot)
+                                .map_err(team_error)?
+                                .ok_or_else(|| team_error("helper has no provider profile"))?;
+                            helpers.push((
+                                worker.template_id,
+                                worker.definition,
+                                profile.configuration().to_owned(),
+                            ));
+                        }
+                    }
+                }
+                Ok(helpers)
+            })
+            .unwrap();
+        let credentials = self.configured_native_provider_credentials();
+        let mut connected = Vec::new();
+        for (template, definition, configuration) in helpers {
+            let recorded: serde_json::Value = serde_json::from_str(&configuration).unwrap();
+            let version = recorded["observation"]["server_version"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            let result =
+                crate::session_dispatch::connect_retained_profile(&configuration, &credentials)
+                    .await
+                    .map_err(|error| error.to_string());
+            connected.push((template, definition, version, result));
+        }
+        connected
     }
 }
 

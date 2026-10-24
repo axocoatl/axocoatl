@@ -10,8 +10,10 @@
 # either), no machine, a stopped machine, a running one, a rootful one, and
 # Podman 6. A state without Podman or Homebrew runs under sandbox-exec, so
 # the programs the runner has where their installers put them stay unseen.
-# The x86_64 build on an Intel runner gets the Intel answers. Nothing is
-# installed or created. Evidence goes to
+# Then, with the stand-in's machine stopped, `axocoatl dev` and a run: its
+# admission must start the machine (`podman machine start`), as doctor's
+# "starts on first use" says. The x86_64 build on an Intel runner gets the
+# Intel answers. Nothing is installed or created. Evidence goes to
 # <evidence-root>/<version>/<commit>/<label>.json; Tier B is not a required
 # path.
 #
@@ -23,6 +25,7 @@
 #   --evidence-root DIR  default: <repo>/release-evidence
 #   --no-plan            skip `onboard --plan`, which probes whether port 8080
 #                        is free (for a run on a machine whose 8080 is in use)
+#   --port-from N        the first port to try for the daemon (default 8200)
 #
 # Depends on (being built in parallel; see docs/RELEASE_GATE.md):
 #   doctor --json and its Podman findings, and onboard --plan.
@@ -39,7 +42,7 @@ usage() {
   exit 2
 }
 
-tarball='' label='' commit='' evidence_root="$gate_repo/release-evidence" plan=1
+tarball='' label='' commit='' evidence_root="$gate_repo/release-evidence" plan=1 port_from=8200
 while [ $# -gt 0 ]; do
   case "$1" in
     --tarball) tarball=${2:?}; shift ;;
@@ -47,6 +50,7 @@ while [ $# -gt 0 ]; do
     --commit) commit=${2:?}; shift ;;
     --evidence-root) evidence_root=${2:?}; shift ;;
     --no-plan) plan=0 ;;
+    --port-from) port_from=${2:?}; shift ;;
     -h | --help) usage ;;
     *) gate_die "unknown argument: $1 (see --help)" ;;
   esac
@@ -56,6 +60,7 @@ done
 [ "$(uname -s)" = Darwin ] || gate_die "this is the macOS plumbing gate (Tier B); on Linux use newuser-linux.sh"
 [ "$(id -u)" != 0 ] || gate_die "run the gate as a normal user"
 [ -n "$tarball" ] && [ -f "$tarball" ] || gate_die "--tarball must be the candidate's macOS release archive"
+case "$port_from" in '' | *[!0-9]* | 0*) gate_die "--port-from must be a port number" ;; esac
 tarball=$(CDPATH='' cd -- "$(dirname -- "$tarball")" && pwd)/${tarball##*/}
 for tool in node git curl tar sandbox-exec; do
   command -v "$tool" >/dev/null 2>&1 || gate_die "$tool is required"
@@ -76,12 +81,14 @@ fi
 gate_valid_name "$label" || gate_die "--label must be letters, digits and dashes"
 
 work=$(mktemp -d "${GATE_TMPDIR:-${TMPDIR:-/tmp}}/axo-gate-b.XXXXXX")
-stub_pid=''
+stub_pid='' dev_pid='' admission_home=''
 # shellcheck disable=SC2329 # the EXIT trap runs it
 cleanup() {
+  [ -n "$dev_pid" ] && kill -INT "$dev_pid" 2>/dev/null && wait "$dev_pid" 2>/dev/null
   [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null && wait "$stub_pid" 2>/dev/null
   chmod -R u+w "$work" 2>/dev/null
   rm -rf "$work"
+  [ -n "$admission_home" ] && rm -rf "$admission_home"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -120,7 +127,7 @@ node "$script_dir/stub-model-server.mjs" --port 0 --port-file "$work/stub.port" 
 stub_pid=$!
 for _ in $(seq 1 100); do [ -s "$work/stub.port" ] && break; sleep 0.1; done
 stub_url="http://127.0.0.1:$(cat "$work/stub.port" 2>/dev/null)"
-gate_check "scripted model server" "it did not start; see logs/stub-model-server.log" -- curl -fsS "$stub_url/api/version"
+gate_check "scripted model server" "it did not start; see logs/stub-model-server.log" -- gate_curl -fsS "$stub_url/api/version"
 
 # 3. The README's install command, with /usr/local/bin unwritable: the
 # published installer, except that its /usr/local/bin is a locked
@@ -152,7 +159,7 @@ cp "$script_dir/podman-shim.sh" "$shim/podman"
 chmod 0755 "$shim/podman"
 export PODMAN_SHIM_STATE="$work/podman.state" PODMAN_SHIM_LOG="$work/podman-calls.log"
 : >"$PODMAN_SHIM_LOG"
-port=8200
+port=$port_from
 while (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; do port=$((port + 1)); done
 # PATH as the installer left it (axocoatl on it, as the user was told).
 user_path=$PATH
@@ -177,16 +184,21 @@ hidden_for() {
 # have Homebrew there, so a PATH without them cannot play a Mac that lacks
 # them. sandbox-exec denies reading those files, as on a Mac that never
 # installed them.
-without() {
-  local programs=$1 profile='(version 1)(allow default)(deny file-read*' program dir
-  shift
-  [ -n "$programs" ] || { "$@"; return; }
-  for program in $programs; do
+without_profile() {
+  local profile='(version 1)(allow default)(deny file-read*' program dir
+  for program in "$@"; do
     for dir in /opt/homebrew/bin /usr/local/bin /opt/podman/bin; do
       profile="$profile (literal \"$dir/$program\")"
     done
   done
-  sandbox-exec -p "$profile)" "$@"
+  printf '%s)\n' "$profile"
+}
+without() {
+  local programs=$1
+  shift
+  [ -n "$programs" ] || { "$@"; return; }
+  # shellcheck disable=SC2086 # the program names, split on purpose
+  sandbox-exec -p "$(without_profile $programs)" "$@"
 }
 
 # 4. doctor --json in each state: what its sandbox section must say.
@@ -273,5 +285,61 @@ fi
 gate_check "doctor and --plan ran only read-only podman commands" \
   "$(grep -E 'machine (init|start|stop|rm|set)|system (migrate|reset)' "$PODMAN_SHIM_LOG" | head -n 3 | tr '\n' ' ')" -- \
   sh -c '! grep -Eq "machine (init|start|stop|rm|set)|system (migrate|reset)" "$1"' gate-podman "$PODMAN_SHIM_LOG"
+
+# 6. A run's admission starts a stopped machine. With the stand-in's
+# machine stopped: `axocoatl dev` and a run of the README's task on
+# node-plain, with the stub's models and a named image (no image build).
+# On a runner the run cannot get past Podman (the stand-in builds and
+# starts nothing), so only its admission is judged: after the daemon has
+# started, it must have run `podman machine start`, which the stand-in
+# answers by running the machine. Doctor and onboarding see only the
+# stand-in, never a Podman the runner may have.
+# A short HOME: the daemon's socket, $HOME/.axocoatl/run/axocoatl.sock, must
+# fit macOS's 104-byte socket path limit, which a HOME under the runner's
+# TMPDIR does not.
+admission_home=$(mktemp -d /tmp/axo-adm.XXXXXX)
+config=$(HOME="$admission_home" gate_config_path)
+mkdir -p "$(dirname -- "$config")"
+printf 'server:\n  port: %s\n  host: "127.0.0.1"\nproviders:\n  ollama:\n    base_url: "%s"\nrun:\n  models:\n    writer: "ollama:qwen3-coder:30b"\n    reviewer: "ollama:gpt-oss:20b"\n' \
+  "$port" "$stub_url" >"$config"
+echo stopped >"$PODMAN_SHIM_STATE"
+printf '== admission: axocoatl dev\n' >>"$PODMAN_SHIM_LOG"
+(cd "$work" && exec env HOME="$admission_home" PATH="$shim:$user_path" sandbox-exec -p "$(without_profile podman)" \
+  axocoatl dev >"$GATE_ATTACH/logs/admission-dev.log" 2>&1) &
+dev_pid=$!
+state=none
+deadline=$((SECONDS + 300))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  state=$(gate_daemon_state "$port" "$config")
+  [ "$state" = current ] && break
+  kill -0 "$dev_pid" 2>/dev/null || break
+  sleep 1
+done
+if [ "$state" != current ]; then
+  gate_record "a run's admission started the stopped machine (podman machine start)" fail '' '' '' \
+    "axocoatl dev did not start: $(gate_daemon_state_says "$state" "$port"); $(tail -n 3 "$GATE_ATTACH/logs/admission-dev.log" | tr '\n' ' ')"
+else
+  printf '== admission: axocoatl run\n' >>"$PODMAN_SHIM_LOG"
+  from=$(wc -l <"$PODMAN_SHIM_LOG")
+  repo="$work/admission-repo"
+  gate_fixture_repo node-plain "$repo"
+  gate_step "a run with the stand-in's machine stopped (it ends at its first container command)" --optional -- \
+    env HOME="$admission_home" PATH="$shim:$user_path" sandbox-exec -p "$(without_profile podman)" /bin/bash -c \
+    'cd "$1" && axocoatl run fix --task "$2" --image docker.io/library/node:22-slim' gate-run "$repo" \
+    "Paging skips the last item when the total is a multiple of the page size"
+  started=$(tail -n +"$((from + 1))" "$PODMAN_SHIM_LOG" | grep -E '^machine start( |$)' | head -n 1)
+  if [ -n "$started" ] && [ "$(cat "$PODMAN_SHIM_STATE")" = running ]; then
+    gate_record "a run's admission started the stopped machine (podman machine start)" pass '' '' '' \
+      "the run called \`podman $started\`; the stand-in's machine runs now"
+  else
+    gate_record "a run's admission started the stopped machine (podman machine start)" fail '' '' '' \
+      "the run made no \`podman machine start\` call (the stand-in's machine is $(cat "$PODMAN_SHIM_STATE")): $(grep -v '^[[:space:]]*$' "$GATE_ATTACH/logs/$(gate_slug "a run with the stand-in's machine stopped (it ends at its first container command)").log" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+  fi
+fi
+if [ -n "$dev_pid" ]; then
+  kill -INT "$dev_pid" 2>/dev/null
+  wait "$dev_pid" 2>/dev/null
+  dev_pid=''
+fi
 
 finish

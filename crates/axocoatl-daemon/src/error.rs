@@ -166,6 +166,21 @@ impl DaemonError {
         matches!(self, Self::WorkspaceBusy(_))
     }
 
+    /// Whether this is a native provider check's refusal of what the
+    /// Session asks for: a model or an Ollama version native Sessions
+    /// refuse, a Team to review again after Ollama was upgraded, or a call
+    /// its limits cannot pay. The person changes something; nothing failed,
+    /// so the HTTP boundary returns 422 with [`Self::person_facing`].
+    pub fn is_provider_refusal(&self) -> bool {
+        matches!(self, Self::Provider(text) if provider_refusal(text).is_some())
+    }
+
+    /// This error as the person reads it ([`person_facing_message`]), in a
+    /// response, a rejected send or the Team & budget refusal.
+    pub fn person_facing(&self) -> String {
+        person_facing_message(&self.to_string())
+    }
+
     /// The machine-readable `code` an HTTP refusal of this error carries,
     /// when it has one.
     pub fn code(&self) -> Option<&'static str> {
@@ -188,9 +203,121 @@ impl DaemonError {
     }
 }
 
+/// The reason of a native provider check's refusal as the Session dispatch
+/// passes it on (`Session dispatch: Invalid request for ollama: REASON`), or
+/// `None` for any other text.
+fn provider_refusal(text: &str) -> Option<&str> {
+    let text = text.strip_prefix("Session dispatch: ").unwrap_or(text);
+    let (provider, reason) = text
+        .strip_prefix("Invalid request for ")?
+        .split_once(": ")?;
+    (!provider.is_empty()
+        && provider
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    .then_some(reason)
+}
+
+/// A message as the person reads it: a native provider check's own words,
+/// without the layers they passed through ("Provider setup failed: Session
+/// dispatch: Invalid request for ollama: "), starting with a capital when
+/// the first word is a plain word. A first word such as a model name
+/// (`qwen3.5:0.8b`) is kept as it is, and any other message is unchanged.
+pub fn person_facing_message(message: &str) -> String {
+    let mut text = message
+        .strip_prefix("Provider setup failed: Session dispatch: ")
+        .unwrap_or(message);
+    if let Some(reason) = provider_refusal(text) {
+        text = reason;
+    }
+    let plain_word = text
+        .split(' ')
+        .next()
+        .is_some_and(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_alphabetic()));
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if plain_word => first.to_uppercase().chain(chars).collect(),
+        Some(_) => text.to_string(),
+        None => message.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The refusals a native provider check gives, as the Session dispatch
+    /// wraps them, read without their layers; anything else is unchanged.
+    #[test]
+    fn provider_refusals_lose_their_internal_layers() {
+        let refusal = |reason: &str| {
+            DaemonError::Provider(format!(
+                "Session dispatch: Invalid request for ollama: {reason}"
+            ))
+        };
+        // As the live 1.5 daemon gave them to a Session a 1.4 Team made on
+        // Ollama 0.20.6: before and after Ollama was upgraded to 0.40.8.
+        let upgraded =
+            refusal("Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again");
+        assert!(upgraded.is_provider_refusal());
+        assert_eq!(
+            upgraded.to_string(),
+            "Provider setup failed: Session dispatch: Invalid request for ollama: Ollama was \
+             upgraded from 0.20.6 to 0.40.8; review Team & budget again"
+        );
+        assert_eq!(
+            upgraded.person_facing(),
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
+        );
+        assert_eq!(
+            refusal("Ollama 0.20.6 is no longer supported").person_facing(),
+            "Ollama 0.20.6 is no longer supported"
+        );
+        let openrouter = DaemonError::Provider(
+            "Session dispatch: Invalid request for openrouter: the smallest call costs more".into(),
+        );
+        assert!(openrouter.is_provider_refusal());
+        assert_eq!(openrouter.person_facing(), "The smallest call costs more");
+        // A model name that starts a refusal is never changed.
+        assert_eq!(
+            refusal("qwen3.5:0.8b is run by Ollama's MLX runner").person_facing(),
+            "qwen3.5:0.8b is run by Ollama's MLX runner"
+        );
+        assert_eq!(
+            person_facing_message(
+                "Invalid request for ollama: The model qwen3.5:0.8b is run by Ollama's MLX runner"
+            ),
+            "The model qwen3.5:0.8b is run by Ollama's MLX runner"
+        );
+        // Not a refusal: a provider that is not set up, a server that does
+        // not answer, a conflict. Their text stays as it is.
+        let missing = DaemonError::Provider("Provider 'openrouter' not configured".into());
+        assert!(!missing.is_provider_refusal());
+        assert_eq!(
+            missing.person_facing(),
+            "Provider setup failed: Provider 'openrouter' not configured"
+        );
+        let down = DaemonError::Provider("Session dispatch: Network error: refused".into());
+        assert!(!down.is_provider_refusal());
+        assert_eq!(down.person_facing(), "Network error: refused");
+        let conflict = DaemonError::SessionConflict(
+            "Invalid request for ollama: written by a person, not a provider check".into(),
+        );
+        assert!(!conflict.is_provider_refusal());
+        assert_eq!(
+            conflict.person_facing(),
+            "Session conflict: Invalid request for ollama: written by a person, not a provider \
+             check"
+        );
+        assert!(
+            !DaemonError::Provider("Session dispatch: Invalid request for : x".into())
+                .is_provider_refusal()
+        );
+        assert_eq!(
+            person_facing_message("Lead's token limit of 10,000 is too small"),
+            "Lead's token limit of 10,000 is too small"
+        );
+    }
 
     #[test]
     fn measured_session_error_keeps_subtotal_and_original_message() {

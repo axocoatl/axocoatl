@@ -152,7 +152,7 @@ an unresolved Ways decision remains authoritative after a daemon restart.
 | `activation-stream` | `event` | Native turns only. One retained observation of one exact Agent activation; replaces `token`, `reasoning`, and `tool-call` for native Sessions. See [below](#native-session-frames) |
 | `activation-control-changed` | `activation`, `blocker_id`, `canonical_command_id`, `turn_revision` | Native turns only. A durable blocker or control change for one activation; re-read the turn's `control-plane`. It grants nothing by itself |
 | `session-error` | `session`, `turn_id?`, `error`, input/output/reasoning tokens, `token_usage_known` | Failed terminal state; paid work completed before the failure remains visible as a complete tracked total or known subtotal |
-| `session-request-rejected` | `session`, `turn_id`, `error` | Nonterminal request rejection; the existing live run with that ID remains active |
+| `session-request-rejected` | `session`, `turn_id`, `error` | Nonterminal request rejection; the existing live run with that ID remains active. A refusal from a native provider check carries that check's message alone (for example "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again") |
 | `session-stop-rejected` | `session`, `turn_id`, `error` | Stop control response; not a terminal transition |
 | `session-environment-changing` | `session`, `generation` | The Session runtime is unavailable while an explicit change, Close/Delete, or cold reconstruction owns its lifecycle boundary |
 | `session-environment-settled` | `session` | The announced lifecycle owner exited on success, failure, or cancellation; re-read the canonical Session before exposing runtime-backed tools |
@@ -219,6 +219,7 @@ activation, without gaps. `payload.kind` is one of:
 | `text` | `delta` | Answer text delta |
 | `reasoning_summary` | `delta` | Reasoning-channel delta when the provider supplies one |
 | `provider_retry` | `reason` | The provider response ended early and one retry started; text before this marker belongs to the abandoned attempt |
+| `provider_response` | `finish_reason`, `offered_tools`, `tool_calls` | A model response completed: how it ended (`stop`, `tool_use`, `max_tokens`, `content_filter` or `error`), how many tools its request offered and how many calls it returned |
 | `tool_proposed` | `call_id`, `name`, `provider_response_group`, `provider_call_index`, `provider_call_count`, `arguments_sha256`, `arguments_bytes` | The Agent proposed a tool call; it still has to pass dispatch |
 | `tool_result` | `call_id`, `name`, `result_sha256`, `result_bytes`, `is_error` | The result the Agent saw |
 

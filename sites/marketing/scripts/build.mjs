@@ -16,7 +16,8 @@ if (!existsSync(llmsSource)) throw new Error('Missing public AI-readable product
 
 // When demo/one-app/films/PENDING names the CLI version, this version's films are
 // not recorded. The site is then built without them: each film placement becomes a
-// static note (or is omitted), and no film media or portfolio ships.
+// static note (or is omitted), no film media or portfolio ships, and the showcase
+// page, which holds nothing but films, is left out of the site until they exist.
 const { version, pending: filmsPending } = filmMode(repositoryRoot);
 
 let portfolio;
@@ -58,7 +59,7 @@ const pages = [
   'index.html', '404.html',
   'changelog/index.html', 'compare/index.html', 'concepts/index.html', 'install/index.html',
   'integrations/openrouter/index.html', 'pricing/index.html',
-  'showcase/index.html', 'why/index.html',
+  ...(filmsPending ? [] : ['showcase/index.html']), 'why/index.html',
 ];
 const files = [
   'robots.txt', 'sitemap.xml',
@@ -116,7 +117,7 @@ if (filmsPending) {
   console.log(
     `Built ${total} marketing files and llms.txt in ${output}${demoSummary}. ` +
     `Films for ${version} are pending (${pendingPath}): ${pendingNotes.length} film placement(s) shown as static notes, ` +
-    `${pendingOmitted.length} omitted; no film media or portfolio shipped.`,
+    `${pendingOmitted.length} omitted; no film media, portfolio or showcase page shipped.`,
   );
 } else {
   console.log(`Built ${total} marketing files, llms.txt, and the authoritative 12-film portfolio in ${output}${demoSummary}`);

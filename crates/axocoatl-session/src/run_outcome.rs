@@ -394,6 +394,9 @@ pub enum FailureClass {
     ProviderFailure,
     /// 400/401/402/403: not retried.
     ProviderRejected,
+    /// The model wrote a tool call as answer text that Axocoatl cannot run,
+    /// so nothing from that response ran; the provider did not fail.
+    UnrunnableToolCall,
     /// A grant, budget or wall-clock limit ran out.
     Budget,
     /// The Agent reported it could not proceed, or the host blocked it.
@@ -415,6 +418,7 @@ impl FailureClass {
             FailureClass::ProviderRefusal => "provider_refusal",
             FailureClass::ProviderFailure => "provider_failure",
             FailureClass::ProviderRejected => "provider_rejected",
+            FailureClass::UnrunnableToolCall => "unrunnable_tool_call",
             FailureClass::Budget => "budget",
             FailureClass::Blocked => "blocked",
             FailureClass::NotReached => "not_reached",
@@ -511,10 +515,21 @@ pub struct RunUsage {
     /// Absent (false) in records written before it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cost_computed: bool,
-    /// Provider calls retried under the transient-error policy.
+    /// Provider calls sent again: retried under the transient-error policy,
+    /// or moved to another OpenRouter endpoint of the same model.
     #[serde(default)]
     pub retries: u32,
+    /// Which calls reported no usage or no cost, when some did not (the
+    /// numbers are then a known subtotal): each names its Agent and how
+    /// many of its calls, such as `required-review (generation 1): 1 of 4
+    /// model calls`. Absent in records written before it, and when every
+    /// call reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreported: Vec<String>,
 }
+
+/// Most calls the usage line names among those that reported no usage.
+const UNREPORTED_SHOWN: usize = 3;
 
 fn cost_known_default() -> bool {
     true
@@ -536,6 +551,7 @@ impl Default for RunUsage {
             cost_known: true,
             cost_computed: false,
             retries: 0,
+            unreported: Vec::new(),
         }
     }
 }
@@ -560,25 +576,137 @@ impl RunUsage {
 
     /// Usage in words, as the run summary, JUnit and the Run outcome panel
     /// show it: tokens, the cost ([`Self::cost_text`]), provider retries,
-    /// and whether the numbers are only a known subtotal.
+    /// and whether the numbers are only a known subtotal, naming the calls
+    /// that did not report when they are known.
     pub fn text(&self) -> String {
         format!(
             "{} input + {} output tokens, {}{}{}",
             self.input_tokens,
             self.output_tokens,
             self.cost_text(),
-            if self.retries > 0 {
-                format!(", {} provider retries", self.retries)
-            } else {
-                String::new()
+            match self.retries {
+                0 => String::new(),
+                1 => ", 1 provider retry".to_string(),
+                retries => format!(", {retries} provider retries"),
             },
-            if self.complete {
-                ""
-            } else {
-                " (known subtotal: some usage was not reported)"
-            }
+            self.subtotal_text()
         )
     }
+
+    /// ` (known subtotal: …)` when the numbers are one, or nothing. A cost
+    /// that is not known while every token was reported (a Codex writer's on
+    /// a model without a price) is said by [`Self::cost_text`] alone.
+    fn subtotal_text(&self) -> String {
+        if self.complete {
+            return String::new();
+        }
+        if self.unreported.is_empty() {
+            return " (known subtotal: some usage was not reported)".into();
+        }
+        let mut named = self
+            .unreported
+            .iter()
+            .take(UNREPORTED_SHOWN)
+            .cloned()
+            .collect::<Vec<_>>();
+        if self.unreported.len() > UNREPORTED_SHOWN {
+            named.push(format!(
+                "and {} more",
+                self.unreported.len() - UNREPORTED_SHOWN
+            ));
+        }
+        format!(
+            " (known subtotal: usage or cost not reported for {})",
+            named.join("; ")
+        )
+    }
+}
+
+/// One OpenRouter endpoint a run's native calls of one model went to
+/// ([`RunOutcome::openrouter_endpoints`]): the calls it answered, and the
+/// calls it failed before producing anything that moved to another endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServedEndpoint {
+    /// The endpoint's tag, `deepinfra/bf16`.
+    pub endpoint: String,
+    /// The provider OpenRouter names for it, `DeepInfra`.
+    pub provider: String,
+    /// The calls it answered.
+    pub calls: u32,
+    /// The calls that moved from it to another endpoint after it failed
+    /// them before producing anything.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub moved: u32,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
+}
+
+impl ServedEndpoint {
+    /// `deepinfra/bf16 (DeepInfra)`.
+    pub fn name(&self) -> String {
+        format!("{} ({})", self.endpoint, self.provider)
+    }
+}
+
+/// The run note naming the OpenRouter endpoints `model`'s calls went to:
+/// `openai/gpt-oss-120b on OpenRouter: 3 calls answered by endpoint
+/// coreweave/fp4 (CoreWeave), 2 by deepinfra/bf16 (DeepInfra); 2 calls moved
+/// on from endpoint near-ai/fp4 (Near AI), which failed them before
+/// answering`.
+pub fn openrouter_endpoints_note(model: &str, endpoints: &[ServedEndpoint]) -> String {
+    let calls = |count: u32| {
+        if count == 1 {
+            "1 call".to_string()
+        } else {
+            format!("{count} calls")
+        }
+    };
+    let answered = endpoints
+        .iter()
+        .filter(|served| served.calls > 0)
+        .enumerate()
+        .map(|(index, served)| {
+            if index == 0 {
+                format!(
+                    "{} answered by endpoint {}",
+                    calls(served.calls),
+                    served.name()
+                )
+            } else {
+                format!("{} by {}", served.calls, served.name())
+            }
+        })
+        .collect::<Vec<_>>();
+    let moved = endpoints
+        .iter()
+        .filter(|served| served.moved > 0)
+        .enumerate()
+        .map(|(index, served)| {
+            if index == 0 {
+                format!(
+                    "{} moved on from endpoint {}",
+                    calls(served.moved),
+                    served.name()
+                )
+            } else {
+                format!("{} from {}", served.moved, served.name())
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut parts = vec![if answered.is_empty() {
+        "no call answered".to_string()
+    } else {
+        answered.join(", ")
+    }];
+    if !moved.is_empty() {
+        parts.push(format!(
+            "{}, which failed them before answering",
+            moved.join(", ")
+        ));
+    }
+    format!("{model} on OpenRouter: {}", parts.join("; "))
 }
 
 /// What the network record holds for the run's Session.
@@ -663,6 +791,13 @@ pub struct RunOutcome {
     /// Absent when no native Ollama call ran.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ollama_versions: BTreeMap<String, Vec<String>>,
+    /// The OpenRouter endpoints the run's native OpenRouter calls went to,
+    /// by model, in the order each was first counted, each with the calls it
+    /// answered and the calls that moved from it to another endpoint after it
+    /// failed them. Absent when no native OpenRouter call was answered or
+    /// moved.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub openrouter_endpoints: BTreeMap<String, Vec<ServedEndpoint>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<KeepResult>,
     /// The infrastructure error that ended the run, when the verdict is
@@ -935,6 +1070,7 @@ mod tests {
             usage: RunUsage::default(),
             network: NetworkSummary::default(),
             ollama_versions: Default::default(),
+            openrouter_endpoints: Default::default(),
             keep: None,
             error: None,
         }
@@ -1276,6 +1412,7 @@ mod tests {
             cost_known: false,
             cost_computed: false,
             retries: 0,
+            unreported: Vec::new(),
         };
         assert_eq!(
             usage.text(),
@@ -1310,6 +1447,134 @@ mod tests {
         assert!(!old.cost_computed);
     }
 
+    /// When some calls reported no usage or no cost, the line names them
+    /// (the first three and how many more), not only that some did not; a
+    /// record without the list keeps the general words. One retry is one.
+    #[test]
+    fn the_usage_line_names_the_calls_that_did_not_report() {
+        let mut usage = RunUsage {
+            input_tokens: 48_235,
+            output_tokens: 1_804,
+            cost_microunits: 15_100,
+            complete: false,
+            cost_known: false,
+            cost_computed: false,
+            retries: 1,
+            unreported: vec!["required-review (generation 1): 1 of 4 model calls".into()],
+        };
+        assert_eq!(
+            usage.text(),
+            "48235 input + 1804 output tokens, cost unknown (reserved up to $0.0151), 1 provider \
+             retry (known subtotal: usage or cost not reported for required-review (generation \
+             1): 1 of 4 model calls)"
+        );
+        usage.unreported = (1..=5)
+            .map(|generation| format!("writer (generation {generation}): 1 of 2 model calls"))
+            .collect();
+        assert!(
+            usage
+                .text()
+                .ends_with("writer (generation 3): 1 of 2 model calls; and 2 more)"),
+            "{}",
+            usage.text()
+        );
+        // Every token reported but the cost not known: the cost says so,
+        // and the tokens are no subtotal.
+        usage.complete = true;
+        usage.unreported.truncate(1);
+        assert_eq!(
+            usage.text(),
+            "48235 input + 1804 output tokens, cost unknown (reserved up to $0.0151), 1 provider \
+             retry"
+        );
+        // A record from before the list says what it always said.
+        let old: RunUsage = serde_json::from_str(
+            r#"{"input_tokens":1,"output_tokens":2,"cost_microunits":3,"complete":false,"retries":2}"#,
+        )
+        .unwrap();
+        assert!(old.unreported.is_empty());
+        assert_eq!(
+            old.text(),
+            "1 input + 2 output tokens, $0.0000, 2 provider retries (known subtotal: some usage \
+             was not reported)"
+        );
+        assert!(serde_json::to_value(RunUsage::default())
+            .unwrap()
+            .get("unreported")
+            .is_none());
+    }
+
+    /// The note naming the OpenRouter endpoints that answered a model.
+    #[test]
+    fn the_openrouter_endpoints_note_names_each_endpoint_and_its_calls() {
+        let served = |endpoint: &str, provider: &str, calls| ServedEndpoint {
+            endpoint: endpoint.into(),
+            provider: provider.into(),
+            calls,
+            moved: 0,
+        };
+        assert_eq!(
+            openrouter_endpoints_note(
+                "openai/gpt-oss-120b",
+                &[served("near-ai/fp4", "Near AI", 1)]
+            ),
+            "openai/gpt-oss-120b on OpenRouter: 1 call answered by endpoint near-ai/fp4 (Near AI)"
+        );
+        assert_eq!(
+            openrouter_endpoints_note(
+                "openai/gpt-oss-120b",
+                &[
+                    served("near-ai/fp4", "Near AI", 3),
+                    served("deepinfra/bf16", "DeepInfra", 2)
+                ]
+            ),
+            "openai/gpt-oss-120b on OpenRouter: 3 calls answered by endpoint near-ai/fp4 (Near \
+             AI), 2 by deepinfra/bf16 (DeepInfra)"
+        );
+        // Calls that moved on from an endpoint that failed them are named
+        // too, and an endpoint that answered none is not named as answering.
+        let moved = |endpoint: &str, provider: &str, calls, moved| ServedEndpoint {
+            moved,
+            ..served(endpoint, provider, calls)
+        };
+        assert_eq!(
+            openrouter_endpoints_note(
+                "openai/gpt-oss-120b",
+                &[
+                    moved("near-ai/fp4", "Near AI", 1, 2),
+                    moved("coreweave/fp4", "CoreWeave", 3, 0),
+                    moved("dekallm/bf16", "DekaLLM", 0, 1),
+                ]
+            ),
+            "openai/gpt-oss-120b on OpenRouter: 1 call answered by endpoint near-ai/fp4 (Near \
+             AI), 3 by coreweave/fp4 (CoreWeave); 2 calls moved on from endpoint near-ai/fp4 \
+             (Near AI), 1 from dekallm/bf16 (DekaLLM), which failed them before answering"
+        );
+        assert_eq!(
+            openrouter_endpoints_note("m/x", &[moved("a/b", "A", 0, 1)]),
+            "m/x on OpenRouter: no call answered; 1 call moved on from endpoint a/b (A), which \
+             failed them before answering"
+        );
+        let mut outcome = outcome();
+        assert!(serde_json::to_value(&outcome)
+            .unwrap()
+            .get("openrouter_endpoints")
+            .is_none());
+        outcome.openrouter_endpoints.insert(
+            "openai/gpt-oss-120b".into(),
+            vec![served("groq", "Groq", 4)],
+        );
+        let value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(
+            value["openrouter_endpoints"]["openai/gpt-oss-120b"][0],
+            serde_json::json!({"endpoint": "groq", "provider": "Groq", "calls": 4})
+        );
+        assert_eq!(
+            serde_json::from_value::<RunOutcome>(value).unwrap(),
+            outcome
+        );
+    }
+
     /// A Codex writer's cost, computed from the tokens it reported at its
     /// model's list prices, is shown as a computation, never as a charge a
     /// provider reported; it still yields to a cost that is not known.
@@ -1323,6 +1588,7 @@ mod tests {
             cost_known: true,
             cost_computed: true,
             retries: 0,
+            unreported: Vec::new(),
         };
         assert_eq!(
             usage.text(),
@@ -1429,6 +1695,7 @@ mod tests {
             ProviderRefusal,
             ProviderFailure,
             ProviderRejected,
+            UnrunnableToolCall,
             Budget,
             Blocked,
             NotReached,

@@ -162,6 +162,7 @@ impl AxocoatlDaemon {
         let mut credentials = self.configured_native_provider_credentials();
         let session_id = controller.owner_session_id().map_err(native_error)?;
         credentials.ollama_served = Some(self.loadout_runs.ollama_served(&session_id));
+        credentials.openrouter_served = Some(self.loadout_runs.openrouter_served(&session_id));
         let native = controller
             .native_provider_factory(&self.data_root, credentials, self.counter.clone())
             .map_err(native_error)?;
@@ -246,6 +247,12 @@ impl AxocoatlDaemon {
                 .ollama
                 .as_ref()
                 .map(|p| p.base_url.clone()),
+            ollama_timeouts: self
+                .config
+                .providers
+                .ollama
+                .as_ref()
+                .map(ollama_stream_timeouts),
             ollama_served: None,
             openrouter_api_key: self
                 .config
@@ -258,6 +265,13 @@ impl AxocoatlDaemon {
             openrouter_configuration_error: invalid_openrouter.then(|| {
                 "native OpenRouter requires the official endpoint and no configured fallback".into()
             }),
+            openrouter_timeouts: self
+                .config
+                .providers
+                .openrouter
+                .as_ref()
+                .map(hosted_stream_timeouts),
+            openrouter_served: None,
         }
     }
 }
@@ -290,7 +304,7 @@ async fn prepare_retained_native_definition_with_credentials(
     // Verification does not generate output or load another model. Keep the
     // configured endpoint exact; changed credentials cannot retarget replay.
     runtime
-        .verify_credentials(credentials)
+        .verify_credentials(credentials, Some(preparation.config()))
         .await
         .map_err(native_error)?;
     registry.with_session_team_stores(token, |canonical, content, _| {

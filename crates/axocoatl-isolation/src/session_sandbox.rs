@@ -23,6 +23,7 @@
 //! `Arc<dyn Sandbox>` and never need to know the concrete backend.
 
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
@@ -216,7 +217,7 @@ echo sealed
 "#;
 
 const NAMED_REMOVE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const SANDBOX_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const SANDBOX_PROVISION_TIMEOUT: Duration = Duration::from_secs(300);
 const SANDBOX_SETUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(900);
 const SANDBOX_START_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
@@ -416,16 +417,67 @@ const DROPPED_CAPS: &[&str] = &[
     "AUDIT_WRITE",     // write to the kernel audit log
 ];
 
-/// Per-session container fork-bomb cap. Generous enough for parallel installs
-/// and build tools, low enough to bound a runaway. Applied with the other
-/// cgroup-backed limits (see `with_limits`).
-const PIDS_LIMIT: &str = "512";
-
 /// Every `podman run` passes this. Without it Podman copies the host's
 /// `http_proxy`, `https_proxy`, `ftp_proxy` and `no_proxy` variables (either
 /// case) into the container, where any command can read them, including a
 /// proxy URL's user name and password.
 const NO_HOST_PROXY_ENV: &str = "--http-proxy=false";
+
+/// The loopback address this platform publishes Session ports on
+/// ([`session_port_address`]).
+///
+/// Never `127.0.0.1`: the browser workbench is served there and keeps its
+/// sign-in cookie there. Cookies ignore ports, so a Session's app on another
+/// `127.0.0.1` port receives that cookie and can set cookies the workbench
+/// receives, with no click: its Preview's code can navigate its own frame
+/// there, and Chromium and WebKit send that frame the workbench's
+/// SameSite=Strict cookie (WebKit whatever frames lie between, so a frame
+/// nested in the Preview too). On macOS the Podman machine's forwarder
+/// listens on the Mac, which has no IPv4 loopback address but `127.0.0.1`,
+/// and can listen on `[::1]`. Linux routes all of 127.0.0.0/8 to loopback,
+/// and rootful Podman there cannot forward from `[::1]`.
+#[cfg(target_os = "macos")]
+const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+#[cfg(not(target_os = "macos"))]
+const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+
+/// The loopback address Session ports are published on: this platform's
+/// preferred one ([`PREFERRED_SESSION_PORT_ADDRESS`]) when this computer can
+/// listen there, else `127.0.0.1`. Decided once per process.
+pub fn session_port_address() -> IpAddr {
+    static ADDRESS: std::sync::OnceLock<IpAddr> = std::sync::OnceLock::new();
+    *ADDRESS.get_or_init(|| {
+        choose_session_port_address(PREFERRED_SESSION_PORT_ADDRESS, |address| {
+            std::net::TcpListener::bind((address, 0)).is_ok()
+        })
+    })
+}
+
+fn choose_session_port_address(preferred: IpAddr, can_listen: impl Fn(IpAddr) -> bool) -> IpAddr {
+    if can_listen(preferred) {
+        return preferred;
+    }
+    tracing::warn!(
+        address = %preferred,
+        "this computer cannot listen on {preferred}, so Session ports are published on \
+         127.0.0.1, the workbench's address: a Session's app opened there receives the \
+         workbench's sign-in cookie"
+    );
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
+/// The `podman run -p` value for one Session port: on [`session_port_address`],
+/// on a host port Podman picks.
+pub(crate) fn session_port_publish_arg(port: u16) -> String {
+    publish_arg(session_port_address(), port)
+}
+
+fn publish_arg(address: IpAddr, port: u16) -> String {
+    match address {
+        IpAddr::V4(address) => format!("{address}::{port}"),
+        IpAddr::V6(address) => format!("[{address}]::{port}"),
+    }
+}
 
 /// Network posture for a session container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1068,9 +1120,10 @@ pub struct SessionSandbox {
     /// the container, and the confinement root for the structured file tools.
     working_dir: std::path::PathBuf,
     /// User/config ports remain container-local identities (3000 means the
-    /// app's port inside this Session). Podman assigns a unique loopback host
-    /// port per Session and the browser proxy resolves through this map.
-    published_ports: HashMap<u16, u16>,
+    /// app's port inside this Session). Podman assigns a unique host port on
+    /// [`session_port_address`] per Session and the browser proxy resolves
+    /// through this map.
+    published_ports: HashMap<u16, SocketAddr>,
     /// The image that actually backs this handle. `None` is reserved for a
     /// non-owning handle attached to an already-running named container.
     effective_image: Option<String>,
@@ -1103,6 +1156,9 @@ pub struct SessionSandbox {
     tasks: std::sync::Mutex<Vec<BgTaskHandle>>,
     /// Interactive PTY-backed terminals.
     terminals: std::sync::Mutex<Vec<std::sync::Arc<crate::pty::PtyTerminal>>>,
+    /// The resource caps the container got; `None` on a handle that did
+    /// not start it.
+    resource_caps: Option<crate::container_host::ResourceCaps>,
 }
 
 /// Stops a sidecar, and removes an egress Preview container, started for a
@@ -1230,6 +1286,68 @@ impl SessionSandbox {
             ),
             volume.into(),
         ]
+    }
+
+    /// The toolchain cache volumes of the daemon whose runtime authority is
+    /// `runtime_authority`, by their labels
+    /// ([`Self::toolchain_cache_volume_create_args`]).
+    pub async fn toolchain_cache_volumes(
+        runtime_authority: &str,
+    ) -> Result<Vec<String>, IsolationError> {
+        let mut list = Command::new(PODMAN);
+        list.args([
+            "volume".to_string(),
+            "ls".into(),
+            "--filter".into(),
+            format!(
+                "label={}={TOOLCHAIN_CACHE_VOLUME_ROLE}",
+                crate::egress_image::ROLE_LABEL
+            ),
+            "--filter".into(),
+            format!("label={RUNTIME_AUTHORITY_LABEL}={runtime_authority}"),
+            "--format".into(),
+            "{{.Name}}".into(),
+        ]);
+        let output = Self::run_bounded_command(list, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "listing the toolchain cache volumes: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|name| name.starts_with(TOOLCHAIN_CACHE_VOLUME_PREFIX))
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// The ids of the Sessions whose container (running or not) mounts the
+    /// volume `volume`.
+    pub async fn volume_sessions(volume: &str) -> Result<Vec<String>, IsolationError> {
+        let mut list = Command::new(PODMAN);
+        list.args([
+            "ps".to_string(),
+            "--all".into(),
+            "--filter".into(),
+            format!("volume={volume}"),
+            "--format".into(),
+            "{{.Names}}".into(),
+        ]);
+        let output = Self::run_bounded_command(list, DEPENDENCY_VOLUME_CREATE_TIMEOUT).await?;
+        if output.timed_out || !output.status.success() {
+            return Err(IsolationError::OciSetupFailed(format!(
+                "listing the containers that use the volume {volume}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|name| name.trim().strip_prefix("axo-ses-"))
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     /// Remove the toolchain cache volume `volume` (its packages and, for
@@ -2001,12 +2119,38 @@ impl SessionSandbox {
             })?;
         }
 
-        // Start the long-lived idle container. Resource caps remain a
-        // best-effort compatibility toggle. Ports are different: every
+        // Start the long-lived idle container. It gets each resource cap
+        // whose cgroup controller Podman can use (`container_host`), and
+        // says which it does not get, unless the operator requires them
+        // all. Ports are different: every
         // Session receives its own Podman-assigned loopback host ports, and a
         // startup that cannot preserve those mappings fails honestly instead
         // of opening a container whose Preview is known to be unreachable.
-        let mut with_limits = true;
+        let host = crate::container_host::container_host().await;
+        let mut caps = host
+            .as_ref()
+            .map_or(crate::container_host::ResourceCaps::ALL, |host| host.caps);
+        let label_disable = host.as_ref().is_some_and(|host| host.label_disable);
+        if let Some(host) = &host {
+            if policy.require_resource_limits {
+                if let Some(refusal) =
+                    crate::container_host::required_caps_missing(host.caps, &host.controllers)
+                {
+                    let error = IsolationError::OciContainerFailed(refusal);
+                    return Err(Self::failed_start_with_name_cleanup(&container, error).await);
+                }
+            }
+            let missing = host.caps.not_applied();
+            if !missing.is_empty() {
+                tracing::warn!(
+                    controllers = %host.controllers.join(", "),
+                    "this host's Podman cannot apply the Session container's {} cap: \
+                     starting it without {}",
+                    missing.join(", "),
+                    if missing.len() == 1 { "that cap" } else { "those caps" }
+                );
+            }
+        }
         let mut seen_ports = HashSet::new();
         let publish: Vec<u16> = exposed_ports
             .iter()
@@ -2044,7 +2188,8 @@ impl SessionSandbox {
                 dependency_mountpoint_labels
                     .as_ref()
                     .map(|labels| labels.as_slice()),
-                with_limits,
+                caps,
+                label_disable,
                 &publish,
                 &effective_policy,
                 &read_only_paths,
@@ -2053,7 +2198,7 @@ impl SessionSandbox {
             .await
             {
                 Ok(container_id) => break container_id,
-                Err(e) if e.contains("cgroup") && with_limits && policy.require_resource_limits => {
+                Err(e) if e.contains("cgroup") && caps.any() && policy.require_resource_limits => {
                     // Fail closed: the operator asked for guaranteed caps and we
                     // can't provide them. Surface the error instead of silently
                     // running an uncapped (fork-bomb / OOM-prone) container.
@@ -2065,13 +2210,14 @@ impl SessionSandbox {
                     ));
                     return Err(Self::failed_start_with_name_cleanup(&container, error).await);
                 }
-                Err(e) if e.contains("cgroup") && with_limits => {
+                Err(e) if e.contains("cgroup") && caps.any() => {
                     tracing::warn!(
+                        error = %e,
                         "this host cannot apply container resource limits \
                          (rootless podman / no cgroup delegation) — starting \
-                         the sandbox without memory/CPU caps"
+                         the sandbox without memory, CPU and process caps"
                     );
-                    with_limits = false;
+                    caps = crate::container_host::ResourceCaps::NONE;
                 }
                 Err(e) if Self::is_port_conflict(&e) && !publish.is_empty() => {
                     if dynamic_port_retries >= DYNAMIC_PORT_START_RETRIES {
@@ -2214,6 +2360,7 @@ impl SessionSandbox {
             workload,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: Some(caps),
         };
         if let Some(selected) = &supervisor_image {
             let handshake = async {
@@ -2488,8 +2635,9 @@ impl SessionSandbox {
         helper_workspace_outcome(outcome, &printed).map(Some)
     }
 
-    /// Host loopback port assigned to one logical container port.
-    pub fn published_host_port(&self, container_port: u16) -> Option<u16> {
+    /// Host loopback address and port assigned to one logical container
+    /// port.
+    pub fn published_address(&self, container_port: u16) -> Option<SocketAddr> {
         self.published_ports.get(&container_port).copied()
     }
 
@@ -2667,7 +2815,14 @@ impl SessionSandbox {
             workload: None,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: None,
         }
+    }
+
+    /// The resource caps this handle's container got when it started
+    /// (`None` for a handle attached to a running container).
+    pub fn resource_caps(&self) -> Option<crate::container_host::ResourceCaps> {
+        self.resource_caps
     }
 
     /// Attach to the deterministic container owned by `session_id` without
@@ -3619,15 +3774,23 @@ impl SessionSandbox {
     }
 
     /// Parse `podman port <container>` output, for example:
-    /// `3000/tcp -> 127.0.0.1:43117`.
-    fn parse_published_ports(stdout: &str) -> HashMap<u16, u16> {
+    /// `3000/tcp -> 127.0.0.2:43117` or `3000/tcp -> ::1:43117`. A mapping on
+    /// an address that is not loopback is left out.
+    fn parse_published_ports(stdout: &str) -> HashMap<u16, SocketAddr> {
         stdout
             .lines()
             .filter_map(|line| {
                 let (container, host) = line.trim().split_once(" -> ")?;
                 let container_port = container.split('/').next()?.parse::<u16>().ok()?;
-                let host_port = host.rsplit(':').next()?.parse::<u16>().ok()?;
-                (container_port > 0 && host_port > 0).then_some((container_port, host_port))
+                let (address, host_port) = host.rsplit_once(':')?;
+                let address = address
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<IpAddr>()
+                    .ok()?;
+                let host_port = host_port.parse::<u16>().ok()?;
+                (container_port > 0 && host_port > 0 && address.is_loopback())
+                    .then_some((container_port, SocketAddr::new(address, host_port)))
             })
             .collect()
     }
@@ -3638,7 +3801,7 @@ impl SessionSandbox {
     async fn discover_published_ports(
         container: &str,
         expected: &[u16],
-    ) -> Result<HashMap<u16, u16>, String> {
+    ) -> Result<HashMap<u16, SocketAddr>, String> {
         if expected.is_empty() {
             return Ok(HashMap::new());
         }
@@ -3725,6 +3888,7 @@ impl SessionSandbox {
     /// (canonical paths below `dir`) bound read-only at their own paths over
     /// the read-write Workspace mount. Podman mounts the deeper destination
     /// after its parent, so the read-only view wins.
+    /// `with_limits` is the resource caps it gets (`true` for every one).
     #[allow(clippy::too_many_arguments)]
     fn build_run_args_with_mounts(
         session_id: &str,
@@ -3732,7 +3896,7 @@ impl SessionSandbox {
         dir: &str,
         image: &str,
         node_dependency_volume: Option<&str>,
-        with_limits: bool,
+        with_limits: impl Into<crate::container_host::ResourceCaps>,
         ports: &[u16],
         policy: &SandboxPolicy,
         read_only: &[String],
@@ -3907,22 +4071,17 @@ impl SessionSandbox {
             ));
         }
 
-        if with_limits {
-            args.extend([
-                "--memory".into(),
-                "2g".into(),
-                "--cpus".into(),
-                "2".into(),
-                "--pids-limit".into(),
-                PIDS_LIMIT.into(),
-            ]);
-        }
+        // 2 GiB, 2 CPUs and 512 processes (a fork-bomb cap generous enough
+        // for parallel installs and build tools), each when its cgroup
+        // controller is there.
+        args.extend(with_limits.into().args());
         for p in ports {
             args.push("-p".into());
             // Keep configured URLs container-local and stable while Podman
             // assigns an independent host port for every Session. Loopback
-            // binding also avoids exposing dev servers on the LAN.
-            args.push(format!("127.0.0.1::{p}"));
+            // binding also avoids exposing dev servers on the LAN, and an
+            // address other than the workbench's keeps its cookies away.
+            args.push(session_port_publish_arg(*p));
         }
         if policy.passive_start {
             args.push("--entrypoint".into());
@@ -3963,8 +4122,9 @@ impl SessionSandbox {
         args
     }
 
-    /// `podman run -d` the idle session container. `with_limits` adds
-    /// memory/CPU caps. `ports` receive dynamic loopback host mappings. On
+    /// `podman run -d` the idle session container. `caps` are its resource
+    /// caps; `label_disable` turns SELinux labelling off for it
+    /// (`container_host`). `ports` receive dynamic loopback host mappings. On
     /// failure returns Podman's stderr so the caller can decide how to recover.
     #[allow(clippy::too_many_arguments)]
     async fn run_container(
@@ -3974,7 +4134,8 @@ impl SessionSandbox {
         image: &str,
         node_dependency_volume: Option<&str>,
         dependency_mountpoint_labels: Option<&[String]>,
-        with_limits: bool,
+        caps: crate::container_host::ResourceCaps,
+        label_disable: bool,
         ports: &[u16],
         policy: &SandboxPolicy,
         read_only: &[String],
@@ -3986,7 +4147,7 @@ impl SessionSandbox {
             dir,
             image,
             node_dependency_volume,
-            with_limits,
+            caps,
             ports,
             policy,
             read_only,
@@ -3994,6 +4155,9 @@ impl SessionSandbox {
         Self::insert_named_volume_mounts(&mut args, named_volumes);
         if let Some(labels) = dependency_mountpoint_labels {
             crate::dependency_mountpoint::insert_labels(&mut args, labels);
+        }
+        if label_disable {
+            crate::container_host::insert_label_disable(&mut args);
         }
 
         let mut command = Command::new(PODMAN);
@@ -5495,9 +5659,10 @@ pub trait Sandbox: Send + Sync {
         true
     }
 
-    /// Host loopback port for a configured container port, when this backend
-    /// exposes local Preview transport. Remote backends may return `None`.
-    fn published_host_port(&self, _container_port: u16) -> Option<u16> {
+    /// Host loopback address and port for a configured container port, when
+    /// this backend exposes local Preview transport. Remote backends may
+    /// return `None`.
+    fn published_address(&self, _container_port: u16) -> Option<SocketAddr> {
         None
     }
 
@@ -5766,8 +5931,8 @@ impl Sandbox for SessionSandbox {
     fn root(&self) -> &Path {
         self.root()
     }
-    fn published_host_port(&self, container_port: u16) -> Option<u16> {
-        self.published_host_port(container_port)
+    fn published_address(&self, container_port: u16) -> Option<SocketAddr> {
+        self.published_address(container_port)
     }
     fn execution_boundary_usable(&self) -> bool {
         self.execution_boundary_usable()
@@ -5852,6 +6017,7 @@ impl Sandbox for SessionSandbox {
             workload: self.workload,
             tasks: std::sync::Mutex::new(Vec::new()),
             terminals: std::sync::Mutex::new(Vec::new()),
+            resource_caps: self.resource_caps,
         })
     }
     async fn stop(&self) {
@@ -6401,12 +6567,19 @@ mod tests {
             .unwrap_or(false)
     }
 
+    /// The pid the child wrote to `path`, once its whole line is there: the
+    /// shell makes the file before it writes the pid, so a file without its
+    /// newline yet is read again.
     #[cfg(unix)]
     async fn wait_for_pid(path: &Path) -> u32 {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            if let Ok(value) = tokio::fs::read_to_string(path).await {
-                return value.trim().parse().expect("child should record its pid");
+            if let Some(pid) = tokio::fs::read_to_string(path)
+                .await
+                .ok()
+                .and_then(|value| value.strip_suffix('\n')?.parse().ok())
+            {
+                return pid;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
@@ -6416,9 +6589,17 @@ mod tests {
         }
     }
 
+    /// The deadline of the bounded-command tests' children: long enough
+    /// for one to write its pid on a loaded machine, far shorter than its
+    /// 30-second sleep.
+    #[cfg(unix)]
+    const BOUNDED_TEST_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Wait until `pid` is gone, at most until its deadline has passed and
+    /// a few seconds more.
     #[cfg(unix)]
     async fn assert_process_stops(pid: u32) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + BOUNDED_TEST_DEADLINE + Duration::from_secs(5);
         while process_is_alive(pid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -6429,7 +6610,7 @@ mod tests {
     fn sleeping_command(pid_file: &Path) -> Command {
         let mut command = Command::new("sh");
         command
-            .args(["-c", "printf %s $$ > \"$1\"; exec sleep 30", "sh"])
+            .args(["-c", "printf '%s\\n' $$ > \"$1\"; exec sleep 30", "sh"])
             .arg(pid_file);
         command
     }
@@ -6638,11 +6819,47 @@ mod tests {
     #[test]
     fn published_port_parser_keeps_container_and_host_identity_separate() {
         let mappings = SessionSandbox::parse_published_ports(
-            "3000/tcp -> 127.0.0.1:43117\n5173/tcp -> [::1]:43118\n",
+            "3000/tcp -> 127.0.0.2:43117\n5173/tcp -> ::1:43118\n8080/tcp -> [::1]:43119\n\
+             9000/tcp -> 127.0.0.1:43120\n",
         );
-        assert_eq!(mappings.get(&3000), Some(&43117));
-        assert_eq!(mappings.get(&5173), Some(&43118));
-        assert_eq!(mappings.len(), 2);
+        let address = |text: &str| Some(text.parse::<SocketAddr>().unwrap());
+        assert_eq!(mappings.get(&3000).copied(), address("127.0.0.2:43117"));
+        assert_eq!(mappings.get(&5173).copied(), address("[::1]:43118"));
+        assert_eq!(mappings.get(&8080).copied(), address("[::1]:43119"));
+        assert_eq!(mappings.get(&9000).copied(), address("127.0.0.1:43120"));
+        assert_eq!(mappings.len(), 4);
+        // A port Podman published beyond loopback is never a Preview's.
+        assert!(SessionSandbox::parse_published_ports(
+            "3000/tcp -> 0.0.0.0:43117\n3000/tcp -> 192.0.2.4:43118\n"
+        )
+        .is_empty());
+    }
+
+    /// Session ports are published on a loopback address other than
+    /// `127.0.0.1`, where the workbench keeps its sign-in cookie: `[::1]` on
+    /// macOS, `127.0.0.2` elsewhere, and `127.0.0.1` only where this computer
+    /// cannot listen on that one.
+    #[test]
+    fn session_ports_are_published_beside_the_workbench_address_not_on_it() {
+        let ipv6: IpAddr = "::1".parse().unwrap();
+        let other_ipv4: IpAddr = "127.0.0.2".parse().unwrap();
+        assert_eq!(publish_arg(ipv6, 3000), "[::1]::3000");
+        assert_eq!(publish_arg(other_ipv4, 5173), "127.0.0.2::5173");
+        if cfg!(target_os = "macos") {
+            assert_eq!(PREFERRED_SESSION_PORT_ADDRESS, ipv6);
+        } else {
+            assert_eq!(PREFERRED_SESSION_PORT_ADDRESS, other_ipv4);
+        }
+        assert_eq!(choose_session_port_address(ipv6, |_| true), ipv6);
+        assert_eq!(
+            choose_session_port_address(ipv6, |_| false),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        // This computer can listen on the preferred address (CI and
+        // development hosts have both), so that is the one used.
+        assert_eq!(session_port_address(), PREFERRED_SESSION_PORT_ADDRESS);
+        assert!(session_port_address().is_loopback());
+        assert_ne!(session_port_address(), IpAddr::V4(Ipv4Addr::LOCALHOST));
     }
 
     #[test]
@@ -6724,12 +6941,10 @@ mod tests {
     async fn bounded_command_timeout_kills_and_reaps_child() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
-        let output = SessionSandbox::run_bounded_command(
-            sleeping_command(&pid_file),
-            Duration::from_millis(250),
-        )
-        .await
-        .unwrap();
+        let output =
+            SessionSandbox::run_bounded_command(sleeping_command(&pid_file), BOUNDED_TEST_DEADLINE)
+                .await
+                .unwrap();
         let pid = wait_for_pid(&pid_file).await;
         assert!(output.timed_out);
         assert_process_stops(pid).await;
@@ -6740,9 +6955,11 @@ mod tests {
     async fn command_supervisor_reaps_child_after_caller_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
+        // The caller goes away before the deadline; the supervisor still
+        // kills the child at the deadline.
         let caller = tokio::spawn(SessionSandbox::run_bounded_command(
             sleeping_command(&pid_file),
-            Duration::from_millis(250),
+            BOUNDED_TEST_DEADLINE,
         ));
         let pid = wait_for_pid(&pid_file).await;
         assert!(process_is_alive(pid));
@@ -7504,10 +7721,12 @@ mod tests {
         assert!(args.windows(2).any(|w| w[0] == "--pids-limit"));
         assert!(args.iter().any(|a| a == "--memory"));
         // Bridge network preserves the logical container port while asking
-        // Podman for a unique, loopback-only host port.
+        // Podman for a unique, loopback-only host port, never on the
+        // workbench's address.
         assert!(args
             .windows(2)
-            .any(|w| w[0] == "-p" && w[1] == "127.0.0.1::3000"));
+            .any(|w| w[0] == "-p" && w[1] == session_port_publish_arg(3000)));
+        assert!(!args.iter().any(|arg| arg.starts_with("127.0.0.1:")));
         assert!(!args.iter().any(|arg| arg == "3000:3000"));
         assert!(!args
             .windows(2)
@@ -8697,6 +8916,36 @@ mod tests {
             .await
             .expect("sandbox should start");
 
+        // It got each resource cap whose cgroup controller this host's
+        // Podman has, and runs with SELinux labelling off on a Linux host
+        // with SELinux enabled.
+        let host = crate::container_host::container_host()
+            .await
+            .expect("podman info names the cgroup controllers");
+        assert_eq!(sb.resource_caps(), Some(host.caps));
+        let mut inspect = Command::new(PODMAN);
+        inspect.args([
+            "inspect",
+            "--format",
+            "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}} {{json .HostConfig.SecurityOpt}}",
+            &sb.container,
+        ]);
+        let inspected = SessionSandbox::run_bounded_command(inspect, Duration::from_secs(20))
+            .await
+            .unwrap();
+        let inspected = String::from_utf8_lossy(&inspected.stdout)
+            .trim()
+            .to_string();
+        let fields: Vec<&str> = inspected.splitn(4, ' ').collect();
+        assert_eq!(fields[0] == "2147483648", host.caps.memory, "{inspected}");
+        assert_eq!(fields[1] == "2000000000", host.caps.cpus, "{inspected}");
+        assert_eq!(fields[2] == "512", host.caps.pids, "{inspected}");
+        assert_eq!(
+            fields[3].contains("label=disable"),
+            host.label_disable,
+            "{inspected}"
+        );
+
         // A command runs inside the container.
         let r = sb
             .exec(&["echo", "hello-sandbox"], Duration::from_secs(20))
@@ -8854,6 +9103,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn node_dependencies_are_linux_local_and_cleanup_is_exact() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         std::fs::create_dir(directory.path().join("node_modules")).unwrap();
@@ -8924,6 +9174,16 @@ mod tests {
         .await
         .unwrap()
         .is_empty());
+    }
+
+    /// Releases in this test run as if no other container engine, Podman
+    /// connection or rootful Podman could have a mount on a mount point
+    /// (`dependency_mountpoint::held_elsewhere`), which on a Mac (every
+    /// machine has a rootful connection) or on Fedora or Ubuntu with its
+    /// podman package (`/run/podman`) would keep every one.
+    fn nothing_elsewhere() {
+        crate::dependency_mountpoint::ASSUME_NOTHING_ELSEWHERE
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// What `release_unused` decides for `mountpoint` now.
@@ -9046,6 +9306,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn a_repository_without_node_modules_has_none_left_behind() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9053,6 +9314,10 @@ mod tests {
             .join("node_modules");
         let first_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
         let second_id = format!("node-mountpoint-test-{}", uuid::Uuid::new_v4());
+        // A failed assertion still removes both Sessions' containers and
+        // dependency volumes.
+        let _first_leftovers = SessionLeftovers(first_id.clone());
+        let _second_leftovers = SessionLeftovers(second_id.clone());
         let start = |id: String| {
             let path = directory.path().to_path_buf();
             async move {
@@ -9116,6 +9381,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires rootless podman; run this test explicitly"]
     async fn under_the_hardened_workload_the_mount_point_is_the_persons_until_removal() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9222,6 +9488,19 @@ mod tests {
         at: &'static str,
     }
 
+    /// How the person's container holds the directory, as a release names
+    /// it.
+    #[cfg(unix)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Holds {
+        /// `podman container inspect` shows its mount on it
+        /// ([`Kept::Mounted`]).
+        Mounted,
+        /// Its processes may mount on it themselves, which no inspect shows
+        /// ([`Kept::MayMount`]).
+        MayMount,
+    }
+
     /// End-to-end, needs Podman; what the tests below share. A Session on a
     /// repository without `node_modules` makes the mount point. A container
     /// of the person's own, run as `own` says (given the repository and its
@@ -9242,6 +9521,22 @@ mod tests {
         setup: &str,
         check: &str,
     ) {
+        assert_an_own_container_holds_the_mount_point(own, setup, check, Holds::Mounted).await;
+    }
+
+    /// [`assert_an_own_containers_mount_keeps_the_mount_point`], where the
+    /// release names the person's container as `holds` says: for
+    /// [`Holds::MayMount`], its mount is one its own processes made, which
+    /// no inspect shows, and it keeps the directory because they may mount
+    /// below a host directory it takes.
+    #[cfg(unix)]
+    async fn assert_an_own_container_holds_the_mount_point(
+        own: impl Fn(&Path, &Path, &str) -> OwnMount,
+        setup: &str,
+        check: &str,
+        holds: Holds,
+    ) {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9279,13 +9574,16 @@ mod tests {
 
         sandbox.stop_checked().await.unwrap();
         let decision = release_decision(&mountpoint).await;
+        let named = match (&decision, holds) {
+            (Some(Decision::Kept(Kept::Mounted { container, at, .. })), Holds::Mounted)
+            | (Some(Decision::Kept(Kept::MayMount { container, at, .. })), Holds::MayMount) => {
+                *container == own_id && at == Path::new(own.at)
+            }
+            _ => false,
+        };
         assert!(
-            matches!(
-                &decision,
-                Some(Decision::Kept(Kept::Mounted { container, at, .. }))
-                    if *container == own_id && at == Path::new(own.at)
-            ),
-            "inspect saw the person's container {own_id} mount it at {}: {decision:?}",
+            named,
+            "the release names the person's container {own_id} as {holds:?} at {}: {decision:?}",
             own.at
         );
         let checked = Command::new(PODMAN)
@@ -9535,10 +9833,17 @@ mod tests {
     /// `--volumes-from`: container A bind-mounts the repository at
     /// `/workspaces/x`, and container B takes A's mounts (`--volumes-from
     /// A`) and mounts a tmpfs on `/workspaces/x/node_modules`. B's own
-    /// inspect leaves out the bind it takes, so it is read from A's. Podman
-    /// lets A go while B runs, and then says nothing of B's bind: the
-    /// directory stays, saying why. Removing it would detach B's tmpfs on
-    /// Linux. Run with:
+    /// inspect leaves out the bind it takes, so it is read from A's. B,
+    /// which has a mount on the directory, is named, also where nothing
+    /// confines A's mounts (rootless Podman on Ubuntu applies no AppArmor
+    /// profile), so that A's processes could mount there too. Podman lets A
+    /// go while B runs, and then says nothing of B's bind: the directory
+    /// stays, saying why. Removing it would detach B's tmpfs on Linux. Last,
+    /// a container C that only binds the repository keeps the directory
+    /// exactly when a process of C can mount on it in a user namespace of
+    /// its own, which the test tries: refused under SELinux's `container_t`
+    /// (a Podman machine, Fedora), allowed under rootless Podman on Ubuntu.
+    /// Run with:
     ///
     /// ```text
     /// cargo test -p axocoatl-isolation --lib \
@@ -9549,6 +9854,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires podman; run this test explicitly"]
     async fn mounts_taken_with_volumes_from_keep_the_mount_point() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9640,7 +9946,9 @@ mod tests {
                         && source == directory.path()
                         && at == Path::new("/workspaces/x/node_modules")
             ),
-            "inspect of {} gave the bind {taker_id} takes with --volumes-from: {decision:?}",
+            "inspect of {} gave the bind {taker_id} takes with --volumes-from, and {taker_id}, \
+             which has a mount on it, is named before {}, which at most could: {decision:?}",
+            from.0,
             from.0
         );
         still_mounted(&taker.0).await;
@@ -9665,14 +9973,76 @@ mod tests {
         still_mounted(&taker.0).await;
 
         podman_ok(&["rm", "-f", "-t", "0", &taker.0]).await;
-        let unrelated = unrelated_container().await;
-        assert_eq!(
-            release_decision(&mountpoint).await,
-            Some(Decision::Released(Released::Removed)),
-            "no container mounts it and it is empty: removed, with another container inspected"
+        // C binds the repository and has nothing mounted below it. Whether
+        // its processes can mount on the directory is tried, in a user
+        // namespace of a process of its own that ends at once.
+        let binder = OwnContainer(format!("axocoatl-test-binder-{}", uuid::Uuid::new_v4()));
+        let binder_id = podman_ok(&[
+            "run",
+            "-d",
+            "--name",
+            &binder.0,
+            "--network=none",
+            "-v",
+            &format!("{}:/workspaces/x", directory.path().display()),
+            DEFAULT_IMAGE,
+            "sleep",
+            "600",
+        ])
+        .await;
+        let tried = Command::new(PODMAN)
+            .args([
+                "exec",
+                &binder.0,
+                "unshare",
+                "-Urm",
+                "sh",
+                "-c",
+                "mount -t tmpfs probe /workspaces/x/node_modules",
+            ])
+            .output()
+            .await
+            .unwrap();
+        println!(
+            "a process of {binder_id} could mount on the directory itself: {}",
+            tried.status.success()
         );
+        let decision = release_decision(&mountpoint).await;
+        if tried.status.success() {
+            assert!(
+                matches!(
+                    &decision,
+                    Some(Decision::Kept(Kept::MayMount { container, source, at, why }))
+                        if *container == binder_id
+                            && source == directory.path()
+                            && at == Path::new("/workspaces/x/node_modules")
+                            && why.starts_with("neither SELinux")
+                ),
+                "a process of {binder_id} mounted on it in a user namespace of its own, so it \
+                 may: {decision:?}"
+            );
+            assert!(mountpoint.is_dir());
+            assert_eq!(std::fs::read_dir(&mountpoint).unwrap().count(), 0);
+            podman_ok(&["rm", "-f", "-t", "0", &binder.0]).await;
+            let unrelated = unrelated_container().await;
+            assert_eq!(
+                release_decision(&mountpoint).await,
+                Some(Decision::Released(Released::Removed)),
+                "no container mounts it and it is empty: removed, with another container \
+                 inspected"
+            );
+            drop(unrelated);
+        } else {
+            assert_eq!(
+                decision,
+                Some(Decision::Released(Released::Removed)),
+                "{binder_id} could not mount on it ({}): nothing mounts it and it is empty, so \
+                 it is removed, with {binder_id} inspected",
+                String::from_utf8_lossy(&tried.stderr).trim()
+            );
+        }
         assert!(!mountpoint.exists());
-        drop(unrelated);
+        drop(binder);
         SessionSandbox::remove_named_with_dependencies(&id)
             .await
             .unwrap();
@@ -9696,6 +10066,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires rootless podman; run this test explicitly"]
     async fn an_overlay_of_a_keep_id_container_keeps_it_and_says_why() {
+        nothing_elsewhere();
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("package.json"), "{}").unwrap();
         let mountpoint = std::fs::canonicalize(directory.path())
@@ -9796,6 +10167,45 @@ mod tests {
             "awk '$5 == \"/workspaces/x/node_modules\" { found = 1 } END { exit !found }' \
              /proc/self/mountinfo || { echo 'nothing is mounted at /workspaces/x/node_modules' >&2; \
              exit 1; }; test \"$(cat /workspaces/x/node_modules/tmp-marker)\" = tmp",
+        )
+        .await;
+    }
+
+    /// End-to-end: needs Podman. A container that SELinux does not label
+    /// (`--security-opt label=disable`, as on a host without SELinux or
+    /// AppArmor) and that binds the repository: a process in it makes a user
+    /// namespace of its own and mounts a tmpfs on `node_modules` there,
+    /// which no inspect reports. Nothing confines its mounts, so the bind
+    /// keeps the mount point, and the release says that its processes may
+    /// mount there ([`Kept::MayMount`]). Run with:
+    ///
+    /// ```text
+    /// cargo test -p axocoatl-isolation --lib \
+    ///   session_sandbox::tests::a_mount_made_in_a_containers_own_user_namespace_keeps_it \
+    ///   -- --ignored --exact --test-threads=1
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires podman; run this test explicitly"]
+    async fn a_mount_made_in_a_containers_own_user_namespace_keeps_it() {
+        assert_an_own_container_holds_the_mount_point(
+            |repository, _, _| OwnMount {
+                before: Vec::new(),
+                options: vec![
+                    "--security-opt".into(),
+                    "label=disable".into(),
+                    "-v".into(),
+                    format!("{}:/w", repository.display()),
+                ],
+                at: "/w/node_modules",
+            },
+            "setsid unshare -Urm sh -c 'mount -t tmpfs nested /w/node_modules && \
+             echo nested > /w/node_modules/marker && exec sleep 601' >/dev/null 2>&1 & sleep 1",
+            "for p in /proc/[0-9]*; do if tr '\\0' ' ' < $p/cmdline 2>/dev/null | \
+             grep -q '^sleep 601'; then awk '$5 == \"/w/node_modules\" { found = 1 } END \
+             { exit !found }' $p/mountinfo && exit 0; fi; done; echo 'no mount at \
+             /w/node_modules in its own namespace' >&2; exit 1",
+            Holds::MayMount,
         )
         .await;
     }

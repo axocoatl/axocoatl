@@ -69,6 +69,7 @@ fn statement(signer: &receipt_key::SigningKey) -> Statement {
                     routes: Vec::new(),
                 }],
                 environment: None,
+                limits: None,
             },
             network: NetworkSummary::default(),
             checks: vec![CheckFacts {
@@ -332,6 +333,110 @@ fn a_changed_or_malformed_receipt_is_exit_one_and_bad_flags_exit_three() {
     ] {
         assert_eq!(verify(&request).exit_code, exit::USAGE, "{request:?}");
     }
+}
+
+/// A receipt of a run that did not pass verifies like any other; with
+/// `--require-pass` it is exit 6, after a bad signature (1), an untrusted
+/// key (2) and files that differ (4).
+#[cfg(unix)]
+#[test]
+fn require_pass_fails_a_valid_receipt_whose_run_did_not_pass() {
+    let mut fixture = Fixture::new();
+    let passed = verify(&VerifyRequest {
+        keys: vec![fixture.keys_file()],
+        require_pass: true,
+        ..fixture.request()
+    });
+    assert_eq!(passed.exit_code, exit::VALID, "{passed:?}");
+    for verdict in [
+        RunVerdict::ChecksFailed,
+        RunVerdict::NeedsAttention,
+        RunVerdict::Interrupted,
+        RunVerdict::Error,
+    ] {
+        let mut failed = statement(&fixture.key);
+        failed.predicate.verdict = verdict;
+        failed.predicate.exit_code = verdict.exit_code();
+        let (envelope, _) = sign_statement(fixture.key.key_pair(), &failed).unwrap();
+        std::fs::write(&fixture.receipt, envelope_file_bytes(&envelope)).unwrap();
+        fixture.envelope = envelope;
+        let name = serde_json::to_value(verdict).unwrap();
+        let name = name.as_str().unwrap();
+        // Without --require-pass the receipt is valid: it says what happened.
+        let report = verify(&VerifyRequest {
+            keys: vec![fixture.keys_file()],
+            repo: Some(fixture.repo.clone()),
+            ..fixture.request()
+        });
+        assert_eq!(report.exit_code, exit::VALID, "{report:?}");
+        assert_eq!(report.verdict.as_deref(), Some(name));
+        let report = verify(&VerifyRequest {
+            keys: vec![fixture.keys_file()],
+            repo: Some(fixture.repo.clone()),
+            require_pass: true,
+            ..fixture.request()
+        });
+        assert_eq!(report.exit_code, exit::NOT_PASSED, "{report:?}");
+        assert_eq!(report.result, "not-passed");
+        assert_eq!(report.signature.as_deref(), Some("trusted"));
+        assert_eq!(
+            report.problems,
+            [format!(
+                "the run's verdict is {name}, not pass (--require-pass)"
+            )]
+        );
+        let mut text = Vec::new();
+        print_report(&report, false, &mut text);
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.ends_with("result: not-passed (exit 6)\n"), "{text}");
+        let mut json = Vec::new();
+        print_report(&report, true, &mut json);
+        let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(value["result"], "not-passed");
+        assert_eq!(value["exit_code"], 6);
+    }
+    // An untrusted key and files that differ come first.
+    let report = verify(&VerifyRequest {
+        require_pass: true,
+        ..fixture.request()
+    });
+    assert_eq!(report.exit_code, exit::UNTRUSTED, "{report:?}");
+    std::fs::write(fixture.repo.join("calc.py"), "changed\n").unwrap();
+    let report = verify(&VerifyRequest {
+        keys: vec![fixture.keys_file()],
+        repo: Some(fixture.repo.clone()),
+        require_pass: true,
+        ..fixture.request()
+    });
+    assert_eq!(report.exit_code, exit::MISMATCH, "{report:?}");
+    assert_eq!(report.problems.len(), 2, "{report:?}");
+}
+
+/// The flag on the command line.
+#[test]
+fn verify_takes_require_pass_on_the_command_line() {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(subcommand)]
+        command: ReceiptCommands,
+    }
+    let parsed = Cli::try_parse_from(["x", "verify", "r.json", "--require-pass"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        ReceiptCommands::Verify {
+            require_pass: true,
+            ..
+        }
+    ));
+    let parsed = Cli::try_parse_from(["x", "verify", "r.json"]).unwrap();
+    assert!(matches!(
+        parsed.command,
+        ReceiptCommands::Verify {
+            require_pass: false,
+            ..
+        }
+    ));
 }
 
 #[test]

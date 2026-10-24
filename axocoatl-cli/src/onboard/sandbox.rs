@@ -19,6 +19,7 @@ use axocoatl_isolation::podman_report::{
 
 use super::detect::Os;
 use super::host::Cmd;
+use super::id_map_attempt::Outcome;
 use super::ui::joined;
 use super::{Onboarding, PodmanChoice};
 
@@ -114,7 +115,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
             }
             PodmanReadiness::MachineStopped => {
                 let name = machine_name(&o.facts.podman);
-                let start = machine_cmd(&["start"], &name);
+                let start = machine_start(&name);
                 if !o.ui.consent(
                     &format!("Start {name} now? (`{}`)", start.display()),
                     true,
@@ -232,6 +233,13 @@ fn machine_cmd(verb: &[&str], name: &str) -> Cmd {
         args.push(name);
     }
     Cmd::new("podman", &args)
+}
+
+/// `podman machine start [name]` ([`Cmd::machine_start`]).
+fn machine_start(name: &str) -> Cmd {
+    let start = machine_cmd(&["start"], name);
+    let args: Vec<&str> = start.args.iter().map(String::as_str).collect();
+    Cmd::machine_start(&args, name)
 }
 
 /// Why onboarding does not change the machine: Podman is reached through
@@ -423,7 +431,7 @@ async fn create_machine(o: &mut Onboarding) -> bool {
         args: spec.init_args(None),
         ..Cmd::new("podman", &[])
     };
-    let start = Cmd::new("podman", &["machine", "start"]);
+    let start = machine_start("podman-machine-default");
     let untested = if spec.tested() {
         String::new()
     } else {
@@ -485,7 +493,7 @@ async fn rootless(o: &mut Onboarding) -> bool {
     let commands = vec![
         machine_cmd(&["stop"], &name),
         machine_cmd(&["set", "--rootful=false"], &name),
-        machine_cmd(&["start"], &name),
+        machine_start(&name),
     ];
     if o.ui.consent(
         &format!(
@@ -592,7 +600,7 @@ async fn machine_memory(o: &mut Onboarding) -> bool {
     let commands = vec![
         machine_cmd(&["stop"], &machine.name),
         machine_cmd(&["set", "--memory", &target_text], &machine.name),
-        machine_cmd(&["start"], &machine.name),
+        machine_start(&machine.name),
     ];
     if o.ui.consent(
         &format!(
@@ -638,10 +646,8 @@ fn version(o: &mut Onboarding) -> bool {
         ));
         return false;
     }
-    if !o.facts.os.is_macos() && (major, minor) < TESTED_LINUX_PODMAN {
-        o.ui.warn(format!(
-            "Podman {version} has not been tested with Axocoatl (4.9 is)"
-        ));
+    if !o.facts.os.is_macos() && (major, minor) != TESTED_LINUX_PODMAN {
+        o.ui.warn(podman_report::linux_untested(&version));
     }
     true
 }
@@ -728,6 +734,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
                     Some((failed, said)) => (format!("{failed})"), said.to_string()),
                     None => (error.clone(), String::new()),
                 };
+                record_attempt(o, command, Outcome::Failed, &failed, &said);
                 o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
                 return false;
             }
@@ -741,18 +748,15 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            o.step_left(install_failed(
-                command,
-                &format!("`{}` did not reinstall it", command.display()),
-                &said,
-                &fix_text,
-                rest,
-            ));
+            let failed = format!("`{}` did not reinstall it", command.display());
+            record_attempt(o, command, Outcome::Failed, &failed, &said);
+            o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
             return false;
         }
         if !o.ui.plan() {
             let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
             if !now.usable() {
+                record_attempt(o, command, Outcome::DidNotFix, "", "");
                 o.step_left(install_did_not_fix(
                     &command.display(),
                     &now.describe(),
@@ -764,7 +768,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
     }
     let ran = o.ui.execute_all(&o.host, rest).await;
     if let (Err(error), None) = (&ran, &install_command) {
-        o.step_left(format!("{error}; run {fix_text}"));
+        o.step_left(format!("{error}; run `{fix_text}`"));
         return false;
     }
     reinspect(o).await;
@@ -782,6 +786,9 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         // never one.
         match (install_command.as_ref().map(Cmd::display), again) {
             (Some(installed), Some(_)) => {
+                if let Some(command) = &install_command {
+                    record_attempt(o, command, Outcome::DidNotFix, "", "");
+                }
                 let keeps = o
                     .facts
                     .podman
@@ -809,6 +816,34 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             false
         }
     }
+}
+
+/// Keep what `command`, the install or reinstall of the id-map helpers'
+/// package, did, so that doctor and later runs do not offer it again while
+/// the helpers are the same files ([`id_map_attempt`]); for a failure,
+/// with what failed (`error`, the package manager's last words `said`) and
+/// what to do instead, as [`install_failed`] says it. A failure is kept
+/// only when the same command cannot work as it is
+/// ([`InstallFailure::lasts`]): after one the network may have caused, the
+/// next run offers it again.
+///
+/// [`id_map_attempt`]: super::id_map_attempt
+fn record_attempt(o: &Onboarding, command: &Cmd, outcome: Outcome, error: &str, said: &str) {
+    if o.ui.plan() || (outcome == Outcome::Failed && !InstallFailure::of(command, said).lasts()) {
+        return;
+    }
+    let shown = command.display();
+    let words = match outcome {
+        Outcome::DidNotFix => String::new(),
+        Outcome::Failed => {
+            let words = install_failed(command, error, said, &shown, &[]);
+            words
+                .strip_suffix("; then run ``")
+                .map(str::to_string)
+                .unwrap_or(words)
+        }
+    };
+    super::id_map_attempt::record(&o.host, &shown, outcome, &words);
 }
 
 /// `text` with its first letter in lower case, after a `;`.
@@ -844,30 +879,78 @@ fn install_did_not_fix(ran: &str, still: &str, keeps: &[String]) -> String {
     }
 }
 
+/// Why the install or reinstall of the id-map helpers' package failed or
+/// changed nothing, from the package manager's last words.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallFailure {
+    /// dnf cannot reinstall a build that no enabled repository has any more
+    /// (Fedora's updates repository keeps only the newest build): `Packages
+    /// for argument 'shadow-utils' installed, but not available.` (exit 1,
+    /// dnf5 5.2.18 in fedora:42); dnf4 (RHEL 9 and its rebuilds) ends with
+    /// `Error: No packages marked for reinstall.` after `Installed package …
+    /// not available.`
+    NotInRepositories,
+    /// apt's package lists do not have the package, or not the build
+    /// installed: `Reinstallation of uidmap is not possible, it cannot be
+    /// downloaded.` (exit 0, apt 2.7 in ubuntu:24.04), `Unable to locate
+    /// package`, `has no installation candidate`.
+    NotInLists,
+    /// apt could not download it (`Unable to fetch some archives`, `Failed
+    /// to fetch`): its lists are out of date, or the network failed.
+    NotFetched,
+    /// Anything else: the network, the repositories' metadata or keys, sudo.
+    Other,
+}
+
+impl InstallFailure {
+    fn of(command: &Cmd, said: &str) -> Self {
+        let manager = command.args.first().map(String::as_str);
+        if said.contains("installed, but not available")
+            || (manager == Some("dnf") && said.contains("No packages marked for reinstall"))
+        {
+            return Self::NotInRepositories;
+        }
+        if manager != Some("apt-get") {
+            return Self::Other;
+        }
+        let not_in_lists = [
+            "cannot be downloaded",
+            "Unable to locate package",
+            "has no installation candidate",
+        ];
+        if not_in_lists.iter().any(|words| said.contains(words)) {
+            Self::NotInLists
+        } else if ["Unable to fetch some archives", "Failed to fetch"]
+            .iter()
+            .any(|words| said.contains(words))
+        {
+            Self::NotFetched
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Whether the same command, run again as it is, fails the same way
+    /// whatever else changes: kept ([`super::id_map_attempt`]) so that it
+    /// is not offered again. A failure the network or a repository may
+    /// have caused is not: the same command works once that is fixed.
+    fn lasts(self) -> bool {
+        matches!(self, Self::NotInRepositories | Self::NotInLists)
+    }
+}
+
 /// The step left when `command`, the install or reinstall of the id-map
 /// helpers' package, failed or changed nothing (`error`), the package
 /// manager's last words being `said`: what failed, and what to do where
-/// the same command cannot work as it is. dnf cannot reinstall a build
-/// that no enabled repository has any more (Fedora's updates repository
-/// keeps only the newest build): `Packages for argument 'shadow-utils'
-/// installed, but not available.` (exit 1, dnf5 5.2.18 in fedora:42). apt
-/// cannot download a package its lists do not have, or no longer have:
-/// `Reinstallation of uidmap is not possible, it cannot be downloaded.`
-/// (exit 0, apt 2.7 in ubuntu:24.04), `Unable to locate package`, `Unable
-/// to fetch some archives`; its lists need `apt-get update` first. `rest`:
-/// what the fix runs after it (`usermod`, `podman system migrate`).
+/// the same command cannot work as it is ([`InstallFailure`]); apt's lists
+/// need `apt-get update` first. `rest`: what the fix runs after it
+/// (`usermod`, `podman system migrate`).
 fn install_failed(command: &Cmd, error: &str, said: &str, fix_text: &str, rest: &[Cmd]) -> String {
     let shown = command.display();
     let package = command.args.last().cloned().unwrap_or_default();
     let said = said.trim();
-    // dnf5: "Packages for argument '…' installed, but not available."; dnf4
-    // (RHEL 9 and its rebuilds) ends with "Error: No packages marked for
-    // reinstall." after "Installed package … not available."
-    let dnf = command.args.first().is_some_and(|arg| arg == "dnf");
-    if said.contains("installed, but not available")
-        || (dnf && said.contains("No packages marked for reinstall"))
-    {
-        return format!(
+    match InstallFailure::of(command, said) {
+        InstallFailure::NotInRepositories => format!(
             "`{shown}` failed: dnf says \"{said}\": the {package} build installed here is not \
              in the enabled repositories (Fedora's updates repository keeps only the newest \
              build), so dnf cannot reinstall it. Install the newest build instead, which writes \
@@ -875,34 +958,24 @@ fn install_failed(command: &Cmd, error: &str, said: &str, fix_text: &str, rest: 
              nothing to do, enable a repository that has {package} (`dnf repolist --all` lists \
              them); then run `{}`",
             joined(rest)
-        );
-    }
-    let apt = command.args.first().is_some_and(|arg| arg == "apt-get");
-    let lists = [
-        "cannot be downloaded",
-        "Unable to locate package",
-        "has no installation candidate",
-        "Unable to fetch some archives",
-        "Failed to fetch",
-    ];
-    if apt && lists.iter().any(|words| said.contains(words)) {
-        return format!(
+        ),
+        InstallFailure::NotInLists | InstallFailure::NotFetched => format!(
             "{error}: apt says \"{said}\": apt's package lists are out of date or no longer \
              have {package}, so it cannot download it. Update them first: `sudo apt-get update \
              && {fix_text}`"
-        );
-    }
-    // Anything else (the network, the repositories' metadata or keys): say
-    // what failed; running the same command only helps once that is fixed.
-    match said {
-        "" => format!(
-            "{error}; fix what it reported (often the network or the package manager's \
-             repositories), then run {fix_text}"
         ),
-        said => format!(
-            "{error}: {said}; fix that (often the network or the package manager's \
-             repositories), then run {fix_text}"
-        ),
+        // Say what failed; running the same command helps once that is
+        // fixed.
+        InstallFailure::Other => match said {
+            "" => format!(
+                "{error}; fix what it reported (often the network or the package manager's \
+                 repositories), then run `{fix_text}`"
+            ),
+            said => format!(
+                "{error}: {said}; fix that (often the network or the package manager's \
+                 repositories), then run `{fix_text}`"
+            ),
+        },
     }
 }
 
@@ -957,8 +1030,10 @@ fn landlock(o: &mut Onboarding) -> bool {
         .as_ref()
         .is_some_and(|runtime| runtime.selinux == Some(true))
     {
-        o.ui.warn(
-            "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet",
+        o.ui.ok(
+            "SELinux is enabled: Session and browser containers run with SELinux labelling off \
+             (--security-opt label=disable), so they can use your repository without \
+             relabelling it; their other limits stay",
         );
     }
     let item = crate::doctor::landlock_item(o.facts.landlock_abi, Some(&release), wsl.is_some());
@@ -1124,7 +1199,9 @@ mod install_failed_tests {
             step,
             "`sudo dnf reinstall -y shadow-utils` failed (exit 1): Error: Failed to download \
              metadata for repo 'fedora'; fix that (often the network or the package manager's \
-             repositories), then run sudo dnf reinstall -y shadow-utils && podman system migrate"
+             repositories), then run `sudo dnf reinstall -y shadow-utils && podman system \
+             migrate`"
         );
+        crate::paste_safe::assert_paste_safe(&step);
     }
 }

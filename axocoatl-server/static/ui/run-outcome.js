@@ -9,7 +9,7 @@ import { adopt } from './sheets.js';
  * whose findings could not be read (with the worker's answers), the run's notes
  * (what was neither a gap nor a warning), warnings (the same-model reviewer
  * warning included), usage (a known subtotal when
- * incomplete, and a cost the run does not know as such), the network summary, the run's signed receipt
+ * incomplete, naming the calls that did not report, and a cost the run does not know as such), the network summary, the run's signed receipt
  * (the key that signed it, the files it covers and a download link, or why there is none), a link to
  * download the record bundle and Keep as PR (`<ax-keep-pr>`, workstream keep).
  *
@@ -111,11 +111,25 @@ export function costText(usage = {}) {
   return cost > 0 ? `cost unknown (reserved up to ${dollars})` : 'cost unknown';
 }
 
-/** Usage in words, saying when the numbers are only a known subtotal. */
+/** Most calls the usage line names among those that reported no usage. */
+const UNREPORTED_SHOWN = 3;
+
+/**
+ * Usage in words, saying when the numbers are only a known subtotal and,
+ * when the Outcome names them (`unreported`), which calls reported no
+ * usage or no cost. This mirrors `RunUsage::text`
+ * (crates/axocoatl-session/src/run_outcome.rs), as the run summary and
+ * JUnit print it.
+ */
 export function usageText(usage = {}) {
   const text = `${usage.input_tokens || 0} input + ${usage.output_tokens || 0} output tokens, ${costText(usage)}`;
   const retries = usage.retries ? `, ${usage.retries} provider retr${usage.retries === 1 ? 'y' : 'ies'}` : '';
-  return usage.complete === false ? `${text}${retries} (known subtotal: some usage was not reported)` : `${text}${retries}`;
+  const unreported = Array.isArray(usage.unreported) ? usage.unreported.map(String) : [];
+  if (usage.complete !== false) return `${text}${retries}`;
+  if (unreported.length === 0) return `${text}${retries} (known subtotal: some usage was not reported)`;
+  const named = unreported.slice(0, UNREPORTED_SHOWN);
+  if (unreported.length > UNREPORTED_SHOWN) named.push(`and ${unreported.length - UNREPORTED_SHOWN} more`);
+  return `${text}${retries} (known subtotal: usage or cost not reported for ${named.join('; ')})`;
 }
 
 const asciiLower = (text) => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
@@ -224,7 +238,7 @@ export class AxRunOutcome extends HTMLElement {
     link.setAttribute('download', `${outcome.run_id}.receipt.dsse.json`);
     actions.append(link, el('span', 'muted mono', receipt.statement_sha256 || ''));
     section.append(actions, el('p', 'muted',
-      'Check it with axocoatl receipt verify <file> --keys <trusted keys> --repo <checkout>. '
+      'Check it with axocoatl receipt verify FILE --keys TRUSTED_KEYS --repo CHECKOUT, where TRUSTED_KEYS is a file of the receipt keys you trust. '
       + 'It proves which key signed these facts and that the covered files are the ones judged, not that the change is correct.'));
   }
 

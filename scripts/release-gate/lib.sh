@@ -23,6 +23,60 @@ gate_die() {
 
 gate_now_ms() { node -e 'process.stdout.write(String(Date.now()))'; }
 
+# gate_curl ARGS...: curl for the gate's own requests to a daemon, a model
+# server or a stub: at most 2 s to connect and GATE_CURL_MAX_TIME seconds
+# (default 5) in all, so one that accepts the connection and never answers
+# fails the step instead of hanging the gate.
+gate_curl() { curl --connect-timeout 2 --max-time "${GATE_CURL_MAX_TIME:-5}" "$@"; }
+
+# gate_daemon_up PORT: something answers /health/live on PORT.
+gate_daemon_up() { gate_curl -fsS "http://127.0.0.1:$1/health/live" >/dev/null 2>&1; }
+
+# gate_daemon_state PORT CONFIG: what answers /health on PORT, decided as
+# onboarding decides it (axocoatl-cli/src/onboard/smoke.rs, started_at):
+#   current  an Axocoatl daemon (its /health names its version) that started
+#            after CONFIG last changed
+#   stale    an Axocoatl daemon that started before CONFIG last changed, or
+#            that does not say when it started (before 1.5.0)
+#   none     nothing listens on PORT
+#   other    something answers that is not an Axocoatl /health
+#   unknown  the request failed otherwise (a timeout, an HTTP error, an
+#            empty reply): the gate cannot tell, and never takes that for a
+#            running daemon
+gate_daemon_state() {
+  local body status
+  body=$(gate_curl -fsS "http://127.0.0.1:$1/health" 2>/dev/null)
+  status=$?
+  case "$status" in
+    0) ;;
+    7) echo none; return 0 ;;
+    *) echo unknown; return 0 ;;
+  esac
+  printf '%s' "$body" | node -e '
+    let text = "";
+    process.stdin.on("data", (d) => (text += d)).on("end", () => {
+      let health;
+      try { health = JSON.parse(text); } catch { health = null; }
+      if (!health || typeof health !== "object" || typeof health.version !== "string") return console.log("other");
+      const started = health.started_at_ms;
+      if (typeof started !== "number") return console.log("stale");
+      let changed = 0;
+      try { changed = Math.floor(require("fs").statSync(process.argv[1]).mtimeMs); } catch {}
+      console.log(changed > started ? "stale" : "current");
+    });' "$2"
+}
+
+# gate_daemon_state_says STATE PORT: STATE in words, for a step's detail.
+gate_daemon_state_says() {
+  case "$1" in
+    current) echo "an Axocoatl daemon on port $2 runs the current configuration" ;;
+    stale) echo "the Axocoatl daemon on port $2 started before the configuration last changed (or does not say when it started)" ;;
+    none) echo "nothing answers on port $2" ;;
+    other) echo "something answers on port $2 that is not an Axocoatl daemon (its /health names no version)" ;;
+    *) echo "the request to port $2/health failed or timed out, so the gate cannot tell what runs there" ;;
+  esac
+}
+
 # Bytes received on every non-loopback interface so far.
 gate_rx_bytes() {
   case "$(uname -s)" in
@@ -166,6 +220,43 @@ gate_step() {
   detail="exit $status, expected $expect: $(grep -v '^[[:space:]]*$' "$log" | tail -n 3 | tr '\n' ' ' | cut -c1-600)"
   gate_record "$name" fail "$status" "$seconds" "$bytes" "$detail" "$optional"
   return 1
+}
+
+# gate_ask QUESTION: the operator's answer on the terminal, y or n (and for
+# n, what they saw instead), in ANSWER and ANSWER_NOTE. The question and the
+# answer are printed to standard output (the script(1) transcript) and
+# appended to the path's answers.txt, with the time and who answered. A
+# simulated run (GATE_SIMULATION=1, never evidence) takes
+# GATE_SIMULATED_ANSWER instead of a terminal.
+gate_ask() {
+  local answer='' note=''
+  if [ "${GATE_SIMULATION:-0}" = 1 ] && [ -n "${GATE_SIMULATED_ANSWER:-}" ]; then
+    answer=$GATE_SIMULATED_ANSWER
+    [ "$answer" = y ] || note='simulated no'
+    printf '\n>>> %s [y/n] (simulated)\n' "$1"
+  else
+    printf '\n>>> %s [y/n] ' "$1" >/dev/tty
+    read -r answer </dev/tty
+  fi
+  case "$answer" in y | Y | yes) answer=y ;; *) answer=n ;; esac
+  if [ "$answer" = n ] && [ -z "$note" ]; then
+    printf '>>> What did you see instead? ' >/dev/tty
+    read -r note </dev/tty
+  fi
+  printf '>>> answered %s%s\n' "$answer" "${note:+: $note}"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(id -un)" "$1" "$answer" "$note" >>"$GATE_ATTACH/answers.txt"
+  ANSWER=$answer
+  ANSWER_NOTE=$note
+}
+
+# gate_confirm NAME QUESTION: record NAME as the operator answers QUESTION.
+gate_confirm() {
+  gate_ask "$2"
+  if [ "$ANSWER" = y ]; then
+    gate_record "$1" pass '' '' '' "the operator ($(id -un)) answered yes at the terminal: $2"
+  else
+    gate_record "$1" fail '' '' '' "the operator ($(id -un)) answered no: ${ANSWER_NOTE:-no note}"
+  fi
 }
 
 # gate_doctor_json NAME EXPECT FILE: run `axocoatl doctor --json` as step
@@ -448,6 +539,83 @@ gate_config_path() {
   fi
 }
 
+# gate_data_dir: where Axocoatl keeps this user's data (as
+# axocoatl-cli/src/user_paths.rs says): its stored secrets, its local API
+# token and its Sessions.
+gate_data_dir() {
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '%s\n' "$HOME/Library/Application Support/Axocoatl/data"
+  else
+    printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/axocoatl"
+  fi
+}
+
+# gate_log_dir: where onboarding writes its log, onboard-<time>.log
+# (axocoatl-cli/src/onboard/host.rs, log_directory).
+gate_log_dir() {
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '%s\n' "$HOME/Library/Logs/Axocoatl"
+  else
+    printf '%s\n' "${XDG_STATE_HOME:-$HOME/.local/state}/axocoatl"
+  fi
+}
+
+# gate_keep_onboarding_logs MARK: copy each onboarding log written since
+# the file MARK was touched into <path>/logs/onboarding/, so a failed step
+# (a browser sign-in that never called back, a sudo that failed) can be
+# diagnosed from the evidence. The log holds every command onboarding ran
+# and never a key.
+gate_keep_onboarding_logs() {
+  local dir log
+  dir=$(gate_log_dir)
+  [ -d "$dir" ] && [ -e "$1" ] || return 0
+  while IFS= read -r log; do
+    mkdir -p "$GATE_ATTACH/logs/onboarding"
+    cp "$log" "$GATE_ATTACH/logs/onboarding/" 2>/dev/null
+  done < <(find "$dir" -maxdepth 1 -name 'onboard-*.log' -newer "$1" 2>/dev/null | LC_ALL=C sort)
+}
+
+# gate_api_get PATH OUT: GET PATH from the daemon on GATE_DAEMON_PORT with
+# the local API token (<data root>/local-api-token, as scripts send it),
+# into OUT. The token goes to curl on standard input, so it is on no
+# command line and in no log. Returns curl's status (0 on success).
+gate_api_get() {
+  local token
+  token="$(gate_data_dir)/local-api-token"
+  [ -r "$token" ] && [ -n "${GATE_DAEMON_PORT:-}" ] || { printf 'no local API token at %s, or no daemon port\n' "$token" >"$2"; return 2; }
+  printf 'header = "Authorization: Bearer %s"\n' "$(cat "$token")" \
+    | GATE_CURL_MAX_TIME=30 gate_curl -fsS --config - "http://127.0.0.1:$GATE_DAEMON_PORT$1" >"$2" 2>&1
+}
+
+# gate_secret_stored NAME: whether Axocoatl's secret store holds NAME, by
+# `axocoatl secret list` (the names only, one per line): 0 it does, 1 it
+# does not, 2 the list cannot be read (no axocoatl, an unreadable data
+# directory or configuration), with why in GATE_SECRET_ERROR. A list that
+# cannot be read is never taken for one without NAME.
+gate_secret_stored() {
+  local list status
+  GATE_SECRET_ERROR=''
+  list=$(axocoatl secret list 2>"$GATE_TMP/secret-list.err")
+  status=$?
+  if [ "$status" != 0 ]; then
+    # shellcheck disable=SC2034 # read by the scripts that source this file
+    GATE_SECRET_ERROR="axocoatl secret list exited $status: $(head -c 200 "$GATE_TMP/secret-list.err" | tr '\n' ' ')"
+    return 2
+  fi
+  printf '%s\n' "$list" | grep -qxF -- "$1"
+}
+
+# gate_onboarding_log_lines MARK TEXT: the first five lines holding TEXT in
+# the onboarding logs written since the file MARK was touched, on one line
+# (for a failed sign-in: each connection its callback received).
+gate_onboarding_log_lines() {
+  local dir
+  dir=$(gate_log_dir)
+  [ -d "$dir" ] && [ -e "$1" ] || return 0
+  find "$dir" -maxdepth 1 -name 'onboard-*.log' -newer "$1" -print0 2>/dev/null \
+    | xargs -0 grep -h -F -- "$2" /dev/null 2>/dev/null | head -n 5 | cut -c1-200 | tr '\n' ' '
+}
+
 # gate_server_port CONFIG: server.port in CONFIG, or nothing.
 gate_server_port() {
   awk '/^server:/ { inside = 1; next } inside && /^[^[:space:]#]/ { inside = 0 }
@@ -531,6 +699,84 @@ gate_doctor_text_check() {
   else
     gate_record "doctor says Ready for: axocoatl run $loadout, Ready: yes, no [FAIL]" fail '' '' '' "$problems"
   fi
+}
+
+# gate_service_unit: the Always-On Service's unit file
+# (crates/axocoatl-service: launchd.rs, systemd.rs).
+gate_service_unit() {
+  if [ "$(uname -s)" = Darwin ]; then
+    printf '%s\n' "$HOME/Library/LaunchAgents/ai.axocoatl.daemon.plist"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/axocoatl.service"
+  fi
+}
+
+# gate_service_status NAME INSTALLED RUNNING: run `axocoatl service status`
+# as its own step, and record NAME as pass when it says `installed:
+# INSTALLED` and `running: RUNNING` (yes or no) and the unit file is there
+# exactly when INSTALLED is yes.
+gate_service_status() {
+  local name=$1 installed=$2 running=$3 log problems='' unit
+  gate_step "axocoatl service status ($name)" --optional -- axocoatl service status
+  log="$GATE_ATTACH/logs/$(gate_slug "axocoatl service status ($name)").log"
+  grep -Eq "^[[:space:]]*installed:[[:space:]]+$installed\$" "$log" || problems="it does not say installed: $installed"
+  grep -Eq "^[[:space:]]*running:[[:space:]]+$running\$" "$log" || problems="${problems:+$problems; }it does not say running: $running"
+  unit=$(gate_service_unit)
+  if [ "$installed" = yes ] && [ ! -f "$unit" ]; then problems="${problems:+$problems; }no $unit"; fi
+  if [ "$installed" = no ] && [ -e "$unit" ]; then problems="${problems:+$problems; }$unit is still there"; fi
+  if [ -z "$problems" ]; then
+    gate_record "$name" pass '' '' '' "installed: $installed, running: $running; $(sed -n 's/^[[:space:]]*detail:[[:space:]]*//p' "$log" | head -n 1 | cut -c1-200)"
+  else
+    gate_record "$name" fail '' '' '' "$problems: $(grep -v '^[[:space:]]*$' "$log" | head -n 4 | tr '\n' ' ' | cut -c1-300)"
+  fi
+}
+
+# gate_wait_daemon PORT CONFIG SECONDS: wait up to SECONDS until the daemon
+# on PORT runs CONFIG as it is now (gate_daemon_state says current); prints
+# the last state.
+gate_wait_daemon() {
+  local state='' deadline=$((SECONDS + $3))
+  while :; do
+    state=$(gate_daemon_state "$1" "$2")
+    [ "$state" = current ] && break
+    [ "$SECONDS" -ge "$deadline" ] && break
+    sleep 2
+  done
+  printf '%s\n' "$state"
+}
+
+# gate_service_restart_steps CONFIG PORT OUTPUT: after `onboard --update`
+# changed CONFIG while the Always-On Service ran, record that onboarding's
+# Step 7 found the service ran the old configuration and restarted it (its
+# question is in OUTPUT, the step's log or the transcript since the step
+# began) and that the service on PORT now runs CONFIG as it is.
+gate_service_restart_steps() {
+  local state
+  state=$(gate_wait_daemon "$2" "$1" 300)
+  if grep -q 'The Always-On Service started before' "$3" 2>/dev/null && [ "$state" = current ]; then
+    gate_record "onboarding restarted the service after the configuration changed (Step 7)" pass '' '' '' \
+      "onboarding asked to restart it, and $(gate_daemon_state_says "$state" "$2")"
+  else
+    gate_record "onboarding restarted the service after the configuration changed (Step 7)" fail '' '' '' \
+      "$(grep -q 'The Always-On Service started before' "$3" 2>/dev/null && echo 'onboarding asked to restart it' || echo 'onboarding did not ask to restart the service'); $(gate_daemon_state_says "$state" "$2")"
+  fi
+}
+
+# gate_service_end PORT: stop the Always-On Service and uninstall it, each
+# as a person runs it, and record that each did what it says.
+gate_service_end() {
+  local state
+  gate_step "axocoatl service stop" -- axocoatl service stop
+  state=none
+  for _ in $(seq 1 60); do
+    state=$(gate_daemon_state "$1" "$(gate_config_path)")
+    [ "$state" = none ] && break
+    sleep 2
+  done
+  gate_service_status "axocoatl service stop: the service is not running" yes no
+  gate_check "nothing answers on port $1 after the service stopped" "$(gate_daemon_state_says "$state" "$1")" -- test "$state" = none
+  gate_step "axocoatl service uninstall" -- axocoatl service uninstall
+  gate_service_status "axocoatl service uninstall: not installed, its unit removed" no no
 }
 
 # gate_host_json FILE: what this host is, for the evidence.
@@ -686,9 +932,93 @@ gate_copy_paste_lint() {
   gate_step "copy-paste lint (scripts/check-copy-paste.mjs)" -- node "$1/scripts/check-copy-paste.mjs"
 }
 
+# gate_markup_check LABEL REPO RECORD [OUTPUT...]: no accepted output of
+# the run whose record is RECORD, in REPO, holds tool-call markup a model
+# wrote as text (`<function=` or `</tool_call>`; a turn that ended on such
+# text ran nothing it meant to run). It reads, without a daemon:
+#   - every answer the run accepted, from the history its record carries
+#     (record-answers.mjs, which reads only a whole record and needs at
+#     least one answer from a run that passed or whose checks failed);
+#   - every line the run added to a file since the commit the record says
+#     it started from (repo_head), in commits and in the working tree, and
+#     every new file, except RECORD and each OUTPUT (its receipt and JUnit
+#     report), which the gate asked for and which quote what the run read.
+# Records the step; fails when either cannot be read.
+gate_markup_check() {
+  local label=$1 repo=$2 record=$3 name answers status start file found
+  shift 3
+  name="no tool-call markup in the accepted output of the run on $label"
+  answers=$(node "$gate_dir/record-answers.mjs" "$record" 2>&1)
+  status=$?
+  if [ "$status" != 0 ]; then
+    gate_record "$name" fail '' '' '' "$answers"
+    return 1
+  fi
+  if ! start=$(node "$gate_dir/record-answers.mjs" --repo-head "$record" 2>&1) \
+    || ! git -C "$repo" rev-parse --quiet --verify "$start^{commit}" >/dev/null 2>&1; then
+    gate_record "$name" fail '' '' '' "$answers; cannot tell what the run changed in $repo: $start"
+    return 1
+  fi
+  local outside=() top dir
+  top=$(cd -P -- "$repo" && pwd)
+  for file in "$record" "$@"; do
+    # Relative to the repository, as the run wrote it, or absolute; one
+    # outside the repository is not in what the run changed anyway.
+    case "$file" in
+      '') continue ;;
+      /*)
+        dir=$(cd -P -- "$(dirname -- "$file")" 2>/dev/null && pwd) || continue
+        case "$dir/" in "$top/"*) ;; *) continue ;; esac
+        file="${dir#"$top"}/$(basename -- "$file")"
+        file=${file#/}
+        ;;
+    esac
+    outside+=(":(exclude,literal)$file")
+  done
+  if ! git -C "$repo" diff --no-color --no-ext-diff --no-textconv -U0 "$start" -- . "${outside[@]}" \
+    >"$GATE_TMP/markup.diff" 2>"$GATE_TMP/markup.err" \
+    || ! git -C "$repo" ls-files --others --exclude-standard -z -- . "${outside[@]}" \
+      >"$GATE_TMP/markup.new" 2>>"$GATE_TMP/markup.err" \
+    || ! (cd "$repo" && xargs -0 sh -c '
+      # A symlink is read as its link text, as Git records it; a regular
+      # file as its bytes.
+      status=0
+      for file; do
+        if [ -L "$file" ]; then
+          readlink -- "$file" | sed "s|^|$file:link:|" | grep -a -F -e "<function=" -e "</tool_call>"
+        elif [ -f "$file" ]; then
+          grep -a -H -n -F -e "<function=" -e "</tool_call>" -- "$file"
+        else
+          continue
+        fi
+        [ $? -le 1 ] || status=2
+      done
+      exit $status' gate-grep \
+      <"$GATE_TMP/markup.new" >"$GATE_TMP/markup.found" 2>>"$GATE_TMP/markup.err"); then
+    gate_record "$name" fail '' '' '' "$answers; cannot read what the run changed in $repo: $(head -c 200 "$GATE_TMP/markup.err" | tr '\n' ' ')"
+    return 1
+  fi
+  # Added lines only: a line the run left alone may quote markup (a parser's
+  # own tests, a changelog).
+  found=$( {
+    awk '/^diff --git / { hunk = 0; file = $NF; sub(/^b\//, "", file); next }
+         /^@@/ { hunk = 1; next }
+         hunk && /^\+/ { print file ": " substr($0, 2) }' "$GATE_TMP/markup.diff"
+    cat "$GATE_TMP/markup.found"
+  } | grep -a -F -m 3 -e '<function=' -e '</tool_call>' | cut -c1-200 | tr '\n' ' ')
+  if [ -n "$found" ]; then
+    gate_record "$name" fail '' '' '' "$answers; a line the run wrote holds tool-call markup: $found"
+    return 1
+  fi
+  gate_record "$name" pass '' '' '' "$answers; no line the run added since ${start:0:12} holds any"
+  return 0
+}
+
 # gate_run_fixture FIXTURE COMMAND REPO_DIR [WRITER_LABEL]: run COMMAND (as
 # published, plus outputs) in a fresh copy of FIXTURE, then verify its
-# receipt with the documented command and its record. Records each check.
+# receipt with the documented command and its record, and check that no
+# accepted output holds tool-call markup (gate_markup_check). Records each
+# check; returns 0 only when the run and all of them passed.
 gate_run_fixture() {
   local fixture=$1 published=$2 repo=$3 label=${4:-$1} command record receipt junit keep
   keep="$GATE_ATTACH/$label"
@@ -736,5 +1066,6 @@ gate_run_fixture() {
   gate_step "receipt matches the record on $label" -- /bin/bash -c \
     "cd \"\$1\" && axocoatl receipt verify \"\$2\" --key \"\$(axocoatl receipt key)\" --record \"\$3\"" \
     gate-verify "$repo" "$receipt" "$record" || status=1
+  gate_markup_check "$label" "$repo" "$repo/$record" "$receipt" "$junit" || status=1
   return "$status"
 }

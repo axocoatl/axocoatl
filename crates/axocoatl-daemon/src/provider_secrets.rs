@@ -85,8 +85,8 @@ pub fn how_to_store_key(provider: &str, name: &str) -> String {
 /// Why the secret `name` never holds `provider`'s API key, if it is one of
 /// the secrets another command owns: the receipt signing key, the Claude
 /// Code sign-in (`axocoatl connect claude-code`), the ChatGPT sign-in
-/// (`axocoatl connect codex`), and, for any provider but OpenAI, the OpenAI
-/// API key `axocoatl connect codex --api-key` stores. Such a secret is never
+/// (`axocoatl connect codex`), and, for any provider but OpenAI, Codex's
+/// OpenAI API key (`codex-openai`). Such a secret is never
 /// sent as that provider's key, and a command that stores a provider key
 /// refuses to store it there (it would replace that secret) or remove it.
 pub fn never_a_provider_key(provider: &str, name: &str) -> Option<String> {
@@ -109,8 +109,8 @@ pub fn never_a_provider_key(provider: &str, name: &str) -> Option<String> {
     }
     if name == crate::external_agent::codex::CODEX_SECRET && provider != "openai" {
         return Some(format!(
-            "it holds the OpenAI API key `axocoatl connect codex --api-key` stores, not a key \
-             for providers.{provider}"
+            "it holds the OpenAI API key Codex's route sends (codex-openai), not a key for \
+             providers.{provider}"
         ));
     }
     None
@@ -191,6 +191,8 @@ mod tests {
             api_key_secret: Some(name.to_string()),
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         }
     }
 
@@ -206,6 +208,8 @@ mod tests {
             api_key_secret: None,
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         });
 
         assert_eq!(
@@ -323,7 +327,7 @@ mod tests {
             );
             assert!(never_a_provider_key("openrouter", name).is_some(), "{name}");
         }
-        // The OpenAI key `connect codex --api-key` stores is OpenAI's key.
+        // Codex's OpenAI key (codex-openai) is OpenAI's key.
         let codex_openai = crate::external_agent::codex::CODEX_SECRET;
         assert_eq!(never_a_provider_key("openai", codex_openai), None);
         let mut config = AxocoatlConfig::default();

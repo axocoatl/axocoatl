@@ -623,6 +623,7 @@ pub fn validate_config(config: &AxocoatlConfig) -> Result<(), ConfigError> {
     validate_web(config)?;
     validate_browser(config)?;
     validate_provider_key_secrets(&config.providers)?;
+    validate_provider_timeouts(&config.providers)?;
     run_defaults::validate_run_defaults(&config.run)?;
 
     for webhook in &config.webhooks {
@@ -763,6 +764,60 @@ fn validate_provider_key_secrets(providers: &ProvidersConfigYaml) -> Result<(), 
                      {name}"
                 ),
             });
+        }
+    }
+    Ok(())
+}
+
+/// The longest `first_token_timeout_secs` a provider block accepts: an hour.
+pub const MAX_FIRST_TOKEN_TIMEOUT_SECS: u64 = 3600;
+/// The longest `idle_timeout_secs` a provider block accepts: a streamed
+/// answer ends 15 minutes after its first chunk in any case.
+pub const MAX_IDLE_TIMEOUT_SECS: u64 = 900;
+
+/// Each provider block's `first_token_timeout_secs` is 1 to
+/// [`MAX_FIRST_TOKEN_TIMEOUT_SECS`] and its `idle_timeout_secs` 1 to
+/// [`MAX_IDLE_TIMEOUT_SECS`].
+fn validate_provider_timeouts(providers: &ProvidersConfigYaml) -> Result<(), ConfigError> {
+    let ollama = providers.ollama.as_ref().map(|ollama| {
+        (
+            "ollama",
+            ollama.first_token_timeout_secs,
+            ollama.idle_timeout_secs,
+            600,
+        )
+    });
+    let hosted = provider_credentials(providers)
+        .into_iter()
+        .filter_map(|(name, credentials)| {
+            let credentials = credentials?;
+            Some((
+                name,
+                credentials.first_token_timeout_secs,
+                credentials.idle_timeout_secs,
+                120,
+            ))
+        });
+    for (provider, first_token, idle, default) in ollama.into_iter().chain(hosted) {
+        for (key, value, max, default) in [
+            (
+                "first_token_timeout_secs",
+                first_token,
+                MAX_FIRST_TOKEN_TIMEOUT_SECS,
+                default,
+            ),
+            ("idle_timeout_secs", idle, MAX_IDLE_TIMEOUT_SECS, 90),
+        ] {
+            if let Some(value) = value.filter(|value| !(1..=max).contains(value)) {
+                return Err(ConfigError::InvalidField {
+                    field: format!("providers.{provider}.{key}"),
+                    value: value.to_string(),
+                    reason: format!("{key} is a number of seconds from 1 to {max}"),
+                    suggestion: format!(
+                        "Write a number from 1 to {max}, or leave it out for {default} s"
+                    ),
+                });
+            }
         }
     }
     Ok(())
@@ -2161,6 +2216,49 @@ mcp_servers:
         }
     }
 
+    /// Each provider block may set how long its answers may take to start
+    /// and to pause; a value outside the range is refused with its field.
+    #[test]
+    fn provider_stream_timeouts_are_read_and_bounded() {
+        let config = parse_config(
+            "providers:\n  ollama:\n    base_url: http://127.0.0.1:11434\n    \
+             first_token_timeout_secs: 1800\n    idle_timeout_secs: 300\n  openrouter:\n    \
+             api_key: sk-or-x\n    first_token_timeout_secs: 60\n",
+            &PathBuf::from("test.yaml"),
+        )
+        .unwrap();
+        let ollama = config.providers.ollama.as_ref().unwrap();
+        assert_eq!(ollama.first_token_timeout_secs, Some(1800));
+        assert_eq!(ollama.idle_timeout_secs, Some(300));
+        let openrouter = config.providers.openrouter.as_ref().unwrap();
+        assert_eq!(openrouter.first_token_timeout_secs, Some(60));
+        assert_eq!(openrouter.idle_timeout_secs, None);
+        // Unset, they are left out of a written file.
+        let yaml = crate::yaml::to_string(&config.providers.openrouter).unwrap();
+        assert!(!yaml.contains("idle_timeout_secs"), "{yaml}");
+        for (yaml, field) in [
+            (
+                "providers:\n  ollama:\n    base_url: http://127.0.0.1:11434\n    \
+                 first_token_timeout_secs: 0\n",
+                "providers.ollama.first_token_timeout_secs",
+            ),
+            (
+                "providers:\n  ollama:\n    base_url: http://127.0.0.1:11434\n    \
+                 first_token_timeout_secs: 3601\n",
+                "providers.ollama.first_token_timeout_secs",
+            ),
+            (
+                "providers:\n  anthropic:\n    api_key: x\n    idle_timeout_secs: 901\n",
+                "providers.anthropic.idle_timeout_secs",
+            ),
+        ] {
+            let error = parse_config(yaml, &PathBuf::from("test.yaml"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{error}");
+        }
+    }
+
     /// A provider's key can live in the secret store: `api_key_secret`
     /// names it, `api_key` may then be left out, and the two together, or a
     /// name the store would refuse, are refused without repeating a value.
@@ -2187,6 +2285,8 @@ mcp_servers:
             api_key_secret: None,
             base_url: None,
             fallback: None,
+            first_token_timeout_secs: None,
+            idle_timeout_secs: None,
         })
         .unwrap();
         assert!(!yaml.contains("api_key_secret"), "{yaml}");

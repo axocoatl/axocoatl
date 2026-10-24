@@ -86,7 +86,7 @@ On a loopback listener with no configured credentials, the API requires a
 per-daemon token. The user's signed-in browser and tools that can read the data
 root can use it. Another user's process, or code in a Session container that
 reaches the host, cannot, unless the token reaches it another way. The most
-likely way is through a web server you open on another `localhost` port, as
+likely way is through a web server you open on another `127.0.0.1` port, as
 described after this list.
 
 - On first start the daemon creates 32 random bytes from the OS random number
@@ -94,8 +94,17 @@ described after this list.
   the data root with mode `0600`. Later starts reuse the file. A file that is a
   symlink, is not a regular file, is readable or writable by other users, or
   does not hold a token stops startup.
+- The first start of 1.5.0 or later replaces a token an earlier version
+  created, once, and writes the SHA-256 of the token it issued to
+  `local-api-token.issued`. Sign-in links before 1.5.0 named `localhost`, so a
+  browser may still hold the old token in a cookie for `localhost`, which
+  every server on a `localhost` port receives; replaced, that copy signs
+  nothing in. Open the new sign-in link, and give scripts that kept the old
+  token the new one.
 - `axocoatl dev` and `axocoatl serve` print a sign-in link,
-  `http://localhost:<port>/?token=<token>`, when their output is a terminal.
+  `http://127.0.0.1:<port>/?token=<token>`, when their output is a terminal.
+  `127.0.0.1` is the workbench's one address
+  ([see below](#preview-uses-a-separate-browser-origin)).
   `axocoatl url` prints it again from the configured port and the token file.
   Under a service manager, run `axocoatl url` with the same `--config` and
   `AXOCOATL_DATA_DIR`.
@@ -106,25 +115,24 @@ described after this list.
 - The link also sets `axocoatl-token-<port>-signed-in=1` (HttpOnly,
   SameSite=Lax, `Path=/`, 30 days). It holds no secret and is never a
   credential. Safari leaves a SameSite=Strict cookie off a navigation that was
-  redirected from another site, and `127.0.0.1` and `localhost` are different
-  sites, so a `127.0.0.1` bookmark or link reached `localhost` without the
-  token cookie. When a navigation you started yourself (a typed address, a
-  bookmark, a link opened from another app: `Sec-Fetch-Site: none`) reaches
-  `/` without a valid token cookie but with this one, the daemon answers with
-  a page that opens the same address again from `localhost` itself, which
-  every browser sends the token cookie with. The request that page makes is
+  redirected from another site, and `localhost` and `127.0.0.1` are different
+  sites, so a `localhost` bookmark or link (every sign-in link before 1.5.0
+  named `localhost`) reached `127.0.0.1` without the token cookie. When a
+  navigation you started yourself (a typed address, a bookmark, a link opened
+  from another app: `Sec-Fetch-Site: none`) reaches `/` without a valid token
+  cookie but with this one, the daemon answers with a page that opens the same
+  address again from `127.0.0.1` itself, which every browser sends the token
+  cookie with. The request that page makes is
   same-origin, so a navigation passes through it at most once. The page also
   clears the cookie, and the next workbench load sets it again. Chromium
   already sends the token cookie on these navigations, so no browser is
   signed in on one that Chromium would refuse. A link or form on another site
   still gets the sign-in page. A Session's app cannot set this cookie through
-  the Preview proxy. In Safari on macOS, script on a page of another
-  `*.localhost` address that runs in a tab of its own (never a Preview: the
-  daemon refuses that in Safari) can set it as a `Domain=localhost` cookie
-  ([see below](#safari-shares-domainlocalhost-cookies)),
-  which the retry page cannot clear: while that browser is signed out, each
-  navigation you start then passes through the retry page once before the
-  sign-in page. It never signs anyone in.
+  the Preview proxy, and a `Domain=localhost` cookie never reaches
+  `127.0.0.1`. A page on another `127.0.0.1` port can set it, in any browser
+  ([see below](#pages-on-other-127001-ports)): while that browser is signed
+  out, a navigation you start then passes through the retry page once, which
+  clears it, before the sign-in page. It never signs anyone in.
 - Scripts send the token as `Authorization: Bearer <token>` or
   `x-api-key: <token>`. Comparisons are constant time.
 - The cookie counts only on same-origin requests, typed navigations, and
@@ -140,20 +148,28 @@ described after this list.
   and `/a2a/*`.
 - A loopback listener holds its port on both `127.0.0.1` and `[::1]` when
   the host has both. Browsers, curl, and Node try `[::1]` first for
-  `localhost`, so a process listening there would receive the sign-in link.
-  If another process already listens on either address and port, Axocoatl
-  does not start.
+  `localhost`, so a process listening there would receive what was meant for
+  Axocoatl at `localhost`: an old bookmark or sign-in link, or a script's
+  token. If another process already listens on either address and port,
+  Axocoatl does not start. Nor does it start on a host without `127.0.0.1`,
+  the workbench's address.
 - Rotate the token by stopping Axocoatl, deleting `local-api-token`, and
   starting it again. Open the new link in each browser.
 
 The cookie value is the token itself, and browsers do not separate cookies by
-port. Any web server you open on another `localhost` port in the same browser
+port. Any web server you open on another `127.0.0.1` port in the same browser
 receives the token in its request headers. It can then use the API from
 outside the browser, so the Fetch Metadata rule does not help. This includes
-another user's server and a Session port mapped to `localhost` that you open
-directly. Treat opening such a server like sharing the token, and rotate the
-token afterwards. Session containers have no mount of the data root, so Session
-code cannot read the token file, and Preview origins never receive the cookie.
+another user's server. Treat opening such a server like sharing the token,
+and rotate the token afterwards. A Session's app is never one: Podman
+publishes Session ports on another loopback address
+([see below](#preview-uses-a-separate-browser-origin)). Before 1.5.0
+the cookie was stored for `localhost`, so servers opened on `localhost` ports
+received it instead; a browser that signed in then keeps that copy until it
+opens the workbench at `localhost` once, which removes it, or its 30 days
+end, but the copy no longer matches the token, which the first start of
+1.5.0 replaced. Session containers have no mount of the data root, so Session code
+cannot read the token file, and Preview origins never receive the cookie.
 
 `server.auth.allow_unauthenticated: true` turns the token off on loopback, for
 an authenticating reverse proxy on the same host. Axocoatl logs a warning when
@@ -207,23 +223,47 @@ forwarded requests and drop upstream `Set-Cookie` headers that would set one.
 From every other upstream `Set-Cookie` they remove the `Domain` attribute, so
 the browser keeps an app's cookies host-only on its own Preview origin.
 
+The Preview proxies reach a Session's app at a port Podman publishes on a
+loopback address other than the workbench's `127.0.0.1`: `[::1]` on macOS, and
+`127.0.0.2` on Linux. Cookies ignore ports, so on `127.0.0.1` a Session's app
+would receive the workbench's sign-in cookie, and could set cookies the
+workbench receives, whenever the browser loaded that address under the
+workbench. That needed no click: a Preview's code could navigate its own
+frame there, or in Safari nest a frame there, and the browser sent that
+frame's requests the workbench's SameSite=Strict token cookie (measured in
+Playwright's Chromium and WebKit on macOS while Session ports were published
+on `127.0.0.1`; WebKit sends it whatever frames lie between). A browser
+journey asserts, in Chromium and WebKit, that such a frame now gets none of
+the workbench's cookies. On a computer that cannot listen on that address,
+Axocoatl publishes Session ports on `127.0.0.1` and logs a warning saying so.
+
+The workbench itself has one address: `127.0.0.1` on the listener port. The
+sign-in link names it, and with the local token the exact root document opened
+at `localhost` or another loopback address (`[::1]`, for example) redirects
+there on the same listener, query included, without redirecting API, health,
+asset, or non-loopback operator requests. (With configured credentials or
+`allow_unauthenticated` the browser holds no sign-in cookie, and the workbench
+is served at the loopback name the request used.) A cookie set for a domain such as
+`Domain=localhost` never matches an IP address, so cookies that pages on
+`localhost` and `*.localhost` addresses set never reach the workbench
+([see below](#safari-shares-domainlocalhost-cookies)). The redirect from
+`localhost` also removes this daemon's sign-in cookies there: sign-in links
+before 1.5.0 named `localhost`, and the workbench was served there.
+
 The legacy `/api/sessions/{id}/proxy/{port}` path also reaches a Session's
 app, from the workbench's own origin and behind its sign-in. In every browser
-it answers only `fetch()` and `XMLHttpRequest` (`Sec-Fetch-Dest: empty`) and
-programs that send no Fetch Metadata. A page, frame, script, image or anything
-else a browser would show or run there gets 403 and a line of text, without
-the app being asked, and the path forwards none of the app's `Set-Cookie`
-headers. Before 1.5.0 a link to it opened the app's page on the workbench's
-origin. That page ran with an opaque origin (the path sends
-`Content-Security-Policy: sandbox` without `allow-same-origin`), so its script
-could not use the workbench's API, but the app's cookies were stored for
-`localhost`, the workbench's host, and its redirects were followed (measured in
-Playwright's Chromium and WebKit on macOS).
-
-If the workbench document is opened through a loopback IP literal, its exact
-root navigation redirects to `localhost` on the same listener. This gives the
-browser one canonical workbench origin without redirecting API, health, asset,
-or non-loopback operator requests.
+it answers only requests the browser marks `Sec-Fetch-Dest: empty` that are
+not navigations (what `fetch()`, `XMLHttpRequest`, `EventSource` and
+`navigator.sendBeacon` send), and programs that send no Fetch Metadata. A
+request for anything a browser would show, run or embed there (a page, frame,
+embed, object, fenced frame, script, style sheet, image or worker) gets 403
+and a line of text, without the app being asked, and the path forwards none
+of the app's `Set-Cookie` headers. Before 1.5.0 a link to it opened the app's
+page on the workbench's origin. That page ran with an opaque origin (the path
+sends `Content-Security-Policy: sandbox` without `allow-same-origin`), so its
+script could not use the workbench's API, but the app's cookies were stored
+for `localhost`, then the workbench's host, and its redirects were followed
+(measured in Playwright's Chromium and WebKit on macOS).
 
 The Preview frame may use scripts, modules, same-origin fetch, forms, storage,
 streamed responses, and development-server WebSockets within its own virtual
@@ -243,13 +283,25 @@ Whether a page on a `*.localhost` address may set a cookie for the parent
 domain, `Domain=localhost`, is the browser's decision. Chromium refuses such a
 cookie, and so does WebKit on Linux. **Safari on macOS accepts it** when a page
 that runs top-level sets it from script (`document.cookie`), and then sends it
-to the workbench at `localhost` (on every port) and to every Session's
-Preview. An app's server cannot do the same through the Preview proxies: they
-remove `Domain` from each `Set-Cookie` they forward. Embedded in the
-workbench, Safari gives a Preview no cookies at all, so it cannot set one there
-and receives none.
+to `localhost` on every port and to every `*.localhost` address, Sessions'
+Previews included. An app's server cannot do the same through the Preview
+proxies: they remove `Domain` from each `Set-Cookie` they forward. Embedded in
+the workbench, Safari gives a Preview no cookies at all, so it cannot set one
+there and receives none.
 
-So **in Safari a Preview never runs top-level**. The daemon answers every
+**Such a cookie never reaches the workbench**, which is served at
+`127.0.0.1`. Measured in Playwright's WebKit on macOS: 60 cookies (51 of
+4,000 bytes and smaller ones up to Safari's limit) that a top-level page on
+another `*.localhost` address set for `Domain=localhost`, once with
+`Path=/api`, once with `Path=/` and once with `Path=/ws`, were all kept for
+`localhost`, and the workbench received none of them: it stayed signed in, its
+API answered, and its live connection opened. Before 1.5.0 the workbench was
+at `localhost`, and the same cookies signed Safari out of its API or kept its
+live connection from opening.
+
+Even so, **in Safari a Preview never runs top-level**: there its code could
+set cookies that every other app you open on a `localhost` address receives,
+and every other Session's Preview that runs top-level. The daemon answers every
 request for a Preview page that Safari would show in a tab or window of its
 own with `403` and a short page that says why and links to the workbench, and
 never asks the app. That holds whatever led there: a link, a redirect,
@@ -264,10 +316,11 @@ its page makes are served as before. Other browsers are unchanged and keep
   Mac without a Chromium or Firefox token (Safari, and apps that show pages
   with WebKit), and every browser on iPhone and iPad, which all use Safari's
   engine. A Safari whose user agent was changed to another browser's is taken
-  for that browser, and a browser that sends Safari's user agent is taken for
-  Safari wherever it runs: Playwright's WebKit on Linux does. Chrome and
-  Firefox on Linux, and WebKitGTK and WPE with their default user agent, name
-  Linux in theirs and keep **Open full preview**.
+  for that browser, and the daemon serves it a Preview top-level; that
+  Preview's cookies still never reach the workbench. A browser that sends
+  Safari's user agent is taken for Safari wherever it runs: Playwright's WebKit
+  on Linux does. Chrome and Firefox on Linux, and WebKitGTK and WPE with their
+  default user agent, name Linux in theirs and keep **Open full preview**.
 - Safari 16.4 and later say whether a request is for a page of its own
   (`Sec-Fetch-Dest: document`) or for a frame. An older Safari does not say,
   so it gets the refusal page for the embedded Preview too.
@@ -279,80 +332,119 @@ its page makes are served as before. Other browsers are unchanged and keep
   Markdown link to one in the conversation keeps its text and loses its
   address; a click, Command-click, middle click, context menu or drag on any
   other such link is refused, and so are `window.open` (the file editor's
-  links) and a link a program prints in the Terminal.
+  links) and a link a program prints in the Terminal. The workbench decides
+  from `navigator.vendor` first, which names the engine, and then from the
+  user agent.
 
 This was measured in Playwright's WebKit 27.2 on macOS: a typed Preview
 address, a redirect from another site to one, and a real Command-click on a
 Preview link inside the Preview's frame and inside the Files view's frame each
-got the refusal page, and no cookie was set. It was not measured in Safari
-itself, or on iPhone or iPad.
+got the refusal page, and no cookie was set. With Playwright's iPhone and
+iPad user agents, in Chromium and WebKit, a typed Preview address got the
+refusal page and the same address in a frame was served, and in WebKit the
+workbench kept Previews embedded. It was not measured in Safari itself, on an
+iPhone or iPad, or in Safari before 16.4, whose rule is covered by unit tests
+only. Firefox was not measured; it keeps **Open full preview**,
+and the workbench does not depend on its cookie rules, since no
+`Domain=localhost` cookie matches `127.0.0.1`.
 
-What remains in Safari on macOS is a page Axocoatl does not serve that runs
-top-level on a `*.localhost` address and sets such cookies: a development
-server you run yourself, for example. A Session's app is also published on a
-loopback port of this computer, which the workbench never shows; opened there
-directly, as `<name>.localhost:<that port>`, it runs without the daemon. A
-service worker that a Preview registered while it ran top-level in Safari,
-before 1.5.0, would also answer a navigation to that Preview's address without
-the daemon seeing it (not measured). Such a page cannot reach a Session's app
-through the Preview: Safari would send its cookies to a Preview only with a
-top-level request, which the daemon refuses. It can:
+What remains in Safari on macOS is a page that runs top-level on a
+`*.localhost` address without the daemon and sets such cookies. They reach
+other apps you open on `localhost` addresses; a Session's Preview receives
+them only in a tab of its own, which the daemon refuses in Safari.
 
-- Reach any other web app you open on `localhost` or `*.localhost` in Safari,
-  on any port.
+- A development server you run yourself on such an address, or a Session's
+  app opened directly as `<name>.localhost:<the port it is published on>`
+  (the workbench never shows that port; on macOS it is published on `[::1]`,
+  which `*.localhost` names reach).
+- A service worker that a Preview registered while it ran top-level in Safari,
+  before 1.5.0. It answers a navigation to that Preview's address in a tab of
+  its own without the daemon seeing it. Measured once in Playwright's WebKit
+  on macOS: a page on a `*.localhost` address that ran top-level registered a
+  service worker, which then answered a later top-level navigation to that
+  address with status 200 while the server received no request; its page set
+  a `Domain=localhost` cookie, which did not reach `127.0.0.1`. Embedded in a
+  page of another address, that address was served by the server, not by the
+  worker. Safari's Manage Website Data cannot remove it: measured with the
+  system's WebKit on macOS 26.6, a service worker, `Domain=localhost` cookies
+  and host-only cookies of a `*.localhost` address formed no website data
+  record at all, while removing all website data, as History > Clear History
+  does, removed the worker and those cookies. So remove such a worker with
+  History > Clear History, which removes the data of every website.
+
+### Pages on other `127.0.0.1` ports
+
+Cookies ignore ports, so a page on another `127.0.0.1` port sets cookies the
+workbench receives, in any browser: a development server you run at
+`127.0.0.1`, for example. A Session's app is never such a page, since its
+ports are published on another loopback address. Such a page can:
+
 - Send the workbench `axocoatl-token-<port>-signed-in=1`. While that browser is
-  signed out, each navigation you start then passes through the retry page once
-  before the sign-in page.
-- Sign the workbench out of its API. Safari sends at most about 200 KB of
-  cookies with a request, puts the cookies with the longest path first, and
-  leaves out each one that no longer fits. Cookies for `localhost` with
-  `Path=/api`, 51 of 4,000 bytes and then smaller ones that fill what is left
-  (the large ones alone still leave room for it), leave the token cookie off
-  every API request, while `/` still gets it, so the API answers 401. The
-  workbench page then reloads once and shows "This browser is signed out" with
-  what to do; it reloads at most once a minute, where it used to reload without
-  end. Opening the sign-in link again
-  does not help while those cookies stay, and they stay until they expire or
-  you remove them: remove localhost's data in Safari > Settings > Privacy >
-  Manage Website Data, then open the sign-in link again (`axocoatl url`).
-- Sign that browser out of the workbench entirely, with the same cookies for
-  `Path=/`: the token cookie then stays off every request, `/` included, so
-  the open workbench page and a new one both get the sign-in page, not the
-  signed-out message. Opening the sign-in link again signs back in, until the
-  page's code writes the cookies again. Remove localhost's data in Safari >
-  Settings > Privacy > Manage Website Data, close that page, then open the
-  sign-in link again.
+  signed out, a navigation you start then passes through the retry page once,
+  which clears it, before the sign-in page.
+- Sign Safari out of the workbench's API. Safari sends at most about 200 KB
+  of cookies with a request, puts the cookies with the longest path first
+  and, among cookies of one path, those set or changed in a later second
+  first, then by name, and leaves out each one that no longer fits; Chromium
+  sent them all (both measured in Playwright on macOS). Cookies for `127.0.0.1` with `Path=/api`, 51 of 4,000 bytes and then
+  smaller ones that fill what is left (the large ones alone still leave room
+  for it), leave the token cookie off every API request, while `/` still gets
+  it, so the API answers 401. The workbench page then reloads once and shows
+  "This browser is signed out" with what to do; it reloads at most once a
+  minute, where it used to reload without end. Opening the sign-in link again
+  does not help while those cookies stay.
+- Sign Safari out of the workbench entirely, with the same cookies for
+  `Path=/`, written after the sign-in: the token cookie then stays off every
+  request, `/` included, so a workbench page gets the sign-in page, which
+  says what to do. Opening the sign-in link again a second or more later
+  sets the token cookie again as the newest of its path, which Safari then
+  sends first, so the browser is signed in until that page writes its
+  cookies again.
 - Keep the workbench's live connection from opening, with the same cookies
-  for `Path=/ws`. The workbench loads and its API answers, but live updates
-  stop and the status bar says the live connection is reconnecting. Removing
-  localhost's data and signing in again restores it.
+  for `Path=/ws`. A WebSocket never sees the 401 of a refused handshake, so
+  after three failed attempts in a row the workbench asks `/ws` with an
+  ordinary request, which carries the same cookies. Its 401 shows "This
+  browser is signed out", as a 401 from the API does; the workbench used to
+  say only that the live connection was reconnecting.
 - Sign out a browser that signed in a few seconds earlier and has no
   workbench page open, by writing about 1,000 cookies at once. WebKit then
   dropped every cookie the browser held, and the workbench answered with the
-  sign-in page. This needs no `Domain=localhost`: 1,000 host-only cookies of a
-  page on `127.0.0.1` did the same, so any page open in Safari can do it. With
-  the workbench page still open, or 20 seconds between the sign-in and the
+  sign-in page. Any page open in Safari can do this, whatever its address:
+  1,000 host-only cookies of a page on `127.0.0.1` did it. With the
+  workbench page still open, or 20 seconds between the sign-in and the
   cookies, the sign-in survived, and 300 cookies changed nothing. Open the
   sign-in link again (`axocoatl url`) to sign back in.
 
-It cannot:
+What to do: close that page, remove this browser's website data for
+`127.0.0.1`, then open the sign-in link again (`axocoatl url`). The
+workbench's message and its sign-in page say the same. In Safari that is
+Settings > Privacy > Manage Website Data, where it is listed as `127.0.0.1`.
+Measured with the system's WebKit on macOS 26.6 (`WKWebsiteDataStore`, whose
+records that list shows): the cookies that pages on `127.0.0.1` set, with
+`Path=/api`, `Path=/` and `Path=/ws`, and an HttpOnly one a server set, formed
+one record named `127.0.0.1`, and removing it removed every one of them.
+Host-only cookies of `localhost` itself formed a record named `localhost`;
+the cookies of `*.localhost` addresses, `Domain=localhost` ones included,
+formed none, and removing the `localhost` record left them in place. It was
+not checked by clicking through Safari's own settings.
+
+Such a page cannot:
 
 - Sign in or use the API. A forged `axocoatl-token-<port>` cookie never matches
   the token, and the signed-in cookie is never a credential.
 - Sign the workbench out with a cookie that is not ASCII, a forged
   `axocoatl-token-<port>` sent before or after the real one, or 40 cookies of
   1 KB. The daemon reads the `Cookie` header as bytes, so the token cookie
-  stays readable beside them (Safari sends `é` as the byte 0xE9): the
-  workbench reloads, connects, and its API answers. Safari refuses a cookie
-  that holds a control character other than tab.
-- Read the workbench's cookies. They are host-only on `localhost` and HttpOnly,
-  so Safari never sends them to a Preview origin. The Preview proxies also
-  strip every `axocoatl-token-*` cookie before an app sees a request.
-- Reach `127.0.0.1` or `[::1]`.
+  stays readable beside them (Safari sends `é` as the byte 0xE9). Safari
+  refuses a cookie that holds a control character other than tab.
+- Read the workbench's cookies from script: they are HttpOnly. Its server
+  receives them, as described under
+  [The local API token](#the-local-api-token).
 
 For a full-page Preview, use the workbench in a Chromium-based browser. The
 Safari cookie behaviour on this page was measured in Playwright's WebKit on
-macOS (26.4), which uses the system's cookie store, not in Safari itself.
+macOS (26.4 and 27.2), which uses the system's cookie store, not in Safari
+itself.
 
 ## Understand Workspace authorization
 
@@ -401,8 +493,13 @@ The local default is rootless Podman with `no-new-privileges`, dropped
 capabilities, fixed resource-limit requests, and trust gates for custom images
 and repository post-create commands. Two defaults are open: `network: bridge`
 lets Session containers make outbound connections, and
-`require_resource_limits: false` lets a Session start without resource limits
-when the host cannot apply them. For a repository you do not trust, set:
+`require_resource_limits: false` lets a Session start without a resource limit
+the host cannot apply (the Session's record and a run's receipt name it). On a
+Linux computer with SELinux enabled, Session and browser containers run with
+SELinux labelling off (`--security-opt label=disable`), so SELinux confines
+them as it confines your own processes rather than as containers; the user
+namespace, dropped capabilities, seccomp and `no-new-privileges` stay. See
+[Sandboxes](/configure/sandboxes/). For a repository you do not trust, set:
 
 ```yaml
 sandbox:
@@ -608,7 +705,10 @@ What `egress` does not do:
   route refuses it like Ollama's other new endpoints (`/api/balance`, `/api/usage`,
   `/v1/systemone`, …). A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud
   mygpt`) keeps its cloud host under a name the route cannot recognize, so the route is
-  opened only to an Ollama that reports its cloud features disabled. A credential is added only as a header: query, path and body
+  opened only to an Ollama that reports its cloud features disabled, and sends each
+  request only after Ollama reports them disabled again: otherwise it refuses the request
+  with `ollama_cloud_not_off`, `403` while Ollama reports them on or does not say, and
+  `502` when Ollama does not answer `GET /api/status`. A credential is added only as a header: query, path and body
   credentials, request signing such as AWS SigV4, and OAuth token exchange are not
   supported. A tool that pins certificates or keeps its own trust store cannot use a
   route.
@@ -630,12 +730,16 @@ What `egress` does not do:
   Podman's default seccomp profile; and on macOS the Podman VM mounts your home
   directory.
 
-- What the 1.5.0 release gate verified, end to end: macOS 26.6 on Apple silicon (48 GB)
-  with rootless Podman installed by onboarding, and Ubuntu 24.04 on arm64 with rootless
-  Podman from apt, in a VM; in CI, Ubuntu 24.04 on x86_64 and arm64 against a scripted
-  model server. Loadout runs there go through `egress` with the `hardened` workload. The
-  Podman versions are in the release's signed evidence bundle, under
-  `release-evidence/1.5.0/` in the repository.
+- What the 1.5.0 release gate requires to pass end to end on the release commit (the
+  release workflow publishes nothing until its signed evidence holds every required
+  path, short of a logged override by a listed maintainer): a Mac on Apple silicon
+  with rootless Podman that onboarding installs with Homebrew, and Linux with rootless
+  Podman that onboarding installs with apt (the gate's instructions use a new Ubuntu
+  24.04 VM); in CI, Ubuntu 24.04 on x86_64 and arm64 against a scripted model server.
+  Loadout runs there go through `egress` with the `hardened` workload. The Podman
+  versions go into the release's signed evidence bundle, under
+  `release-evidence/1.5.0/` in the repository ([Install](/start/install/) lists every
+  path).
 - Not yet verified: Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux
   enforcing, WSL2 on Windows, and rootful Podman, which loadout runs refuse.
 
@@ -736,9 +840,8 @@ this contract, and Axocoatl cannot change or always detect those settings.
   answers only an authenticated request from a loopback address and returns no token).
   Its access token goes only on a route to `chatgpt.com`; a request on a route to another
   host that names it is refused, and its refresh token goes only to OpenAI's token
-  endpoint. `axocoatl connect codex --api-key` also stores, as `codex-openai`, the OpenAI
-  API key Codex writes to that `auth.json` after the browser sign-in, read the same way
-  and never shown.
+  endpoint. The OpenAI API key Codex may write to that `auth.json` after the browser
+  sign-in is not stored: this version refuses `axocoatl connect codex --api-key`.
   A route adds it on your computer; it never enters a container, a record or a log. It is not encrypted at rest, and a backup of the data
   root includes it.
 - Scope E2B Git tokens, MCP credentials, webhook headers, API keys, and bearer
@@ -747,8 +850,9 @@ this contract, and Axocoatl cannot change or always detect those settings.
   repository scripts and Agent commands.
 - Protect the data root, backups, config, service definition, and logs. Axocoatl
   has no application-level at-rest encryption.
-- The data root holds `local-api-token`. A backup includes it, and a restore
-  reuses it. Delete the file and restart to issue a new one.
+- The data root holds `local-api-token` and `local-api-token.issued`. A backup
+  includes them, and a restore reuses the token. Delete `local-api-token` and
+  restart to issue a new one.
 
 The runtime attempts to set its data root to mode `0700`; selected memory and
 checkpoint files use `0600`. Do not assume every persisted file is encrypted or

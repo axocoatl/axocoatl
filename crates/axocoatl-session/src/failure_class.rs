@@ -55,6 +55,7 @@ fn recorded(class: &str) -> Option<FailureClass> {
             FailureClass::ProviderFailure
         }
         "provider_rejected" => FailureClass::ProviderRejected,
+        "unrunnable_tool_call" => FailureClass::UnrunnableToolCall,
         "budget" | "budget_limited" | "deadline" | "admission" | "grant" => FailureClass::Budget,
         "blocked" | "scope_violation" | "capture_unavailable" => FailureClass::Blocked,
         "not_reached" | "never_started" | "not_started" => FailureClass::NotReached,
@@ -195,6 +196,7 @@ mod tests {
             ("provider_error", FailureClass::ProviderFailure),
             ("provider_incomplete", FailureClass::ProviderFailure),
             ("provider_rejected", FailureClass::ProviderRejected),
+            ("unrunnable_tool_call", FailureClass::UnrunnableToolCall),
             ("budget", FailureClass::Budget),
             ("budget_limited", FailureClass::Budget),
             ("deadline", FailureClass::Budget),

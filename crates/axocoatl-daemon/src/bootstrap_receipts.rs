@@ -103,6 +103,42 @@ fn ollama_versions_program_version(versions: &[String]) -> Option<String> {
     })
 }
 
+/// The `program_version` of a native Agent on `model` that OpenRouter
+/// served: the endpoints that answered its calls, as the run's Outcome
+/// records them (`openrouter endpoint near-ai/fp4 (Near AI)`; several when a
+/// call moved to another endpoint), or `None` when none answered.
+fn openrouter_program_version(outcome: &RunOutcome, model: &str) -> Option<String> {
+    openrouter_endpoints_program_version(outcome.openrouter_endpoints.get(model)?)
+}
+
+/// `openrouter endpoint` and the endpoint that answered, or `openrouter
+/// endpoints` and each of several; `None` when none did. An endpoint calls
+/// only moved away from served nothing.
+fn openrouter_endpoints_program_version(
+    endpoints: &[axocoatl_session::run_outcome::ServedEndpoint],
+) -> Option<String> {
+    let names: Vec<String> = endpoints
+        .iter()
+        .filter(|served| served.calls > 0)
+        .map(|served| served.name())
+        .collect();
+    match names.len() {
+        0 => None,
+        1 => Some(format!("openrouter endpoint {}", names[0])),
+        _ => Some(format!("openrouter endpoints {}", names.join(", "))),
+    }
+}
+
+/// The `program_version` of a native Agent on `provider` and `model`: the
+/// Ollama that served it, or the OpenRouter endpoints that answered it.
+fn native_program_version(outcome: &RunOutcome, provider: &str, model: &str) -> Option<String> {
+    match provider {
+        "ollama" => ollama_program_version(outcome, model),
+        "openrouter" => openrouter_program_version(outcome, model),
+        _ => None,
+    }
+}
+
 /// What the run status and the UI show of a receipt.
 pub(crate) fn receipt_view(bytes: &[u8]) -> Option<RunReceiptView> {
     let opened: OpenedReceipt = receipt::open_receipt(bytes).ok()?;
@@ -246,13 +282,13 @@ impl AxocoatlDaemon {
                     role: serde_name(&agent.role),
                     runtime: agent.runtime.id().to_string(),
                     program_version: match agent.runtime {
-                        // The Ollama that served the Agent's model, as the
-                        // run's Outcome records it (`ollama 0.40.6`). An
-                        // existing field, so a 1.4.0 verifier reads it.
-                        AgentRuntime::Native => identity
-                            .as_ref()
-                            .filter(|identity| identity.provider == "ollama")
-                            .and_then(|identity| ollama_program_version(outcome, &identity.model)),
+                        // The Ollama that served the Agent's model, or the
+                        // OpenRouter endpoints that answered it, as the run's
+                        // Outcome records them (`ollama 0.40.6`). An existing
+                        // field, so a 1.4.0 verifier reads it.
+                        AgentRuntime::Native => identity.as_ref().and_then(|identity| {
+                            native_program_version(outcome, &identity.provider, &identity.model)
+                        }),
                         AgentRuntime::ClaudeCode => Some(
                             crate::external_agent::claude_code::CLAUDE_CODE_VERSION.to_string(),
                         ),
@@ -336,6 +372,12 @@ impl AxocoatlDaemon {
                     .options
                     .get("environment")
                     .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                // The caps the Session's container got, as its record keeps
+                // them.
+                limits: self
+                    .get_session(&manifest.session_id)
+                    .await
+                    .and_then(|session| session.environment.resource_limits),
             },
             network: outcome.network.clone(),
             checks: outcome
@@ -354,9 +396,14 @@ impl AxocoatlDaemon {
                 provider: review.reviewer.provider.clone(),
                 model: review.reviewer.model.clone(),
                 runtime: review.reviewer.runtime.clone(),
-                program_version: (review.reviewer.runtime == "native"
-                    && review.reviewer.provider == "ollama")
-                    .then(|| ollama_program_version(outcome, &review.reviewer.model))
+                program_version: (review.reviewer.runtime == "native")
+                    .then(|| {
+                        native_program_version(
+                            outcome,
+                            &review.reviewer.provider,
+                            &review.reviewer.model,
+                        )
+                    })
                     .flatten(),
                 verdict: review.state.clone(),
                 passed: review.passed,
@@ -540,7 +587,7 @@ impl AxocoatlDaemon {
 /// Most reasons the warning `receipt_incomplete` names, and most bytes of
 /// each.
 const INCOMPLETE_REASONS: usize = 3;
-const INCOMPLETE_REASON_BYTES: usize = 300;
+const INCOMPLETE_REASON_BYTES: usize = 400;
 
 /// The warning of a finished run whose receipt does not cover every path the
 /// run changed, with why (`unattributed`, the receipt's own reasons), so a
@@ -613,5 +660,47 @@ mod program_version_tests {
             Some("ollama 0.40.7, 0.41.0 (unaudited, contract probes passed)")
         );
         assert_eq!(ollama_versions_program_version(&[]), None);
+    }
+
+    /// The receipt names the OpenRouter endpoints that answered a native
+    /// Agent's model, in the order they first answered, or none.
+    #[test]
+    fn the_openrouter_endpoints_that_answered_are_named_in_the_receipt() {
+        let served =
+            |endpoint: &str, provider: &str| axocoatl_session::run_outcome::ServedEndpoint {
+                endpoint: endpoint.into(),
+                provider: provider.into(),
+                calls: 1,
+                moved: 0,
+            };
+        assert_eq!(
+            openrouter_endpoints_program_version(&[served("deepinfra/fp8", "DeepInfra")])
+                .as_deref(),
+            Some("openrouter endpoint deepinfra/fp8 (DeepInfra)")
+        );
+        assert_eq!(
+            openrouter_endpoints_program_version(&[
+                served("near-ai/fp4", "Near AI"),
+                served("deepinfra/bf16", "DeepInfra"),
+            ])
+            .as_deref(),
+            Some("openrouter endpoints near-ai/fp4 (Near AI), deepinfra/bf16 (DeepInfra)")
+        );
+        assert_eq!(openrouter_endpoints_program_version(&[]), None);
+        // An endpoint every call moved away from served none of them.
+        let failed = axocoatl_session::run_outcome::ServedEndpoint {
+            calls: 0,
+            moved: 2,
+            ..served("near-ai/fp4", "Near AI")
+        };
+        assert_eq!(
+            openrouter_endpoints_program_version(&[
+                failed.clone(),
+                served("coreweave/fp4", "CoreWeave"),
+            ])
+            .as_deref(),
+            Some("openrouter endpoint coreweave/fp4 (CoreWeave)")
+        );
+        assert_eq!(openrouter_endpoints_program_version(&[failed]), None);
     }
 }

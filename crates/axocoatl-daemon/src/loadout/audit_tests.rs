@@ -707,6 +707,7 @@ fn outcome_of(report: &KindReport) -> RunOutcome {
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: None,
     };
@@ -2858,6 +2859,7 @@ fn usage(input_tokens: u64, output_tokens: u64, complete: bool) -> RunUsage {
         cost_known: true,
         cost_computed: false,
         retries: 0,
+        unreported: Vec::new(),
     }
 }
 
@@ -4454,6 +4456,33 @@ async fn an_integrator_failing_for_a_provider_s_reason_is_retried_then_merged_by
             "findings merged by the host: the integrator has no result (provider_rejected: HTTP \
           401), so the host took the union of the area findings and removed duplicates by file, \
           line and title (1 finding, 1 kept)"
+        ]
+    );
+
+    // An answer that was a tool call written as text that cannot run is
+    // retried, like a provider failure, then merged by the host.
+    let host = FakeHost::new(vec![
+        planned(),
+        areas(),
+        failed(FailureClass::UnrunnableToolCall, "a call after prose"),
+        failed(FailureClass::UnrunnableToolCall, "a call after prose"),
+    ]);
+    let (report, _) = drive(&host, &run).await;
+    assert_eq!(
+        purposes(&report),
+        [
+            PLAN_PURPOSE,
+            AREAS_PURPOSE,
+            INTEGRATE_PURPOSE,
+            INTEGRATE_PURPOSE
+        ]
+    );
+    assert_eq!(
+        report.notes,
+        [
+            "findings merged by the host: the integrator has no result after its retry \
+          (unrunnable_tool_call: a call after prose), so the host took the union of the area \
+          findings and removed duplicates by file, line and title (1 finding, 1 kept)"
         ]
     );
 

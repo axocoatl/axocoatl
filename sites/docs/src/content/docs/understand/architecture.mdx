@@ -179,9 +179,11 @@ Do not collapse all multi-Agent behavior into one scheduler:
 - An orphaned running Session turn is reconciled to interrupted on restart.
 - Agent supervision polls liveness and restores the latest conversation
   checkpoint, not an arbitrary in-flight tool.
-- Provider responses reject a 129th tool call before hooks or dispatch. Text
-  recovery is bounded and restricted to the effective Ollama route; parallel
-  dispatch retains each original call identity even if one task panics.
+- Provider responses reject a 129th tool call before hooks or dispatch. Only
+  the Ollama providers read calls written as answer text, and only Qwen3-Coder
+  calls that end the answer; an answer that calls a tool in a way that cannot
+  run is refused, so the turn needs attention. Parallel dispatch retains each
+  original call identity even if one task panics.
 - Top-level Automation Interrupts are durable; arbitrary running nodes are not.
 - Attempt Keep and cleanup have resumable lifecycle states.
 - Rewind makes the ledger authoritative and repairs the checkpoint on restart

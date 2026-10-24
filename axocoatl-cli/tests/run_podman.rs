@@ -3,8 +3,8 @@
 //! and reviewer on the same model, so admission warns), `--keep branch`,
 //! `--junit` and `--record`. The record file must be the bundle the API
 //! serves after Keep, byte for byte, as every later download is; each
-//! warning prints once, and a refused run never says it started. Run
-//! explicitly:
+//! warning prints once, a refused run never says it started, and the run's
+//! Session keeps no container running once the run ended. Run explicitly:
 //!
 //! ```text
 //! CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
@@ -449,6 +449,27 @@ async fn a_kept_fix_run_writes_the_api_bundle_and_prints_each_warning_once() {
         header["created_at_ms"], status["outcome"]["finished_at_ms"],
         "{header}"
     );
+    // The run stopped its Session's runtime when it ended: neither its
+    // container nor its egress sidecar runs on, and the Session stays open.
+    let session_id = status["session_id"].as_str().unwrap();
+    for prefix in ["axo-ses-", "axo-egr-"] {
+        let name = format!("{prefix}{session_id}");
+        let exists = Command::new("podman")
+            .args(["container", "exists", &name])
+            .status()
+            .unwrap();
+        assert!(!exists.success(), "{name} still exists");
+    }
+    let session: serde_json::Value = client(port)
+        .get(format!("{base}/api/sessions/{session_id}"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(session["status"], "closed", "{session}");
     let written_sections: Vec<&str> = std::str::from_utf8(&written).unwrap().lines().collect();
     assert!(
         written_sections.iter().any(|line| {

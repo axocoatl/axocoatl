@@ -128,6 +128,9 @@ pub async fn rate_limit(
 }
 
 /// Request logging middleware. Sign-in tokens in the query are redacted.
+/// Every request is logged at `debug` (`RUST_LOG=axocoatl_server=debug`
+/// shows them); a server error also at `warn`, which the daemon shows by
+/// default.
 pub async fn request_logging(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -136,13 +139,25 @@ pub async fn request_logging(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
 
     let elapsed = start.elapsed();
-    tracing::info!(
-        method = %method,
-        uri = %crate::auth::loggable_uri(&uri),
-        status = %response.status(),
-        latency_ms = elapsed.as_millis(),
-        "HTTP request"
-    );
+    let uri = crate::auth::loggable_uri(&uri);
+    let status = response.status();
+    if status.is_server_error() {
+        tracing::warn!(
+            method = %method,
+            uri = %uri,
+            status = %status,
+            latency_ms = elapsed.as_millis(),
+            "HTTP request"
+        );
+    } else {
+        tracing::debug!(
+            method = %method,
+            uri = %uri,
+            status = %status,
+            latency_ms = elapsed.as_millis(),
+            "HTTP request"
+        );
+    }
 
     response
 }
@@ -243,24 +258,64 @@ mod tests {
         assert!(limiter.check("2.2.2.2")); // different IP, allowed
     }
 
-    #[tokio::test]
-    async fn request_log_never_contains_the_sign_in_token() {
-        #[derive(Clone, Default)]
-        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Captured {
-            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
         }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
+    /// What `request_logging` writes for one GET of `uri` answered with
+    /// `status`, at `level` and above.
+    async fn logged(uri: &str, status: StatusCode, level: tracing::Level) -> String {
         let captured = Captured::default();
         let writer = captured.clone();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(move || writer.clone())
+            .with_max_level(level)
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let app = Router::new()
+            .route("/", axum::routing::get(move || async move { status }))
+            .layer(axum::middleware::from_fn(request_logging));
+        let response = app
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let logged = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        logged
+    }
+
+    #[tokio::test]
+    async fn requests_are_logged_at_debug_and_server_errors_at_warn() {
+        let quiet = logged("/", StatusCode::OK, tracing::Level::INFO).await;
+        assert!(!quiet.contains("HTTP request"), "{quiet}");
+        let verbose = logged("/", StatusCode::OK, tracing::Level::DEBUG).await;
+        assert!(
+            verbose.contains("DEBUG") && verbose.contains("HTTP request"),
+            "{verbose}"
+        );
+        let failed = logged("/", StatusCode::BAD_GATEWAY, tracing::Level::INFO).await;
+        assert!(
+            failed.contains("WARN") && failed.contains("status=502"),
+            "{failed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_log_never_contains_the_sign_in_token() {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_max_level(tracing::Level::DEBUG)
             .with_ansi(false)
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);

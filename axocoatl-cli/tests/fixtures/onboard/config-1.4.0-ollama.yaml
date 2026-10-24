@@ -1,0 +1,56 @@
+# Axocoatl — local Ollama setup
+agents:
+  # Default team. Lead owns the change; Scout and Reviewer are read-only
+  # helpers it can delegate to once you opt in and approve their limits in
+  # Team & budget. A new Session starts with Lead alone.
+  - id: lead
+    name: "Lead"
+    provider: ollama
+    model: "qwen3-coder:30b"
+    role: autonomous
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to review it. Fix each defect found. Then summarize what you changed."
+    sampling:
+      max_tokens: 4096
+
+  - id: scout
+    name: "Scout"
+    provider: ollama
+    model: "qwen3-coder:30b"
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Answer the lead's question with file paths, line numbers and short evidence. Change nothing."
+    sampling:
+      max_tokens: 4096
+
+  - id: reviewer
+    name: "Reviewer"
+    provider: ollama
+    model: "gpt-oss:20b"
+    role: worker
+    tools: [read_file, list_dir, grep, glob, bash]
+    writes: []
+    system_prompt: "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing."
+    sampling:
+      max_tokens: 4096
+
+  # Plain chat for `axocoatl chat`; not part of the default team.
+  - id: assistant
+    name: "Assistant"
+    provider: ollama
+    model: "qwen3-coder:30b"
+    system_prompt: "You are a helpful assistant powered by Axocoatl."
+    tools: [read_file, list_dir, grep, glob]
+    token_budget:
+      per_execution: 16000
+      per_call: 8192
+      overflow_policy: warn
+
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+
+server:
+  port: 8080
+  host: "127.0.0.1"

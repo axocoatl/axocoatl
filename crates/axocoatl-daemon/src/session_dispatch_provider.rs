@@ -5,14 +5,29 @@
 //! not grant authority. A dropped call retains incomplete observed usage and
 //! its conservative charge. No provider completion escapes before settlement.
 //!
-//! A transient failure (429, 5xx, timeout, connection reset) that arrives
-//! before the provider produced anything is retried once, after the
-//! provider's `Retry-After` (at most 30 s) or 2 s, on the same executor, so
-//! the same pinned model and endpoint ([`crate::provider_retry`]). The
-//! failed call keeps its own settlement: an incomplete call keeps its whole
-//! reservation. The retry is a new call admitted against the grant like any
-//! other; when the grant cannot pay for it the original failure stands. Each
-//! retry is recorded on the activation's stream before it is sent.
+//! A failure that arrives before the provider produced anything is
+//! recovered from on the same executor, so the same pinned model
+//! ([`crate::provider_retry`]). When the executor holds other endpoints of
+//! the model and the executor says the failure is the current endpoint's own
+//! (an upstream rate limit, an outage, a timeout or a closed connection, a
+//! degraded endpoint or one whose retained contract changed), the call is
+//! sent again at once to the next endpoint that can carry it and that the
+//! grant can pay for, each endpoint once a round
+//! ([`axocoatl_llm::EndpointFailover`]); the move takes effect only once
+//! that call is admitted. Otherwise, or once no endpoint is left, a
+//! transient failure (429, 5xx, timeout, connection reset) is retried once,
+//! after the longest `Retry-After` (at most 30 s) or 2 s that the endpoints
+//! of the round asked for; an endpoint that asked for longer sits the next
+//! round out. That new round starts on the latest endpoint, or on the first
+//! that may be sent to again, and moves on as the first did. Each failed
+//! call keeps its own settlement: one the executor knows cost nothing (it
+//! sent nothing, or the provider refused it before generating) settles to
+//! zero, and any other incomplete call keeps its whole reservation. Each new
+//! attempt is a call admitted against the grant like any other, at its
+//! endpoint's own bounds; when the grant cannot pay for it the failure
+//! stands. Each one is recorded on the activation's stream before it is
+//! sent, and a wait is recorded only when the grant can pay for the call
+//! after it.
 
 use std::io::{self, Write};
 use std::pin::Pin;
@@ -22,8 +37,9 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use axocoatl_core::{MeasuredTokenUsage, TokenUsageStats};
 use axocoatl_llm::{
-    AccountedChatOutcome, ChatRequest, ChatResponse, FinishReason, LlmProvider, ProviderAllowance,
-    ProviderCapabilities, ProviderError, ProviderExecutionBounds, StreamEvent,
+    AccountedChatOutcome, ChatRequest, ChatResponse, FailedCall, FailureFacts, FinishReason,
+    LlmProvider, ProviderAllowance, ProviderCapabilities, ProviderError, ProviderExecutionBounds,
+    StreamEvent,
 };
 use axocoatl_session::control_authority::{
     ProviderCallClaim, ProviderCallOutcome, ProviderCallTerminal,
@@ -33,7 +49,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio_stream::{Stream, StreamExt};
 
-use crate::provider_retry::{self, ProviderFailure, RetryDecision};
+use crate::provider_retry::{self, RetryDecision};
 use crate::session_dispatch::SessionDispatchController;
 
 #[path = "session_dispatch_provider_framing.rs"]
@@ -58,7 +74,25 @@ pub(crate) struct SessionProvider {
 /// the attempt's own `Err` instead.
 enum Attempt<T> {
     Done(T),
-    Failed(ProviderError),
+    Failed(FailedCall),
+}
+
+/// Where one call stands in recovering from failures before its provider
+/// produced anything.
+struct Recovery {
+    /// Waits the retry policy allowed so far.
+    retries: u32,
+    /// The endpoints this round of the call was sent to, in order: the last
+    /// is the one the latest attempt went to.
+    tried: Vec<usize>,
+    /// Endpoints left out of this round: the last failure of each in the
+    /// round before asked to wait longer than the policy allows, or was not
+    /// one a wait helps.
+    resting: Vec<usize>,
+    /// Each endpoint the call failed on, with its failure, in order.
+    failures: Vec<(usize, FailedCall)>,
+    /// Where this round's failures start in `failures`.
+    round: usize,
 }
 
 impl SessionProvider {
@@ -89,24 +123,201 @@ impl SessionProvider {
         self
     }
 
-    /// How long to wait before retrying `error` after attempt `attempt`, or
-    /// `None` when the policy gives up. A retry that cannot be recorded on
-    /// the activation is not made.
-    fn retry_wait(&self, error: &ProviderError, attempt: u32) -> Option<std::time::Duration> {
-        let failure = provider_retry::failure_of(error);
-        let RetryDecision::RetryAfter(wait) = provider_retry::decide(&failure, attempt) else {
-            return None;
-        };
-        self.record_retry(&failure, wait).then_some(wait)
+    /// The endpoint the executor sends calls to now.
+    fn current_endpoint(&self) -> usize {
+        self.inner
+            .endpoint_failover()
+            .map_or(0, |failover| failover.current_endpoint())
     }
 
-    fn record_retry(&self, failure: &ProviderFailure, wait: std::time::Duration) -> bool {
-        let note = provider_retry::retry_note(
-            failure,
-            wait,
-            &self.expected_provider,
-            &self.expected_model,
-        );
+    fn recovery(&self) -> Recovery {
+        Recovery {
+            retries: 0,
+            tried: vec![self.current_endpoint()],
+            resting: Vec::new(),
+            failures: Vec::new(),
+            round: 0,
+        }
+    }
+
+    /// After an attempt failed (`failed`) before its provider produced
+    /// anything: the next attempt's admitted call, at once on the next
+    /// endpoint when the executor says the failure is the current endpoint's
+    /// own, or after the retry policy's wait; or the error the call ends
+    /// with. Each attempt is admitted, then recorded, before it is sent; one
+    /// that cannot be recorded is not made.
+    async fn recover(
+        &self,
+        request: &ChatRequest,
+        failed: FailedCall,
+        recovery: &mut Recovery,
+    ) -> Result<PendingCall, ProviderError> {
+        let failure = provider_retry::failure_of(&failed.error);
+        let from = recovery
+            .tried
+            .last()
+            .copied()
+            .unwrap_or_else(|| self.current_endpoint());
+        let endpoint_failure = failed.facts.endpoint_failure;
+        recovery.failures.push((from, failed));
+        let failover = self.inner.endpoint_failover();
+        if let (true, Some(failover)) = (endpoint_failure, failover) {
+            let excluded: Vec<usize> = recovery
+                .tried
+                .iter()
+                .chain(&recovery.resting)
+                .copied()
+                .collect();
+            for next in failover.candidates(request, &excluded) {
+                let Some(pending) = failover
+                    .execution_bounds_on(next, request)
+                    .and_then(|bounds| self.admit_retry(request, bounds))
+                else {
+                    continue;
+                };
+                let note = provider_retry::switch_note(
+                    &failure,
+                    &self.expected_provider,
+                    &self.expected_model,
+                    &failover.describe_move(from, next),
+                );
+                if !self.record_note(note) {
+                    let mut pending = pending;
+                    pending.finish_without_charge()?;
+                    return Err(self.give_up(recovery));
+                }
+                failover.move_to(next, true);
+                recovery.tried.push(next);
+                return Ok(pending);
+            }
+        }
+        if recovery.retries >= provider_retry::MAX_PROVIDER_RETRIES
+            || !provider_retry::is_transient(&failure)
+        {
+            return Err(self.give_up(recovery));
+        }
+        // How long the last failure of each endpoint of this round asks to
+        // wait, if the policy allows it.
+        let mut waits: Vec<(usize, Option<std::time::Duration>)> = Vec::new();
+        for (endpoint, failed) in &recovery.failures[recovery.round..] {
+            let wait = match provider_retry::decide(
+                &provider_retry::failure_of(&failed.error),
+                recovery.retries,
+            ) {
+                RetryDecision::RetryAfter(wait) => Some(wait),
+                RetryDecision::GiveUp => None,
+            };
+            match waits.iter_mut().find(|(seen, _)| seen == endpoint) {
+                Some(entry) => entry.1 = wait,
+                None => waits.push((*endpoint, wait)),
+            }
+        }
+        let may_resume = |endpoint: usize| {
+            waits
+                .iter()
+                .any(|(seen, wait)| *seen == endpoint && wait.is_some())
+        };
+        let Some(wait) = waits.iter().filter_map(|(_, wait)| *wait).max() else {
+            return Err(self.give_up(recovery));
+        };
+        // The new round starts on the latest endpoint when it may be sent
+        // to again, otherwise on the first that may, in the order calls move.
+        let target = match failover {
+            _ if may_resume(from) => from,
+            Some(failover) => {
+                let excluded: Vec<usize> = (0..failover.endpoint_count())
+                    .filter(|endpoint| !may_resume(*endpoint))
+                    .collect();
+                match failover.candidates(request, &excluded).first() {
+                    Some(target) => *target,
+                    None => return Err(self.give_up(recovery)),
+                }
+            }
+            None => return Err(self.give_up(recovery)),
+        };
+        let bounds = match failover {
+            Some(failover) if target != from => failover.execution_bounds_on(target, request),
+            _ => self.inner.execution_bounds(request),
+        };
+        let Some(bounds) = bounds.filter(|bounds| self.allowance_fits(bounds)) else {
+            tracing::info!(
+                activation = %self.activation.activation_id.as_str(),
+                "the grant cannot pay for the provider retry; the failure stands"
+            );
+            return Err(self.give_up(recovery));
+        };
+        let note = match failover {
+            Some(failover) if target != from => provider_retry::retry_moved_note(
+                &failure,
+                wait,
+                &self.expected_provider,
+                &self.expected_model,
+                &failover.describe_move(from, target),
+            ),
+            _ => provider_retry::retry_note(
+                &failure,
+                wait,
+                &self.expected_provider,
+                &self.expected_model,
+            ),
+        };
+        if !self.record_note(note) {
+            return Err(self.give_up(recovery));
+        }
+        tokio::time::sleep(wait).await;
+        let Some(pending) = self.admit_retry(request, bounds) else {
+            return Err(self.give_up(recovery));
+        };
+        if let Some(failover) = failover.filter(|_| target != from) {
+            failover.move_to(target, true);
+        }
+        recovery.retries += 1;
+        recovery.resting = waits
+            .iter()
+            .filter(|(_, wait)| wait.is_none())
+            .map(|(endpoint, _)| *endpoint)
+            .collect();
+        recovery.tried = vec![target];
+        recovery.round = recovery.failures.len();
+        Ok(pending)
+    }
+
+    /// Whether what the grant still allows this activation can pay for a
+    /// call reserving `bounds`. Admission decides; this only keeps a wait
+    /// from being recorded for a call that cannot be paid for after it.
+    fn allowance_fits(&self, bounds: &ProviderExecutionBounds) -> bool {
+        self.controller
+            .agent_allowance(&self.activation)
+            .is_none_or(|allowance| {
+                allowance.invocations.is_none_or(|left| left > 0)
+                    && allowance
+                        .tokens
+                        .is_none_or(|left| bounds.token_limit <= left)
+                    && allowance
+                        .cost_microunits
+                        .is_none_or(|left| bounds.cost_microunits <= left)
+            })
+    }
+
+    /// The error a call ends with: its last failure, or, when it failed on
+    /// several endpoints, what the executor says of all of them.
+    fn give_up(&self, recovery: &mut Recovery) -> ProviderError {
+        let failures = std::mem::take(&mut recovery.failures);
+        let endpoints: std::collections::BTreeSet<usize> =
+            failures.iter().map(|(endpoint, _)| *endpoint).collect();
+        match self.inner.endpoint_failover() {
+            Some(failover) if endpoints.len() > 1 => failover.exhausted(failures),
+            _ => failures
+                .into_iter()
+                .next_back()
+                .map(|(_, failed)| failed.error)
+                .unwrap_or_else(|| ProviderError::Stream("provider call failed".into())),
+        }
+    }
+
+    /// Record `note` on the activation's stream. A note that cannot be
+    /// recorded means the attempt it announces is not made.
+    fn record_note(&self, note: String) -> bool {
         match &self.retry_observer {
             Some(observer) => match observer
                 .observe(&axocoatl_actor::AgentStreamChunk::ProviderRetry { reason: note })
@@ -132,20 +343,40 @@ impl SessionProvider {
         }
     }
 
-    /// Admit the retry of a failed call. When the grant cannot pay for it,
-    /// or the activation may no longer call, the original failure stands.
-    fn admit_retry(&self, request: &ChatRequest, failure: &ProviderError) -> Option<PendingCall> {
-        match self.admit(request) {
+    /// Admit the next attempt of a failed call at `bounds`. When the grant
+    /// cannot pay for it, or the activation may no longer call, the failure
+    /// stands.
+    fn admit_retry(
+        &self,
+        request: &ChatRequest,
+        bounds: ProviderExecutionBounds,
+    ) -> Option<PendingCall> {
+        match self.admit_at(request, bounds) {
             Ok(pending) => Some(pending),
             Err(refused) => {
                 tracing::info!(
                     activation = %self.activation.activation_id.as_str(),
                     %refused,
-                    %failure,
-                    "the provider retry was not admitted; the first failure stands"
+                    "a provider retry was not admitted"
                 );
                 None
             }
+        }
+    }
+
+    /// Settle a call that failed before it produced anything: at zero when
+    /// the executor knows it cost nothing (`facts`), otherwise as `kind`
+    /// with what was observed (an incomplete call keeps its reservation).
+    fn settle_failed(
+        &self,
+        pending: &mut PendingCall,
+        facts: &FailureFacts,
+        kind: ProviderCallTerminal,
+    ) -> Result<(), ProviderError> {
+        if facts.cost_nothing {
+            pending.finish_without_charge()
+        } else {
+            pending.finish(kind, false)
         }
     }
 
@@ -159,7 +390,7 @@ impl SessionProvider {
         usage: &mut MeasuredTokenUsage,
         cost_microunits: &mut Option<u64>,
     ) -> Result<Attempt<ChatResponse>, ProviderError> {
-        let outcome = self.inner.chat_with_accounting(request).await;
+        let (outcome, facts) = self.inner.chat_with_accounting_and_facts(request).await;
         *usage = outcome.usage.clone();
         *cost_microunits = outcome.cost_microunits;
         // Retain both independently authoritative dimensions before refusing
@@ -178,10 +409,17 @@ impl SessionProvider {
             Err(error) => {
                 // A parser may have received usage before the body became
                 // invalid. Preserve its subtotal without treating failure
-                // as proof of a complete provider exchange.
-                *usage = pending.observed_usage(false);
-                pending.finish(ProviderCallTerminal::Failed, false)?;
-                return Ok(Attempt::Failed(error));
+                // as proof of a complete provider exchange, unless the
+                // executor knows the call cost nothing.
+                self.settle_failed(&mut pending, &facts, ProviderCallTerminal::Failed)?;
+                *usage = match &pending.settled_usage {
+                    Some(settled) => settled.clone(),
+                    None => pending.observed_usage(false),
+                };
+                if pending.settled_without_charge {
+                    *cost_microunits = Some(0);
+                }
+                return Ok(Attempt::Failed(FailedCall { error, facts }));
             }
         };
         if response.usage != usage.usage {
@@ -219,60 +457,95 @@ impl SessionProvider {
         Ok(Attempt::Done(response))
     }
 
-    /// Open one stream under `pending`. While a retry is still allowed
-    /// (`attempt` below the policy's limit), the stream's first item is read
-    /// before it is handed on, so a transient failure before the provider
-    /// produced anything can be retried; that failure is settled exactly as
-    /// the stream would have settled it. Any other first item is handed on
-    /// unchanged, and the last attempt's stream is handed on unread.
+    /// Open one stream under `pending`. Its first item is read before the
+    /// stream is handed on, so a transient failure before the provider
+    /// produced anything can be recovered from, or said with the others the
+    /// call met; that failure is settled exactly as the stream would have
+    /// settled it. Any other first item is handed on unchanged.
     async fn stream_once(
         &self,
         mut pending: PendingCall,
         request: ChatRequest,
-        attempt: u32,
     ) -> Result<Attempt<ProviderStream>, ProviderError> {
-        let mut inner = match self.inner.chat_stream(request).await {
+        let mut inner = match self.inner.open_chat_stream(request).await {
             Ok(stream) => stream,
-            Err(error) => {
-                pending.finish(ProviderCallTerminal::Failed, false)?;
-                return Ok(Attempt::Failed(error));
+            Err(failed) => {
+                self.settle_failed(&mut pending, &failed.facts, ProviderCallTerminal::Failed)?;
+                return Ok(Attempt::Failed(failed));
             }
         };
-        let retryable = |error: &ProviderError| {
-            matches!(
-                provider_retry::decide(&provider_retry::failure_of(error), attempt),
-                RetryDecision::RetryAfter(_)
-            )
-        };
-        let first = if attempt < provider_retry::MAX_PROVIDER_RETRIES {
-            match inner.next().await {
-                Some(Err(error)) if retryable(&error) => {
-                    // Nothing was observed before it, so no terminal usage was
-                    // reported: the whole reservation stays, as 1.2 keeps it.
-                    pending.finish(ProviderCallTerminal::Interrupted, false)?;
-                    return Ok(Attempt::Failed(error));
-                }
-                first => Some(first),
+        let first = match inner.next().await {
+            Some(Err(error))
+                if provider_retry::is_transient(&provider_retry::failure_of(&error)) =>
+            {
+                // Its answer had started without anything observed, so no
+                // terminal usage was reported: the whole reservation stays,
+                // as 1.2 keeps it.
+                let mut failed = self.inner.failed_answer(error);
+                failed.facts.cost_nothing = false;
+                self.settle_failed(
+                    &mut pending,
+                    &failed.facts,
+                    ProviderCallTerminal::Interrupted,
+                )?;
+                return Ok(Attempt::Failed(failed));
             }
-        } else {
-            None
+            first => first,
         };
         Ok(Attempt::Done(Box::pin(framing::FramedProviderStream::new(
             Box::pin(SessionProviderStream {
                 inner,
                 pending,
                 finished: false,
-                first,
+                first: Some(first),
                 provider: self.expected_provider.clone(),
             }),
         ))))
     }
 
+    /// Admit a new call at the current endpoint's bounds. When the executor
+    /// moved calls to an endpoint that costs more and the grant cannot pay
+    /// for the call there, the call is admitted on the endpoint that reserves
+    /// least of those that can carry it and that the grant can pay for, and
+    /// calls go there: a move never ends an activation's budget sooner.
     fn admit(&self, request: &ChatRequest) -> Result<PendingCall, ProviderError> {
         self.validate_request(request)?;
         let bounds = self.inner.execution_bounds(request).ok_or_else(|| {
             self.invalid("executor does not provide enforced provider spend and response bounds")
         })?;
+        let refused = match self.admit_at(request, bounds) {
+            Err(refused @ ProviderError::BudgetExhausted { .. }) => refused,
+            admitted => return admitted,
+        };
+        let Some(failover) = self.inner.endpoint_failover() else {
+            return Err(refused);
+        };
+        let mut cheaper: Vec<(usize, ProviderExecutionBounds)> = failover
+            .candidates(request, &[])
+            .into_iter()
+            .filter_map(|index| Some((index, failover.execution_bounds_on(index, request)?)))
+            .filter(|(_, other)| {
+                other.cost_microunits < bounds.cost_microunits
+                    || other.token_limit < bounds.token_limit
+            })
+            .collect();
+        cheaper.sort_by_key(|(index, other)| (other.cost_microunits, other.token_limit, *index));
+        for (index, other) in cheaper {
+            if let Ok(pending) = self.admit_at(request, other) {
+                failover.move_to(index, false);
+                return Ok(pending);
+            }
+        }
+        Err(refused)
+    }
+
+    /// Admit `request` as a call reserving `bounds`.
+    fn admit_at(
+        &self,
+        request: &ChatRequest,
+        bounds: ProviderExecutionBounds,
+    ) -> Result<PendingCall, ProviderError> {
+        self.validate_request(request)?;
         if bounds.response_bytes == 0 || bounds.response_bytes > MAX_RESPONSE_BYTES {
             return Err(self.invalid("executor response bound exceeds reserved provider capacity"));
         }
@@ -299,6 +572,8 @@ impl SessionProvider {
             follow_up: Some((self.inner.clone(), request.clone())),
             activation: self.activation.clone(),
             tool_calls: false,
+            settled_usage: None,
+            settled_without_charge: false,
         })
     }
 
@@ -370,24 +645,16 @@ impl LlmProvider for SessionProvider {
         let mut cost_microunits = None;
         let response = async {
             let mut pending = self.admit(&request)?;
-            let mut attempt = 0;
+            let mut recovery = self.recovery();
             loop {
-                let error = match self
+                let failed = match self
                     .accounted_once(pending, request.clone(), &mut usage, &mut cost_microunits)
                     .await?
                 {
                     Attempt::Done(response) => return Ok(response),
-                    Attempt::Failed(error) => error,
+                    Attempt::Failed(failed) => failed,
                 };
-                let Some(wait) = self.retry_wait(&error, attempt) else {
-                    return Err(error);
-                };
-                tokio::time::sleep(wait).await;
-                attempt += 1;
-                pending = match self.admit_retry(&request, &error) {
-                    Some(pending) => pending,
-                    None => return Err(error),
-                };
+                pending = self.recover(&request, failed, &mut recovery).await?;
             }
         }
         .await;
@@ -400,21 +667,13 @@ impl LlmProvider for SessionProvider {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ProviderStream, ProviderError> {
         let mut pending = self.admit(&request)?;
-        let mut attempt = 0;
+        let mut recovery = self.recovery();
         loop {
-            let error = match self.stream_once(pending, request.clone(), attempt).await? {
+            let failed = match self.stream_once(pending, request.clone()).await? {
                 Attempt::Done(stream) => return Ok(stream),
-                Attempt::Failed(error) => error,
+                Attempt::Failed(failed) => failed,
             };
-            let Some(wait) = self.retry_wait(&error, attempt) else {
-                return Err(error);
-            };
-            tokio::time::sleep(wait).await;
-            attempt += 1;
-            pending = match self.admit_retry(&request, &error) {
-                Some(pending) => pending,
-                None => return Err(error),
-            };
+            pending = self.recover(&request, failed, &mut recovery).await?;
         }
     }
 }
@@ -454,6 +713,10 @@ struct PendingCall {
     activation: ActivationRef,
     /// The response asked for at least one tool.
     tool_calls: bool,
+    /// The usage this call settled with, once it settled without charge.
+    settled_usage: Option<MeasuredTokenUsage>,
+    /// The call settled at zero: the executor knows it cost nothing.
+    settled_without_charge: bool,
 }
 
 impl PendingCall {
@@ -515,6 +778,29 @@ impl PendingCall {
                 self.controller.provider_boundary_failed(reason.clone());
                 ProviderError::Stream(reason)
             })
+    }
+
+    /// Settle a call its executor knows used no tokens and cost nothing (it
+    /// sent nothing, or the provider refused it before generating): zero
+    /// usage, reported, at no cost, so its whole reservation goes back to
+    /// the grant. A call that observed any usage or cost settles as it
+    /// observed, keeping its reservation.
+    fn finish_without_charge(&mut self) -> Result<(), ProviderError> {
+        let observed_nothing = self.observed.as_ref().is_none_or(|observed| {
+            observed.usage.input_tokens == 0
+                && observed.usage.output_tokens == 0
+                && observed.usage.reasoning_tokens.unwrap_or(0) == 0
+        }) && self.observed_cost.is_none_or(|cost| cost == 0);
+        if !observed_nothing {
+            return self.finish(ProviderCallTerminal::Failed, false);
+        }
+        let zero = MeasuredTokenUsage::known(TokenUsageStats::default());
+        self.observed = Some(zero.clone());
+        self.observed_cost = Some(0);
+        self.finish(ProviderCallTerminal::Failed, true)?;
+        self.settled_usage = Some(zero);
+        self.settled_without_charge = true;
+        Ok(())
     }
 
     fn violation(&mut self, reason: String) -> ProviderError {

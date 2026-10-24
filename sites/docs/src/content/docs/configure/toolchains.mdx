@@ -147,13 +147,19 @@ writer user for the setup alone. Then root takes it back, owned by root and read
 the Session's users, before the first model call, whether the setup succeeded or not.
 The writer's turns and the checks run from the cache but cannot change it. A writer can
 therefore not change the test runner, a dependency or the virtual environment that its
-own run's checks, or any later run's checks, use. Build output is not cached: Go's build
-cache is in the Session user's home directory and cargo's target directory is under the
-Session's `/tmp`, so nothing one run builds is reused by another, and no `target/`
-directory is written into your repository.
+own run's checks, or any later run's checks, use. Handing the directory over and taking
+it back changes the owner of every file in it, so a Node.js run, whose setup runs every
+time, does it on every run: for a cache of 61,201 files and directories it took 0.4 to
+0.6 seconds in all on a Mac's Podman machine (Apple M5 Pro, 6 CPUs). Build output is
+not cached: Go's build cache is in the Session user's home directory and cargo's target
+directory is under the Session's `/tmp`, so nothing one run builds is reused by another,
+and no `target/` directory is written into your repository.
 
-To start a Workspace's cache over, remove its volume: `podman volume ls --filter
-label=io.axocoatl.role=toolchain-cache`, then `podman volume rm axo-tc-…`.
+To start a repository's cache over, run `axocoatl recipe clear-cache --repo DIR`
+(without `--repo`, the current directory; `--all` for every repository of your data
+root). The next run installs everything again. A cache that a container of one of the
+repository's Sessions still uses is left as it is, and the command names that Session:
+let its run end, or close it, first. A run's container stops when the run ends.
 
 The toolchain images also keep these files out of your repository: Python bytecode,
 pytest's cache, and an editable install's `*.egg-info` directory.
@@ -175,11 +181,15 @@ The download sizes are the compressed layers of the official image plus the Debi
 packages for git and make, and the sizes on disk were measured on Apple silicon
 (linux/arm64). On amd64 the Rust layers are about 40 MB larger.
 
-The first run that needs an image builds it. `axocoatl run` prints what it builds and
-about how large it is, and Podman's progress appears on standard error. Later runs reuse
-the image. To build it ahead of time, run `axocoatl recipe build python`.
-`--no-build` refuses the run instead and names the build command. `axocoatl recipe list`
-lists the toolchains and the images you have built.
+The first run that needs an image builds it. Before it builds, `axocoatl run` has the
+daemon check the run as `--dry-run` does, without loading any model, so a run that
+cannot start (a credential that is not stored, a reviewer on a provider that cannot
+review, a model the provider does not have) is refused with the same message and exit
+code first, and nothing is built. Then it prints what it builds and about how large it
+is, and Podman's progress appears on standard error. Later runs reuse the image. To
+build it ahead of time, run `axocoatl recipe build python`. `--no-build` refuses the run
+instead and names the build command. `axocoatl recipe list` lists the toolchains and the
+images you have built.
 
 `fix-claude-code` and `fix-codex` combine their agent recipe with the toolchain into a
 single image, such as `axocoatl recipe build claude-code python`. On a Python, Rust or Go
@@ -227,7 +237,7 @@ the language and the program. `--no-probe` skips the probe, for a check it is wr
 about.
 
 ```text
-axocoatl run: the check `npm run test` cannot run in this run's image: the program `jest` was not found. Image: localhost/axocoatl-recipe-node:3b267c748259, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. To fix it: declare it in package.json's devDependencies, or give its install with --setup "<command that installs jest>"; …
+axocoatl run: the check `npm run test` cannot run in this run's image: the program `jest` was not found. Image: localhost/axocoatl-recipe-node:3b267c748259, with the node toolchain (package.json at the repository root). No writer or reviewer turn ran. To fix it: declare it in package.json's devDependencies, or give its install with --setup "COMMAND", where COMMAND installs jest; …
 ```
 
 <Aside type="note">

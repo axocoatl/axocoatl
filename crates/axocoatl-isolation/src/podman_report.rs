@@ -41,7 +41,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// The oldest Podman Axocoatl runs work with: `keep-id` with `uid=` and
 /// `gid=` arrived in Podman 4.3.
 pub const MIN_PODMAN_VERSION: (u64, u64) = (4, 3);
-/// The Podman Axocoatl is tested with on Linux (Ubuntu 24.04's).
+/// The Podman minor release Axocoatl is tested with on Linux: Ubuntu
+/// 24.04's 4.9, what the release gate's Linux runs and CI use. Doctor and
+/// onboarding warn about any other (Fedora's 5.x and Arch's 6.x included),
+/// as they do on macOS.
 pub const TESTED_LINUX_PODMAN: (u64, u64) = (4, 9);
 /// The Podman minor releases Axocoatl is tested with on macOS: 6.1, what
 /// Homebrew installs for onboarding today and what the release gate's Mac runs
@@ -62,6 +65,12 @@ fn tested_macos_text() -> String {
     }
 }
 
+/// The warning for a Podman on Linux other than [`TESTED_LINUX_PODMAN`].
+pub fn linux_untested(version: &str) -> String {
+    let (major, minor) = TESTED_LINUX_PODMAN;
+    format!("Podman {version} has not been tested with Axocoatl on Linux yet ({major}.{minor} is)")
+}
+
 /// What `podman info --format json` said.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeInfo {
@@ -78,6 +87,11 @@ pub struct RuntimeInfo {
     pub gid_ranges: Option<usize>,
     /// The runtime is reached remotely (a machine, `CONTAINER_HOST`).
     pub remote: Option<bool>,
+    /// The cgroup controllers it can use for containers' resource caps
+    /// (`None`: not reported).
+    pub cgroup_controllers: Option<Vec<String>>,
+    /// `v1` or `v2`.
+    pub cgroup_version: Option<String>,
 }
 
 /// One machine `podman machine list` and `inspect` report.
@@ -381,8 +395,27 @@ pub fn parse_runtime_info(stdout: &[u8]) -> Result<RuntimeInfo, String> {
         remote: info
             .pointer("/host/serviceIsRemote")
             .and_then(Value::as_bool),
+        cgroup_controllers: match info.pointer("/host/cgroupControllers") {
+            Some(Value::Array(controllers)) => Some(
+                controllers
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            Some(Value::Null) => Some(Vec::new()),
+            _ => None,
+        },
+        cgroup_version: text("/host/cgroupVersion"),
     })
 }
+
+/// How to delegate the cgroup controllers rootless Podman needs for a
+/// container's caps to every user's systemd manager (Podman's own advice).
+pub const DELEGATE_CONTROLLERS_FIX: &str = "sudo mkdir -p /etc/systemd/system/user@.service.d && \
+     printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee \
+     /etc/systemd/system/user@.service.d/delegate.conf && sudo systemctl daemon-reload, then log \
+     out and back in";
 
 /// A byte count Podman reports as a number or a string of digits, in MiB.
 fn mib(value: &Value) -> Option<u64> {
@@ -1550,11 +1583,11 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
                         .to_string()
                 }),
             ));
-        } else if !platform.machine && (major, minor) < TESTED_LINUX_PODMAN {
+        } else if !platform.machine && (major, minor) != TESTED_LINUX_PODMAN {
             list.push(Finding::new(
                 Level::Warn,
                 "Podman version",
-                format!("Podman {version} has not been tested with Axocoatl (4.9 is)"),
+                linux_untested(&version),
                 None,
             ));
         } else if platform.machine && !TESTED_MACOS_PODMAN.contains(&(major, minor)) {
@@ -1599,12 +1632,56 @@ pub fn findings(report: &PodmanReport, platform: &Platform) -> Vec<Finding> {
     if let Some(runtime) = &report.runtime {
         if !platform.machine && runtime.selinux == Some(true) {
             list.push(Finding::new(
-                Level::Warn,
+                Level::Ok,
                 "SELinux",
-                "SELinux is enabled; Sessions under SELinux enforcing have not been verified yet"
+                "SELinux is enabled: Session and browser containers run with SELinux labelling \
+                 off (--security-opt label=disable), so they can use your repository without \
+                 relabelling it; their other limits stay"
                     .to_string(),
                 None,
             ));
+        }
+        if let Some(controllers) = runtime
+            .cgroup_controllers
+            .as_ref()
+            .filter(|_| runtime.rootless != Some(false))
+        {
+            let missing =
+                crate::container_host::ResourceCaps::from_controllers(controllers).not_applied();
+            if !missing.is_empty() {
+                let in_use = report.machine_in_use().map(|machine| machine.name.as_str());
+                let fix = if platform.machine {
+                    // Podman 6.1.4 sets a machine up with this drop-in
+                    // (read in podman-machine-default).
+                    format!(
+                        "In the machine (`{}`), give its user the cgroup controllers Podman's \
+                         machine setup delegates: `Delegate=memory pids cpu io` under \
+                         `[Service]` in /etc/systemd/system/user@.service.d/delegate.conf, then \
+                         restart the machine (`{} && {}`)",
+                        machine_command("ssh", in_use),
+                        machine_command("stop", in_use),
+                        machine_command("start", in_use)
+                    )
+                } else if runtime.cgroup_version.as_deref() == Some("v1") {
+                    "This computer uses cgroup v1, where rootless Podman caps no container: boot \
+                     it with cgroup v2 (systemd.unified_cgroup_hierarchy=1)"
+                        .to_string()
+                } else {
+                    DELEGATE_CONTROLLERS_FIX.to_string()
+                };
+                list.push(Finding::new(
+                    Level::Warn,
+                    "Resource caps",
+                    format!(
+                        "rootless Podman can use the cgroup controllers [{}], so Session \
+                         containers run without their {} cap (sandbox.require_resource_limits: \
+                         true refuses to start them instead)",
+                        controllers.join(", "),
+                        missing.join(", ")
+                    ),
+                    Some(fix),
+                ));
+            }
         }
     }
 
@@ -1990,6 +2067,93 @@ mod tests {
         }
     }
 
+    /// A Linux host whose user is not delegated the cpu controller hears
+    /// that Session containers run without their CPU cap, and how to
+    /// delegate it, and so does a Podman machine; SELinux is said as what
+    /// Axocoatl does about it.
+    #[test]
+    fn missing_cgroup_controllers_and_selinux_are_said() {
+        let linux = platform(false);
+        let info = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":["memory","pids"],"cgroupVersion":"v2","#,
+        );
+        let report = linux_report(&info, None);
+        let runtime = report.runtime.as_ref().unwrap();
+        assert_eq!(
+            runtime.cgroup_controllers,
+            Some(vec!["memory".to_string(), "pids".to_string()])
+        );
+        let all = findings(&report, &linux);
+        let caps = all.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert_eq!(caps.level, Level::Warn);
+        assert!(
+            caps.detail.contains("[memory, pids]")
+                && caps
+                    .detail
+                    .contains("without their CPU (2 CPUs, cgroup controller cpu) cap"),
+            "{}",
+            caps.detail
+        );
+        assert_eq!(caps.fix.as_deref(), Some(DELEGATE_CONTROLLERS_FIX));
+        assert!(!all.iter().any(|f| f.name == "SELinux"));
+        // Every controller, as Ubuntu 24.04 delegates with cpu: nothing.
+        let delegated = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":["cpu","memory","pids"],"#,
+        );
+        assert!(!findings(&linux_report(&delegated, None), &linux)
+            .iter()
+            .any(|f| f.name == "Resource caps"));
+        // cgroup v1 delegates none.
+        let v1 = LINUX_INFO.replace(
+            r#""kernel":"6.8.0","#,
+            r#""kernel":"6.8.0","cgroupControllers":null,"cgroupVersion":"v1","#,
+        );
+        let v1 = findings(&linux_report(&v1, None), &linux);
+        let caps = v1.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert!(caps.fix.as_deref().unwrap().contains("cgroup v2"));
+        // Fedora with SELinux enforcing.
+        let selinux = LINUX_INFO.replace(r#""selinuxEnabled":false"#, r#""selinuxEnabled":true"#);
+        let selinux = findings(&linux_report(&selinux, None), &linux);
+        let line = selinux.iter().find(|f| f.name == "SELinux").unwrap();
+        assert_eq!(line.level, Level::Ok);
+        assert!(line.detail.contains("label=disable"), "{}", line.detail);
+        // A Podman machine without one: its fix is in the machine, as
+        // Podman's machine setup has it.
+        let with = |controllers: &str| {
+            let mut report = mac_report();
+            report.runtime = Some(
+                parse_runtime_info(
+                    MAC_INFO
+                        .replace(
+                            r#""arch":"arm64","#,
+                            &format!(r#""arch":"arm64","cgroupControllers":{controllers},"#),
+                        )
+                        .as_bytes(),
+                )
+                .unwrap(),
+            );
+            findings(&report, &platform(true))
+        };
+        let machine = with(r#"["memory","pids"]"#);
+        let caps = machine.iter().find(|f| f.name == "Resource caps").unwrap();
+        assert_eq!(caps.level, Level::Warn);
+        assert_eq!(
+            caps.fix.as_deref(),
+            Some(
+                "In the machine (`podman machine ssh`), give its user the cgroup controllers \
+                 Podman's machine setup delegates: `Delegate=memory pids cpu io` under \
+                 `[Service]` in /etc/systemd/system/user@.service.d/delegate.conf, then restart \
+                 the machine (`podman machine stop && podman machine start`)"
+            )
+        );
+        // podman-machine-default (Podman 6.1.4) lists them all: nothing.
+        assert!(!with(r#"["cpu","io","memory","pids"]"#)
+            .iter()
+            .any(|f| f.name == "Resource caps"));
+    }
+
     #[test]
     fn subordinate_ids_are_read_by_name_or_uid_and_summed() {
         let subuid = "# comment\nnewuser:100000:65536\nalex:165536:1000\n1001:200000:64536\n\
@@ -2084,6 +2248,32 @@ mod tests {
                  podman system migrate"
             )
         );
+    }
+
+    /// Only Ubuntu 24.04's Podman 4.9 is tested on Linux: an older or a
+    /// newer release (Fedora's 5.x, Arch's 6.x) warns, as any release
+    /// other than 6.1 does on macOS.
+    #[test]
+    fn a_linux_podman_other_than_4_9_is_not_tested() {
+        let ids = parse_subordinate_ids("alex:100000:65536\n", "alex:100000:65536\n", "alex", None);
+        let version_finding = |version: &str| {
+            let mut report = linux_report(LINUX_INFO, Some(ids.clone()));
+            report.client_version = Some(version.to_string());
+            findings(&report, &platform(false))
+                .into_iter()
+                .find(|finding| finding.name == "Podman version")
+        };
+        assert_eq!(version_finding("4.9.3"), None);
+        assert_eq!(version_finding("4.9.4-rhel"), None);
+        for version in ["4.6.2", "5.4.2", "6.0.1"] {
+            let finding = version_finding(version).unwrap();
+            assert_eq!(finding.level, Level::Warn, "{version}");
+            assert_eq!(
+                finding.detail,
+                format!("Podman {version} has not been tested with Axocoatl on Linux yet (4.9 is)")
+            );
+        }
+        assert_eq!(version_finding("4.2.0").unwrap().level, Level::Fail);
     }
 
     #[test]

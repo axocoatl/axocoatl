@@ -479,7 +479,10 @@ pub(super) async fn metadata(
         return Err(ProviderError::ApiError {
             provider: PROVIDER.into(),
             status,
-            message: super::with_retry_after(detail, retry_after),
+            message: super::with_retry_after(
+                super::failover::catalog_refusal(status, &detail),
+                retry_after,
+            ),
         });
     }
     tokio::time::timeout(RESPONSE_TIMEOUT, read_json(response, PROVIDER))
@@ -764,11 +767,117 @@ pub fn catalog_call_floor(
     })
 }
 
+/// An endpoint that could serve a model as native Sessions need, but that
+/// OpenRouter reports as unavailable or degraded right now: its `status` is
+/// not 0. A Session uses an endpoint only while OpenRouter reports it
+/// healthy: a degraded one fails part of its calls, some part way and after
+/// they cost credits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnavailableOpenRouterEndpoint {
+    /// The endpoint, as an observation would have retained it.
+    pub profile: NativeOpenRouterObservation,
+    /// OpenRouter's `status` (`None`: not reported).
+    pub status: Option<i64>,
+    /// The share of its requests that succeeded over the last 30 minutes,
+    /// in percent, when OpenRouter reports it.
+    pub uptime_last_30m: Option<f64>,
+}
+
+impl UnavailableOpenRouterEndpoint {
+    /// `deepinfra/turbo: status -2, 80% of requests succeeded over the last
+    /// 30 minutes`.
+    pub fn describe(&self) -> String {
+        let status = self.status.map_or_else(
+            || "no status".to_string(),
+            |status| format!("status {status}"),
+        );
+        let uptime = match self.uptime_last_30m {
+            Some(uptime) => format!(
+                "{}% of requests succeeded over the last 30 minutes",
+                (uptime * 10.0).round() / 10.0
+            ),
+            None => "no uptime reported".to_string(),
+        };
+        format!("{}: {status}, {uptime}", self.profile.endpoint_tag)
+    }
+}
+
+/// Every endpoint OpenRouter lists for one model: those native Sessions
+/// can use now, cheapest first ([`observe_native_openrouter_profiles`]), and
+/// those that would fit but are unavailable or degraded right now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeOpenRouterEndpoints {
+    pub profiles: Vec<NativeOpenRouterObservation>,
+    pub unavailable: Vec<UnavailableOpenRouterEndpoint>,
+    /// Why each other endpoint cannot be used.
+    pub rejected: Vec<String>,
+}
+
+impl NativeOpenRouterEndpoints {
+    /// Why no endpoint can be used, when none can: every one that fits is
+    /// unavailable or degraded (OpenRouter's state, said plainly, with what
+    /// to do), or none fits (each reason).
+    pub fn refusal(&self, model: &str) -> Option<ProviderError> {
+        if !self.profiles.is_empty() {
+            return None;
+        }
+        if self.unavailable.is_empty() {
+            return Some(invalid(format!(
+                "no OpenRouter endpoint for {model} has exact text/tool limits and bounded \
+                 pricing: {}",
+                self.rejected.join("; ")
+            )));
+        }
+        let others = if self.rejected.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Its other endpoints cannot be used: {}.",
+                self.rejected.join("; ")
+            )
+        };
+        Some(ProviderError::ApiError {
+            provider: PROVIDER.into(),
+            status: 503,
+            message: format!(
+                "OpenRouter reports every endpoint that could serve {model} as unavailable or \
+                 degraded right now ({}). This is OpenRouter's provider status, not your \
+                 setup: try again later, or choose another model (https://openrouter.ai/{model} \
+                 shows its providers). Axocoatl uses an endpoint only while OpenRouter reports \
+                 it healthy (status 0): a degraded one fails part of its calls, some part way \
+                 and after they cost credits; nothing was sent to the model.{others}",
+                self.unavailable
+                    .iter()
+                    .map(UnavailableOpenRouterEndpoint::describe)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        })
+    }
+}
+
+/// The endpoints native Sessions can use for `model` now, cheapest first;
+/// an error says why there are none ([`NativeOpenRouterEndpoints::refusal`]).
 pub async fn observe_native_openrouter_profiles(
     base_url: &str,
     api_key: &str,
     model: &str,
 ) -> Result<Vec<NativeOpenRouterObservation>, ProviderError> {
+    let endpoints = observe_native_openrouter_endpoints(base_url, api_key, model).await?;
+    match endpoints.refusal(model) {
+        Some(refusal) => Err(refusal),
+        None => Ok(endpoints.profiles),
+    }
+}
+
+/// Every endpoint OpenRouter lists for `model`, sorted into those native
+/// Sessions can use now, those unavailable or degraded right now, and the
+/// others with why.
+pub async fn observe_native_openrouter_endpoints(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<NativeOpenRouterEndpoints, ProviderError> {
     if model.len() > 256
         || model.starts_with("openrouter/")
         || model.split('/').count() != 2
@@ -852,6 +961,7 @@ pub async fn observe_native_openrouter_profiles(
         .and_then(|d| u64::try_from(d.as_millis()).ok())
         .ok_or_else(|| invalid("observation clock unavailable"))?;
     let mut profiles = Vec::new();
+    let mut unavailable = Vec::new();
     let mut rejected = std::collections::BTreeSet::new();
     for row in rows {
         let Some(tag) = row["tag"].as_str().filter(|tag| valid_tag(tag)) else {
@@ -882,10 +992,13 @@ pub async fn observe_native_openrouter_profiles(
             rejected.insert(reject("its tag also selects other endpoint variants"));
             continue;
         }
-        if row["model_id"].as_str() != Some(model) || row["status"].as_i64() != Some(0) {
-            rejected.insert(reject("model identity or endpoint availability differs"));
+        if row["model_id"].as_str() != Some(model) {
+            rejected.insert(reject("OpenRouter lists it under another model id"));
             continue;
         }
+        // Whether it is healthy is decided last: an endpoint that would not
+        // fit is never said to be merely unavailable.
+        let status = row["status"].as_i64();
         let Some(context) = integer(&row["context_length"]) else {
             rejected.insert(reject("missing context limit"));
             continue;
@@ -954,7 +1067,12 @@ pub async fn observe_native_openrouter_profiles(
             billing: "openrouter_credits".into(),
         };
         match profile.validate() {
-            Ok(()) => profiles.push(profile),
+            Ok(()) if status == Some(0) => profiles.push(profile),
+            Ok(()) => unavailable.push(UnavailableOpenRouterEndpoint {
+                profile,
+                status,
+                uptime_last_30m: row["uptime_last_30m"].as_f64(),
+            }),
             Err(reason) => {
                 rejected.insert(reject(&reason.to_string()));
             }
@@ -966,11 +1084,9 @@ pub async fn observe_native_openrouter_profiles(
             .cmp(&right.price_order())
             .then_with(|| left.endpoint_tag.cmp(&right.endpoint_tag))
     });
-    if profiles.is_empty() {
-        return Err(invalid(format!(
-            "no OpenRouter endpoint for {model} has exact text/tool limits and bounded pricing: {}",
-            rejected.into_iter().collect::<Vec<_>>().join("; ")
-        )));
-    }
-    Ok(profiles)
+    Ok(NativeOpenRouterEndpoints {
+        profiles,
+        unavailable,
+        rejected: rejected.into_iter().collect(),
+    })
 }

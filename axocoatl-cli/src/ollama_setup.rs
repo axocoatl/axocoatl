@@ -10,6 +10,7 @@
 //! memory, and what to do about each finding depends on how Ollama runs here
 //! ([`OllamaService`]).
 
+use axocoatl_llm::ProviderError;
 use axocoatl_llm_ollama::{
     check_native_ollama_server, check_shown_model, ollama_version_note, ollama_version_refusal,
     show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaServerCheck,
@@ -35,10 +36,6 @@ pub const RECOMMENDED_REVIEWER_MODEL: &str = "gpt-oss:20b";
 /// The reviewer for a computer with 96 GB of memory or more: the measured
 /// one (65.4 GB).
 pub const LARGE_REVIEWER_MODEL: &str = "gpt-oss:120b";
-
-/// The flag of `ollama pull` that selects the GGUF variant of a model whose
-/// tag also has an MLX variant. Ollama does not document it.
-pub const LLAMACPP_PULL_FLAG: &str = "--runner llamacpp";
 
 /// The smallest context, in tokens, a fix run's first writer call fits in
 /// (it needs about 9.7k); below it native Sessions and runs refuse the model
@@ -132,6 +129,9 @@ pub struct InstalledModel {
     format: String,
     /// `details.runner` as reported (`ggml`, `llamacpp`, `mlx`), lower case.
     runner: String,
+    /// Whether `capabilities` lists `tools`; `None` when the server does not
+    /// list capabilities (before Ollama 0.40).
+    tools: Option<bool>,
 }
 
 impl InstalledModel {
@@ -167,8 +167,13 @@ impl InstalledModel {
                 .and_then(Value::as_str)
                 .is_some_and(|v| !v.is_empty())
         });
+        let tools = record
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .map(|capabilities| capabilities.iter().any(|c| c.as_str() == Some("tools")));
         Some(Self {
             remote,
+            tools,
             size_bytes: record.get("size").and_then(Value::as_u64).unwrap_or(0),
             parameter_size: text("/details/parameter_size"),
             families,
@@ -180,15 +185,7 @@ impl InstalledModel {
 
     /// The name without registry, namespace or tag, in lower case.
     fn base(&self) -> String {
-        let without_tag = match self.name.rsplit_once(':') {
-            Some((base, tag)) if !tag.contains('/') => base,
-            _ => self.name.as_str(),
-        };
-        without_tag
-            .rsplit('/')
-            .next()
-            .unwrap_or(without_tag)
-            .to_ascii_lowercase()
+        base_name(&self.name)
     }
 
     fn tag(&self) -> &str {
@@ -239,14 +236,14 @@ impl InstalledModel {
         if self.runner == "mlx" || (!self.format.is_empty() && self.format != "gguf") {
             return Some(format!(
                 "{} run by Ollama's MLX runner, which does not hold num_ctx as a hard limit; \
-                 native Sessions run only GGUF models (try `ollama pull {LLAMACPP_PULL_FLAG} {}`, \
-                 an undocumented Ollama flag)",
+                 native Sessions run only GGUF models (try `{}`; `--runner` is an undocumented \
+                 Ollama flag, which does not replace a variant already installed)",
                 if self.format.is_empty() {
                     "a model".to_string()
                 } else {
                     format!("a {} model", self.format)
                 },
-                self.name
+                axocoatl_llm_ollama::gguf_variant_commands(&self.name)
             ));
         }
         None
@@ -256,6 +253,21 @@ impl InstalledModel {
     /// generates text. Native Sessions refuse a cloud or MLX model.
     pub fn is_candidate(&self) -> bool {
         self.refusal().is_none() && !self.is_embedding()
+    }
+
+    /// Why setup never suggests this model for the default team, whose
+    /// Agents all call tools, though it may be chosen: Ollama does not list
+    /// tool calling for it, or it writes its calls as JSON text, which
+    /// Axocoatl never runs. `None` when it may be suggested.
+    pub fn not_suggested(&self) -> Option<String> {
+        if writes_calls_as_json(&self.name) {
+            return Some(JSON_CALLS.into());
+        }
+        (self.tools == Some(false)).then(|| {
+            "Ollama does not list tool calling for it, and every Agent of the default team calls \
+             tools"
+                .into()
+        })
     }
 
     /// The model as a choice in a list.
@@ -314,6 +326,40 @@ pub fn refused_models(models: &[InstalledModel]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The installed models offered as team choices that setup never suggests,
+/// each with why ([`InstalledModel::not_suggested`]).
+pub fn unsuggested_models(models: &[InstalledModel]) -> Vec<(String, String)> {
+    candidates(models)
+        .into_iter()
+        .filter_map(|model| model.not_suggested().map(|why| (model.name, why)))
+        .collect()
+}
+
+/// Why a model that writes its tool calls as JSON text cannot work an
+/// Agent's tools.
+const JSON_CALLS: &str = "it returns its tool calls as JSON text instead of Ollama tool calls \
+                          (qwen2.5-coder:14b did in Axocoatl's tests), and Axocoatl never runs a \
+                          call written as JSON";
+
+/// `model` is Qwen2.5-Coder, which returns its tool calls as JSON text
+/// rather than as calls Ollama lifts: they never run.
+fn writes_calls_as_json(model: &str) -> bool {
+    base_name(model).starts_with("qwen2.5-coder")
+}
+
+/// A model name without registry, namespace or tag, in lower case.
+fn base_name(name: &str) -> String {
+    let without_tag = match name.rsplit_once(':') {
+        Some((base, tag)) if !tag.contains('/') => base,
+        _ => name,
+    };
+    without_tag
+        .rsplit('/')
+        .next()
+        .unwrap_or(without_tag)
+        .to_ascii_lowercase()
+}
+
 /// The models offered as team choices, sorted by name.
 pub fn candidates(models: &[InstalledModel]) -> Vec<InstalledModel> {
     let mut candidates: Vec<_> = models
@@ -328,8 +374,10 @@ pub fn candidates(models: &[InstalledModel]) -> Vec<InstalledModel> {
 /// List the models installed on an Ollama server.
 pub async fn installed_models(base_url: &str) -> Result<Vec<InstalledModel>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    // Ollama is on this computer or its network: never through a proxy.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let response = client
@@ -371,7 +419,12 @@ pub fn suggest_fitting_team_models(
     )
 }
 
+/// The pair among `candidates` that call tools ([`InstalledModel::not_suggested`]).
 fn suggest_from(candidates: Vec<InstalledModel>) -> Option<TeamModels> {
+    let candidates: Vec<InstalledModel> = candidates
+        .into_iter()
+        .filter(|model| model.not_suggested().is_none())
+        .collect();
     let lead = candidates.iter().min_by(|a, b| {
         lead_tier(a)
             .cmp(&lead_tier(b))
@@ -782,9 +835,15 @@ pub fn version_fix(server: Option<&str>, host: &OllamaHost) -> String {
 /// The context Ollama loads `model` with on the server at `base_url`, read
 /// the way native admission reads it: the model is loaded without
 /// generating, its context read from `GET /api/ps`, and the contract probes
-/// run on it. Returns the context and the server version.
-pub async fn observed_context(base_url: &str, model: &str) -> Result<(usize, String), String> {
-    axocoatl_llm_ollama::observe_native_ollama_context(base_url, model)
+/// run on it. The load may take `load_timeout`
+/// (`providers.ollama.first_token_timeout_secs`, 600 s unless set). Returns
+/// the context and the server version.
+pub async fn observed_context(
+    base_url: &str,
+    model: &str,
+    load_timeout: std::time::Duration,
+) -> Result<(usize, String), String> {
+    axocoatl_llm_ollama::observe_native_ollama_context_within(base_url, model, load_timeout)
         .await
         .map(|observation| (observation.context_tokens, observation.server_version))
         .map_err(|error| error.to_string())
@@ -793,6 +852,27 @@ pub async fn observed_context(base_url: &str, model: &str) -> Result<(usize, Str
 /// What a loaded model takes, from `GET /api/ps`: its size in memory and
 /// the part of it in GPU memory (bytes).
 pub async fn loaded_memory(base_url: &str, model: &str) -> Option<(u64, u64)> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
+        .build()
+        .ok()?;
+    let ps: Value = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    loaded_memory_in(&ps, model)
+}
+
+/// The context Ollama holds `model` loaded with (`GET /api/ps`), without
+/// loading it; `None` when it is not loaded or `/api/ps` does not answer.
+pub async fn loaded_context(base_url: &str, model: &str) -> Option<usize> {
     let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -807,7 +887,22 @@ pub async fn loaded_memory(base_url: &str, model: &str) -> Option<(u64, u64)> {
         .json()
         .await
         .ok()?;
-    loaded_memory_in(&ps, model)
+    loaded_context_in(&ps, model)
+}
+
+/// [`loaded_context`] of an `/api/ps` answer.
+pub fn loaded_context_in(ps: &Value, model: &str) -> Option<usize> {
+    let entry = ps.get("models")?.as_array()?.iter().find(|entry| {
+        [entry.get("name"), entry.get("model")]
+            .into_iter()
+            .flatten()
+            .any(|name| name.as_str() == Some(model))
+    })?;
+    entry
+        .get("context_length")?
+        .as_u64()
+        .and_then(|context| usize::try_from(context).ok())
+        .filter(|context| *context > 0)
 }
 
 /// [`loaded_memory`] of an `/api/ps` answer.
@@ -857,21 +952,25 @@ pub async fn model_finding(base_url: &str, model: &str, needs_tools: bool) -> Fi
 pub fn shown_model_finding(model: &str, shown: &Value, needs_tools: bool) -> Finding {
     match check_shown_model(model, shown) {
         Err(error) => {
-            let mut hint = vec![error.to_string()];
-            if !matches!(
-                shown.pointer("/details/format").and_then(Value::as_str),
-                Some("gguf")
-            ) || shown.pointer("/details/runner").and_then(Value::as_str) == Some("mlx")
-            {
-                hint.push(format!(
-                    "Pull its GGUF variant with `ollama pull {LLAMACPP_PULL_FLAG} {model}` (an undocumented Ollama flag), or choose another model."
-                ));
+            // Native execution's own refusal is already in words, with the
+            // GGUF pull when that is the fix: shown as a sentence, without
+            // the error kind.
+            let mut why = match &error {
+                ProviderError::InvalidRequest { message, .. } => message.clone(),
+                other => other.to_string(),
+            };
+            if !why.ends_with('.') {
+                why.push('.');
             }
-            Finding::fail(format!("Model '{model}' cannot run in native Sessions"), hint)
+            Finding::fail(format!("Model '{model}' cannot run in native Sessions"), vec![why])
         }
         Ok(capabilities) if needs_tools && !capabilities.tools => Finding::fail(
             format!("Model '{model}' does not report tool calling, and an Agent that uses it lists tools"),
             vec!["Choose a model whose `ollama show` lists the tools capability, or remove the Agent's tools.".to_string()],
+        ),
+        Ok(_) if needs_tools && writes_calls_as_json(model) => Finding::warning(
+            format!("Model '{model}' is listed with tool calling, but {JSON_CALLS}; an Agent that uses it lists tools"),
+            vec![format!("Choose a model that returns Ollama tool calls, such as {RECOMMENDED_LEAD_MODEL}, or remove the Agent's tools.")],
         ),
         Ok(capabilities) => Finding::pass(format!(
             "Model '{model}' is a local GGUF model native Sessions can run ({})",
@@ -987,13 +1086,79 @@ mod tests {
     fn a_coding_lead_beats_a_larger_general_model_which_then_reviews() {
         let installed = models(vec![
             tag("qwen3:32b", "32.8B", 20201253829, "qwen3"),
-            tag("qwen2.5-coder:14b", "14.8B", 8988124298, "qwen2"),
+            tag("devstral:24b", "23.6B", 14333927918, "llama"),
             tag("deepseek-coder:6.7b", "7B", 3827834503, "llama"),
         ]);
         assert_eq!(
             suggested(&installed),
-            ("qwen2.5-coder:14b".into(), "qwen3:32b".into())
+            ("devstral:24b".into(), "qwen3:32b".into())
         );
+    }
+
+    /// Every Agent of the default team calls tools: a model whose calls never
+    /// run is offered as a choice but never suggested, and setup says why.
+    #[test]
+    fn models_whose_tool_calls_never_run_are_offered_but_not_suggested() {
+        let with = |mut tag: Value, capabilities: &[&str]| {
+            tag["capabilities"] = json!(capabilities);
+            tag
+        };
+        let installed = models(vec![
+            with(
+                tag("qwen3:32b", "32.8B", 20201253829, "qwen3"),
+                &["completion", "tools", "thinking"],
+            ),
+            with(
+                tag("qwen2.5-coder:14b", "14.8B", 8988124298, "qwen2"),
+                &["completion", "tools", "insert"],
+            ),
+            with(
+                tag("deepseek-coder:6.7b", "7B", 3827834503, "llama"),
+                &["completion", "insert"],
+            ),
+            // A server that lists no capabilities may still be suggested.
+            tag("qwen3:8b", "8.2B", 5225388164, "qwen3"),
+        ]);
+        assert_eq!(
+            suggested(&installed),
+            ("qwen3:32b".into(), "qwen3:32b".into())
+        );
+        let offered: Vec<_> = candidates(&installed).into_iter().map(|m| m.name).collect();
+        assert_eq!(
+            offered,
+            [
+                "deepseek-coder:6.7b",
+                "qwen2.5-coder:14b",
+                "qwen3:32b",
+                "qwen3:8b"
+            ]
+        );
+        let unsuggested = unsuggested_models(&installed);
+        assert_eq!(
+            unsuggested
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["deepseek-coder:6.7b", "qwen2.5-coder:14b"]
+        );
+        assert!(unsuggested[0].1.contains("does not list tool calling"));
+        assert!(unsuggested[1].1.contains("JSON"));
+        // Only models whose calls never run: nothing to suggest.
+        let only = models(vec![tag(
+            "hf.co/x/Qwen2.5-Coder-32B-GGUF:Q4_K_M",
+            "32B",
+            1,
+            "qwen2",
+        )]);
+        assert_eq!(suggest_team_models(&only), None);
+        // Doctor warns about such a model for an Agent with tools.
+        let shown = json!({"details":{"format":"gguf"},"capabilities":["completion","tools"]});
+        let finding = shown_model_finding("qwen2.5-coder:14b", &shown, true);
+        assert!(finding.ok && finding.warn, "{finding:?}");
+        assert!(finding.label.contains("JSON"), "{finding:?}");
+        assert!(finding.hint[0].contains("qwen3-coder:30b"), "{finding:?}");
+        let finding = shown_model_finding("qwen2.5-coder:14b", &shown, false);
+        assert!(finding.ok && !finding.warn, "{finding:?}");
     }
 
     #[test]
@@ -1059,7 +1224,9 @@ mod tests {
         for (name, why) in &refused {
             assert!(why.contains("MLX runner"), "{why}");
             assert!(
-                why.contains(&format!("ollama pull --runner llamacpp {name}")),
+                why.contains(&format!(
+                    "`ollama rm {name} && ollama pull --runner llamacpp {name}`"
+                )),
                 "{why}"
             );
             assert!(why.contains("undocumented"), "{why}");
@@ -1091,18 +1258,58 @@ mod tests {
             "capabilities":["completion","tools"]});
         let finding = shown_model_finding("qwen3.5:27b", &mlx, false);
         assert!(!finding.ok);
-        let hint = finding.hint.join("\n");
-        assert!(hint.contains("MLX"), "{hint}");
+        // As doctor prints it: native execution's refusal as a sentence,
+        // with the fix named once.
+        let hint = finding.hint.join(" ");
         assert!(
-            hint.contains("ollama pull --runner llamacpp qwen3.5:27b"),
+            hint.starts_with("The model qwen3.5:27b is run by Ollama's MLX runner;"),
             "{hint}"
         );
+        assert!(
+            hint.ends_with(
+                "by default: remove it and pull its GGUF variant with `ollama rm qwen3.5:27b \
+                 && ollama pull --runner llamacpp qwen3.5:27b` (an undocumented Ollama flag, \
+                 which does not replace a variant already installed), or choose another model."
+            ),
+            "{hint}"
+        );
+        assert_eq!(hint.matches("--runner llamacpp").count(), 1, "{hint}");
         let remote = json!({"details":{"format":"gguf"},"capabilities":["completion"],
             "remote_host":"https://ollama.com:443"});
         let finding = shown_model_finding("gpt-oss:20b-cloud", &remote, false);
         assert!(!finding.ok);
-        assert!(finding.hint[0].contains("cloud model"), "{finding:?}");
+        assert!(
+            finding.hint[0].starts_with("The model gpt-oss:20b-cloud is a cloud model")
+                && finding.hint[0].ends_with("runs only local models."),
+            "{finding:?}"
+        );
         assert!(!finding.hint.join(" ").contains("--runner"), "{finding:?}");
+        // A cloud model of no reported format, an embedding model and an
+        // image-generation model have no GGUF variant to pull.
+        for (name, shown, reason) in [
+            (
+                "gpt-oss:120b-cloud",
+                json!({"details":{},"capabilities":["completion"],
+                    "remote_host":"https://ollama.com:443"}),
+                "is a cloud model",
+            ),
+            (
+                "nomic-embed-text",
+                json!({"details":{"format":"gguf"},"capabilities":["embedding"]}),
+                "does not report text completion",
+            ),
+            (
+                "flux",
+                json!({"details":{"format":"gguf"},"capabilities":["completion","image"]}),
+                "is an image-generation model",
+            ),
+        ] {
+            let finding = shown_model_finding(name, &shown, false);
+            assert!(!finding.ok);
+            let hint = finding.hint.join(" ");
+            assert!(hint.contains(reason), "{hint}");
+            assert!(!hint.contains("--runner"), "{hint}");
+        }
     }
 
     #[test]

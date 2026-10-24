@@ -29,12 +29,17 @@ if [ "${TEST_INSTALL_TOOL_MODE:-}" = "1" ]; then
       fi
       ;;
     curl)
-      output=""
+      output=/dev/stdout
       url=""
       while [ "$#" -gt 0 ]; do
         case "$1" in
           -o)
             [ "$#" -ge 2 ] || exit 2
+            # The curl snap cannot write in the installer's /tmp directory.
+            if [ "${TEST_CURL_SNAP:-}" = 1 ]; then
+              echo "curl: (23) client returned ERROR on write of 1369 bytes" >&2
+              exit 23
+            fi
             output=$2
             shift 2
             ;;
@@ -46,6 +51,8 @@ if [ "${TEST_INSTALL_TOOL_MODE:-}" = "1" ]; then
       printf '%s\n' "$url" >> "$TEST_CURL_LOG"
       case "$url" in
         */releases/latest)
+          # refused: GitHub's answer when its hourly limit is used up.
+          [ "${TEST_LATEST:-ok}" = ok ] || exit 22
           printf '{"tag_name":"%s"}\n' "$TEST_TAG"
           ;;
         *.tar.gz.sha256)
@@ -186,6 +193,9 @@ done
 
 digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 case_count=0
+# How the stub answers GitHub's latest-release request in run_case: ok, or
+# refused (its hourly limit used up).
+latest_mode=ok
 
 run_case() {
   name=$1
@@ -227,6 +237,7 @@ run_case() {
   TEST_INSTALL_TOOL_MODE=1 \
   TEST_ARCH="$arch" \
   TEST_TAG="$current_tag" \
+  TEST_LATEST="$latest_mode" \
   TEST_GLIBC="$glibc" \
   TEST_MACOS="$macos" \
   TEST_CHECKSUM_MODE="$checksum" \
@@ -277,6 +288,15 @@ run_case checksum-missing fail "checksum download failed" Linux x86_64 none "gli
 run_case checksum-malformed fail "malformed checksum file" Linux x86_64 none "glibc 2.35" unavailable malformed "$fake_bin"
 run_case checksum-mismatch fail "checksum mismatch" Linux x86_64 none "glibc 2.35" unavailable mismatch "$fake_bin"
 run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" Linux x86_64 none "glibc 2.35" unavailable valid "$no_hash_bin"
+# GitHub refuses the latest-release request (60 an hour from one address
+# without a token): the installer says so and how to skip it, and downloads
+# nothing.
+latest_mode=refused
+run_case latest-refused fail "set AXOCOATL_VERSION to a release tag, such as v1.5.0, to install that release without asking it" Linux x86_64 none "glibc 2.35" unavailable valid "$fake_bin"
+latest_mode=ok
+grep -F 'at most 60 requests an hour from one address without a token' "$work_dir/latest-refused.out" >/dev/null \
+  || fail "latest-refused did not name GitHub's limit: $(cat "$work_dir/latest-refused.out")"
+[ "$(grep -c . "$work_dir/latest-refused.curl")" = 1 ] || fail "latest-refused downloaded after the refusal: $(cat "$work_dir/latest-refused.curl")"
 
 [ ! -s "$work_dir/linux-old-glibc.curl" ] || fail "old glibc reached the network stub"
 [ ! -s "$work_dir/linux-musl.curl" ] || fail "musl reached the network stub"
@@ -284,6 +304,15 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 [ ! -s "$work_dir/darwin-version-unavailable.curl" ] || fail "unknown macOS version reached the network stub"
 [ ! -s "$work_dir/windows-native.curl" ] || fail "native Windows reached the network stub"
 [ ! -s "$work_dir/unsupported-arch.curl" ] || fail "unsupported architecture reached the network stub"
+
+# Ubuntu offers the curl snap when curl is missing. Its /tmp is its own, so it
+# cannot write a file in the installer's temporary directory (measured with
+# curl 8.22.0 from the snap on Ubuntu 24.04: "(23) client returned ERROR on
+# write"); the installer writes what curl prints instead.
+TEST_CURL_SNAP=1
+export TEST_CURL_SNAP
+run_case linux-curl-snap pass "checksum verified" Linux aarch64 aarch64-unknown-linux-gnu "glibc 2.39" unavailable valid "$fake_bin"
+unset TEST_CURL_SNAP
 
 # --- PATH handling ---------------------------------------------------------
 # Each case installs where /usr/local/bin is not writable (or is, and is on
@@ -306,6 +335,10 @@ run_case checksum-tool-missing fail "neither sha256sum nor shasum is available" 
 #   P_VERSION     the AXOCOATL_VERSION value
 #   P_BASE_URL    the AXOCOATL_INSTALL_BASE_URL value
 #   P_BIN         the directory of tools on PATH (default: the stubs)
+#   P_EXISTING    a version: an axocoatl that reports it is already where
+#                 the case installs
+#   P_PS          lines a `ps` on PATH prints for `ps -A -o args=` (the
+#                 processes running); default: no ps
 #   P_XDG_CONFIG_HOME, P_ZDOTDIR  those variables (default: unset)
 run_path_case() {
   name=$1
@@ -354,6 +387,19 @@ run_path_case() {
     case_path="$shadow_dir:$case_path"
   fi
   [ "${P_ON_PATH:-no}" = yes ] && case_path="$case_path:$case_dest"
+  if [ -n "${P_EXISTING:-}" ]; then
+    mkdir -p "$case_dest"
+    printf '%s\n' '#!/bin/sh' "echo 'axocoatl $P_EXISTING'" > "$case_dest/axocoatl"
+    chmod 0755 "$case_dest/axocoatl"
+  fi
+  if [ -n "${P_PS:-}" ]; then
+    ps_dir="$work_dir/$name-ps"
+    mkdir -p "$ps_dir"
+    printf '%s\n' "$P_PS" > "$ps_dir/processes"
+    printf '%s\n' '#!/bin/sh' '[ "$*" = "-A -o args=" ] || exit 2' "/bin/cat '$ps_dir/processes'" > "$ps_dir/ps"
+    chmod 0755 "$ps_dir/ps"
+    case_path="$case_path:$ps_dir"
+  fi
   case_tty="$work_dir/$name.tty"
   if [ "${P_TTY-none}" = none ]; then
     case_tty="$work_dir/$name.no-terminal"
@@ -642,6 +688,7 @@ path_reinstall_twice() {
 reset_path_case() {
   P_OS=Darwin P_SHELL=/bin/zsh P_SYSTEM=missing P_ON_PATH=no P_SHADOW=no P_TTY=none P_MODIFY=ask P_HOME_NAME=home
   P_GITHUB_PATH=no P_PODMAN=no P_PODMAN_AT='' P_VERSION='' P_BASE_URL='' P_BIN='' P_XDG_CONFIG_HOME='' P_ZDOTDIR='' P_LINE=''
+  P_EXISTING='' P_PS=''
 }
 
 # Reading startup files: the installer's adds_to_path and reads_dot_profile
@@ -723,6 +770,11 @@ startup_expect adds_to_path no "the unmarked line after a line that ends in \\" 
 startup_expect adds_to_path no "the unmarked line in a block for another OS" "$(os_block "  $unguarded")"
 startup_expect adds_to_path no "the unmarked line in a function" "$(printf 'use_local_bin() {\n  %s\n}' "$unguarded")"
 startup_expect adds_to_path no "the unmarked line after an early return" "$(printf '[ -n "$NO_LOCAL" ] && return\n%s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after an exec with a command" "$(printf 'exec 2>/dev/null zsh\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after an exec that only redirects" "$(printf 'exec 2>>"$HOME/.shell.log" 3<&-\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after an exec that opens a named descriptor" "$(printf 'exec {fd}>>"$HOME/.shell.log"\n%s' "$unguarded")"
+startup_expect adds_to_path yes "the unmarked line after assignments" "$(printf 'FOO=1; export FOO\nX=1 Y=2 true\nZ=1 2>/dev/null; export Z\n%s' "$unguarded")"
+startup_expect adds_to_path no "the unmarked line after an exec after an assignment" "$(printf 'SHELL=/bin/zsh exec zsh\n%s' "$unguarded")"
 startup_expect adds_to_path yes "the marked line in a block for another OS (taken at the user's word)" \
   "$(os_block "$(printf '  # Added by the Axocoatl installer\n  %s' "$unguarded")")"
 startup_expect adds_to_path yes "fish's line" "$(path_line_for fish)" config.fish
@@ -745,6 +797,7 @@ startup_expect adds_to_path no "fish's unmarked line after an exec" "$(printf 'e
 fish_line="$(path_line_for fish)"
 for fish_before in 'status is-login || return' 'status is-interactive || exit' 'not status is-interactive && return' \
   'status is-login || exec bash' '! status is-interactive && return' 'not not return' 'true & return' \
+  'SHELL=/bin/zsh exec zsh' 'status is-login || A=1 B=2 exec bash' \
   'status is-login ||' 'status is-login &&' 'echo x |' "echo a \\" \
   "$(printf 'status is-login ||\n# a comment')" 'status is-login || # a comment'; do
   startup_expect adds_to_path no "fish's unmarked line after $fish_before" "$(printf '%s\n%s' "$fish_before" "$fish_line")" config.fish
@@ -898,6 +951,116 @@ for reads in \
   '. ~/".profile"'; do
   startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
 done
+# An if that ends in `fi` and redirections still runs in this shell, so its
+# then branch reads ~/.profile (without that, an SSH login would list
+# ~/.local/bin twice); a quoted # is not a comment, so what follows it on the
+# line still counts: an if on ~/.profile that `"#"; fi; if` closes and
+# replaces, a pipe and a background job do not read it in this shell.
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi >/dev/null')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi >/dev/null 2>&1')" \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi 2>/dev/null  # quiet')" \
+  'if [ -f ~/.profile ]; then . ~/.profile; fi &>/dev/null'; do
+  startup_expect reads_dot_profile yes "$reads" "$reads" .bash_profile
+done
+for reads in \
+  "$(printf 'if [ -f ~/.profile ]; then "#"; fi; if [ "$(uname)" = SunOS ]; then\n  . ~/.profile\nfi')" \
+  '. ~/.profile "#" | cat' '[ -f ~/.profile ] && . ~/.profile "#" &' \
+  "$(printf 'if [ -f ~/.profile ]; then\n  . ~/.profile\nfi > >(cat)')"; do
+  startup_expect reads_dot_profile no "$reads" "$reads" .bash_profile
+done
+# Constructs the reader misread before 1.5.0's release: return and exit in
+# quotes stop the shell too, and <( ) and >( ) hold commands as $( ) does (a
+# case in them, and in bash 3.2 a # after a blank written with a backslash,
+# where a comment starts).
+startup_expect adds_to_path no "Ubuntu's lines after a quoted return" "$(printf "[ -n \"\$NOPE\" ] || 'return'\n%s" "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a double-quoted exit" "$(printf '[ -n "$NOPE" ] || "exit"\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after a partly quoted return" "$(printf '[ -n "$NOPE" ] || re"tu"rn\n%s' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines in a case inside <( )" "$(printf 'cat <(\ncase a in\nb)\n%s\n;;\nesac\n) >/dev/null' "$stanza")"
+startup_expect adds_to_path no "Ubuntu's lines after <( ) with a\\ #b in it (bash 3.2 reads a comment)" \
+  "$(printf 'cat <(echo a\\ #b) >/dev/null\n%s' "$stanza")" .bashrc
+startup_expect adds_to_path yes "Ubuntu's lines after <( ) and >( )" "$(printf 'diff <(echo a) <(echo a) >/dev/null\ntee >(cat >/dev/null) </dev/null\n%s' "$stanza")" .bashrc
+
+# A line appended at the end of a startup file (appended_line_runs) runs in
+# every new terminal, an interactive shell, unless something before it stops
+# the file there: a return, exit or exec where a command starts, outside a
+# function and other than a stop only for a shell that is not interactive,
+# or a line the reader cannot follow. Ubuntu's, Debian's, Arch's, Gentoo's
+# and Fedora's files, and the usual conda, nvm and Homebrew lines, do not.
+# appended_expect runs|stops WHAT CONTENT FILE
+appended_expect() {
+  startup_count=$((startup_count + 1))
+  startup_file="$startup_home/$4"
+  printf '%s\n' "$3" >"$startup_file"
+  if (HOME="$startup_home" dest="$startup_home/.local/bin" && . "$install_helpers" && appended_line_runs "$startup_file"); then
+    startup_got=runs
+  else
+    startup_got=stops
+  fi
+  [ "$startup_got" = "$1" ] || fail "appended_line_runs says the line $startup_got, not $1, after $2: $3"
+}
+# The lines of Ubuntu 24.04's /etc/skel/.bashrc that a reader can trip on.
+cat >"$work_dir/ubuntu-bashrc-start" <<'BASHRC'
+# If not running interactively, don't do anything
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+HISTCONTROL=ignoreboth
+shopt -s histappend
+[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+case "$TERM" in
+    xterm-color|*-256color) color_prompt=yes;;
+esac
+alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
+if ! shopt -oq posix; then
+  if [ -f /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+  elif [ -f /etc/bash_completion ]; then
+    . /etc/bash_completion
+  fi
+fi
+BASHRC
+appended_expect runs "Ubuntu's ~/.bashrc" "$(cat "$work_dir/ubuntu-bashrc-start")" .bashrc
+appended_expect runs "Arch's ~/.bashrc" '[[ $- != *i* ]] && return' .bashrc
+appended_expect runs "Gentoo's ~/.bashrc" "$(printf 'if [[ $- != *i* ]] ; then\n\t# Shell is non-interactive.  Be done now!\n\treturn\nfi')" .bashrc
+appended_expect runs "an old Debian ~/.bashrc" '[ -z "$PS1" ] && return' .bashrc
+appended_expect runs "zsh's interactive test" '[[ -o interactive ]] || return' .zshrc
+appended_expect runs "Fedora's ~/.bashrc" "$(printf 'if [ -f /etc/bashrc ]; then\n    . /etc/bashrc\nfi\nif ! [[ "$PATH" =~ "$HOME/.local/bin:$HOME/bin:" ]]; then\n    PATH="$HOME/.local/bin:$HOME/bin:$PATH"\nfi\nexport PATH\nif [ -d ~/.bashrc.d ]; then\n    for rc in ~/.bashrc.d/*; do\n        if [ -f "$rc" ]; then\n            . "$rc"\n        fi\n    done\nfi\nunset rc')" .bashrc
+appended_expect runs "conda's, nvm's and Homebrew's lines" "$(printf '__conda_setup="$(%s 2> /dev/null)"\nif [ $? -eq 0 ]; then\n    eval "$__conda_setup"\nelse\n    export PATH="/opt/conda/bin:$PATH"\nfi\nunset __conda_setup\n[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\neval "$(/opt/homebrew/bin/brew shellenv)"' "'/opt/conda/bin/conda' 'shell.zsh' 'hook'")" .zshrc
+appended_expect runs "functions that return" "$(printf 'f() {\n  return 1\n}\ng() { [ -n "$1" ] || return; }\nfunction h {\n  exit\n}')" .bashrc
+appended_expect runs "return as an argument" 'echo return exit' .bashrc
+appended_expect runs "a non-interactive test that returns a status" '[ -z "$PS1" ] && return 0' .bashrc
+appended_expect runs "a one-line if on a non-interactive test" 'if [ -z "$PS1" ]; then return; fi' .bashrc
+appended_expect runs "an exit in a subshell" "$(printf '( exit 1 )\n(\n  cd /tmp || exit\n)')" .bashrc
+appended_expect runs "an exec that only redirects" "$(printf 'exec 2>>"$HOME/.bash.log"\nexec >/dev/null 2>&1 \\\n  3<&-')" .bashrc
+appended_expect stops "an exec" '[ -x /bin/zsh ] && exec zsh' .bashrc
+appended_expect stops "an exec after redirections" 'exec 2>/dev/null zsh' .bashrc
+appended_expect stops "an exec on the next line" "$(printf 'exec \\\n  zsh')" .bashrc
+appended_expect stops "a return after builtin" '[ -n "$X" ] && builtin return' .bashrc
+appended_expect stops "an exec after command" '[ -x /bin/zsh ] && command exec zsh' .bashrc
+appended_expect stops "an exec after command -p" 'command -p exec zsh' .bashrc
+appended_expect stops "a return after command --" '[ -n "$X" ] && command -- return' .bashrc
+appended_expect stops "an exec after an assignment" 'FOO=1 exec zsh' .bashrc
+appended_expect stops "an exec after assignments, to switch shells" '[ -x /usr/bin/fish ] && SHELL=/usr/bin/fish TERM+=x exec fish' .bashrc
+appended_expect stops "an exec after an assignment and a redirection" 'FOO=1 2>/dev/null exec zsh' .zshrc
+appended_expect stops "an exec on the line after an assignment and a \\" "$(printf 'FOO=1 \\\n  exec zsh')" .bashrc
+appended_expect stops "an exec after an assignment in fish" 'SHELL=/usr/bin/zsh exec zsh' config.fish
+appended_expect runs "an exec that opens a named descriptor" 'exec {fd}>>"$HOME/.bash.log"' .bashrc
+appended_expect runs "command -v exec" 'command -v exec >/dev/null' .bashrc
+appended_expect runs "assignments with no command" "$(printf 'FOO=1; export FOO\nX=1 && Y=2 || Z=3\nA=1 B=2 >/dev/null\nexport C=exec')" .bashrc
+appended_expect stops "a return after a subshell" '( cd /tmp ) && return' .bashrc
+appended_expect stops "a return after a one-line if on a non-interactive test" 'if [ -z "$PS1" ]; then :; fi; return' .bashrc
+appended_expect stops "a return in a one-line if's else" 'if [ -z "$PS1" ]; then :; else return; fi' .bashrc
+appended_expect stops "a return in a login shell only" '[[ -o login ]] || return' .zshrc
+appended_expect stops "an exit in a non-interactive test" '[[ $- != *i* ]] && exit' .bashrc
+appended_expect stops "a quoted return" "[ -n \"\$X\" ] || 'return'" .bashrc
+appended_expect stops "a case on \$- that returns for an interactive shell" "$(printf 'case $- in\n  *i*) return;;\nesac')" .bashrc
+appended_expect stops "a case on \$- whose *i* branch falls through to a return" "$(printf 'case $- in\n  *i*) ;&\n  *) return;;\nesac')" .bashrc
+appended_expect stops "a case on another word" "$(printf 'case $x in\n  *i*) ;;\n  *) return;;\nesac')" .bashrc
+appended_expect stops "a return in the else of a non-interactive test" "$(printf 'if [[ $- != *i* ]]; then\n  :\nelse\n  return\nfi')" .bashrc
+appended_expect stops "a line that ends in &&" 'true &&' .bashrc
+appended_expect stops "a line the reader cannot follow" "$zsh_function" .zshrc
 
 # What onboarding does when it finds no Podman (onboard/sandbox.rs, install).
 podman_install_text="onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do."
@@ -1143,6 +1306,7 @@ path_expect_text '~/.profile already adds ~/.local/bin to PATH in a new login'
 grep -F '~/.local/bin is not on your PATH. Add it in ~/.bashrc? [Y/n]' "$case_tty" >/dev/null \
   || fail "$name did not ask about ~/.bashrc alone: $(cat "$case_tty")"
 path_expect_text "added to ~/.bashrc:  $(path_line_for bash-nonlogin)"
+path_expect_text 'new terminals find axocoatl; in this one, run:'
 cmp -s "$work_dir/ubuntu-profile-before" "$case_home/.profile" || fail "$name changed ~/.profile: $(cat "$case_home/.profile")"
 P_LINE="$(path_line_for bash-nonlogin)"
 path_expect_new_shells_find bash "$case_home/.bashrc"
@@ -1317,6 +1481,7 @@ run_path_case path-linux-bash-arch
 path_expect_status 0
 grep -F 'Add it in ~/.bashrc and ~/.bash_profile? [Y/n]' "$case_tty" >/dev/null \
   || fail "$name did not name ~/.bashrc and ~/.bash_profile in its question: $(cat "$case_tty")"
+path_expect_text 'new terminals find axocoatl; in this one, run:'
 path_expect_new_shells_find bash "$case_home/.bashrc" "$case_home/.bash_profile"
 
 # Fedora's files: ~/.bashrc adds ~/.local/bin itself, in its own way, which
@@ -1447,6 +1612,30 @@ path_expect_text '~/.config/fish/config.fish can stop before that line in some s
 path_refuse_text 'new terminals find axocoatl'
 path_expect_text 'in this terminal, run:'
 
+# The same for sh, bash and zsh files: a ~/.zshrc that returns in a shell
+# that is not a login shell stops a new terminal window on Linux before the
+# line, so the installer says so; such a window does not find axocoatl, and a
+# new login (which reads ~/.zprofile) does. Ubuntu's and Arch's ~/.bashrc,
+# which return only in a shell that is not interactive, get no such note
+# (path-linux-bash-ubuntu, path-linux-bash-arch).
+reset_path_case
+P_OS=Linux P_SHELL=/usr/bin/zsh P_TTY='y'
+name=path-zsh-early-return
+mkdir -p "$work_dir/$name/home"
+printf '%s\n' '[[ -o login ]] || return' >"$work_dir/$name/home/.zshrc"
+run_path_case "$name"
+path_expect_status 0
+path_expect_text "added to ~/.zshrc and ~/.zprofile:  $(path_line_for zsh)"
+path_expect_text '~/.zshrc can stop before that line in some shells (a return, exit or exec, or a line the installer cannot follow, comes first); if a new terminal does not find axocoatl, move the line above it'
+path_refuse_text 'new terminals find axocoatl'
+path_expect_text 'in this terminal, run:'
+if early_zsh="$(command -v zsh 2>/dev/null)"; then
+  early_window="$(env -i HOME="$case_home" PATH=/usr/bin:/bin TERM=dumb "$early_zsh" -ic 'command -v axocoatl' </dev/null 2>/dev/null)" || true
+  [ -z "$early_window" ] || fail "$name: a new terminal window found axocoatl past the return: $early_window"
+  early_login="$(env -i HOME="$case_home" PATH=/usr/bin:/bin TERM=dumb "$early_zsh" -ilc 'command -v axocoatl' </dev/null 2>/dev/null)" || true
+  [ "$early_login" = "$case_dest/axocoatl" ] || fail "$name: a new login found '$early_login', not $case_dest/axocoatl"
+fi
+
 # The fish line unreleased 1.5.0 builds wrote (without --path) counts:
 # nothing is asked or added, then or on two more installs.
 reset_path_case
@@ -1556,6 +1745,69 @@ path_expect_status 0
 path_expect_text "comes first on your PATH, so 'axocoatl' runs that copy"
 path_expect_text "Next:  $case_system/axocoatl onboard"
 path_expect_next_runs
+
+# An upgrade from 1.4 with its Always-On Service running: the installer
+# names the copy it replaces, says to back up before Axocoatl starts again
+# (the way back to 1.4 is that backup), and that the running daemon keeps the
+# old binary until it restarts.
+previous_minor="$(printf '%s' "$current_version" | awk -F. '{print $1 "." ($2 - 1) ".0"}')"
+reset_path_case
+P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$previous_minor" \
+  P_PS="/sbin/launchd
+$work_dir/upgrade-with-a-running-service-system/axocoatl serve
+$work_dir/upgrade-with-a-running-service-system/axocoatl onboard"
+run_path_case upgrade-with-a-running-service
+path_expect_status 0
+path_expect_text "replacing Axocoatl $previous_minor at $case_system/axocoatl"
+path_expect_text "upgrading from Axocoatl $previous_minor: before Axocoatl starts again, back up its data and read https://docs.axocoatl.ai/operate/upgrade/ (going back to $previous_minor needs that backup)"
+path_expect_text "an Axocoatl daemon is running ($case_system/axocoatl serve); it runs the binary it started from until it restarts. Restart it: 'axocoatl service restart' for the Always-On Service, or stop 'axocoatl dev' (Ctrl-C) and start it again"
+path_refuse_text 'another copy'
+[ "$("$case_system/axocoatl" --version)" = "axocoatl $current_version" ] \
+  || fail "$name did not replace the older copy"
+path_expect_next_runs
+
+# A reinstall of the same minor release, with `axocoatl dev` run by name
+# and a build from source running: no upgrade note; the daemon run by name
+# restarts on the new copy, the build's does not.
+reset_path_case
+P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="$current_version" \
+  P_PS="axocoatl dev --config /home/a/config.yaml
+/home/a/src/axocoatl/target/debug/axocoatl dev"
+run_path_case reinstall-with-dev-running
+path_expect_status 0
+path_expect_text "replacing Axocoatl $current_version at $case_system/axocoatl"
+path_refuse_text 'upgrading from'
+path_expect_text "an Axocoatl daemon is running (axocoatl dev); it runs the binary it started from until it restarts"
+path_expect_text "an Axocoatl daemon runs another copy (/home/a/src/axocoatl/target/debug/axocoatl dev); this install does not change it. To run v$current_version instead, stop it and start $case_system/axocoatl (for the Always-On Service: '$case_system/axocoatl service install', then 'axocoatl service restart')"
+
+# Other programs and other axocoatl commands are not daemons, and a file
+# that does not report a version is not named.
+reset_path_case
+P_SYSTEM=writable P_ON_PATH=yes P_EXISTING="unknown build" \
+  P_PS="/opt/tools/axocoatl-helper serve
+/usr/local/bin/axocoatl run fix
+vim axocoatl serve"
+run_path_case no-daemon-running
+path_expect_status 0
+path_refuse_text 'replacing Axocoatl'
+path_refuse_text 'upgrading from'
+path_refuse_text 'daemon is running'
+
+# Going back: an older release installed over a newer one is not called an
+# upgrade, and needs no backup to return to the newer one. The copy is in a
+# home folder whose name holds a space, and so is its running daemon's path.
+next_minor="$(printf '%s' "$current_version" | awk -F. '{print $1 "." ($2 + 1) ".0"}')"
+reset_path_case
+P_HOME_NAME='home dir' P_ON_PATH=yes P_EXISTING="$next_minor" \
+  P_PS="$work_dir/downgrade-with-a-daemon-in-a-folder-with-a-space/home dir/.local/bin/axocoatl serve --config /x/config.yaml"
+run_path_case downgrade-with-a-daemon-in-a-folder-with-a-space
+path_expect_status 0
+path_expect_text "replacing Axocoatl $next_minor at $case_dest/axocoatl"
+path_refuse_text 'upgrading from'
+path_refuse_text 'needs that backup'
+path_expect_text "going back from Axocoatl $next_minor to $current_version: an older release may not start on data a newer one wrote. Before Axocoatl starts again, read how to go back at https://docs.axocoatl.ai/operate/upgrade/ (it uses the backup made before upgrading to $next_minor)"
+path_expect_text "an Axocoatl daemon is running ($case_dest/axocoatl serve); it runs the binary it started from until it restarts"
+path_refuse_text 'another copy'
 
 # A GitHub Actions step: the directory goes into $GITHUB_PATH for the job's
 # later steps, and no profile is asked about or written.

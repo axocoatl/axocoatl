@@ -32,6 +32,25 @@
 //! this data root: a closed or deleted one's runtime volume, a deleted
 //! one's dependency volume. A deleted Session is this data root's when its
 //! data root still holds the Session's native History.
+//!
+//! The authority is the digest of the data root's path, so a data root
+//! moved to another path (the same directory, renamed) gets another one,
+//! while its Sessions keep their volumes, which carry the old one (a
+//! Session that starts again reuses them by name). The daemon keeps the
+//! authorities of the paths its data root had
+//! ([`reap_leaked_runtime_volumes_of_moved_root`]), and treats a volume
+//! carrying one as its own when its name is a Session of its data root
+//! (open, closed or deleted); one named after anything else is left, as
+//! another daemon's. A daemon killed at an old path also left its SearXNG
+//! container, which carries the old authority: it is removed once it has
+//! exited, or while no daemon runs at that path. (Its Session containers are
+//! removed by name at start, as every Session's are.)
+//!
+//! A copy (another directory) keeps none of them: its original, which may
+//! still run, owns its volumes, and the copy's Sessions are the original's
+//! too (the same ids). The volumes carrying the authority of a data root a
+//! copy was copied from are counted apart
+//! ([`RuntimeVolumeReap::copied_from`]), for `axocoatl doctor` to name.
 use crate::error::IsolationError;
 use crate::session_sandbox::{SessionSandbox, RUNTIME_AUTHORITY_LABEL};
 use serde::{Deserialize, Serialize};
@@ -101,6 +120,10 @@ pub struct RuntimeVolumeReap {
     pub kept_dependencies: usize,
     /// Volumes carrying another daemon's runtime authority, left alone.
     pub other_daemons: usize,
+    /// Of [`Self::other_daemons`], those carrying the runtime authority of a
+    /// data root this one was copied from.
+    #[serde(default)]
+    pub copied_from: usize,
     /// Volumes without a runtime authority that this data root cannot show
     /// are its own leaked ones, left alone.
     pub unlabelled_kept: usize,
@@ -208,6 +231,47 @@ pub fn plan(
     authority: &str,
     owner: impl Fn(&str) -> VolumeOwner,
 ) -> (Vec<String>, RuntimeVolumeReap) {
+    plan_of_moved_root(listed, authority, &OtherAuthorities::default(), owner)
+}
+
+/// The runtime authorities other than its own that a data root knows of.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OtherAuthorities {
+    /// Those of the paths it was moved from (the same directory): a volume
+    /// carrying one is this daemon's when its name is a Session of its data
+    /// root.
+    pub previous: Vec<String>,
+    /// Those of `previous` at whose path no daemon runs now: a SearXNG
+    /// container carrying one is removed even while it runs.
+    pub previous_unused: Vec<String>,
+    /// Those of the data roots it was copied from: their volumes are
+    /// theirs, counted apart.
+    pub copied_from: Vec<String>,
+}
+
+/// What [`reap_leaked_runtime_volumes_of_moved_root`] found and did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MovedRootReap {
+    pub report: RuntimeVolumeReap,
+    /// The authorities of [`OtherAuthorities::previous`] that a volume of a
+    /// Session of this data root still carries (an open Session's, kept), or
+    /// a SearXNG container that was left: the ones to keep for the next
+    /// start.
+    pub previous: Vec<String>,
+    /// The authorities of [`OtherAuthorities::copied_from`] that a volume
+    /// still carries.
+    pub copied_from: Vec<String>,
+}
+
+/// [`plan`] for a data root that knows `other` authorities: a volume
+/// carrying one of [`OtherAuthorities::previous`] is this daemon's when its
+/// name is a Session of its data root.
+pub fn plan_of_moved_root(
+    listed: &[ListedVolume],
+    authority: &str,
+    other: &OtherAuthorities,
+    owner: impl Fn(&str) -> VolumeOwner,
+) -> (Vec<String>, RuntimeVolumeReap) {
     use VolumeKind::{Dependencies, Runtime};
     use VolumeOwner::{Closed, Deleted, Open, Unknown};
     let mut remove = Vec::new();
@@ -215,8 +279,17 @@ pub fn plan(
     for volume in listed {
         let ours = match volume.authority.as_deref() {
             Some(label) if label == authority => true,
-            Some(_) => {
+            Some(label)
+                if other.previous.iter().any(|previous| previous == label)
+                    && owner(&volume.owner_id) != Unknown =>
+            {
+                true
+            }
+            Some(label) => {
                 report.other_daemons += 1;
+                if other.copied_from.iter().any(|copied| copied == label) {
+                    report.copied_from += 1;
+                }
                 continue;
             }
             None => false,
@@ -244,13 +317,50 @@ pub async fn reap_leaked_runtime_volumes(
     authority: &str,
     owner: impl Fn(&str) -> VolumeOwner,
 ) -> Result<RuntimeVolumeReap, IsolationError> {
-    if authority.len() != 64 || !authority.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    reap_leaked_runtime_volumes_of_moved_root(authority, &OtherAuthorities::default(), owner)
+        .await
+        .map(|reap| reap.report)
+}
+
+/// [`reap_leaked_runtime_volumes`] for a data root that knows `other`
+/// authorities (see [`plan_of_moved_root`]), which also removes the SearXNG
+/// containers a daemon killed at a path it was moved from left: once they
+/// have exited, or while no daemon runs at that path.
+pub async fn reap_leaked_runtime_volumes_of_moved_root(
+    authority: &str,
+    other: &OtherAuthorities,
+    owner: impl Fn(&str) -> VolumeOwner,
+) -> Result<MovedRootReap, IsolationError> {
+    if [authority]
+        .into_iter()
+        .chain(other.previous.iter().map(String::as_str))
+        .chain(other.copied_from.iter().map(String::as_str))
+        .any(|authority| {
+            authority.len() != 64 || !authority.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    {
         return Err(IsolationError::OciSetupFailed(
             "Axocoatl runtime authority is not a full SHA-256 identity".to_string(),
         ));
     }
+    let mut searxng_left = Vec::new();
+    for previous in &other.previous {
+        let unused = other.previous_unused.contains(previous);
+        match crate::searxng::SearxngService::reap_of_moved_root(previous, unused).await {
+            Ok(false) => {}
+            Ok(true) => searxng_left.push(previous),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "could not remove the SearXNG container a daemon left at a path this data \
+                     root was moved from"
+                );
+                searxng_left.push(previous);
+            }
+        }
+    }
     let listed = list().await?;
-    let (remove, mut report) = plan(&listed, authority, owner);
+    let (remove, mut report) = plan_of_moved_root(&listed, authority, other, &owner);
     for batch in remove.chunks(REMOVE_BATCH) {
         let mut command = Command::new("podman");
         command.args(["volume", "rm"]).args(batch);
@@ -276,7 +386,34 @@ pub async fn reap_leaked_runtime_volumes(
             }
         }
     }
-    Ok(report)
+    let previous = other
+        .previous
+        .iter()
+        .filter(|previous| {
+            searxng_left.contains(previous)
+                || listed.iter().any(|volume| {
+                    volume.authority.as_deref() == Some(previous.as_str())
+                        && owner(&volume.owner_id) != VolumeOwner::Unknown
+                        && !report.removed.contains(&volume.name)
+                })
+        })
+        .cloned()
+        .collect();
+    let copied_from = other
+        .copied_from
+        .iter()
+        .filter(|copied| {
+            listed
+                .iter()
+                .any(|volume| volume.authority.as_deref() == Some(copied.as_str()))
+        })
+        .cloned()
+        .collect();
+    Ok(MovedRootReap {
+        report,
+        previous,
+        copied_from,
+    })
 }
 
 async fn list() -> Result<Vec<ListedVolume>, IsolationError> {
@@ -444,10 +581,92 @@ mod tests {
                 kept_open: 1,
                 kept_dependencies: 0,
                 other_daemons: 2,
+                copied_from: 0,
                 unlabelled_kept: 2,
                 failed: Vec::new(),
             }
         );
+    }
+
+    /// A data root moved to another path (the same directory, renamed) has
+    /// another authority, and its Sessions' volumes carry the old one: they
+    /// are this daemon's as its own are, but only those named after a
+    /// Session of its data root. Anything else that carries the old
+    /// authority (a data root made at that path since, say) is left.
+    #[test]
+    fn a_moved_data_roots_volumes_carrying_its_old_authority_are_its_own() {
+        let ours = "a".repeat(64);
+        let before = "c".repeat(64);
+        let theirs = "b".repeat(64);
+        let listed = vec![
+            volume("axo-egr-ses-open", Some(&before)),
+            volume("axo-egi-ses-closed", Some(&before)),
+            volume("axo-svc-ses-deleted", Some(&before)),
+            volume("axo-ca-ses-unknown", Some(&before)),
+            volume("axo-ses-ses-closed-node-modules", Some(&before)),
+            volume("axo-ses-ses-deleted-node-modules", Some(&before)),
+            volume("axo-ses-ses-unknown-node-modules", Some(&before)),
+            volume("axo-egr-ses-closed", Some(&theirs)),
+        ];
+        let owner = |id: &str| match id {
+            "ses-open" => VolumeOwner::Open,
+            "ses-closed" => VolumeOwner::Closed,
+            "ses-deleted" => VolumeOwner::Deleted,
+            _ => VolumeOwner::Unknown,
+        };
+        let other = OtherAuthorities {
+            previous: vec![before.clone()],
+            ..OtherAuthorities::default()
+        };
+        let (remove, report) = plan_of_moved_root(&listed, &ours, &other, owner);
+        assert_eq!(
+            remove,
+            [
+                "axo-egi-ses-closed",
+                "axo-svc-ses-deleted",
+                "axo-ses-ses-deleted-node-modules",
+            ]
+        );
+        assert_eq!(report.kept_open, 1);
+        assert_eq!(report.kept_dependencies, 1);
+        assert_eq!(report.other_daemons, 3);
+        // Without the old authority they are all another daemon's.
+        let (remove, report) = plan(&listed, &ours, owner);
+        assert!(remove.is_empty());
+        assert_eq!(report.other_daemons, listed.len());
+    }
+
+    /// A copy's Sessions are its original's too (the same ids), and the
+    /// volumes carrying the original's authority are the original's, which
+    /// may still run: the copy never removes one, whatever its Session is
+    /// to the copy, and counts them apart.
+    #[test]
+    fn a_copy_leaves_the_volumes_of_the_data_root_it_was_copied_from() {
+        let ours = "a".repeat(64);
+        let original = "c".repeat(64);
+        let theirs = "b".repeat(64);
+        let listed = vec![
+            volume("axo-egr-ses-open", Some(&original)),
+            volume("axo-egi-ses-closed", Some(&original)),
+            volume("axo-ses-ses-deleted-node-modules", Some(&original)),
+            volume("axo-egr-ses-unknown", Some(&original)),
+            volume("axo-egr-ses-closed", Some(&theirs)),
+        ];
+        let owner = |id: &str| match id {
+            "ses-open" => VolumeOwner::Open,
+            "ses-closed" => VolumeOwner::Closed,
+            "ses-deleted" => VolumeOwner::Deleted,
+            _ => VolumeOwner::Unknown,
+        };
+        let other = OtherAuthorities {
+            copied_from: vec![original.clone()],
+            ..OtherAuthorities::default()
+        };
+        let (remove, report) = plan_of_moved_root(&listed, &ours, &other, owner);
+        assert!(remove.is_empty(), "{remove:?}");
+        assert_eq!(report.other_daemons, 5);
+        assert_eq!(report.copied_from, 4);
+        assert_eq!(report.kept_open, 0);
     }
 
     /// A dependency volume outlives Close, so this daemon removes its own
@@ -504,6 +723,7 @@ mod tests {
                 kept_open: 0,
                 kept_dependencies: 5,
                 other_daemons: 3,
+                copied_from: 0,
                 unlabelled_kept: 2,
                 failed: Vec::new(),
             }
@@ -519,6 +739,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(older.kept_dependencies, 0);
+        assert_eq!(older.copied_from, 0);
     }
 
     #[tokio::test]

@@ -57,6 +57,7 @@ const REQUEST_REASONS = {
   ai_sdk_gateway_refused: 'The body was in the AI SDK\'s own Vercel AI Gateway protocol (gateway() from ai), which the route cannot check. Use the gateway\'s OpenAI-compatible API (createOpenAICompatible, https://ai-gateway.vercel.sh/v1), or set provider_fetch: allow on the route, which sends every body unread.',
   request_incomplete: 'The body did not arrive whole, so the route did not check or send it.',
   credential_unavailable: 'The daemon could not read the route\'s credential.',
+  ollama_cloud_not_off: 'Ollama on this computer did not report its cloud features off when asked just before this request, so nothing was sent to it.',
   record_unavailable: 'The request could not be recorded, so it was not sent.',
 };
 

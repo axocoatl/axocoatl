@@ -253,6 +253,30 @@ pub struct SessionEnvironment {
     /// live runtime, exactly as after a restart, instead of Failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_ready: Option<ResumedReadyEnvironment>,
+    /// The resource caps the container that made this Session Ready got,
+    /// and those its host could not apply (1.5). Absent while no local
+    /// container this daemon started is Ready, and in older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_limits: Option<SessionResourceLimits>,
+}
+
+/// The resource caps a Session's container got: each one applied, and each
+/// one its host could not apply (its cgroup controller is not delegated to
+/// rootless Podman), in words. A receipt carries the same facts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionResourceLimits {
+    /// `--memory`, such as `2g`; absent when not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
+    /// `--cpus`, such as `2`; absent when not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<String>,
+    /// `--pids-limit`; absent when not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pids: Option<u32>,
+    /// Each cap not applied: `CPU (2 CPUs, cgroup controller cpu)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_applied: Vec<String>,
 }
 
 /// Evidence of the Ready plan being prepared again, restored if that
@@ -317,6 +341,7 @@ impl Default for SessionEnvironment {
             error: None,
             prepared_at: None,
             resume_ready: None,
+            resource_limits: None,
         }
     }
 }
@@ -1052,7 +1077,9 @@ impl SessionStore {
         Ok(candidate)
     }
 
-    /// Persist a preparation transition and its bounded evidence.
+    /// Persist a preparation transition and its bounded evidence. Any
+    /// recorded resource caps are cleared: they belong to the container
+    /// [`Self::set_environment_ready`] recorded.
     pub fn set_environment(
         &mut self,
         id: &str,
@@ -1061,6 +1088,49 @@ impl SessionStore {
         runtime: Option<SessionRuntimeIdentity>,
         setup_results: Vec<SessionSetupResult>,
         error: Option<String>,
+    ) -> Result<Session, SessionError> {
+        self.set_environment_with_limits(
+            id,
+            state,
+            effective_image,
+            runtime,
+            setup_results,
+            error,
+            None,
+        )
+    }
+
+    /// [`Self::set_environment`] to Ready, recording the resource caps the
+    /// container that made it Ready got.
+    pub fn set_environment_ready(
+        &mut self,
+        id: &str,
+        effective_image: Option<String>,
+        runtime: Option<SessionRuntimeIdentity>,
+        setup_results: Vec<SessionSetupResult>,
+        resource_limits: Option<SessionResourceLimits>,
+    ) -> Result<Session, SessionError> {
+        self.set_environment_with_limits(
+            id,
+            SessionEnvironmentState::Ready,
+            effective_image,
+            runtime,
+            setup_results,
+            None,
+            resource_limits,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_environment_with_limits(
+        &mut self,
+        id: &str,
+        state: SessionEnvironmentState,
+        effective_image: Option<String>,
+        runtime: Option<SessionRuntimeIdentity>,
+        setup_results: Vec<SessionSetupResult>,
+        error: Option<String>,
+        resource_limits: Option<SessionResourceLimits>,
     ) -> Result<Session, SessionError> {
         let mut candidate = self
             .sessions
@@ -1075,6 +1145,7 @@ impl SessionStore {
         }
         candidate.environment.setup_results = setup_results;
         candidate.environment.error = error;
+        candidate.environment.resource_limits = resource_limits;
         if state != SessionEnvironmentState::Preparing {
             candidate.environment.resume_ready = None;
         }
@@ -1865,6 +1936,75 @@ mod tests {
             reopened.get(&legacy_id).unwrap().exposed_ports,
             LEGACY_DEFAULT_EXPOSED_PORTS
         );
+    }
+
+    /// The caps a Session's container got are kept with its Ready record,
+    /// survive a reload, and go when it is prepared again; a record written
+    /// before 1.5 reads without them.
+    #[test]
+    fn a_ready_sessions_resource_caps_are_recorded_until_it_is_prepared_again() {
+        let data = tempdir().unwrap();
+        let work = tempdir().unwrap();
+        let sessions_dir = data.path().join("sessions");
+        let mut store = SessionStore::new(&sessions_dir).unwrap();
+        let session = store
+            .create_with_environment(
+                "Caps",
+                "wsp-caps",
+                work.path(),
+                SessionMode::SingleAgent {
+                    agent_id: "coder".into(),
+                },
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                true,
+            )
+            .unwrap();
+        assert_eq!(session.environment.resource_limits, None);
+        let limits = SessionResourceLimits {
+            memory: Some("2g".into()),
+            cpus: None,
+            pids: Some(512),
+            not_applied: vec!["CPU (2 CPUs, cgroup controller cpu)".into()],
+        };
+        let ready = store
+            .set_environment_ready(
+                &session.id,
+                Some("alpine".into()),
+                None,
+                Vec::new(),
+                Some(limits.clone()),
+            )
+            .unwrap();
+        assert_eq!(ready.environment.state, SessionEnvironmentState::Ready);
+        assert_eq!(ready.environment.resource_limits, Some(limits.clone()));
+        let mut reopened = SessionStore::new(&sessions_dir).unwrap();
+        reopened.load_all().unwrap();
+        assert_eq!(
+            reopened
+                .get(&session.id)
+                .unwrap()
+                .environment
+                .resource_limits,
+            Some(limits)
+        );
+        let preparing = reopened
+            .set_environment(
+                &session.id,
+                SessionEnvironmentState::Preparing,
+                None,
+                None,
+                Vec::new(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(preparing.environment.resource_limits, None);
+        let path = sessions_dir.join(format!("{}.json", session.id));
+        let persisted = std::fs::read_to_string(path).unwrap();
+        assert!(!persisted.contains("resource_limits"), "{persisted}");
     }
 
     #[test]

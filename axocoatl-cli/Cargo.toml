@@ -26,7 +26,9 @@ axocoatl-memory = { version = "1.5.0", path = "../crates/axocoatl-memory" }
 axocoatl-service = { version = "1.5.0", path = "../crates/axocoatl-service" }
 axocoatl-session = { version = "1.5.0", path = "../crates/axocoatl-session" }
 axocoatl-isolation = { version = "1.5.0", path = "../crates/axocoatl-isolation" }
+axocoatl-llm = { version = "1.5.0", path = "../crates/axocoatl-llm" }
 axocoatl-llm-ollama = { version = "1.5.0", path = "../crates/axocoatl-llm-ollama" }
+axocoatl-llm-openai = { version = "1.5.0", path = "../crates/axocoatl-llm-openai" }
 axocoatl-mcp = { version = "1.5.0", path = "../crates/axocoatl-mcp" }
 clap = { workspace = true }
 rmcp = { workspace = true }
@@ -71,6 +73,12 @@ live-verify = ["axocoatl-daemon/live-verify"]
 
 [dev-dependencies]
 tempfile = "3.27"
+# Onboarding's OpenRouter tests read model endpoints from a fake OpenRouter
+# on a loopback address, which only this feature of the test build admits.
+axocoatl-llm-openai = { version = "1.5.0", path = "../crates/axocoatl-llm-openai", features = ["test-loopback-endpoint"] }
+# Test servers that stand in for Ollama answer the contract probes as Ollama
+# 0.40 does (`axocoatl_llm_ollama::ContractProbe`).
+axocoatl-llm-ollama = { version = "1.5.0", path = "../crates/axocoatl-llm-ollama", features = ["contract-probe-stand-in"] }
 # `connect codex --refresh`'s end-to-end test serves the daemon's API router
 # in the test process.
 axum = { workspace = true }

@@ -7,8 +7,8 @@ use axocoatl_core::{MessageContent, MessageRole, ProviderMetadata, TokenUsageSta
 use axocoatl_llm::{
     provider_tool_metadata,
     transport::{
-        bounded_redacted, http_client, network_error, next_stream_item, read_error_text, read_json,
-        SseDecoder, RESPONSE_TIMEOUT, STREAM_IDLE_TIMEOUT, STREAM_TOTAL_TIMEOUT,
+        bounded_redacted, http_client, network_error, read_error_text, read_json, SseDecoder,
+        StreamDeadlines, StreamTimeouts,
     },
     validate_chat_response, validate_provider_request, validate_response_tool_call,
     validate_stream_terminal, ChatRequest, ChatResponse, FinishReason, LlmProvider,
@@ -400,6 +400,8 @@ pub struct AnthropicProvider {
     client: reqwest::Client,
     api_key: String,
     model: String,
+    /// How long an answer may take to start and to pause.
+    stream_timeouts: StreamTimeouts,
 }
 
 impl AnthropicProvider {
@@ -444,7 +446,15 @@ impl AnthropicProvider {
             client: http_client(),
             api_key: api_key.into(),
             model: model.into(),
+            stream_timeouts: StreamTimeouts::HOSTED,
         }
+    }
+
+    /// Wait for each answer as `timeouts` say (`providers.anthropic`'s
+    /// `first_token_timeout_secs` and `idle_timeout_secs`).
+    pub fn with_stream_timeouts(mut self, timeouts: StreamTimeouts) -> Self {
+        self.stream_timeouts = timeouts;
+        self
     }
 
     fn build_request_body(
@@ -598,6 +608,10 @@ impl AnthropicProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for AnthropicProvider {
+    fn stream_timeouts(&self) -> Option<StreamTimeouts> {
+        Some(self.stream_timeouts)
+    }
+
     fn provider_id(&self) -> &str {
         "anthropic"
     }
@@ -635,7 +649,7 @@ impl LlmProvider for AnthropicProvider {
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header(CONTENT_TYPE, "application/json")
             .json(&body)
-            .timeout(RESPONSE_TIMEOUT)
+            .timeout(self.stream_timeouts.buffered())
             .send()
             .await
             .map_err(|error| network_error(&error, &[&self.api_key]))?;
@@ -749,11 +763,10 @@ impl LlmProvider for AnthropicProvider {
             .header(CONTENT_TYPE, "application/json")
             .json(&body);
 
-        let response = tokio::time::timeout(RESPONSE_TIMEOUT, request_builder.send())
-            .await
-            .map_err(|_| {
-                ProviderError::Network("Anthropic response headers timed out".to_string())
-            })?
+        let mut deadlines = StreamDeadlines::start(self.stream_timeouts);
+        let response = deadlines
+            .headers(request_builder.send(), "anthropic")
+            .await?
             .map_err(|error| network_error(&error, &[&self.api_key]))?;
 
         let status = response.status();
@@ -803,16 +816,8 @@ impl LlmProvider for AnthropicProvider {
             let mut saw_usage = false;
             let mut pending_finish = None;
             let mut saw_message_stop = false;
-            let total_deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
-
             'response: loop {
-                let next = next_stream_item(
-                    &mut bytes,
-                    total_deadline,
-                    STREAM_IDLE_TIMEOUT,
-                    "Anthropic",
-                )
-                .await?;
+                let next = deadlines.next(&mut bytes, "anthropic").await?;
                 let reached_eof = next.is_none();
                 let events = match next {
                     Some(chunk) => {

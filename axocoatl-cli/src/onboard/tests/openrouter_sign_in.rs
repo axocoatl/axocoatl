@@ -11,7 +11,7 @@ use crate::connect_cmd::openrouter_tests::{
 
 /// The models onboarding suggests, which the fake catalog lists.
 const AGAIN: &str = "axocoatl onboard --writer openrouter --writer-model \
-                     openrouter:qwen/qwen3-coder --reviewer openrouter:openai/gpt-oss-120b";
+                     openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b";
 
 /// A Mac whose Podman machine runs, with no Ollama: onboarding with `ui`
 /// and `args`, its OpenRouter API the fake's.
@@ -74,7 +74,7 @@ async fn assert_connected_and_ready(o: &Onboarding) {
     assert_eq!(
         config::run_models(&text),
         RunModels {
-            writer: Some("openrouter:qwen/qwen3-coder".into()),
+            writer: Some("openrouter:qwen/qwen3-coder-30b-a3b-instruct".into()),
             reviewer: Some("openrouter:openai/gpt-oss-120b".into()),
         }
     );
@@ -142,7 +142,7 @@ async fn an_interactive_browser_sign_in_stores_the_key_as_a_secret() {
         "{output}"
     );
     for expected in [
-        "  ✓ writer qwen/qwen3-coder",
+        "  ✓ writer qwen/qwen3-coder-30b-a3b-instruct",
         "  ✓ reviewer openai/gpt-oss-120b",
         "  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser \
          then returns to http://127.0.0.1:",
@@ -254,6 +254,7 @@ async fn connect(o: &Onboarding, server: &wiremock::MockServer) {
         Vec::new(),
         browser,
         endpoints(server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &crate::connect_cmd::Interrupt::default(),
     )
@@ -437,4 +438,362 @@ async fn a_refused_or_missing_connected_key_names_connect_again() {
         );
         assert_eq!(config_text(&o), before);
     }
+}
+
+/// Any key but the one the fake issues is refused, as OpenRouter refuses a
+/// deleted one.
+async fn refuse_other_keys(server: &wiremock::MockServer) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/v1/key"))
+        .respond_with(wiremock::ResponseTemplate::new(401))
+        .with_priority(10)
+        .mount(server)
+        .await;
+}
+
+/// At a terminal, a connected key OpenRouter refuses, or a stored secret
+/// that holds no OpenRouter key, is replaced by onboarding's own browser
+/// sign-in when the person agrees, instead of a step left that says to run
+/// `connect` and onboarding again.
+#[cfg(unix)]
+#[tokio::test]
+async fn at_a_terminal_an_unusable_connected_key_signs_in_again() {
+    for stored_value in ["sk-or-v1-revoked", "not an OpenRouter key"] {
+        let server = openrouter(issued(), described()).await;
+        refuse_other_keys(&server).await;
+        let shims = Shims::new();
+        let ui = Ui::scripted(vec![
+            Answer::Yes,   // the sandbox check container
+            Answer::Yes,   // credits, no BYOK
+            Answer::Enter, // the writer model
+            Answer::Enter, // the reviewer model
+            Answer::Yes,   // sign in again
+            Answer::Enter, // write the changes
+        ]);
+        let mut o = on_a_mac(&shims, ui, gate_args(false), &server).await;
+        connect(&o, &server).await;
+        axocoatl_daemon::secret_store::set_secret(
+            &o.data_dir(),
+            "openrouter",
+            stored_value.as_bytes(),
+        )
+        .unwrap();
+        let (browser, seen) = signing_in();
+        o.openrouter_sign_in = Some((browser, endpoints(&server)));
+        let code = run(&mut o).await;
+        let output = o.ui.output();
+        assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+        assert!(o.ui.answers.lock().unwrap().is_empty(), "{output}");
+        let problem = if stored_value.starts_with("sk-or-") {
+            "  ✗ OpenRouter refused the key you connected (secret openrouter, HTTP 401)"
+        } else {
+            "  ✗ The OpenRouter key secret openrouter cannot be used (it does not hold an \
+             OpenRouter key (they start with sk-or-), so it was not sent to OpenRouter)"
+        };
+        assert!(output.contains(problem), "{problem}\n{output}");
+        assert!(
+            output.contains(
+                "? Sign in to OpenRouter in your browser now? OpenRouter issues a new key"
+            ),
+            "{output}"
+        );
+        assert!(seen.opened());
+        assert_eq!(exchanges(&server).await, 2);
+        assert_no_key(&output, "the output");
+        assert!(!output.contains(stored_value), "{output}");
+        assert_connected_and_ready(&o).await;
+    }
+}
+
+/// A model whose every endpoint OpenRouter reports unavailable right now
+/// is said before anything is written: at a terminal another model is
+/// asked for (Enter takes the next one onboarding suggests that can run
+/// now), and under --yes the step left says why and names that model, with
+/// nothing saved.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_model_openrouter_reports_unavailable_is_said_before_the_setup_is_written() {
+    use crate::connect_cmd::openrouter_tests::mount_unavailable;
+    use crate::onboard::openrouter::{DEFAULT_WRITER, SUGGESTED};
+    for interactive in [true, false] {
+        let server = openrouter(issued(), described()).await;
+        mount_unavailable(&server, "/api/v1", DEFAULT_WRITER).await;
+        // Under --yes the next suggestion is down too: the one after it is
+        // named.
+        if !interactive {
+            mount_unavailable(&server, "/api/v1", SUGGESTED[1]).await;
+        }
+        let instead = if interactive {
+            SUGGESTED[1]
+        } else {
+            SUGGESTED[2]
+        };
+        let shims = Shims::new();
+        let ui = if interactive {
+            Ui::scripted(vec![
+                Answer::Yes,   // the sandbox check container
+                Answer::Yes,   // credits, no BYOK
+                Answer::Enter, // the writer model
+                Answer::Enter, // the reviewer model
+                Answer::Enter, // another writer: the one onboarding suggests
+                Answer::Enter, // write the changes
+            ])
+        } else {
+            Ui::new(Mode::Yes, false, None)
+        };
+        let mut o = on_a_mac(&shims, ui, gate_args(!interactive), &server).await;
+        connect(&o, &server).await;
+        let before = config_text(&o);
+        let code = run(&mut o).await;
+        let output = o.ui.output();
+        let why = format!(
+            "The writer model cannot run now: OpenRouter reports every endpoint that could serve \
+             {DEFAULT_WRITER} as unavailable or degraded right now (fake/exact: status -5, 0% of \
+             requests succeeded over the last 30 minutes). This is OpenRouter's provider status, \
+             not your setup: try again later, or choose another model"
+        );
+        assert!(output.contains(&why), "{why}\n{output}");
+        if interactive {
+            assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+            assert!(
+                output.contains(&format!(
+                    "✓ OpenRouter has an endpoint for {instead} that native Sessions can use now"
+                )),
+                "{output}"
+            );
+            assert_eq!(
+                config::run_models(&config_text(&o)).writer.as_deref(),
+                Some(format!("openrouter:{instead}").as_str())
+            );
+        } else {
+            assert_eq!(code, exit::NOT_READY, "{output}");
+            assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+            assert!(o.steps[0].starts_with(&why), "{:?}", o.steps);
+            assert!(
+                o.steps[0].ends_with(&format!(
+                    "Run `axocoatl onboard` again later, or with another writer model \
+                     (--writer-model openrouter:VENDOR/MODEL, such as openrouter:{instead})"
+                )),
+                "{:?}",
+                o.steps
+            );
+            assert_eq!(config_text(&o), before);
+        }
+    }
+}
+
+/// A model with no endpoint native Sessions can use is said as that, not as
+/// OpenRouter's status: running onboarding again later would not change
+/// it, so the step left names another model only, and nothing is saved.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_model_no_endpoint_fits_is_not_said_to_be_down_for_now() {
+    use crate::connect_cmd::openrouter_tests::endpoint_row;
+    use crate::onboard::openrouter::{DEFAULT_WRITER, SUGGESTED};
+    let server = openrouter(issued(), described()).await;
+    let mut row = endpoint_row(DEFAULT_WRITER, "fake/no-tools", 0, 100.0);
+    row["supported_parameters"] = serde_json::json!(["max_tokens"]);
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(format!(
+            "/api/v1/models/{DEFAULT_WRITER}/endpoints"
+        )))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"data": {"id": DEFAULT_WRITER, "endpoints": [row]}}),
+            ),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let shims = Shims::new();
+    let mut o = on_a_mac(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        gate_args(true),
+        &server,
+    )
+    .await;
+    connect(&o, &server).await;
+    let before = config_text(&o);
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::NOT_READY, "{output}");
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert_eq!(
+        o.steps[0],
+        format!(
+            "The writer model cannot be used in native Sessions: no OpenRouter endpoint for \
+             {DEFAULT_WRITER} has exact text/tool limits and bounded pricing: fake/no-tools: \
+             does not accept max_tokens and tools. Run `axocoatl onboard` again with another \
+             writer model (--writer-model openrouter:VENDOR/MODEL, such as openrouter:{})",
+            SUGGESTED[1]
+        )
+    );
+    assert_eq!(config_text(&o), before);
+}
+
+/// Moving a setup with a key written in the file to the browser sign-in:
+/// the configuration names the secret, its comment says the key is in the
+/// secret store, and the backup leaves the old key out, saying so.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_typed_key_moved_to_the_sign_in_is_left_out_of_the_backup() {
+    const OLD: &str = "sk-or-v1-typed-before-the-sign-in-0123456789";
+    let server = openrouter(issued(), described()).await;
+    let shims = Shims::new();
+    // The models are kept from the configuration, unasked.
+    let mut answers = vec![
+        Answer::Yes, // the sandbox check container
+        Answer::Yes, // credits, no BYOK
+        Answer::No,  // keep the key in the configuration
+    ];
+    if std::env::var("OPENROUTER_API_KEY").is_ok_and(|value| !value.trim().is_empty()) {
+        answers.push(Answer::No);
+    }
+    answers.push(Answer::Enter); // the key: the browser sign-in
+    answers.push(Answer::Enter); // write the changes
+    let mut o = on_a_mac(&shims, Ui::scripted(answers), gate_args(false), &server).await;
+    let old = config::render(&config::ConfigPlan {
+        ollama_base_url: None,
+        openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(OLD.into()))),
+        lead: config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "qwen/qwen3-coder-30b-a3b-instruct",
+        ),
+        reviewer: config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "qwen/qwen3-coder-30b-a3b-instruct",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::OpenRouter,
+            "openai/gpt-oss-120b",
+        )),
+        port: o.args.port.unwrap(),
+        note: "OpenRouter setup".into(),
+        writer: "openrouter",
+        codex_credential: None,
+    });
+    assert!(old.contains("# OpenRouter uses your normal API key"));
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let (browser, _) = signing_in();
+    o.openrouter_sign_in = Some((browser, endpoints(&server)));
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    assert!(o.ui.answers.lock().unwrap().is_empty(), "{output}");
+    let text = config_text(&o);
+    assert!(!text.contains(OLD), "{text}");
+    assert!(
+        text.starts_with(
+            "# Axocoatl — OpenRouter setup\n# OpenRouter's key is in Axocoatl's secret store \
+             (secret openrouter), never in this file.\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("normal API key"), "{text}");
+    let backups: Vec<_> = std::fs::read_dir(&o.paths.config_dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("config.yaml.bak-")
+        })
+        .collect();
+    assert_eq!(backups.len(), 1);
+    let backup = std::fs::read_to_string(backups[0].path()).unwrap();
+    assert!(!backup.contains(OLD), "{backup}");
+    assert!(
+        backup.contains("    api_key: \"\"  # the key written here was left out of this backup"),
+        "{backup}"
+    );
+    assert!(
+        output.contains("The backup leaves out the OpenRouter key that was written in the file"),
+        "{output}"
+    );
+    assert!(!output.contains(OLD), "{output}");
+    assert_connected_and_ready(&o).await;
+}
+
+/// `--plan` reads the secret store without the store's own reads, which
+/// make its directory owner-only first: a directory with other permissions
+/// stays as it was.
+#[cfg(unix)]
+#[tokio::test]
+async fn plan_leaves_the_secret_store_as_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = openrouter(issued(), described()).await;
+    let shims = Shims::new();
+    let o = on_a_mac(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        gate_args(true),
+        &server,
+    )
+    .await;
+    connect(&o, &server).await;
+    let secrets = o.data_dir().join("secrets");
+    std::fs::set_permissions(&secrets, std::fs::Permissions::from_mode(0o750)).unwrap();
+    let mut plan = on_a_mac(
+        &shims,
+        Ui::new(Mode::Plan, false, None),
+        OnboardArgs {
+            yes: false,
+            plan: true,
+            ..gate_args(false)
+        },
+        &server,
+    )
+    .await;
+    assert_eq!(run(&mut plan).await, exit::READY);
+    assert!(
+        plan.ui.output().contains(
+            "  would use the OpenRouter key you connected (secret openrouter, never shown)"
+        ),
+        "{}",
+        plan.ui.output()
+    );
+    assert_eq!(
+        std::fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+}
+
+/// Endpoints that cannot be read (OpenRouter answers an error) do not stop
+/// onboarding: it says so, and a run reads them again before it starts.
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_endpoints_are_said_and_do_not_stop_the_setup() {
+    use crate::onboard::openrouter::DEFAULT_WRITER;
+    let server = openrouter(issued(), described()).await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(format!(
+            "/api/v1/models/{DEFAULT_WRITER}/endpoints"
+        )))
+        .respond_with(wiremock::ResponseTemplate::new(500))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let shims = Shims::new();
+    let mut o = on_a_mac(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        gate_args(true),
+        &server,
+    )
+    .await;
+    connect(&o, &server).await;
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    assert!(
+        output.contains(&format!(
+            "  ! The endpoints of {DEFAULT_WRITER} could not be read (openrouter API error: 500"
+        )),
+        "{output}"
+    );
+    assert!(output.contains("a run checks them again"), "{output}");
 }

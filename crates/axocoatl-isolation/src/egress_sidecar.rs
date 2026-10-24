@@ -197,17 +197,22 @@ fn labels(spec: &SidecarSpec, role: &str) -> Vec<String> {
 
 /// The sidecar's `podman run` arguments (pure). No environment, no secret and
 /// no bind mount: the only mount is the proxy socket's volume.
-pub fn build_sidecar_args(spec: &SidecarSpec, with_limits: bool) -> Vec<String> {
+pub fn build_sidecar_args(
+    spec: &SidecarSpec,
+    with_limits: impl Into<crate::container_host::ResourceCaps>,
+) -> Vec<String> {
     build_sidecar_args_with(spec, SidecarOptions::default(), with_limits)
 }
 
 /// [`build_sidecar_args`] with options: with an identity socket, its volume
-/// is the one other mount.
+/// is the one other mount. `with_limits`: its process and memory caps, each
+/// when its cgroup controller is there.
 pub fn build_sidecar_args_with(
     spec: &SidecarSpec,
     options: SidecarOptions,
-    with_limits: bool,
+    with_limits: impl Into<crate::container_host::ResourceCaps>,
 ) -> Vec<String> {
+    let caps = with_limits.into();
     let mut args: Vec<String> = vec![
         "run".into(),
         "--rm".into(),
@@ -228,13 +233,14 @@ pub fn build_sidecar_args_with(
         "--user".into(),
         "0:0".into(),
     ]);
-    if with_limits {
+    if caps.pids {
         args.extend([
             "--pids-limit".into(),
             (spec.max_connections + 32).to_string(),
-            "--memory".into(),
-            SIDECAR_MEMORY.into(),
         ]);
+    }
+    if caps.memory {
+        args.extend(["--memory".into(), SIDECAR_MEMORY.into()]);
     }
     if let Some(network) = &spec.network {
         args.push("--network".into());
@@ -309,7 +315,7 @@ pub fn build_preview_args(spec: &SidecarSpec, ports: &[u16]) -> Vec<String> {
     ]);
     for port in ports {
         args.push("-p".into());
-        args.push(format!("127.0.0.1::{port}"));
+        args.push(crate::session_sandbox::session_port_publish_arg(*port));
     }
     args.extend([
         "--mount".into(),
@@ -623,7 +629,11 @@ async fn reap(child: &mut Child) {
 }
 
 /// Start one sidecar process and complete its handshake.
-async fn launch(shared: &Shared, number: u32, with_limits: bool) -> Result<Generation, String> {
+async fn launch(
+    shared: &Shared,
+    number: u32,
+    with_limits: crate::container_host::ResourceCaps,
+) -> Result<Generation, String> {
     let container = shared.spec.container();
     remove_container(&container).await?;
     let mut command = Command::new("podman");
@@ -726,6 +736,16 @@ impl EgressSidecar {
     ) -> Result<Self, IsolationError> {
         spec.validate()?;
         let container = spec.container();
+        // A cap the host cannot apply, when every one is required, refuses
+        // the start before anything is made.
+        let mut with_limits =
+            crate::container_host::caps_for("the egress sidecar", spec.require_resource_limits)
+                .await
+                .map_err(|refusal| {
+                    IsolationError::OciContainerFailed(format!(
+                        "starting the egress proxy {container}: {refusal}"
+                    ))
+                })?;
         // The proxy reaches what the sidecar's network reaches, including
         // the host through that network's gateway: refuse it outright.
         let gateways = network_gateways(spec.network.as_deref())
@@ -780,12 +800,11 @@ impl EgressSidecar {
                 container: Some(container.clone()),
             })
             .await;
-        let mut with_limits = true;
         let first = loop {
             match launch(&shared, first_generation, with_limits).await {
                 Ok(generation) => break generation,
                 Err(error)
-                    if with_limits
+                    if with_limits.any()
                         && error.contains("cgroup")
                         && !shared.spec.require_resource_limits =>
                 {
@@ -793,7 +812,7 @@ impl EgressSidecar {
                         container = %container,
                         "this host cannot apply resource limits to the egress sidecar; starting it without pid and memory limits"
                     );
-                    with_limits = false;
+                    with_limits = crate::container_host::ResourceCaps::NONE;
                 }
                 Err(error) => {
                     shared
@@ -881,7 +900,11 @@ impl Drop for EgressSidecar {
     }
 }
 
-async fn supervise(shared: Arc<Shared>, mut current: Generation, with_limits: bool) {
+async fn supervise(
+    shared: Arc<Shared>,
+    mut current: Generation,
+    with_limits: crate::container_host::ResourceCaps,
+) {
     let mut recent: VecDeque<Instant> = VecDeque::new();
     let mut restarts = 0u32;
     let mut stop = shared.stop_signal.subscribe();
@@ -1069,6 +1092,18 @@ mod tests {
         assert!(build_sidecar_args(&spec, true)
             .join(" ")
             .contains("--pids-limit 40"));
+        // Without the pids controller it keeps its memory cap.
+        let memory_only = build_sidecar_args(
+            &spec,
+            crate::container_host::ResourceCaps {
+                memory: true,
+                cpus: true,
+                pids: false,
+            },
+        )
+        .join(" ");
+        assert!(!memory_only.contains("--pids-limit"), "{memory_only}");
+        assert!(memory_only.contains("--memory 128m"), "{memory_only}");
         let volume = volume_create_args(&spec, "axo-svc-ses-1234", "service-sockets").join(" ");
         assert!(volume.starts_with("volume create --ignore"));
         assert!(volume.contains("--label io.axocoatl.role=service-sockets"));
@@ -1110,7 +1145,13 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.starts_with("run -d --name axo-pvw-ses-1234 --pull=never"));
         assert!(joined.contains("--label io.axocoatl.role=preview"));
-        assert!(joined.contains("-p 127.0.0.1::3000 -p 127.0.0.1::5173"));
+        // Beside the workbench's address, never on it.
+        assert!(joined.contains(&format!(
+            "-p {} -p {}",
+            crate::session_sandbox::session_port_publish_arg(3000),
+            crate::session_sandbox::session_port_publish_arg(5173)
+        )));
+        assert!(!joined.contains("127.0.0.1::"));
         assert!(joined.contains(
             "--mount type=volume,source=axo-svc-ses-1234,destination=/run/axocoatl-svc,ro=true"
         ));

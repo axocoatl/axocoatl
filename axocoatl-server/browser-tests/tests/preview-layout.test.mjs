@@ -112,6 +112,41 @@ test('the visible Inspect element button uses the component current URL and bloc
     assert.deepEqual(await page.evaluate(()=>window.pickerEvents.at(-1)),{error:'Picker only works on local URLs'});
   }finally{await context.close();}
 });
+// A local address names a Session's port, whatever its number. The workbench
+// is served at 127.0.0.1 on the daemon's own port, and an app may use that
+// port number too: under either loopback name it opens that port's Preview,
+// never a blank frame. Only a non-local address equal to the workbench's own
+// origin (a non-loopback operator host) is blanked.
+test('a Preview of the workbench\'s own port number opens the Session app under either loopback name',async()=>{
+  const context=await newAuthorizedContext(browser,{viewport:{width:800,height:600}});
+  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+  try{
+    await page.route('**/preview-proxied',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><script type="module">
+      import '/ui/browser.js';
+      const element=document.createElement('ax-browser');
+      document.body.append(element);
+      element.session='ses-proxied-test';
+      window.proxied=(url)=>element.proxied(url);
+    </script>`}));
+    await page.goto(runtime.baseUrl+'/preview-proxied');
+    await page.waitForFunction(()=>typeof window.proxied==='function');
+    const listener=new URL(page.url()).port;
+    const preview=(port,rest)=>`http://ses-proxied-test-p${port}.localhost:${listener}${rest}`;
+    assert.deepEqual(await page.evaluate((listener)=>[
+      `http://127.0.0.1:${listener}/app?x=1`,
+      `http://localhost:${listener}/app`,
+      'http://0.0.0.0:3000/',
+      'https://example.com/a',
+    ].map((url)=>window.proxied(url)),listener),[
+      preview(listener,'/app?x=1'),
+      preview(listener,'/app'),
+      preview('3000','/'),
+      'https://example.com/a',
+    ]);
+    assert.deepEqual(errors,[]);
+  }finally{await context.close();}
+});
+
 after(async()=>{await browser?.close();await runtime?.stop();});
 
 for(const [theme,width] of [['light',1280],['dark',390]])test(`Preview fills its body with a floating element inspector (${theme}, ${width}px)`,async()=>{

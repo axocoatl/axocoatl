@@ -49,21 +49,10 @@ async fn ollama_showing(version: Value, status: Option<Value>, show: Value) -> M
         .and(path("/api/chat"))
         .respond_with(|request: &wiremock::Request| {
             let body: Value = serde_json::from_slice(&request.body).unwrap();
-            let content = body["messages"][0]["content"].as_str().unwrap_or_default();
-            if content.starts_with("x x ") {
-                ResponseTemplate::new(400)
-                    .set_body_json(json!({"error": "the prompt is longer than the context"}))
-            } else {
-                ResponseTemplate::new(200).set_body_raw(
-                    format!(
-                        "{}\n",
-                        json!({"model": "qwen3-coder:30b", "message": {"role": "assistant",
-                            "content": "ready"}, "done": true, "done_reason": "length",
-                            "prompt_eval_count": 14, "eval_count": 1})
-                    ),
-                    "application/x-ndjson",
-                )
-            }
+            let probe = axocoatl_llm_ollama::ContractProbe::of(&body)
+                .expect("doctor sends only the contract probes");
+            let (status, kind, answer) = probe.answer(&body);
+            ResponseTemplate::new(status).set_body_raw(answer, kind)
         })
         .mount(&server)
         .await;
@@ -341,6 +330,19 @@ async fn doctor_refuses_ollama_0_20_6_and_says_why() {
         "{stdout}"
     );
     assert!(stdout.contains("0.20.6 is no longer supported"), "{stdout}");
+    // A refused server's models are not checked: no model line says OK,
+    // and none is loaded or probed.
+    assert!(!stdout.contains("qwen3-coder:30b: GGUF"), "{stdout}");
+    assert!(!stdout.contains("contract probes"), "{stdout}");
+    assert!(!stdout.contains("[ OK ] Model"), "{stdout}");
+    let loads = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| ["/api/generate", "/api/chat", "/api/show"].contains(&request.url.path()))
+        .count();
+    assert_eq!(loads, 0, "{stdout}");
     // No ollama CLI here: upgrade, the way this platform installs it.
     if cfg!(target_os = "macos") {
         assert!(stdout.contains("brew upgrade ollama"), "{stdout}");
@@ -373,11 +375,27 @@ async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
         stdout.contains("[FAIL] Model 'qwen3-coder:30b' cannot run in native Sessions"),
         "{stdout}"
     );
-    assert!(stdout.contains("MLX runner"), "{stdout}");
+    // The refusal reads as a sentence that names the fix once (Ollama 0.40.8
+    // showed qwen3.5:0.8b, an MLX model, this way live, and the commands it
+    // names replaced it with the GGUF variant there).
     assert!(
-        stdout.contains("ollama pull --runner llamacpp qwen3-coder:30b"),
+        stdout.contains("→ The model qwen3-coder:30b is run by Ollama's MLX runner;"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(
+            "by default: remove it and pull its GGUF variant with `ollama rm qwen3-coder:30b && \
+             ollama pull --runner llamacpp qwen3-coder:30b` (an undocumented Ollama flag, which \
+             does not replace a variant already installed), or choose another model.\n"
+        ),
+        "{stdout}"
+    );
+    let fix = stdout
+        .lines()
+        .find(|line| line.contains("→ The model qwen3-coder:30b"))
+        .unwrap();
+    assert_eq!(fix.matches("--runner llamacpp").count(), 1, "{fix}");
+    assert!(!stdout.contains("Invalid request for ollama"), "{stdout}");
 }
 
 #[tokio::test]

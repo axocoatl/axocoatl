@@ -8,9 +8,10 @@
 //! device page `https://auth.openai.com/codex/device`, nothing else (no other
 //! host, scheme, port, user part, path or fragment). The first one it sees
 //! is opened once, with this computer's opener ([`Opener`]: `open` on macOS,
-//! `xdg-open` elsewhere, the first on `PATH`), as its only argument and
-//! without a shell. The address is not secret (Codex's PKCE verifier never
-//! leaves the container), but it is never written to a file or a log.
+//! `xdg-open` elsewhere, the first on `PATH`; in WSL, `wslview` first, which
+//! opens Windows' browser), as its only argument and without a shell. The
+//! address is not secret (Codex's PKCE verifier never leaves the
+//! container), but it is never written to a file or a log.
 
 use std::ffi::OsStr;
 use std::os::unix::process::CommandExt;
@@ -270,11 +271,28 @@ impl Opener {
         }
     }
 
-    /// The first [`Opener::name`] on `path`, if there is one.
+    /// The first [`Opener::name`] on `path`, if there is one; in WSL,
+    /// `wslview` first.
     pub(crate) fn find(path: Option<&OsStr>) -> Option<Self> {
-        super::find_program(Self::name(), None, path, None, "")
-            .ok()
-            .map(|program| Self { program })
+        Self::find_for(path, in_wsl())
+    }
+
+    /// [`Opener::find`] in WSL (`wsl`) or not. WSL usually has no Linux
+    /// browser for `xdg-open`, so `wslview` (wslu, which Ubuntu's WSL image
+    /// ships) opens the page in Windows' browser, which reaches the
+    /// distribution's `127.0.0.1` through WSL's localhost forwarding.
+    /// Without either the address is only printed, as callers do anyway.
+    pub(crate) fn find_for(path: Option<&OsStr>, wsl: bool) -> Option<Self> {
+        let names: &[&str] = if wsl {
+            &["wslview", Self::name()]
+        } else {
+            &[Self::name()]
+        };
+        names.iter().find_map(|name| {
+            super::find_program(name, None, path, None, "")
+                .ok()
+                .map(|program| Self { program })
+        })
     }
 
     /// Open `address` in the background: the opener runs with the address
@@ -322,6 +340,16 @@ impl Opener {
         });
         receiver
     }
+}
+
+/// This is Windows Subsystem for Linux.
+fn in_wsl() -> bool {
+    cfg!(target_os = "linux")
+        && crate::onboard::detect::wsl_from(
+            &std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default(),
+            std::env::var("WSL_DISTRO_NAME").ok().as_deref(),
+        )
+        .is_some()
 }
 
 /// The relay's part: watch what is shown for the page, open it once, and

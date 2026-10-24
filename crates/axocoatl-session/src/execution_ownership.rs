@@ -165,6 +165,18 @@ impl RecordedRelocation {
     }
 }
 
+/// A relocation admission recorded (see
+/// [`DataRootFormatOwnership::acquire_for_root_relocating`]), with what the
+/// manifest named before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relocated {
+    pub recorded: RecordedRelocation,
+    /// The digest of the path the root was recorded at before
+    /// (`root_authority_sha256`): the runtime authority a daemon on that
+    /// path labelled its Podman containers and volumes with.
+    pub previous_root_authority: String,
+}
+
 /// How a manifest compares with the root it is read from.
 enum Admission {
     Exact,
@@ -210,6 +222,15 @@ impl DataRootFormatOwnership {
     pub fn acquire_for_root_reporting(
         data_root: &SecureDir,
     ) -> Result<(Self, Option<RecordedRelocation>), OwnershipError> {
+        Self::acquire_for_root_relocating(data_root)
+            .map(|(owner, relocated)| (owner, relocated.map(|relocated| relocated.recorded)))
+    }
+
+    /// [`Self::acquire_for_root_reporting`], with the root authority the
+    /// manifest recorded before it was re-recorded.
+    pub fn acquire_for_root_relocating(
+        data_root: &SecureDir,
+    ) -> Result<(Self, Option<Relocated>), OwnershipError> {
         let (lease, format) = RootLease::acquire(data_root.path(), None, Some(data_root))?;
         match format {
             RootFormat::Legacy => {
@@ -487,7 +508,7 @@ fn finish_installed(
 fn admit_manifest(
     lease: &RootLease,
     directory: &str,
-) -> Result<(FormatManifest, Option<RecordedRelocation>), OwnershipError> {
+) -> Result<(FormatManifest, Option<Relocated>), OwnershipError> {
     let manifest = read_manifest(&lease.root, directory)?;
     let current = CurrentIdentity::of_lease(lease)?;
     match manifest.classify(&current) {
@@ -495,10 +516,16 @@ fn admit_manifest(
             remove_interrupted_rebind(&lease.root)?;
             Ok((manifest, None))
         }
-        Admission::Relocated(relocation) => Ok((
-            rebind(lease, directory, manifest, current)?,
-            Some(relocation),
-        )),
+        Admission::Relocated(recorded) => {
+            let previous_root_authority = manifest.root_authority_sha256.clone();
+            Ok((
+                rebind(lease, directory, manifest, current)?,
+                Some(Relocated {
+                    recorded,
+                    previous_root_authority,
+                }),
+            ))
+        }
         Admission::Refused => invalid(REFUSED_MANIFEST),
     }
 }
@@ -654,6 +681,45 @@ fn inspect(path: &Path) -> Result<FormatOwnershipReport, OwnershipError> {
             interrupted_rebind,
         }
     })
+}
+
+/// The external lease of the data root path whose digest
+/// ([`Relocated::previous_root_authority`]) is `authority`, held while this
+/// lives: no daemon runs on a data root at that path meanwhile, as each one
+/// holds it while it runs.
+#[derive(Debug)]
+pub struct PathLease {
+    _external_root: SecureDir,
+    _file: File,
+}
+
+impl PathLease {
+    /// Hold the lease of the path whose digest is `authority`; `None` when a
+    /// daemon at that path holds it.
+    pub fn hold(authority: &str) -> Result<Option<Self>, OwnershipError> {
+        if authority.len() != 64 || !authority.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return invalid("a data root path digest is 64 hexadecimal digits");
+        }
+        #[cfg(not(unix))]
+        {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "Unix ownership locks required").into())
+        }
+        #[cfg(unix)]
+        {
+            let external_root = SecureDir::open_or_create_all(external_root_path())?;
+            external_root.require_owner_and_private_writes(effective_uid())?;
+            external_root.restrict_owner_only()?;
+            let file = external_root.open_lock_file(format!("{authority}.lock"))?;
+            match lock(&file, "controller (external lease)") {
+                Ok(()) => Ok(Some(Self {
+                    _external_root: external_root,
+                    _file: file,
+                })),
+                Err(OwnershipError::Busy(_)) => Ok(None),
+                Err(error) => Err(error),
+            }
+        }
+    }
 }
 
 impl RootLease {
@@ -933,6 +999,25 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    /// The lease of a path is the one a daemon on a data root there holds:
+    /// held by neither while the other holds it.
+    #[test]
+    fn a_path_lease_is_held_only_while_no_daemon_runs_at_that_path() {
+        let root = tempfile::tempdir().unwrap();
+        let authority = root_authority(&SecureDir::open_existing_all(root.path()).unwrap());
+        let daemon = LegacyFormatOwnership::acquire(root.path()).unwrap();
+        assert!(PathLease::hold(&authority).unwrap().is_none());
+        drop(daemon);
+        let lease = PathLease::hold(&authority).unwrap().unwrap();
+        assert!(matches!(
+            LegacyFormatOwnership::acquire(root.path()),
+            Err(OwnershipError::Busy(_))
+        ));
+        drop(lease);
+        LegacyFormatOwnership::acquire(root.path()).unwrap();
+        assert!(PathLease::hold("../escape").is_err());
+    }
 
     #[test]
     fn owned_legacy_history_accessor_is_existing_only_and_refuses_redirected_source() {

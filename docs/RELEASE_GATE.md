@@ -22,12 +22,20 @@ bundle, and each must say `pass: true`.
 <!-- release-gate:required-paths:start -->
 - `A-x86`: Tier A, CI, ubuntu-24.04 (x86_64), `scripts/release-gate/newuser-linux.sh`
 - `A-arm`: Tier A, CI, ubuntu-24.04-arm (aarch64), the same script
-- `C1-local`: Tier C, the gate Mac, local models through Ollama (`newuser-mac.sh`, path `local`)
-- `C1-claude-code`: Tier C, Claude Code as the writer, `--keep pr` and the verify-receipt Action
+- `C1-local`: Tier C, the gate Mac from zero, local models through Ollama
+- `C1-claude-code`: Tier C, Claude Code as the writer, `--keep pr` and the
+  verify-receipt Action
 - `C1-codex`: Tier C, Codex as the writer, billed to the ChatGPT plan
-- `C1-openrouter`: Tier C, writer and reviewer on OpenRouter, and Claude Code with an OpenRouter reviewer
-- `C1-workbench-webkit`: Tier C, the workbench in Safari (WebKit), from the sign-in link to a commit
-- `D1`: Tier D, Ubuntu 24.04 VM, a new user made with `adduser`, OpenRouter models (`newuser-linux.sh --live`)
+- `C1-openrouter`: Tier C, writer and reviewer on OpenRouter, and Claude Code
+  with an OpenRouter reviewer
+- `C1-service`: Tier C, the Always-On Service from onboarding's Step 6 to
+  `service uninstall`
+- `C1-workbench-webkit`: Tier C, the workbench in Safari, from the sign-in
+  link to a commit, then its Previews and cookies
+- `C1-recovery`: Tier C, a run that starts a stopped Podman machine
+- `C1-real-repo`: Tier C, timed runs on the pinned real repositories
+- `D1`: Tier D, Ubuntu 24.04 VM, a new user made with `adduser`, OpenRouter
+  models, the Always-On Service (`newuser-linux.sh --live`)
 - `C2-local` (when the public copy names 16 GB): Tier C on a 16 GB Apple-silicon Mac
 - `C2-openrouter` (when the public copy names 16 GB): the same Mac, OpenRouter reviewer
 <!-- release-gate:required-paths:end -->
@@ -38,8 +46,183 @@ The C2 paths are required as soon as `README.md`, `llms.txt`,
 tested on 16 GB": describe a memory floor without naming 16 GB, or record C2.
 
 A bundle may hold other paths too (the Ubuntu 22.04 refusal leg, Tier B,
-optional Tier C paths). They are reported, and a failing one is a warning,
-not a refusal.
+`C1-workbench-chromium`). They are reported, and a failing one is a
+warning, not a refusal.
+
+## Required steps
+
+A path passes when every step it recorded as required passed, but a path
+that never recorded a step proves nothing about it. So each sentence of the
+public text about what was verified relies on a step listed here, and
+`check-evidence.mjs` requires each one in that path's evidence, recorded as
+required and passed. A step the script skipped (a `--yes` run skips every
+step that only a person answering live can show), recorded as optional, or
+never recorded fails the path, naming the step. The list is read from the
+tagged commit, like the paths, and `evidence.test.mjs` fails when a step
+named here is not a whole quoted string in the script that records its
+path (`newuser-linux.sh` for A and D, `newuser-mac.sh` for C) or in
+`lib.sh`. Restate the public text (see "Restating what was verified") from
+these steps.
+
+<!-- release-gate:required-steps:start -->
+- `A-x86`
+  - `start without axocoatl on PATH`
+  - `install with the published command`
+  - `a new shell finds axocoatl`
+  - `installed binary is the tarball's`
+  - `onboard --yes --writer ollama with no terminal`
+  - `onboard ran no sudo and no package manager through PATH`
+  - `onboard ran no sudo by any path (system journal)`
+  - `--no-pull pulled nothing`
+  - `doctor: ready, no FAIL in sandbox, models, writers, daemon`
+  - `axocoatl dev serves on its configured port`
+  - `the README's command passed on every fixture, each receipt and record verified`
+  - `a check program that is absent: exit 3`
+  - `refused before any model call (0 tokens)`
+  - `reviewer anthropic:x: exit 3`
+  - `no Session, container or model call for the refused run`
+  - `onboard without Podman: exit 1`
+  - `doctor FAILs the subuid range with the usermod fix`
+  - `copy-paste lint (scripts/check-copy-paste.mjs)`
+- `A-arm`
+  - `start without axocoatl on PATH`
+  - `install with the published command`
+  - `a new shell finds axocoatl`
+  - `installed binary is the tarball's`
+  - `onboard --yes --writer ollama with no terminal`
+  - `onboard ran no sudo and no package manager through PATH`
+  - `onboard ran no sudo by any path (system journal)`
+  - `--no-pull pulled nothing`
+  - `doctor: ready, no FAIL in sandbox, models, writers, daemon`
+  - `axocoatl dev serves on its configured port`
+  - `the README's command passed on every fixture, each receipt and record verified`
+  - `a check program that is absent: exit 3`
+  - `refused before any model call (0 tokens)`
+  - `reviewer anthropic:x: exit 3`
+  - `no Session, container or model call for the refused run`
+  - `onboard without Podman: exit 1`
+  - `doctor FAILs the subuid range with the usermod fix`
+  - `copy-paste lint (scripts/check-copy-paste.mjs)`
+- `C1-local`
+  - `the account started without Axocoatl, its data or stored secrets`
+  - `the account started without Podman or a Podman machine`
+  - `the account started without Ollama or its settings`
+  - `install with the published command`
+  - `a new shell finds axocoatl`
+  - `onboarding was answered live in the terminal`
+  - `onboarding installed Podman with Homebrew`
+  - `onboarding installed Ollama with Homebrew`
+  - `onboarding created the Podman machine, and it runs`
+  - `Ollama's cloud models are off (doctor)`
+  - `onboarding ended Ready with a passing first run`
+  - `doctor: ready, no FAIL`
+  - `the README's command passed on every fixture, each receipt and record verified`
+- `C1-claude-code`
+  - `no Claude Code sign-in was stored before this path`
+  - `onboarding was answered live in the terminal`
+  - `Claude Code was signed in through the browser during onboarding`
+  - `doctor: ready, no FAIL`
+  - `the home page's fix-claude-code command passed on node-deps and python-pytest`
+  - `--keep pr opened a pull request`
+  - `the verify-receipt Action verified the pull request's receipt`
+  - `reviewer anthropic:opus is refused: exit 3`
+  - `the refused run left no Session`
+- `C1-codex`
+  - `no Codex sign-in was stored before this path`
+  - `onboarding was answered live in the terminal`
+  - `Codex billing was set to the ChatGPT plan`
+  - `Codex was signed in with ChatGPT in the browser during onboarding`
+  - `doctor: ready, no FAIL`
+  - `the site's fix-codex command passed on node-deps and python-pytest`
+- `C1-openrouter`
+  - `no OpenRouter key was stored before this path`
+  - `onboarding was answered live in the terminal`
+  - `OpenRouter was connected through the browser sign-in during onboarding`
+  - `config.yaml holds no OpenRouter key`
+  - `onboarding asked for different writer and reviewer models`
+  - `doctor: ready, no FAIL`
+  - `axocoatl run fix passed on node-deps and python-pytest with the OpenRouter models`
+  - `fix-claude-code with the OpenRouter reviewer passed on node-deps`
+- `C1-service`
+  - `onboarding was answered live in the terminal`
+  - `onboarding installed and started the Always-On Service (Step 6)`
+  - `onboarding restarted the service after the configuration changed (Step 7)`
+  - `a fix through the Always-On Service passed, its receipt and record verified`
+  - `axocoatl service status: installed and running`
+  - `axocoatl service stop: the service is not running`
+  - `axocoatl service uninstall: not installed, its unit removed`
+- `C1-workbench-webkit`
+  - `the sign-in link opened the workbench`
+  - `Open workspace refuses the home folder`
+  - `Open workspace accepts the repository`
+  - `New session starts`
+  - `Team & budget is pre-filled and Apply works`
+  - `one turn edits a file`
+  - `Source Control lists the turn's change to src/paginate.js`
+  - `a commit from the workbench succeeds`
+  - `the commit is authored by this account's identity`
+  - `the Preview shows the Session's app in the workbench`
+  - `Open full preview is disabled in Safari, and the workbench says why`
+  - `a Preview address typed into a tab gets Axocoatl's refusal page`
+  - `a redirect from another site to a Preview gets Axocoatl's refusal page`
+  - `a Command-click inside the Preview gets Axocoatl's refusal page`
+  - `a Domain=localhost cookie flood from another page leaves the workbench as the docs say`
+  - `Manage Website Data removes the planted localhost cookies`
+  - `Ctrl+C stops axocoatl dev with exit 0`
+- `C1-recovery`
+  - `podman machine stop`
+  - `the Podman machine is stopped before the run`
+  - `a run with the machine stopped passed, its receipt and record verified`
+  - `the run started the stopped machine`
+- `C1-real-repo`
+  - `a timed run on every pinned real repository ended with a verdict, its receipt verified`
+- `D1`
+  - `the account started without Axocoatl, its data or stored secrets`
+  - `the account started without Podman`
+  - `the gate removed this account's subordinate ids; another user's range overlaps 100000-165535`
+  - `onboarding was answered live in the terminal`
+  - `onboarding installed Podman with apt`
+  - `onboarding added a subordinate id range that no other user's overlaps`
+  - `OpenRouter was connected through the browser sign-in during onboarding`
+  - `onboarding did not install Ollama`
+  - `doctor: ready, no FAIL in sandbox, models, writers, daemon`
+  - `axocoatl dev serves on its configured port`
+  - `the README's command passed on every fixture, each receipt and record verified`
+  - `this login has a systemd user session (the service needs one)`
+  - `onboarding installed and started the Always-On Service (Step 6)`
+  - `onboarding restarted the service after the configuration changed (Step 7)`
+  - `a fix through the Always-On Service passed, its receipt and record verified`
+  - `axocoatl service status: installed and running`
+  - `axocoatl service stop: the service is not running`
+  - `axocoatl service uninstall: not installed, its unit removed`
+<!-- release-gate:required-steps:end -->
+
+Every run on a fixture or a real repository, the `--keep pr` run, and the
+workbench paths' Session turn (read from the Session's JSON export,
+`record-answers.mjs --export`) also check that no accepted output holds
+tool-call markup a model wrote as text (`<function=` or `</tool_call>`). A turn that ended on such
+text ran nothing it meant to run. The check
+(`scripts/release-gate/record-answers.mjs` and `gate_markup_check` in
+`lib.sh`) needs no daemon:
+
+- It reads every answer the run accepted from the Session history in the
+  run's record: each activation the record marks `currently_accepted`, and
+  each one a review revision replaced after it was accepted (`superseded`),
+  whose output is the answer. A refused or failed activation's output was
+  never accepted and is not read. It reads only a whole record
+  (its end line's line count and digest, as `axocoatl record verify`
+  checks). A history it cannot read, an accepted activation whose output
+  the record does not hold, or a run that passed or whose checks failed
+  with no accepted answer fails the step.
+- It reads every line the run added to a file since the commit the record
+  says it started from (`repo_head`), in commits and in the working tree,
+  and every new file. It leaves out the record, receipt and JUnit report
+  the gate asked for, which quote what the run read. Lines the run left
+  alone may quote markup (a parser's own tests, a changelog) and are not
+  read.
+
+A run whose accepted output holds markup fails, and with it the summary
+step of its path.
 
 ## How the release workflow enforces it
 
@@ -74,7 +257,8 @@ not a refusal.
   nothing else is in the bundle (no extra files, no symbolic links).
 - The manifest is for this version and commit, and every required path above
   has a file whose `pass` is `true`, whose required steps all passed (a
-  skipped required step fails the path) and whose version and commit match.
+  skipped required step fails the path), which holds every step "Required
+  steps" lists for it, passed, and whose version and commit match.
 
 When it refuses, it names every missing or failing path and why, and the job
 fails.
@@ -96,8 +280,8 @@ gh workflow run release.yml --ref v1.5.0 \
   accepts it only when both the run's actor (`github.actor`) and the login
   that ran it (`github.triggering_actor`, which differs on a re-run) are
   listed in `.axocoatl/gate-override-actors`, read from the tagged commit.
-  The list ships with comments only, so nobody can override until the
-  founder adds his own login in a reviewed commit. The workflow contract
+  It lists the founder's login (`cubanerick`), added in a reviewed commit,
+  and nobody else; an empty list lets nobody override. The workflow contract
   checker (`scripts/check-workflow-contracts.rb`) fails CI if either evidence
   check stops passing both actors.
 - The run logs a warning annotation, writes the override, the actor and every
@@ -130,9 +314,13 @@ A path file (`axocoatl.release-evidence.path/1`) holds:
   `exit_code`, `seconds`, `bytes_downloaded` and a `detail`;
 - `host` (OS, version, kernel, architecture, memory, CPUs, user);
 - `tools` (Podman, Ollama, git, Node and the `axocoatl --version` it ran);
-- `attachments`, the files in its folder: the full transcript, each step's
-  log, the install command as run, and for each fixture the exact command,
-  its output, the receipt, the JUnit and the record bundle.
+- `attachments`, the files in its folder: the full transcript (written as it
+  happens, so it holds every question and answer), each step's log, the
+  install command as run, for each fixture the exact command, its output,
+  the receipt, the JUnit and the record bundle, `answers.txt` (each question
+  the person answered, the answer, who and when) and `logs/onboarding/`
+  (the onboarding logs written during the path: every command onboarding
+  ran and its exit status, never a key).
 
 ### Signing
 
@@ -200,7 +388,7 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    current shell alone fails.
 3. A scripted model server (`scripts/release-gate/stub-model-server.mjs`):
    an Ollama 0.40.6 on 127.0.0.1 with cloud models off, `qwen3-coder:30b`
-   and `gpt-oss:20b` "installed", Axocoatl's two contract probes answered as
+   and `gpt-oss:20b` "installed", Axocoatl's contract probes answered as
    Ollama answers them, and an OpenAI-compatible endpoint. Its writer reads
    each fixture's buggy file and fixes it with `edit_file`
    (`scripts/release-gate/stub-fixes.json`); its reviewer approves.
@@ -219,7 +407,9 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    reads it: `Ready for: … axocoatl run fix` (on the Claude Code and Codex paths, that
    writer's own `fix-claude-code` or `fix-codex`), a last line `Ready: yes`, and no
    `[FAIL]` line.
-6. `axocoatl dev` must serve on the configured port.
+6. `axocoatl dev` must serve on the configured port: its `/health` names its
+   version and a start after the configuration last changed, as onboarding
+   reads it.
 7. On each fixture in `tests/fixtures/newuser/` (`node-plain`, `node-deps`,
    `python-pytest`, `rust`, `go`), the README's `axocoatl run fix` command
    exactly as written, plus `--junit`, `--record` and `--receipt` when it
@@ -229,8 +419,9 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    run's plan line must name the image the fixture needs (and the setup,
    for `node-deps` and `python-pytest`). The documented
    `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .`
-   and `axocoatl record verify` must exit 0, and the receipt must match the
-   record.
+   and `axocoatl record verify` must exit 0, the receipt must match the
+   record, and no accepted output may hold tool-call markup (see "Required
+   steps"). One step then says whether the command passed on every fixture.
 8. Negative cases:
    - A repository whose check program is absent exits 3 within 15 s with no
      model call.
@@ -251,6 +442,15 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    own step, and the lint then fails every YAML block.
 10. Ctrl+C stops `axocoatl dev` with exit 0 (recorded, not required).
 
+Every request the gate makes to a daemon, the scripted model server or
+another local server is bounded (`gate_curl`: 2 s to connect, 5 s in all),
+so one that accepts the connection and never answers fails its step
+instead of hanging the gate. What answers on a daemon's port is decided as
+onboarding decides it (`gate_daemon_state`): an Axocoatl `/health` names
+its version; a daemon that started before the configuration last changed,
+or does not say when it started, runs an older configuration; and a
+request that failed is never taken for a running daemon.
+
 The ubuntu-22.04 leg (`--expect-refusal "Podman 3.4.4"`) checks only that
 onboarding and doctor refuse cleanly and name Podman 3.4.4.
 
@@ -262,12 +462,31 @@ shows how far the product gets.
 Supporting checks, run in CI's workflow-contracts job:
 
 - `node --test scripts/release-gate/*.test.mjs`: the stub, the fixture table,
-  the command extraction, the evidence format, the release decision and the
-  override list.
+  the command extraction, the evidence format, the release decision (with
+  the required steps, each of which a gate script must record by that
+  name), the override list, and the Safari steps' pages.
 - `scripts/release-gate/test-release-gate.sh`. It checks:
   - the scripts' safety refusals;
   - the installer step, with an installer whose `/usr/local/bin` is a locked
     temporary directory;
+  - what answers on a daemon's port (current, older configuration, before
+    1.5.0, not Axocoatl, an HTTP error, a server that never answers, which
+    must fail within the bound, nothing at all), and that every request the
+    scripts make is bounded;
+  - the tool-call markup check, on records shaped as a 1.5.0 run writes
+    them (`testdata/record-history-1.5.0.json` is a real run's history): a
+    clean run passes, even when its record, receipt, report or a line it
+    left alone quotes markup; markup in an accepted answer, in a line it
+    added, a new file or a commit fails; a needs-attention run with no
+    accepted answer passes; and the transcript shape the daemon's API
+    serves, no accepted answer from a run that passed, a cut-off record,
+    a missing record and an unknown starting commit fail
+    (`record-answers.test.mjs` covers the reader);
+  - the operator's answers in `answers.txt`, and the onboarding logs kept;
+  - what `newuser-mac.sh` runs: every required C1 path by default, the
+    Source Control question (Last turn N of at least 1, and the Safari
+    driver decides the same), the flushed transcripts, the driver's usage,
+    and the docs' strict verify-receipt workflow;
   - Tier B's Podman stand-in;
   - `collect-evidence.sh`: a key made with `--init-signer`, kept through a
     simulated reset, signs a bundle that `check-evidence.mjs` then passes;
@@ -277,14 +496,18 @@ Supporting checks, run in CI's workflow-contracts job:
   It also runs `newuser-linux.sh` end to end with `GATE_SIMULATION=1`,
   against a stand-in `axocoatl` (`scripts/release-gate/testdata/fake-axocoatl.mjs`,
   which follows the shared contract) and the real stub. That covers Tier A
-  and a `--live` (D1) run in which onboarding chooses the port, so the gate
-  script's own logic is checked on a host without Podman, models or a release
-  build. A simulated path always records a failed step and can never be
-  evidence.
+  (every step "Required steps" lists for it is recorded), a fixture the
+  model cannot fix, a turn that ended on a slipped tool call, and a
+  `--live` (D1) run in which onboarding chooses the port, adds the
+  subordinate ids the gate removed beside another user's, and the
+  Always-On Service runs from Step 6 to `uninstall` (every step D1 requires
+  is recorded), so the gate script's own logic is checked on a host without
+  Podman, models or a release build. A simulated path always records a
+  failed step and can never be evidence.
 
 CI's "Podman suites (ignored tests)" job runs the Podman tests that are
 ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
-`session_trust_podman`, and the nine `node_modules` mount point tests
+`session_trust_podman`, and the eleven `node_modules` mount point tests
 (`a_repository_without_node_modules_has_none_left_behind`,
 `under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`,
 `a_development_containers_node_modules_volume_keeps_the_mount_point`,
@@ -292,16 +515,20 @@ ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
 `a_bind_of_the_mount_point_through_a_link_keeps_it`,
 `a_bind_volume_of_the_mount_point_keeps_it`,
 `an_overlay_volume_of_the_mount_point_keeps_it`,
-`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it` and
+`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it`,
+`mounts_taken_with_volumes_from_keep_the_mount_point`,
+`an_overlay_of_a_keep_id_container_keeps_it_and_says_why` and
 `dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected`:
 plain, hardened keep-id, a development container, a bind of the mount point
 itself, a bind through a link, a bind volume, an overlay volume, a tmpfs
-through a bind of the repository, and Podman's `no such container` and `no
-such volume` answers). Each removal they assert runs while an unrelated
-container exists, and each keep of the empty mount point they assert names
-why, so a broken `podman container inspect` fails them. The step must report `9 passed`, so that a
-renamed test cannot pass by matching nothing. The egress and workload suites need prepared local images and are
-not wired yet.
+through a bind of the repository, mounts taken with `--volumes-from`, a
+keep-id container's overlay volume, and Podman's `no such container` and
+`no such volume` answers). Each removal they assert runs while an
+unrelated container exists, and each keep of the empty mount point they
+assert names why, so a broken `podman container inspect` fails them. The
+step must report `11 passed` (as many as it names), so that a renamed test
+cannot pass by matching nothing. The egress and workload suites need
+prepared local images and are not wired yet.
 
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
 with `GATE_REQUIRE_ALL_TOOLCHAINS=1`, which proves each fixture in
@@ -355,17 +582,21 @@ machine, so this checks the plumbing a new Mac user meets:
    `~/.local/bin`; a new `zsh -il` must find it, as in Tier A.
 3. `axocoatl doctor --json` against `scripts/release-gate/podman-shim.sh`, a
    stand-in that answers `--version`, `info`, `machine list`, `inspect` and
-   `info` as Podman does in each state. The sandbox section must say:
+   `info` as Podman does in each state. The sandbox section must say, for
+   each Podman state:
 
-   | Podman state | doctor |
-   |---|---|
-   | not installed | FAIL, fix "Run `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`" (the Intel build: "Podman 6 no longer supports Intel Macs", the Podman 5.8 package) |
-   | not installed, no Homebrew (aarch64) | FAIL, fix names the podman.io installer, not onboarding installing Podman |
-   | no machine | FAIL, fix runs `podman machine init` |
-   | machine stopped | OK: it starts on first use; no FAIL |
-   | running, rootless | OK: ready; no FAIL |
-   | running, rootful | FAIL, fix sets `--rootful=false` |
-   | Podman 6.1.4 (numeric memory, libkrun) | no version WARN (doctor lists 6.1 among the macOS releases it does not warn about); WARN naming the libkrun provider as untested; no FAIL |
+   - not installed: FAIL, fix "Run `axocoatl onboard` (it installs Podman
+     after asking), or: `brew install podman`" (the Intel build: "Podman 6
+     no longer supports Intel Macs", the Podman 5.8 package);
+   - not installed, no Homebrew (aarch64): FAIL, fix names the podman.io
+     installer, not onboarding installing Podman;
+   - no machine: FAIL, fix runs `podman machine init`;
+   - machine stopped: OK: it starts on first use; no FAIL;
+   - running, rootless: OK: ready; no FAIL;
+   - running, rootful: FAIL, fix sets `--rootful=false`;
+   - Podman 6.1.4 (numeric memory, libkrun): no version WARN (doctor lists
+     6.1 among the macOS releases it does not warn about); WARN naming the
+     libkrun provider as untested; no FAIL.
 
 4. `axocoatl onboard --plan` (nothing changes) must show the consent it would
    ask for: `brew install podman`, the podman.io installer when there is no
@@ -380,27 +611,46 @@ machine, so this checks the plumbing a new Mac user meets:
    directories, as on a Mac that never installed them.
 5. Neither command may run a podman command that creates or changes a
    machine.
+6. A run's admission starts a stopped machine, as doctor's "it starts on
+   first use" says: with the stand-in's machine stopped, `axocoatl dev` and
+   a run of the README's task on `node-plain` against the scripted model
+   server, both unable to see any other Podman (`sandbox-exec`). After the
+   daemon has started, the run must call `podman machine start`, which the
+   stand-in answers by running the machine. The stand-in builds and starts
+   nothing, so the run itself ends at its first container command; only
+   its admission is judged here, and Tier C's `recovery` path runs the
+   whole thing on a real machine.
 
 Its evidence (`B-arm`, `B-intel`) is reported in the bundle and is not a
-required path. Not built yet: a run's admission calling `podman machine
-start` for a stopped machine (it needs a daemon and a run against the
-stand-in).
+required path.
 
 ## Tier C: a real Mac, every release, with a person present
 
 Machines:
 
-- **C1**: a dedicated Apple-silicon Mac (recommended), or a new macOS admin
-  account `axo-newuser` on the founder's 48 GB Mac.
+- **C1**: an Apple-silicon Mac account that starts without Axocoatl, its
+  data or stored secrets, without Podman or a Podman machine, and without
+  Ollama or its settings, and that owns the Mac's Homebrew, so that
+  onboarding can install Podman and Ollama with it. The public text says
+  the gate Mac started that way, and the gate records it before the
+  install (see "Required steps"). That is a Mac kept for the gate, reset
+  with `--dedicated-machine` (recommended), or the founder's own account
+  on his 48 GB Mac reset the same way, as 1.5.0's runs did
+  (`GATE_ACCOUNT=erick`): that reset uninstalls his Podman (its machines
+  go with it) and Ollama and removes his Axocoatl data and sign-ins, so
+  back them up and agree it with him first. A second account on a Mac
+  whose Homebrew another account owns cannot serve: Homebrew's Podman and
+  Ollama are shared by every account, so it never starts without them.
 - **C2**: a 16 GB Apple-silicon Mac. Required only when the copy names 16 GB.
 
-Never use a fresh `HOME` in the founder's own account as evidence: the
-Homebrew Ollama service reads the founder's real `~/.ollama`, and Homebrew
-upgrades would change the founder's own Podman and Ollama.
+Never use a fresh `HOME` in an account that keeps its Podman and Ollama as
+evidence: the Homebrew Ollama service reads that account's real
+`~/.ollama`, and Homebrew upgrades would change its Podman and Ollama.
 
 Once per gate account (most of it persists):
 
-1. Create the account (System Settings, admin password).
+1. On a Mac kept for the gate, create its admin account (System Settings,
+   admin password), which installs Homebrew.
 2. In the account, in a checkout of this repository, after the first
    install: `scripts/release-gate/collect-evidence.sh --init-signer` makes the
    gate's signing key in `~/.axocoatl-gate-signer` and prints its line. Add
@@ -413,28 +663,30 @@ Once per gate account (most of it persists):
    onboarding signs in to OpenRouter in the browser when it asks for the key
    (the sign-in `axocoatl connect openrouter` runs) and stores the key
    OpenRouter issues in Axocoatl's secret store, never in the configuration.
-5. On the founder's Mac (Option B): stop the founder's own Ollama
-   (`brew services stop ollama`), Podman machine and `:11435` test server for
-   the duration, with the founder's agreement; port 11434 and memory are
-   shared. An `axocoatl` in a shared directory on every account's `PATH`
+5. For `--workbench-driver`: turn on Safari's Settings > Developer > Allow
+   Remote Automation, and run `safaridriver --enable` once (admin password).
+6. On the founder's own Mac: stop his `:11435` test server for the duration.
+   An `axocoatl` in a shared directory on every account's `PATH`
    (`/usr/local/bin`) would shadow the gate account's own install, so the
    gate records a failure until it is moved aside for the run.
 
 Each release, the reset removes Axocoatl's data, and with it the sign-ins.
 The person signs in again in the browser when onboarding asks: Claude
-(`axocoatl connect claude-code`), ChatGPT (`axocoatl connect codex`) and
-OpenRouter (onboarding's own browser sign-in, the one `axocoatl connect
-openrouter` runs), as a new user does.
+(the sign-in `axocoatl connect claude-code` runs), ChatGPT (`axocoatl
+connect codex`) and OpenRouter (onboarding's own browser sign-in, the one
+`axocoatl connect openrouter` runs), as a new user does; the gate records
+that each secret was not stored before its path and was stored by its
+onboarding, and asks the person whether the sign-in happened in the
+browser.
 
 ```bash
 # In the gate account, in a checkout of the release candidate's commit.
 # ~/candidate holds axocoatl-vX.Y.Z-aarch64-apple-darwin.tar.gz and its .sha256
 # (from CI or release-artifact.sh); ~/candidate/site is the staged marketing site.
-# Add --keep-models to keep Ollama's downloaded models, --dedicated-machine on a
-# gate-only Mac.
-scripts/release-gate/reset-mac-account.sh
-scripts/release-gate/newuser-mac.sh --release-dir ~/candidate --site ~/candidate/site \
-  --pr-repo OWNER/axocoatl-gate-receipts
+# Add --keep-models to keep Ollama's downloaded models.
+GATE_ACCOUNT="$(id -un)" scripts/release-gate/reset-mac-account.sh --dedicated-machine
+GATE_ACCOUNT="$(id -un)" scripts/release-gate/newuser-mac.sh --release-dir ~/candidate \
+  --site ~/candidate/site --pr-repo OWNER/axocoatl-gate-receipts --workbench-driver
 scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   --from release-evidence --ci-run RUN_ID
 ```
@@ -458,36 +710,79 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
     them off again. Ollama reads its settings when it starts: when one of the
     account's Ollama servers is running, the plan says to stop it first
     (`--dedicated-machine` stops and uninstalls it).
-  - Only with `--dedicated-machine` does it `brew uninstall podman ollama`.
+  - Only with `--dedicated-machine` does it `brew uninstall podman ollama`,
+    which the C1 paths need.
   - It never touches `~/.axocoatl-gate-signer`.
   - It shows the plan and asks for the account name first. `--dry-run` only
     shows the plan; `--print-paths` lists the paths a reset removes (with
     `--keep-models`, the paths that reset removes) and changes nothing.
   - Podman or Ollama installed from their own `.pkg` or app need the admin
-    password to remove, and are left in place.
+    password to remove, and are left in place; the next `local` path then
+    fails its first steps.
 - `newuser-mac.sh`:
   - It refuses any other account and records the whole session with
-    `script(1)`.
+    `script(1)`, written to the file as it happens (`-t 0`). Each question
+    the person answers, and the answer, is printed into the transcript and
+    kept in the path's `answers.txt`; the step's detail says who answered.
+  - Before the install, it records that the account has no Axocoatl, its
+    data or stored secrets, no Podman or Podman machine (none where Homebrew
+    or podman.io install it, none on a new login's `PATH`), and no Ollama or
+    its settings (no program or app, no `~/.ollama/server.json`, nothing on
+    port 11434; downloaded models may stay).
   - It reads the staged site's commands from its `index.html`. It runs the
     install command exactly as written; the installer may ask on the
     terminal whether to add `~/.local/bin` to `~/.zprofile`, and the person
     answers. It checks that the site shows `axocoatl onboard`,
     `axocoatl doctor` and `axocoatl dev`, and runs them.
-  - Onboarding runs with `--start none`, because its last step's default
-    would start `axocoatl dev` in the foreground and print the sign-in link
-    into the transcript. The gate starts the daemon itself, with its output
-    kept out of the transcript.
+  - Onboarding runs with `--start none` (except in the `service` path),
+    because its last step's default would start `axocoatl dev` in the
+    foreground and print the sign-in link into the transcript. The gate
+    starts the daemon itself, with its output kept out of the transcript.
   - It runs, in order, the paths `local`, `claude-code`, `codex`,
-    `openrouter` and `workbench` (C2: `local` and `openrouter`). The person
-    answers every onboarding consent prompt live, and the transcript is the
-    evidence that the prompts read correctly. On the `openrouter` path,
-    onboarding asks how to get the key; the person chooses the browser
-    sign-in (the default), and onboarding stores the key OpenRouter issues as
-    the secret `openrouter`. A `--yes` rerun is allowed for later commits of
-    the same release; its OpenRouter path signs in first with `axocoatl
-    connect openrouter`, and onboarding then uses that key without asking.
-  - Optional paths: `workbench-chromium`, `recovery` (`podman machine stop`,
-    then a run must start the machine) and `real-repo`.
+    `openrouter`, `service`, `workbench`, `workbench-chromium`, `recovery`
+    and `real-repo` (C2: `local` and `openrouter`). Run them in one session
+    right after the reset: `local` records the account before the install,
+    and each sign-in path checks that its secret was not stored yet. The
+    person answers every onboarding consent prompt live, and the transcript
+    is the evidence that the prompts read correctly. `--yes` answers
+    onboarding with flags; it is for trying the gate. It skips the
+    "onboarding was answered live in the terminal" and sign-in steps, so
+    the paths that onboard (`local`, `claude-code`, `codex`, `openrouter`
+    and `service`) cannot pass with it; `workbench`, `recovery` and
+    `real-repo` do not onboard and are not changed by it.
+  - Every `onboard --update` after the first finds the gate's own
+    `axocoatl dev`, which started before onboarding changes the
+    configuration, and asks "The daemon on port … started before … changed,
+    so the first run would use the old configuration. Stop it now …?".
+    Answer yes (Enter): onboarding stops it, and the gate starts it again
+    after onboarding (any daemon on the port that runs an older
+    configuration and is not the gate's own fails the path).
+  - `local`: onboarding installs Podman and Ollama with Homebrew after
+    asking, creates the Podman machine, turns Ollama's cloud models off and
+    passes its first-run sample; the gate records each from Homebrew's list,
+    `podman machine list` and doctor. Then the README's command on every
+    fixture.
+  - `claude-code`, `codex`, `openrouter`: `onboard --update --writer …`
+    signs in in the browser when it asks (Claude, ChatGPT; on the
+    `openrouter` path, the person chooses the browser sign-in, the default,
+    and onboarding stores the key OpenRouter issues as the secret
+    `openrouter`, never in `config.yaml`).
+  - `service`: the Always-On Service as a person meets it. The gate stops
+    its own `axocoatl dev` (the service takes the port). `onboard --update`
+    runs without `--start`: in Step 6 the person chooses "Always on,
+    starting at login" and agrees to install it, and `axocoatl service
+    status` must then say installed and running, with its launch agent in
+    `~/Library/LaunchAgents`. A second `onboard --update` switches the
+    writer between the local models and OpenRouter, so the configuration
+    changes while the service runs; its Step 7 asks "The Always-On Service
+    started before … changed … Restart it now?": answer yes, and the
+    service must answer on the port with the new configuration. Then the
+    README's command on `node-deps` runs through it, and `axocoatl service
+    status`, `stop` (nothing answers on the port after it) and `uninstall`
+    (the launch agent is gone) must each do what they say.
+  - `recovery`: `podman machine stop`, then the README's command on
+    `node-deps` must pass and leave the machine running (the run's
+    admission starts it).
   - Each step's wall time and download (interface counters) and the free
     disk at the start and end are recorded. Doctor must end `Ready: yes`,
     as in Tier A.
@@ -498,26 +793,70 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   (Rust). A verdict of 0, 1 or 2 passes; anything else is an infrastructure
   failure. `--real-repo DIR --real-task TEXT` runs another repository.
 - The `claude-code` path's `--keep pr` step resets the throwaway repository to
-  the `node-deps` fixture with the docs' verify-receipt workflow, pinned to
-  the candidate commit, and waits for the Action on the pull request. The
-  Action installs the Axocoatl release its `version` input names, so before
-  the tag exists it proves that the candidate's receipts verify with the
-  published verifier.
-- The workbench path is answered by the person in Safari item by item, from
-  the sign-in link to a commit. The gate checks the commit's author and that
-  Ctrl+C stops `axocoatl dev` with exit 0, and never prints or records the
-  sign-in link. Separately, CI's "Product browser regressions" job runs
+  the `node-deps` fixture with the docs' strict verify-receipt workflow (the
+  one that runs only on Keep as PR branches and keeps `require-receipt` at
+  its default, `true`), pinned to the candidate commit, and waits for the
+  Action on the pull request. A passing check is not enough (a skipped job
+  passes too): the Action's own log must say "Verified the receipt of run"
+  with the run the hero command just made. The Action installs the
+  Axocoatl release its `version` input names, so before the tag exists it
+  proves that the candidate's receipts verify with the published verifier.
+- The workbench path asks eight questions, from the sign-in link to a
+  commit: the link opens the workbench signed in; Open workspace refuses
+  the home folder and accepts the repository; a New session (with 5173 in
+  Exposed ports) starts; Team & budget is pre-filled and Apply works; one
+  turn asking to fix the paging bug in `src/paginate.js` changes the file;
+  Source Control shows "Last turn N" (N of at least 1: the writer may also
+  add or change a test) listing `src/paginate.js`; a commit from Source
+  Control succeeds. The person answers them in Safari, or, with
+  `--workbench-driver`, `scripts/release-gate/safari-workbench.mjs` does in
+  Safari itself through `safaridriver` (WebDriver): it clicks and types as
+  a person would, sends the prompt "Fix the paging bug in
+  src/paginate.js.", and each answer is recorded as the driver's, with that
+  prompt and what the workbench showed (its log and a screenshot per
+  question are kept). The gate checks the commit's author and that Ctrl+C
+  stops `axocoatl dev` with exit 0, and never prints or records the
+  sign-in link (the driver reads it on standard input).
+- Then, in Safari itself, always answered by the person (the cookie and
+  website-data steps need Safari's own profile, not WebDriver's). After
+  the driver, whose automation window closes when it finishes, the gate
+  opens the sign-in link in an ordinary Safari window and names the
+  workspace and the Session (from `GET /api/sessions`) to open there. The
+  gate writes a small app into the repository; the person starts it in the
+  Session's Terminal (`node gate-preview-app.cjs`; it logs each request's
+  `Sec-Fetch-Dest`) and opens `http://localhost:5173` in the Session's
+  Browser view. The person confirms that the Preview shows there, and that
+  Open full preview is disabled with the line saying why. The gate then
+  gives the Preview's address (`http://<session>-p5173.localhost:<port>/`)
+  to paste into a new tab, a link on another `*.localhost` address that
+  redirects to it (`scripts/release-gate/safari-pages.mjs`), and asks for
+  a Command-click on the app's link inside the Preview: each must end on
+  Axocoatl's refusal page, and the app's log must show no request for a
+  page of its own. Last, a page on another `*.localhost` address sets the
+  cookie flood the docs describe (51 cookies of 4,000 bytes and then 9
+  smaller ones, `Domain=localhost; Path=/api`). Its own server counts the
+  planted cookies Safari sends back to it, and the page shows that count:
+  the step needs at least one, so the evidence shows the flood was in
+  place. When the workbench's sign-in link is on `localhost`, reloading it
+  must show "This browser is signed out", and removing localhost in
+  Safari > Settings > Privacy > Manage Website Data must sign it in again
+  with the link; when the link is on another host, which `Domain=localhost`
+  cookies never reach, the workbench must stay signed in. Either way,
+  after the removal the same server's count page must show that Safari
+  sends none of the planted cookies back.
+- Separately, CI's "Product browser regressions" job runs
   every browser regression on WebKit, Safari's engine
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
   and in Chromium on x86_64 and aarch64, all against the release build.
-  `release.yml`'s browser gate still runs Chromium only, until the WebKit leg
-  has passed in CI. In every engine a failure that followed a browser crash
+  `release.yml`'s browser gate runs Chromium only, on a debug build. In
+  every engine a failure that followed a browser crash
   the suite detected is marked `# browser crash:`; nothing is rerun, so it
   still fails the suite (that README, "Browser crashes"). Run on a Mac with
   `AXO_BROWSER_ENGINE=webkit`, Playwright's
   WebKit (measured with 26.4 and 27.2) accepts `Domain=localhost` cookies from
-  a top-level page as Safari on macOS is expected to; live Safari has not
-  confirmed it yet. So there the daemon refuses a Preview page that would run
+  a top-level page as Safari on macOS is expected to; the workbench path's
+  Safari steps above check it in Safari itself on every release. So there
+  the daemon refuses a Preview page that would run
   top-level and the workbench keeps every Preview embedded, and
   the "Preview browser contract" journey asserts that Open full preview has
   no address and says why, that the Preview frame has no `allow-popups`, and
@@ -531,7 +870,8 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   tries `Domain=localhost` cookies (one that is not ASCII, a forged
   `axocoatl-token-<port>` and `-signed-in`, and 40 of 1 KB), and asserts the
   browser refuses them. In every engine it asserts that the workbench's own
-  token cookie never reaches a Preview origin, and that the workbench still
+  token cookie never reaches a Preview origin, that no `Domain=localhost`
+  cookie reaches the workbench at `127.0.0.1`, and that the workbench still
   opens, connects and reads the API. `preview-cookies.test.mjs` needs Podman and
   `docker.io/library/node:20-slim`. On a developer machine it is skipped
   without that image. CI's product-browser legs and `release.yml`'s browser
@@ -553,10 +893,11 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
     WebSocket upgrade (outside Safari, from Preview pages opened top-level
     with forged `Domain=localhost` cookies set from a top-level page; in
     Safari, from a page on another `*.localhost` address, since the daemon
-    refuses the Preview there);
+    refuses the Preview there), and none of those cookies reaches the
+    workbench at `127.0.0.1`;
   - an app's `Set-Cookie` with `Domain=localhost` stays host-only;
-  - a forged signed-in cookie gives a signed-out browser the retry page at
-    most once per navigation;
+  - a forged signed-in cookie that a page on another `127.0.0.1` port sets
+    gives a signed-out browser the retry page once, which clears it;
   - the workbench shows that Preview in its frame, where in WebKit on a Mac
     it offers no Open full preview, the frame has no `allow-popups`, and the
     Preview's `window.open` of its address returns null and opens nothing.
@@ -565,51 +906,61 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   shell and the API answers 401, the workbench reloads once and then shows
   "This browser is signed out": no further automatic reload in the 3 seconds
   it then waits, nor after a click on the message's Reload button, and no
-  reload at all without sessionStorage. It does not pin the one-minute window
-  the page's code uses (`ONE_MINUTE`). In WebKit on a Mac it sets, from a
-  page on another `*.localhost` address opened top-level (Playwright serves
-  it), 60 `Path=/api` cookies for `localhost` (51 of
-  4,000 bytes, then 9 from 2,048 down to 8 bytes; the large ones alone leave
-  room for the token cookie), and asserts:
-  - the token cookie stays stored but API requests get 401;
-  - the workbench loads twice, then shows the message, and does not reload in
-    the next 5 seconds, nor in the 3 seconds after the sign-in link is opened
-    again;
-  - the same cookies with `Path=/ws` leave the live connection reconnecting.
-- Closed in 1.5.0 for Previews in Safari on macOS (measured in Playwright's
-  WebKit), and by the same user-agent rule on iPhone and iPad (not measured):
-  a Preview page that ran top-level could set a `Domain=localhost` cookie from
-  script that reaches the workbench and every other Preview
+  reload at all without sessionStorage. With Playwright's clock fixing
+  `Date.now()` it pins the one-minute window (`ONE_MINUTE`): a 401 59 seconds
+  after the automatic reload shows the message, one 61 seconds after it
+  reloads. The message closes an open modal dialog and stays on top. Against
+  the real daemon, with real pages: 60 cookies a top-level page on another
+  `*.localhost` address sets for `Domain=localhost` (51 of 4,000 bytes, then
+  9 from 2,048 down to 8 bytes), with `Path=/api`, `Path=/` and `Path=/ws`,
+  never reach the workbench at `127.0.0.1`, in every engine. The same cookies
+  set for `127.0.0.1` by a page on another `127.0.0.1` port, in WebKit on a
+  Mac:
+  - with `Path=/api`, the token cookie stays stored but API requests get 401;
+    the workbench loads twice, then shows the message, and does not reload
+    in the next 5 seconds, nor in the 3 seconds after the sign-in link is
+    opened again;
+  - with `Path=/`, every request gets the sign-in page, which names the
+    remedy, and the sign-in link opened again a second later signs the
+    browser back in (the token cookie is then the newest of its path);
+  - with `Path=/ws`, the live connection fails, the workbench's check of
+    `/ws` gets 401, and it shows the message.
+  In each case clearing `127.0.0.1`'s cookies and signing in again restores
+  the workbench. In Chromium the workbench keeps working.
+- Closed in 1.5.0 in every browser: the workbench is served at `127.0.0.1`,
+  so no `Domain=localhost` cookie reaches it (measured in Playwright's
+  Chromium and WebKit on macOS). Closed in 1.5.0 for Previews in Safari on
+  macOS (measured in Playwright's WebKit), and by the same user-agent rule on
+  iPhone and iPad (not measured): a Preview page that ran top-level could set
+  a `Domain=localhost` cookie from script that reaches every other Preview
   ([Safari shares `Domain=localhost` cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies)).
   The daemon now refuses, in Safari's engine (by user agent), every request for
   a Preview page that would run top-level, whatever led there (a link, a
   redirect, Command-click inside the Preview, the context menu, a typed
   address), and the legacy proxy path refuses every browser page in every
   engine. The macOS WebKit journeys assert the typed, redirected and
-  Command-clicked cases; iPhone and iPad are decided the same way by user
-  agent and are not measured, nor is Safari itself.
-- Known gap: a page Axocoatl does not serve that runs top-level on a
-  `*.localhost` address in Safari on macOS can still set such cookies: a
-  development server the person runs, a Session's app opened directly at the
-  loopback port it is published on (the workbench never shows that port), or
-  a service worker a Preview registered while it ran top-level before 1.5.0
-  (not measured). From such a page:
-  - Such cookies with `Path=/api`, 51 of 4,000 bytes and then smaller ones
-    that fill what is left of the about 200 KB Safari sends, sign that browser
-    out of the workbench's API until localhost's data is removed in Safari's
-    settings. The workbench then says "This browser is signed out" instead of
-    reloading without end.
-  - With `Path=/` they sign that browser out of the workbench entirely (the
-    sign-in page, not the signed-out message) until the cookies are removed
-    and that page is closed; signing in again works until it writes them
-    again. No journey asserts this case yet.
-  - With `Path=/ws` they keep its live connection from opening.
-
-  The macOS WebKit journeys assert the `Path=/api` and `Path=/ws` cases, with
-  the cookies set from a page Playwright serves on another `*.localhost`
-  address. Any page in Safari can also sign out a browser that signed in
-  seconds earlier and has no workbench page open, by writing about 1,000
-  cookies, because WebKit drops its whole cookie jar.
+  Command-clicked cases, and with Playwright's iPhone and iPad user agents a
+  typed Preview gets the refusal page and a framed one is served; a real
+  iPhone, iPad and Safari itself are not measured.
+- Remaining: a page Axocoatl does not serve that runs top-level on a
+  `*.localhost` address in Safari on macOS can still set such cookies, which
+  reach other `localhost` apps but not the workbench: a development server
+  the person runs, a Session's app opened directly at its published port
+  through a `*.localhost` name (the workbench never shows that port; on macOS
+  it is published on `[::1]`), or a service worker a Preview registered while
+  it ran top-level before 1.5.0 (measured once in Playwright's WebKit: it
+  answers a later top-level navigation without the server). A page on another
+  `127.0.0.1` port (never a Session's app, whose ports are published on
+  `[::1]` or `127.0.0.2`; a journey asserts that a frame its Preview nests at
+  that port gets none of the workbench's cookies), in any browser, sets cookies
+  the workbench receives; in Safari it can sign the workbench out with the
+  floods above, and the workbench then says what to do: remove `127.0.0.1`'s
+  website data and open the sign-in link again. That `127.0.0.1` is listed in
+  Safari's Manage Website Data and that removing it removes those cookies was
+  measured with the system WebKit's `WKWebsiteDataStore` on macOS 26.6, not in
+  Safari's own settings. Any page in Safari can also sign out a browser that
+  signed in seconds earlier and has no workbench page open, by writing about
+  1,000 cookies, because WebKit drops its whole cookie jar.
 
 Pass: every required path exits 0 and every receipt verifies; no command
 copied from the site fails; doctor ends ready; time to first success and the
@@ -620,41 +971,111 @@ model download dominates unless models are cached.
 
 ## Tier D: Linux and Windows VMs, every release
 
-- **D1, Ubuntu 24.04 (blocking).**
-  - Set up a Lima VM (`limactl create template://ubuntu-24.04`, about 1 GB)
-    or a cloud VM, with a new user made by `adduser` for the gate.
-  - As that user, copy the candidate's
-    `axocoatl-vX.Y.Z-<linux target>.tar.gz` and its `.sha256` into the VM,
-    check out this repository at the candidate commit, and run:
+- **D1, Ubuntu 24.04 (blocking).** A new Lima VM on the gate Mac, or a
+  cloud VM, with a new user made by `adduser` for the gate, logged in over
+  SSH. A VM where Podman is already installed cannot show onboarding's apt
+  install: use a new one each release.
+  - The VM must not be plain: `limactl create --plain` turns off Lima's port
+    forwarding, and OpenRouter's browser sign-in calls back to a loopback
+    port in the VM (`http://127.0.0.1:<port>/callback`, a port the system
+    chooses). Without `--plain`, Lima's guest agent forwards every port the
+    VM listens on at 127.0.0.1 to the same port on the Mac, so the sign-in
+    page opened in the Mac's browser reaches it. Two of 1.5.0's D1 attempts
+    (on a1428e69) used a plain VM and timed out waiting for that callback.
+    A third (on 05e930f9) forwarded the callback port with `ssh -L` and also
+    timed out after 10 minutes; why was never found. So the gate now checks
+    the forwarding before onboarding, and onboarding's log records each
+    connection its callback receives (both below). On the Mac:
+
+    ```bash
+    limactl create --name=axo-d1 --cpus=4 --memory=8 template:ubuntu-24.04
+    limactl start axo-d1
+    limactl list axo-d1 --format '{{.Config.Plain}}'   # must print false
+    limactl shell axo-d1 -- sudo adduser --gecos '' d1gate
+    limactl shell axo-d1 -- sudo usermod -aG sudo d1gate
+    limactl shell axo-d1 -- sudo install -d -m 700 -o d1gate -g d1gate /home/d1gate/.ssh
+    limactl shell axo-d1 -- sudo install -m 600 -o d1gate -g d1gate /dev/stdin \
+      /home/d1gate/.ssh/authorized_keys <~/.lima/_config/user.pub
+    ```
+
+  - Log in as that user over SSH, not with `su` or `sudo -iu`: only a login
+    gives it the systemd user session the Always-On Service needs (the gate
+    records whether `systemctl --user` reaches it):
+
+    ```bash
+    ssh -t -i ~/.lima/_config/user -o StrictHostKeyChecking=no \
+      -p "$(limactl list axo-d1 --format '{{.SSHLocalPort}}')" d1gate@127.0.0.1
+    ```
+
+  - Copy the candidate's `axocoatl-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz`
+    and its `.sha256` into `~/candidate` (for example with `scp -P` and the
+    same key), check out this repository at the candidate commit, and run:
 
   ```bash
-  scripts/release-gate/newuser-linux.sh --live --tarball ~/candidate/axocoatl-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz
+  scripts/release-gate/newuser-linux.sh --live \
+    --tarball ~/candidate/axocoatl-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz
   ```
 
   - `--live` uses no stub and runs in the account's own `HOME`. It refuses
     an account that already has Axocoatl state, and it never removes that
-    `HOME`.
+    `HOME`. It records that the account has no Axocoatl and no Podman, and,
+    in Lima, whether the guest agent forwards ports (a plain VM's is
+    missing).
+  - Before onboarding, the gate listens on a free loopback port and prints
+    an address on it (`http://127.0.0.1:PORT/` and a random path) to open in
+    the browser the person will sign in to OpenRouter with, with the
+    `ssh -L` line to run first in a plain or cloud VM. The step passes when
+    the gate's listener received that request and the person saw the
+    page. In a Lima VM whose guest agent forwards every loopback port, a
+    sign-in that later never calls back is then not the forwarding; in a
+    plain or cloud VM the sign-in's own callback port needs its own
+    `ssh -L` line, which onboarding prints.
+  - It then removes the account's own range of subordinate ids from
+    `/etc/subuid` and `/etc/subgid` with `sudo` (after a backup in its work
+    directory, put back if onboarding adds none), so that onboarding must
+    add one: the collision case, since another user's range must overlap
+    100000-165535, the first one onboarding would otherwise take. Check
+    `/etc/subuid` in the VM first: when no other user's range overlaps
+    100000-165535, give Lima's own user that range (`sudo usermod
+    --add-subuids 100000-165535 --add-subgids 100000-165535 LIMA_USER`).
+    The gate records whose range it found.
   - Onboarding runs interactively with `--start none`, and the gate starts
     `axocoatl dev` itself on the port onboarding wrote to `server.port`
     (8080 when it is free). Pass `--port N` to choose one.
   - Answer yes when onboarding asks to install Podman with apt and to add a
-    subuid range if one is missing, each with `sudo`.
+    range of subordinate ids (it names one that overlaps no other user's),
+    each with `sudo`. The gate records that Podman's package is installed,
+    and that the account's new range overlaps no other user's.
   - Choose OpenRouter to write and review: a CPU-only VM cannot run a 30B
     model. Onboarding then installs no Ollama, which it does only when a
-    local model is chosen.
+    local model is chosen; the gate records that.
   - When onboarding asks how to get the OpenRouter key, choose the browser
     sign-in (the default). Do not run `axocoatl connect openrouter` first:
     `--live` refuses an account that already has Axocoatl state, so the
     sign-in happens inside onboarding. Never type, paste or export the key.
-    The sign-in's callback is a loopback port in the VM: open the link
-    onboarding prints in a browser that can reach it. Lima forwards a guest's
-    loopback ports to the host by default; for a cloud VM, forward the port
-    first (`ssh -L PORT:127.0.0.1:PORT`; onboarding prints that command when
-    the VM has no `xdg-open`).
+    Open the link onboarding prints in the Mac's browser; Lima forwards the
+    callback port. When the page cannot reach `127.0.0.1:<port>` (a plain
+    or cloud VM), run on the Mac the `ssh -L PORT:127.0.0.1:PORT …` line
+    onboarding prints, with the same `-p` and `-i` as the login, and load
+    the page again. Onboarding's log (kept in the evidence under
+    `logs/onboarding/`) names each connection its callback received; when
+    the sign-in fails, the step's detail quotes those lines (`OpenRouter
+    sign-in: …`), or says that none reached the callback.
   - Then the README's command, without its `--model` options so that the
     models onboarding configured are used, runs on every fixture, followed
     by the receipt and record checks. `--command TEXT` runs another command
-    instead. The evidence is `D1.json`.
+    instead.
+  - Then the Always-On Service, a systemd user unit: the gate stops its
+    `axocoatl dev`, and `onboard --update` runs without `--start`; in Step
+    6 choose "Always on, starting at login" and agree to install it. A
+    second `onboard --update --writer-model …` (by default the first of
+    `openrouter:z-ai/glm-4.6` and `openrouter:deepseek/deepseek-chat-v3.1`
+    that is neither model already configured; `--service-writer-model`
+    chooses another) changes the configuration while the service runs. Its
+    Step 7 asks to restart the service: answer yes. Then the README's
+    command on `node-deps` runs through the service, and `axocoatl service
+    status`, `stop` and `uninstall` must each do what they say. The
+    evidence is `D1.json`.
 - **D2 Fedora 42 with SELinux enforcing, D3 Debian 12, D4 Ubuntu 22.04:**
   each must pass or refuse with the documented message (`--expect-refusal`
   for 22.04). Reported, not required; their "not yet verified" label is
@@ -664,25 +1085,30 @@ model download dominates unless models are cached.
 
 ## Restating what was verified
 
-The public statements of what was verified live describe the release's
-final live runs, never an earlier build. While those runs are outstanding,
-each such place holds a pending marker (the string `pendingMarker` names in
-`sites/marketing/scripts/validate.mjs`): the CHANGELOG's Verified section and
-its other entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`, the marketing
-home, install and changelog pages, and the docs' install, onboarding,
-security and Fix/QA/Audit pages. Except in `llms.txt`, which has the marker
-alone and points to the CHANGELOG, the earlier text is commented out below
-each marker as a template. Restating replaces the marker and its commented
-template with the final text: the release-bound check looks for the marker
-only, so a template left behind would ship in the page source.
+The public statements about the release gate are the CHANGELOG's Verified
+section and its other entries, `README.md`, `llms.txt`, `docs/CLAIMS.md`,
+the marketing home, install and changelog pages, and the docs' install,
+onboarding, security and Fix/QA/Audit pages. Each of their sentences about
+what the gate verifies says, in the present tense, what one of the required
+steps above requires (see "Required steps"), and nothing those steps do not
+check: the evidence check refuses a bundle without them, so the text cannot
+outrun the runs, and it holds before and after them with no pending marker.
+What no step checks is not named: the machine and its memory, the account,
+the Linux release and architecture, and the models onboarding chose. The
+text says that the evidence records them, and who answered each question
+(the person, or `safari-workbench.mjs`). A step added later (for example
+that the Mac has 48 GB of memory or more, or which models onboarding
+configured) lets the text name what it checks.
 
+A place may still hold a pending marker (the string `pendingMarker` names
+in `sites/marketing/scripts/validate.mjs`) while its text is being written.
 `release.yml`'s marketing job runs `./scripts/verify-marketing-gate.sh
 source-bound`, whose release-bound validation refuses every file in that list
 that still holds a marker, and the build needs that job; a release-tag
 marketing deploy runs the same check. CI on pull requests and
 `scripts/preflight.sh` run the portable mode, which does not look for
-markers, so a green CI does not mean the markers are gone. The restatement
-therefore has to land before the tag. Check it before tagging with:
+markers, so a green CI does not mean no marker is left. Check it before
+tagging with:
 
 ```bash
 ./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing
@@ -691,10 +1117,9 @@ therefore has to land before the tag. Check it before tagging with:
 The evidence check accepts a bundle only for the tagged commit, or an
 ancestor that differs from it in evidence files alone (see above), so text
 changed after the live runs needs the runs again on the new commit. Write
-the restated text, and remove the markers, in the candidate commit before
-Tier C and D1 run on it, stating what those runs are to show; if a run fails
-or shows something else, correct the text and run again on the corrected
-commit.
+the text, with no marker left, in the candidate commit before Tier C and D1
+run on it; if a run fails or shows something else, correct the text and run
+again on the corrected commit.
 
 ## Keeping the gate honest
 
@@ -703,8 +1128,12 @@ commit.
   `test-fixtures.sh` fail otherwise.
 - Adding a required path means a line in the block above; the checker reads
   it from the tagged commit, so a path cannot be dropped without a reviewed
-  change to this file.
+  change to this file. The same holds for a required step, and a step
+  renamed in a gate script without its line in "Required steps" fails
+  `evidence.test.mjs`.
 - A new gate key is a reviewed change to `.axocoatl/gate-keys`. Remove a key
   when its account or machine is retired; old bundles stay verifiable only
   while their key is listed.
 - Who may override is a reviewed change to `.axocoatl/gate-override-actors`.
+
+[safari-cookies]: https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies

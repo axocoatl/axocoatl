@@ -64,8 +64,10 @@ pub enum SecretCommands {
 /// Only the well-known names are repeated, as `secret set "$TOKEN"` typed in
 /// a terminal would otherwise print a value that happens to look like a name.
 /// For Codex's API key and Claude Code's token, the `connect` command that
-/// signs you in comes first, and only `--from-env` follows, for automation
-/// without a browser: never a file the key would have to be pasted into.
+/// signs you in comes first (for Codex, the ChatGPT sign-in: this version
+/// does not store an API key through `connect codex --api-key`), and only
+/// `--from-env` follows, for automation without a browser: never a file the
+/// key would have to be pasted into.
 fn pipe_hint(name: &str) -> String {
     const READS: &str = "axocoatl secret set reads the value from stdin or an environment \
                          variable, not from the command line or the keyboard.";
@@ -77,9 +79,10 @@ fn pipe_hint(name: &str) -> String {
     };
     match name {
         "codex-openai" => format!(
-            "{READS} You never type or paste the OpenAI API key: run `axocoatl connect codex \
-             --api-key`, which signs you in in the browser and stores the key OpenAI issues with \
-             that sign-in as codex-openai, without showing it.{}",
+            "{READS} You never type or paste the OpenAI API key. For Codex, sign in with your \
+             ChatGPT plan instead: run `axocoatl connect codex`, which stores the sign-in as \
+             codex-chatgpt without showing it (`axocoatl connect codex --api-key` is not \
+             available in this version).{}",
             automation(name, "OPENAI_API_KEY")
         ),
         CLAUDE_CODE_SECRET => format!(
@@ -88,8 +91,8 @@ fn pipe_hint(name: &str) -> String {
             automation(name, "VAR")
         ),
         _ => format!(
-            "{READS} For example:\n  axocoatl secret set <name> --from-env VAR\n  \
-             axocoatl secret set <name> < token-file"
+            "{READS} For example:\n  axocoatl secret set NAME --from-env VAR\n  \
+             axocoatl secret set NAME < token-file"
         ),
     }
 }
@@ -278,8 +281,8 @@ pub async fn cmd_secret(command: SecretCommands) -> i32 {
                 if names.is_empty() {
                     eprintln!(
                         "No secrets stored. Add one with `axocoatl connect claude-code`, \
-                         `axocoatl secret set <name> --from-env VAR`, or \
-                         `<command that prints it> | axocoatl secret set <name>`"
+                         `axocoatl secret set NAME --from-env VAR`, or \
+                         `COMMAND | axocoatl secret set NAME`, where COMMAND prints the value"
                     );
                 }
                 for name in names {
@@ -379,8 +382,12 @@ mod tests {
             set_from(root.path(), "codex-openai", &b"sk-typed"[..], true).unwrap_err();
         assert_eq!(code, USAGE);
         let connect = message
-            .find("run `axocoatl connect codex --api-key`")
+            .find("run `axocoatl connect codex`, which stores the sign-in as codex-chatgpt")
             .expect(&message);
+        assert!(
+            message.contains("`axocoatl connect codex --api-key` is not available"),
+            "{message}"
+        );
         let from_env = message
             .find("axocoatl secret set codex-openai --from-env OPENAI_API_KEY")
             .expect(&message);
@@ -395,7 +402,7 @@ mod tests {
         assert!(secret_store::list_secrets(root.path()).unwrap().is_empty());
         let (_, message) = set_from(root.path(), "other", &b"x"[..], true).unwrap_err();
         assert!(
-            message.contains("axocoatl secret set <name> < token-file"),
+            message.contains("axocoatl secret set NAME < token-file"),
             "{message}"
         );
 

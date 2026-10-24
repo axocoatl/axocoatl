@@ -16,7 +16,13 @@
 //! - once the holding run is stopped, Close succeeds and removes the
 //!   Session's runtime volumes from Podman;
 //! - a run's Session left open across a daemon restart loads again with no
-//!   quarantine (its loadout binding intact), exports and closes.
+//!   quarantine (its loadout binding intact), exports and closes;
+//! - Ctrl-C while the daemon still admits a run, after its Session was made
+//!   (during the Session's setup, or during the check probe in its Ready
+//!   container), ends `axocoatl run` at once with exit code 6; the daemon
+//!   finishes the admission without its client, and the run it admits stops
+//!   before its first turn as interrupted, with no container or egress
+//!   sidecar left running and its Session still open.
 //!
 //! ```text
 //! CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-cli \
@@ -785,6 +791,201 @@ async fn a_daemon_removes_the_leaked_runtime_volumes_of_its_data_root_and_doctor
         .filter(|line| line.contains("Session volumes"))
     {
         eprintln!("doctor: {line}");
+    }
+
+    daemon.stop();
+    drop(guard);
+}
+
+/// `GET path` on the daemon, as JSON.
+async fn get(base: &str, port: u16, token: &str, path: &str) -> serde_json::Value {
+    client(port)
+        .get(format!("{base}{path}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Podman; run this test explicitly"]
+async fn ctrl_c_during_admission_stops_the_admitted_run_and_its_containers() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README.md"), "# Interrupted\n").unwrap();
+    // A repository with one commit, as `fix` keeps changes on a branch.
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["add", "README.md"][..],
+        &[
+            "-c",
+            "user.name=Lifecycle",
+            "-c",
+            "user.email=lifecycle@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "init",
+        ][..],
+    ] {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+    let model = model_server().await;
+    let port = free_port();
+    let config = write_config(&root, port, &model.uri());
+    let data = root.join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    copy_model_cache(&data);
+    let mut daemon = Daemon::start(&root, &config, port, 0).await;
+    let token = std::fs::read_to_string(data.join("local-api-token"))
+        .unwrap()
+        .trim()
+        .to_string();
+    let base = format!("http://127.0.0.1:{port}");
+    let guard = SessionGuard(std::sync::Mutex::new(Vec::new()));
+    let (writer, reviewer) = (
+        format!("writer=ollama:{MODEL}"),
+        format!("reviewer=ollama:{MODEL}"),
+    );
+
+    // Interrupted while the Session's setup runs (its environment is still
+    // being prepared), and while the check probe runs in its Ready
+    // container. Each step takes 15 seconds, so the admission goes on for
+    // a while after its client went away.
+    for (case, extra, ready) in [
+        (
+            "setup",
+            &["--check", "true", "--setup", "sleep 15", "--no-probe"][..],
+            false,
+        ),
+        ("check probe", &["--check", "sleep 15"][..], true),
+    ] {
+        let mut args: Vec<&std::ffi::OsStr> = vec![
+            "run".as_ref(),
+            "fix".as_ref(),
+            "--task".as_ref(),
+            "Say what README.md is.".as_ref(),
+            "--repo".as_ref(),
+            repo.as_os_str(),
+            "--model".as_ref(),
+            writer.as_ref(),
+            "--model".as_ref(),
+            reviewer.as_ref(),
+            "--url".as_ref(),
+            base.as_ref(),
+            "-c".as_ref(),
+            config.as_os_str(),
+        ];
+        args.extend(extra.iter().map(|arg| -> &std::ffi::OsStr { arg.as_ref() }));
+        let known: Vec<String> = guard.0.lock().unwrap().clone();
+        let cli = run_cli(&root, &args);
+        let pid = cli.id().unwrap();
+        // The run's Session exists and its container runs (Ready, for the
+        // check probe).
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let session = loop {
+            let sessions = get(&base, port, &token, "/api/sessions").await;
+            let made = sessions.as_array().into_iter().flatten().find(|session| {
+                session["id"]
+                    .as_str()
+                    .is_some_and(|id| !known.iter().any(|known| known == id))
+            });
+            if let Some(made) = made {
+                let id = made["id"].as_str().unwrap().to_string();
+                let state = made["environment"]["state"].as_str().unwrap_or_default();
+                if podman_exists("container", &format!("axo-ses-{id}"))
+                    && (state == "ready") == ready
+                {
+                    break id;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{case}: no Session with a running container\n{}",
+                daemon.logs()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        };
+        guard.0.lock().unwrap().push(session.clone());
+        assert!(Command::new("kill")
+            .args(["-INT", &pid.to_string()])
+            .status()
+            .unwrap()
+            .success());
+        let interrupted = finished(cli).await;
+        let err = String::from_utf8_lossy(&interrupted.stderr).to_string();
+        assert_eq!(interrupted.status.code(), Some(6), "{case}: {err}");
+        assert!(
+            err.contains(
+                "axocoatl run: interrupted (Ctrl-C) while the daemon was admitting the run"
+            ),
+            "{case}: {err}"
+        );
+
+        // The daemon admits the run without its client and stops it before
+        // its first turn.
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let run = loop {
+            let runs = get(&base, port, &token, "/api/runs").await;
+            let run = runs
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|run| run["session_id"] == session.as_str())
+                .cloned();
+            if let Some(run) = run.filter(|run| run["outcome"].is_object()) {
+                break run;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{case}: the run never ended\n{}",
+                daemon.logs()
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        let outcome = &run["outcome"];
+        assert_eq!(outcome["verdict"], "interrupted", "{case}: {run}");
+        assert_eq!(outcome["exit_code"], 6, "{case}: {run}");
+        assert_eq!(outcome["turns"], serde_json::json!([]), "{case}: {run}");
+        let events = get(
+            &base,
+            port,
+            &token,
+            &format!("/api/runs/{}/events", run["run_id"].as_str().unwrap()),
+        )
+        .await;
+        assert!(
+            events
+                .to_string()
+                .contains("went away before admission answered"),
+            "{case}: {events}"
+        );
+        // Neither its container nor its egress sidecar runs on; its Session
+        // stays open.
+        assert!(
+            !podman_exists("container", &format!("axo-ses-{session}"))
+                && !podman_exists("container", &format!("axo-egr-{session}")),
+            "{case}: the run's containers are still there"
+        );
+        let listed = get(&base, port, &token, &format!("/api/sessions/{session}")).await;
+        assert_ne!(listed["status"], "closed", "{case}: {listed}");
+        eprintln!(
+            "{case}: exit 6; run {} {} with no turn; Session {session} open, no container",
+            run["run_id"], outcome["verdict"]
+        );
     }
 
     daemon.stop();

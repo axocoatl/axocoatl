@@ -142,7 +142,8 @@ impl WebTools {
                             },
                             data_root,
                         )
-                        .map_err(|error| format!("preparing the managed SearXNG: {error}"))?,
+                        .map_err(|error| format!("preparing the managed SearXNG: {error}"))?
+                        .with_required_resource_limits(config.sandbox.require_resource_limits),
                     );
                     searxng = Some(service.clone());
                     WebSearchTool::searxng(Arc::new(ManagedSearxng(service)), query, false)?

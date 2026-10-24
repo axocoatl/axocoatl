@@ -86,6 +86,9 @@ pub struct SearxngService {
     secret_key: String,
     directory: SecureDir,
     extra_labels: Vec<(String, String)>,
+    /// `sandbox.require_resource_limits`: a cap the host cannot apply
+    /// refuses the container's start.
+    require_resource_limits: bool,
     client: reqwest::Client,
     state: tokio::sync::Mutex<Option<Endpoint>>,
 }
@@ -237,6 +240,7 @@ impl SearxngService {
             secret_key,
             directory,
             extra_labels: Vec::new(),
+            require_resource_limits: false,
             client,
             state: tokio::sync::Mutex::new(None),
         })
@@ -246,6 +250,18 @@ impl SearxngService {
     pub fn with_labels(mut self, labels: Vec<(String, String)>) -> Self {
         self.extra_labels = labels;
         self
+    }
+
+    /// Refuse to start the container without every resource cap
+    /// (`sandbox.require_resource_limits`).
+    pub fn with_required_resource_limits(mut self, required: bool) -> Self {
+        self.require_resource_limits = required;
+        self
+    }
+
+    /// Whether the container starts only with every resource cap.
+    pub fn requires_resource_limits(&self) -> bool {
+        self.require_resource_limits
     }
 
     /// This daemon's container name.
@@ -263,8 +279,9 @@ impl SearxngService {
         authority: &str,
         image: &str,
         extra_labels: &[(String, String)],
-        with_limits: bool,
+        with_limits: impl Into<crate::container_host::ResourceCaps>,
     ) -> Vec<String> {
+        let caps = with_limits.into();
         let mut args = strings(&["create", "--name", name]);
         args.push("--label".into());
         args.push(format!("{RUNTIME_AUTHORITY_LABEL}={authority}"));
@@ -288,8 +305,12 @@ impl SearxngService {
             "--no-healthcheck",
             "--image-volume=ignore",
         ]));
-        if with_limits {
-            args.extend(strings(&["--memory", "512m", "--pids-limit", "256"]));
+        // Each cap when its cgroup controller is there.
+        if caps.memory {
+            args.extend(strings(&["--memory", "512m"]));
+        }
+        if caps.pids {
+            args.extend(strings(&["--pids-limit", "256"]));
         }
         args.push("-p".into());
         args.push(format!("127.0.0.1::{SEARXNG_CONTAINER_PORT}"));
@@ -439,18 +460,27 @@ impl SearxngService {
         )?;
         self.remove_own_container().await?;
 
+        let caps = crate::container_host::caps_for("SearXNG", self.require_resource_limits)
+            .await
+            .map_err(|refusal| {
+                IsolationError::OciSetupFailed(format!("starting SearXNG {name}: {refusal}"))
+            })?;
         let mut created = podman(
             &Self::create_args(
                 &name,
                 &self.runtime_authority,
                 &self.image,
                 &self.extra_labels,
-                true,
+                caps,
             ),
             CREATE_TIMEOUT,
         )
         .await?;
-        if !created.success && created.detail().contains("cgroup") {
+        if !created.success
+            && caps.any()
+            && created.detail().contains("cgroup")
+            && !self.require_resource_limits
+        {
             tracing::warn!(
                 container = %name,
                 detail = %created.detail(),
@@ -611,6 +641,69 @@ impl SearxngService {
             }
         }
         removed
+    }
+
+    /// Remove the SearXNG containers that carry `authority`, the runtime
+    /// authority of a path the daemon's data root was moved from: what a
+    /// daemon there that was killed left. One that has exited is removed.
+    /// One that still runs (the Podman machine kept running) is removed when
+    /// `path_unused`, as no daemon runs at that path; otherwise it is left,
+    /// as a data root made at that path since uses it. Whether one is left.
+    pub async fn reap_of_moved_root(
+        authority: &str,
+        path_unused: bool,
+    ) -> Result<bool, IsolationError> {
+        let listed = podman(
+            &[
+                "ps".to_string(),
+                "-a".to_string(),
+                "--filter".to_string(),
+                format!("label={RUNTIME_AUTHORITY_LABEL}={authority}"),
+                "--filter".to_string(),
+                format!("label={ROLE_LABEL}={SEARXNG_ROLE}"),
+                "--format".to_string(),
+                "{{.Names}}\t{{.State}}".to_string(),
+            ],
+            PODMAN_TIMEOUT,
+        )
+        .await?;
+        if !listed.success {
+            return Err(IsolationError::OciContainerFailed(format!(
+                "listing SearXNG containers: {}",
+                listed.detail()
+            )));
+        }
+        let mut left = false;
+        for (name, state) in listed
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(name, state)| (name.trim(), state.trim()))
+            .filter(|(name, _)| name.starts_with("axo-searxng-"))
+        {
+            if !path_unused && !matches!(state, "exited" | "stopped") {
+                left = true;
+                continue;
+            }
+            let removed = podman(
+                &strings(&[
+                    "rm",
+                    "--force",
+                    "--volumes",
+                    "--time",
+                    "0",
+                    "--ignore",
+                    name,
+                ]),
+                PODMAN_TIMEOUT,
+            )
+            .await?;
+            if !removed.success {
+                tracing::warn!(container = name, detail = %removed.detail(), "removing an orphaned SearXNG failed");
+                left = true;
+            }
+        }
+        Ok(left)
     }
 }
 

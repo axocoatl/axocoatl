@@ -10,7 +10,9 @@
 //!
 //! The one exception is the explicit `sandbox.egress.host_ollama` route:
 //! plain HTTP to `127.0.0.1:<port>` on this computer, its configured port
-//! and nothing else ([`UpstreamConnector::connect_host_loopback`]).
+//! and nothing else ([`UpstreamConnector::connect_host_loopback`]), where
+//! Ollama is asked for its cloud mode before each request
+//! ([`UpstreamConnector::host_ollama_cloud_mode`]).
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -27,6 +29,8 @@ use rustls::pki_types::ServerName;
 use rustls::ClientConfig;
 use tokio::net::TcpStream;
 
+use axocoatl_llm_ollama::OllamaCloudMode;
+
 use super::rules::Route;
 use super::BoxError;
 
@@ -38,6 +42,14 @@ pub type LocalCheck = Arc<dyn Fn(IpAddr) -> bool + Send + Sync>;
 
 /// How long one TCP connect and one TLS handshake may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The `User-Agent` of the broker's own `GET /api/status` to Ollama on this
+/// computer ([`UpstreamConnector::host_ollama_cloud_mode`]).
+pub const HOST_OLLAMA_CHECK_AGENT: &str = "axocoatl-host-ollama-route";
+/// How long that request may take, connect included.
+const HOST_OLLAMA_STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Most bytes of its answer read.
+const HOST_OLLAMA_STATUS_BYTES: usize = 64 * 1024;
 
 /// Why the upstream could not be reached.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -188,6 +200,55 @@ impl UpstreamConnector {
             let _ = connection.await;
         });
         Ok(sender)
+    }
+
+    /// Ollama's cloud mode at `127.0.0.1:port`, as `GET /api/status` reports
+    /// it now, read over a connection of its own (with the `User-Agent`
+    /// [`HOST_OLLAMA_CHECK_AGENT`]) the way native admission reads it: an
+    /// answer that is not a success, or not a usable status, is
+    /// [`OllamaCloudMode::Unreported`]. An error says Ollama did not answer.
+    pub async fn host_ollama_cloud_mode(
+        &self,
+        port: u16,
+    ) -> Result<OllamaCloudMode, UpstreamError> {
+        use http_body_util::{BodyExt, Empty, Limited};
+        let read = async {
+            let mut sender = self.connect_host_loopback(port).await?;
+            let request = hyper::Request::get("/api/status")
+                .header(hyper::header::HOST, format!("127.0.0.1:{port}"))
+                .header(hyper::header::USER_AGENT, HOST_OLLAMA_CHECK_AGENT)
+                .body(
+                    Empty::<Bytes>::new()
+                        .map_err(|never| -> BoxError { match never {} })
+                        .boxed(),
+                )
+                .map_err(|error| UpstreamError(format!("GET /api/status: {error}")))?;
+            let response = sender
+                .send_request(request)
+                .await
+                .map_err(|error| UpstreamError(format!("GET /api/status: {error}")))?;
+            if !response.status().is_success() {
+                return Ok(OllamaCloudMode::Unreported);
+            }
+            let body = Limited::new(response.into_body(), HOST_OLLAMA_STATUS_BYTES)
+                .collect()
+                .await
+                .map(|body| body.to_bytes());
+            Ok(match body {
+                Ok(body) => serde_json::from_slice::<serde_json::Value>(&body)
+                    .map(|status| OllamaCloudMode::from_status(&status))
+                    .unwrap_or(OllamaCloudMode::Unreported),
+                Err(_) => OllamaCloudMode::Unreported,
+            })
+        };
+        tokio::time::timeout(HOST_OLLAMA_STATUS_TIMEOUT, read)
+            .await
+            .unwrap_or_else(|_| {
+                Err(UpstreamError(format!(
+                    "GET /api/status did not answer within {} seconds",
+                    HOST_OLLAMA_STATUS_TIMEOUT.as_secs()
+                )))
+            })
     }
 
     /// Open an HTTP/1.1 connection over TLS to `route` at the first of

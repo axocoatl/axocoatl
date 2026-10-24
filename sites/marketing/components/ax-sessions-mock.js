@@ -154,7 +154,7 @@ class AxSessionsMock extends HTMLElement {
                 <!-- Per-turn pickers + input row. -->
                 <div class="sx-input">
                   <div class="sx-input-bar">
-                    <span class="sx-pick">model · qwen2.5-coder:14b ▾</span>
+                    <span class="sx-pick">model · qwen3-coder:30b ▾</span>
                   </div>
                   <div class="sx-input-row">
                     <input class="sx-input-text" placeholder="Tell the agents what to build — Enter to send" />

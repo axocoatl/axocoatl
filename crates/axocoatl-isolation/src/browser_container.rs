@@ -36,6 +36,7 @@ use axocoatl_exec::protocol::{
 };
 use tokio::process::Command;
 
+use crate::container_host::ResourceCaps;
 use crate::supervisor_image::SupervisorImage;
 use crate::supervisor_program::{SupervisorProgram, SUPERVISOR_CONTAINER_PATH};
 use crate::{IsolationError, SessionSandbox};
@@ -148,7 +149,9 @@ pub struct ServiceForwarderSpec {
     /// That container's start time, in Unix nanoseconds.
     pub session_started: String,
     pub ports: Vec<u16>,
-    pub with_limits: bool,
+    /// Its memory and process caps, each when its cgroup controller is
+    /// there.
+    pub with_limits: ResourceCaps,
     pub labels: Vec<(String, String)>,
 }
 
@@ -199,8 +202,11 @@ pub fn build_forwarder_args(spec: &ServiceForwarderSpec) -> Vec<String> {
         ]
         .map(String::from),
     );
-    if spec.with_limits {
-        args.extend(["--memory", "128m", "--pids-limit", "512"].map(String::from));
+    if spec.with_limits.memory {
+        args.extend(["--memory", "128m"].map(String::from));
+    }
+    if spec.with_limits.pids {
+        args.extend(["--pids-limit", "512"].map(String::from));
     }
     args.push("--mount".into());
     args.push(format!(
@@ -355,6 +361,10 @@ pub async fn ensure_service_sockets(
         }
         remove_forwarder(&name).await?;
     }
+    let with_limits =
+        crate::container_host::caps_for("the service forwarder", launch.require_resource_limits)
+            .await
+            .map_err(|refusal| failed(format!("starting the service forwarder: {refusal}")))?;
     create_owned_volume(
         &service_socket_volume(&launch.session_id),
         Some(launch.runtime_authority.as_str()),
@@ -368,7 +378,7 @@ pub async fn ensure_service_sockets(
         session_container_id: session_id,
         session_started: started,
         ports: ports.clone(),
-        with_limits: true,
+        with_limits,
         labels: launch.labels.clone(),
     };
     let id = loop {
@@ -378,11 +388,11 @@ pub async fn ensure_service_sockets(
         }
         let detail = stderr_text(&output);
         let _ = remove_forwarder(&name).await;
-        if spec.with_limits && detail.contains("cgroup") && !launch.require_resource_limits {
+        if spec.with_limits.any() && detail.contains("cgroup") && !launch.require_resource_limits {
             tracing::warn!(
                 "this host cannot apply container resource limits; starting the service forwarder without them"
             );
-            spec.with_limits = false;
+            spec.with_limits = ResourceCaps::NONE;
             continue;
         }
         return Err(failed(format!("starting the service forwarder: {detail}")));
@@ -428,7 +438,11 @@ pub struct BrowserContainerSpec {
     pub egress: bool,
     /// Host path of the supervisor for the image's architecture.
     pub supervisor_path: PathBuf,
-    pub with_limits: bool,
+    /// Its resource caps, each when its cgroup controller is there.
+    pub with_limits: ResourceCaps,
+    /// Turn SELinux labelling off, so the supervisor bound from the data
+    /// root can run ([`crate::container_host`]).
+    pub label_disable: bool,
     pub labels: Vec<(String, String)>,
 }
 
@@ -468,8 +482,9 @@ pub fn build_browser_args(spec: &BrowserContainerSpec) -> Vec<String> {
     args.push(spec.user.clone());
     args.push("--env".into());
     args.push("HOME=/tmp".into());
-    if spec.with_limits {
-        args.extend(["--memory", "2g", "--cpus", "2", "--pids-limit", "512"].map(String::from));
+    args.extend(spec.with_limits.args());
+    if spec.label_disable {
+        crate::container_host::insert_label_disable(&mut args);
     }
     args.push("--mount".into());
     args.push(format!(
@@ -610,6 +625,12 @@ impl BrowserContainer {
         .await?;
         let user = image_user(selected.id()).await?;
         let name = browser_container_name(&launch.session_id);
+        let with_limits = crate::container_host::caps_for(
+            "the browser container",
+            launch.require_resource_limits,
+        )
+        .await
+        .map_err(|refusal| failed(format!("starting {name}: {refusal}")))?;
         let removed = podman(
             &[
                 "rm".into(),
@@ -636,7 +657,10 @@ impl BrowserContainer {
             exposed_ports: dedup_ports(&launch.exposed_ports),
             egress: launch.egress,
             supervisor_path: supervisor.path().to_path_buf(),
-            with_limits: true,
+            with_limits,
+            label_disable: crate::container_host::container_host()
+                .await
+                .is_some_and(|host| host.label_disable),
             labels: launch.labels.clone(),
         };
         let container_id = loop {
@@ -662,11 +686,14 @@ impl BrowserContainer {
                 COMMAND_TIMEOUT,
             )
             .await;
-            if spec.with_limits && detail.contains("cgroup") && !launch.require_resource_limits {
+            if spec.with_limits.any()
+                && detail.contains("cgroup")
+                && !launch.require_resource_limits
+            {
                 tracing::warn!(
                     "this host cannot apply container resource limits; starting the browser container without them"
                 );
-                spec.with_limits = false;
+                spec.with_limits = ResourceCaps::NONE;
                 continue;
             }
             return Err(failed(format!("starting {name}: {detail}")));
@@ -880,7 +907,8 @@ mod tests {
             exposed_ports: vec![5173, 8765],
             egress,
             supervisor_path: PathBuf::from("/data/execution-supervisors/supervisor-sha256-x"),
-            with_limits: true,
+            with_limits: ResourceCaps::ALL,
+            label_disable: false,
             labels: vec![("io.axocoatl.test".into(), "browser-1".into())],
         }
     }
@@ -949,12 +977,37 @@ mod tests {
         assert_eq!(args[image - 1], "/axocoatl-exec-supervisor");
         assert_eq!(args[image - 2], "--entrypoint");
         assert!(joined.contains("--memory 2g --cpus 2 --pids-limit 512"));
+        assert!(!joined.contains("label=disable"));
+    }
+
+    /// Without the cpu controller the browser keeps its memory and process
+    /// caps; under SELinux on Linux its labelling is off, so the
+    /// supervisor bound from the data root can run.
+    #[test]
+    fn the_browser_gets_each_cap_it_can_and_runs_unlabelled_under_selinux() {
+        let mut spec = spec(false);
+        spec.with_limits = ResourceCaps {
+            memory: true,
+            cpus: false,
+            pids: true,
+        };
+        spec.label_disable = true;
+        let args = build_browser_args(&spec);
+        let joined = args.join(" ");
+        assert!(joined.contains("--memory 2g --pids-limit 512"), "{joined}");
+        assert!(!joined.contains("--cpus"), "{joined}");
+        let label = args
+            .iter()
+            .position(|arg| arg == crate::container_host::LABEL_DISABLE)
+            .unwrap();
+        assert_eq!(args[label - 1], "--security-opt=no-new-privileges");
+        assert!(label < args.iter().position(|arg| arg == "--entrypoint").unwrap());
     }
 
     #[test]
     fn declared_hosts_add_the_read_only_egress_socket_and_the_proxy_listener() {
         let mut with_egress = spec(true);
-        with_egress.with_limits = false;
+        with_egress.with_limits = ResourceCaps::NONE;
         let args = build_browser_args(&with_egress);
         let joined = args.join(" ");
         assert!(joined
@@ -974,7 +1027,7 @@ mod tests {
             session_container_id: "c".repeat(64),
             session_started: "1790998455827417067".into(),
             ports: vec![3000, 8765],
-            with_limits: true,
+            with_limits: ResourceCaps::ALL,
             labels: vec![("io.axocoatl.test".into(), "browser-1".into())],
         };
         let args = build_forwarder_args(&spec);
@@ -1036,10 +1089,25 @@ mod tests {
         );
         assert!(joined.contains("--memory 128m --pids-limit 512"));
         let unlimited = build_forwarder_args(&ServiceForwarderSpec {
-            with_limits: false,
-            ..spec
+            with_limits: ResourceCaps::NONE,
+            ..spec.clone()
         });
         assert!(!unlimited.contains(&"--memory".to_string()));
+        // Without the memory controller it keeps its process cap.
+        let processes_only = build_forwarder_args(&ServiceForwarderSpec {
+            with_limits: ResourceCaps {
+                memory: false,
+                cpus: false,
+                pids: true,
+            },
+            ..spec
+        })
+        .join(" ");
+        assert!(!processes_only.contains("--memory"), "{processes_only}");
+        assert!(
+            processes_only.contains("--pids-limit 512"),
+            "{processes_only}"
+        );
     }
 
     #[test]

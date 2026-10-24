@@ -123,7 +123,11 @@ pub use lifecycle::{FinalizedTurn, SuccessorTurn};
 pub use repository::OwnedRepositoryCheck;
 pub(crate) use repository_activation::validate_repository_tools;
 pub use repository_activation::RepositoryActivationResource;
+pub(crate) use repository_snapshot::group_digits;
 pub use run::{AutonomousActivationResources, PreparedActivation, SettledActivation};
+pub(crate) use turn_review::rerun_cause_of_text as review_rerun_cause_of_text;
+#[cfg(test)]
+pub(crate) use turn_review::review_rerun_backoff;
 #[path = "session_dispatch_native.rs"]
 mod native;
 // 1.3 external agents (workstream `agents`): the controller's port for
@@ -133,9 +137,12 @@ mod external_port;
 pub(crate) use external_port::ExternalSettings;
 #[cfg(test)]
 pub(crate) use external_port::RouteRequestSource;
+#[cfg(test)]
+pub(crate) use native::connect_retained_profile;
 pub(crate) use native::{
-    retained_call_reservation, with_provider_retry, CapturedNativeDefinition,
-    NativeDefinitionPreparation, NativeProviderCredentials, OllamaServedLog,
+    retained_call_reservation, retained_profile_refused, with_provider_retry,
+    CapturedNativeDefinition, NativeDefinitionPreparation, NativeProviderCredentials,
+    OllamaServedLog, OpenRouterServedLog,
 };
 #[path = "session_dispatch_native_turn.rs"]
 mod native_turn;
@@ -195,6 +202,10 @@ struct DispatchState {
     repository_reattachments: HashMap<EvidenceRef, EvidenceRef>,
     repository_registration:
         Option<std::sync::Weak<crate::bootstrap::session_dispatch::RepositoryRegistrationGate>>,
+    /// When the review round a transient provider failure ended runs again
+    /// (Unix milliseconds), while the driver waits for it; see
+    /// `drive_review`.
+    review_rerun_at_ms: Option<u64>,
     poisoned: Option<String>,
     #[cfg(test)]
     fail_at: Option<TestFailure>,

@@ -45,10 +45,14 @@ with these maxima:
 | CPU | 2 cores |
 | PIDs | 512 |
 
-They are maximums, not preallocated reservations. When rootless cgroups cannot
-apply them, the default `require_resource_limits: false` continues uncapped and
-logs a warning. Set the flag to `true` when failing closed is safer than running
-without limits.
+They are maximums, not preallocated reservations. Each needs its cgroup
+controller, and rootless Podman has the ones your system delegates to your user.
+When one is missing, the default `require_resource_limits: false` starts the
+container without that cap (the others still apply), logs a warning, and records
+it in the Session and in a run's notes and receipt; `axocoatl doctor` prints how
+to delegate it. Set the flag to `true` when failing closed is safer than running
+without a limit: no Session, browser, service-forwarder, egress or managed SearXNG
+container then starts without every cap.
 
 ## Count Attempt concurrency
 
@@ -80,6 +84,16 @@ Account for:
   runtime volumes of a Session that is closed, deleted or unknown and the dependency
   volume of one that is deleted or unknown. It keeps an open Session's runtime volumes
   and an open or closed Session's dependency volume, and never touches another daemon's.
+  A data root moved to another path (the same directory, renamed) has another runtime
+  authority; from 1.5.0 the daemon keeps the one of the path it had while a volume of its
+  Sessions carries it, and treats those volumes as its own when they are named after
+  one of its Sessions. The SearXNG container a daemon killed at the old path left is
+  removed once it has exited, or while no daemon runs at that path. A copy (to another
+  volume, or a backup restored at another path) keeps none: its original may still run,
+  and its Sessions are the copy's too. `axocoatl doctor` counts the volumes that carry
+  the authority of the data root it was copied from. When you deleted that one (a move by
+  copying), run `axocoatl session record-location --original-deleted` while Axocoatl is
+  stopped, and the next start removes them as a moved root's.
   A dependency volume made before 1.3.0 has no label and is removed only when its
   Session is one this data root created and deleted. A closed Session's dependency volume
   stays until you delete the Session, including a loadout run's. `axocoatl doctor` shows
@@ -95,6 +109,25 @@ untracked files can still multiply. Finish Attempt cleanup and confirm
 `.axo-variants/` state before assuming the space has been reclaimed. Native Ways
 decision evidence has separate explicit storage limits and deletion controls in
 History; runtime cleanup does not reclaim that retained evidence.
+
+### Volumes of a deleted data directory
+
+No daemon removes the Session volumes of a data directory you deleted, as none runs
+there. Each carries that directory's runtime authority in the
+`io.axocoatl.runtime-authority` label: the SHA-256 of its full path, with symbolic links
+resolved, and on macOS of that path in lower case. Compute it, list what carries it,
+and remove those volumes:
+
+```sh
+# macOS (on Linux, leave out the tr and use sha256sum)
+printf %s "/Users/me/old/axocoatl/data" | tr '[:upper:]' '[:lower:]' | shasum -a 256
+podman volume ls --filter label=io.axocoatl.runtime-authority=DIGEST
+podman volume rm NAME
+```
+
+Do this only for a data directory that is gone. A copy of it that still runs uses the
+same Session names; for that case use `axocoatl session record-location
+--original-deleted` instead, as above.
 
 ## Plan ports and networking
 

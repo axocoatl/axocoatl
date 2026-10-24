@@ -886,6 +886,40 @@ impl SessionDispatchRegistry {
         Ok((controller, reference))
     }
 
+    /// After [`Self::attach_existing_turn`]: a recovered turn that had ended
+    /// is released as a turn that ends in this process is
+    /// ([`Self::release_after_turn`]), so the Session is between turns and
+    /// does not hold its Workspace until its next turn reacquires it. A turn
+    /// that has not ended keeps its owner for its own recovery. Whether the
+    /// turn was released.
+    pub(crate) fn release_recovered_turn_if_ended(
+        &self,
+        session_id: &str,
+        turn_id: &LogicalTurnId,
+    ) -> Result<bool> {
+        let controller = self
+            .state
+            .lock()
+            .map_err(|_| failure("Session dispatch registry failed"))?
+            .entries
+            .get(session_id)
+            .map(|entry| entry.controller.clone())
+            .ok_or_else(|| failure("Session has no retained dispatch controller"))?;
+        let snapshot = controller
+            .snapshot()
+            .map_err(|error| failure(error.to_string()))?;
+        if snapshot.turn_id() != turn_id
+            || !snapshot
+                .contract()
+                .state()
+                .is_some_and(LogicalTurnState::is_closed)
+        {
+            return Ok(false);
+        }
+        self.release_after_turn(session_id, turn_id)?;
+        Ok(true)
+    }
+
     pub(crate) fn prepare_first_turn(&self, session_id: &str) -> Result<PendingSessionToken> {
         let state = self
             .state

@@ -10,9 +10,19 @@ impl NativeDefinitionPreparation {
                     .as_deref()
                     .ok_or_else(|| error("Ollama provider is not configured"))?;
                 // Ollama's status and message, with what to do when known
-                // (`ollama pull` for a model it does not have).
+                // (`ollama pull` for a model it does not have). Loading the
+                // model may take the first-token timeout, as the first
+                // answer of a model not loaded does.
+                let load_timeout = credentials
+                    .ollama_timeouts
+                    .unwrap_or(axocoatl_llm::transport::StreamTimeouts::LOCAL)
+                    .first_token;
                 let observation = with_provider_retry(|| {
-                    axocoatl_llm_ollama::observe_native_ollama_context(base, self.model())
+                    axocoatl_llm_ollama::observe_native_ollama_context_within(
+                        base,
+                        self.model(),
+                        load_timeout,
+                    )
                 })
                 .await
                 .map_err(|failure| {
@@ -37,15 +47,30 @@ impl NativeDefinitionPreparation {
         }
     }
 
-    /// The first (cheapest) endpoint that fits this Agent. Selection never
+    /// The first (cheapest) endpoint that fits this Agent, and the next
+    /// [`OPENROUTER_FAILOVER_ENDPOINTS`] that can take over each of its
+    /// calls: at least its context and prompt limit, its output limit and
+    /// reasoning setting, within the same approved budget. Selection never
     /// raises or clamps an explicitly approved maximum. Each usable endpoint
-    /// is retained exactly and revalidated later.
+    /// is retained exactly and revalidated before each call.
     pub(crate) fn openrouter_runtime(
         &self,
         profiles: Vec<axocoatl_llm_openai::NativeOpenRouterObservation>,
     ) -> Result<NativeRuntimeConfiguration> {
         let mut refusals = std::collections::BTreeSet::new();
+        let mut selected: Option<NativeOpenRouterRuntimeConfiguration> = None;
         for observation in profiles {
+            if let Some(runtime) = &mut selected {
+                let fits = runtime.validate_failover(&self.config, &observation).is_ok();
+                let failover = runtime.failover_observations.get_or_insert_with(Vec::new);
+                if failover.len() >= OPENROUTER_FAILOVER_ENDPOINTS {
+                    break;
+                }
+                if fits {
+                    failover.push(observation);
+                }
+                continue;
+            }
             // The reasoning contract is the model's, the same on every
             // endpoint; an effort it refuses is refused everywhere.
             let reasoning = observation
@@ -64,21 +89,32 @@ impl NativeDefinitionPreparation {
                 max_response_bytes: NATIVE_RESPONSE_BYTES,
                 initial_limits: self.initial_limits.clone(),
                 reasoning,
+                failover_observations: Some(Vec::new()),
             });
             match runtime.and_then(|runtime| runtime.validate(&self.config).map(|()| runtime)) {
-                Ok(runtime) => return Ok(NativeRuntimeConfiguration::OpenRouter(runtime)),
+                Ok(runtime) => selected = Some(runtime),
                 Err(reason) => {
                     refusals.insert(reason.to_string());
                 }
             }
         }
-        Err(error(format!(
-            "no OpenRouter endpoint for {} fits this Agent's approved budget: {}",
-            self.model(),
-            refusals.into_iter().collect::<Vec<_>>().join("; ")
-        )))
+        match selected {
+            Some(runtime) => Ok(NativeRuntimeConfiguration::OpenRouter(runtime)),
+            None => Err(error(format!(
+                "no OpenRouter endpoint for {} fits this Agent's approved budget: {}",
+                self.model(),
+                refusals.into_iter().collect::<Vec<_>>().join("; ")
+            ))),
+        }
     }
 }
+
+/// At most this many endpoints besides the selected one are retained for
+/// failover in a profile, cheapest first: the endpoints a call can move to
+/// when OpenRouter's catalog cannot be read as its activation opens. An
+/// activation adds every other one that fits then
+/// ([`NativeOpenRouterRuntimeConfiguration::connectable_endpoints`]).
+const OPENROUTER_FAILOVER_ENDPOINTS: usize = 3;
 
 /// Run one provider metadata request (an endpoint or model observation, no
 /// inference and no charge) under the transient-error policy of
@@ -269,7 +305,66 @@ impl NativeOpenRouterRuntimeConfiguration {
     }
 
     fn validate(&self, config: &AgentConfig) -> Result<()> {
-        let observation = &self.openrouter_observation;
+        let reasoning = self
+            .openrouter_observation
+            .reasoning_request(config.sampling.reasoning_effort)
+            .map_err(error)?;
+        let failover = self.failover_observations.as_deref().unwrap_or_default();
+        if self.schema_version != 2
+            || config.provider != "openrouter"
+            || self.max_response_bytes != NATIVE_RESPONSE_BYTES
+            || self.reasoning != reasoning
+            || failover.len() > OPENROUTER_FAILOVER_ENDPOINTS
+        {
+            return Err(error(
+                "retained OpenRouter profile differs from its admitted definition",
+            ));
+        }
+        self.validate_endpoint(config, &self.openrouter_observation)?;
+        for (index, observation) in failover.iter().enumerate() {
+            if failover[..index]
+                .iter()
+                .any(|earlier| earlier.endpoint_tag == observation.endpoint_tag)
+            {
+                return Err(error(
+                    "retained OpenRouter profile names a failover endpoint twice",
+                ));
+            }
+            self.validate_failover(config, observation)?;
+        }
+        Ok(())
+    }
+
+    /// Whether `observation` can take over every call of the selected
+    /// endpoint: another endpoint of the same model with at least its
+    /// context and prompt limit, fitting the same output, reasoning setting
+    /// and approved budget.
+    fn validate_failover(
+        &self,
+        config: &AgentConfig,
+        observation: &axocoatl_llm_openai::NativeOpenRouterObservation,
+    ) -> Result<()> {
+        let selected = &self.openrouter_observation;
+        if observation.endpoint_tag == selected.endpoint_tag
+            || observation.base_url != selected.base_url
+            || observation.context_tokens < selected.context_tokens
+            || observation.prompt_limit() < selected.prompt_limit()
+        {
+            return Err(error(format!(
+                "OpenRouter endpoint {} cannot take over every call of {}",
+                observation.endpoint_tag, selected.endpoint_tag
+            )));
+        }
+        self.validate_endpoint(config, observation)
+    }
+
+    /// Whether this profile's output limit, reasoning setting and smallest
+    /// call fit `observation` for the definition `config`.
+    fn validate_endpoint(
+        &self,
+        config: &AgentConfig,
+        observation: &axocoatl_llm_openai::NativeOpenRouterObservation,
+    ) -> Result<()> {
         let reasoning = observation
             .reasoning_request(config.sampling.reasoning_effort)
             .map_err(error)?;
@@ -283,13 +378,7 @@ impl NativeOpenRouterRuntimeConfiguration {
         } else {
             self.max_output_tokens > 0 && self.max_output_tokens <= selected
         };
-        if self.schema_version != 2
-            || config.provider != "openrouter"
-            || observation.model != config.model
-            || self.max_response_bytes != NATIVE_RESPONSE_BYTES
-            || self.reasoning != reasoning
-            || !output_matches
-        {
+        if observation.model != config.model || self.reasoning != reasoning || !output_matches {
             return Err(error(
                 "retained OpenRouter profile differs from its admitted definition",
             ));
@@ -314,6 +403,58 @@ impl NativeOpenRouterRuntimeConfiguration {
         }
         Ok(())
     }
+
+    /// The endpoints calls may go to: the selected one, then those
+    /// retained for failover.
+    fn endpoints(&self) -> Vec<axocoatl_llm_openai::NativeOpenRouterObservation> {
+        std::iter::once(&self.openrouter_observation)
+            .chain(self.failover_observations.iter().flatten())
+            .cloned()
+            .collect()
+    }
+
+    /// The endpoints an activation of the definition `config` may send
+    /// calls to: those this profile retains, then every other endpoint of
+    /// the model that OpenRouter's catalog lists healthy now and that passes
+    /// the checks Team & budget applies to a failover endpoint (the same
+    /// model, at least the context and prompt limit, the same output and
+    /// reasoning setting, the smallest call within the approved budget),
+    /// cheapest first. So a call can move to any endpoint of the model that
+    /// fits, not only those retained when Team & budget was applied, and a
+    /// profile retained before 1.5.0's failover (which lists none besides
+    /// its own) fails over too. Each is checked against the catalog again
+    /// before each call, as every endpoint is. A catalog that cannot be read
+    /// now adds none.
+    async fn connectable_endpoints(
+        &self,
+        config: Option<&AgentConfig>,
+        key: &str,
+    ) -> Vec<axocoatl_llm_openai::NativeOpenRouterObservation> {
+        let mut endpoints = self.endpoints();
+        let Some(config) = config else {
+            return endpoints;
+        };
+        let selected = &self.openrouter_observation;
+        let Ok(live) = axocoatl_llm_openai::observe_native_openrouter_profiles(
+            &selected.base_url,
+            key,
+            &selected.model,
+        )
+        .await
+        else {
+            return endpoints;
+        };
+        for candidate in live {
+            if !endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_tag == candidate.endpoint_tag)
+                && self.validate_failover(config, &candidate).is_ok()
+            {
+                endpoints.push(candidate);
+            }
+        }
+        endpoints
+    }
 }
 impl NativeRuntimeConfiguration {
     fn validate(&self, config: &AgentConfig) -> Result<()> {
@@ -327,9 +468,12 @@ impl NativeRuntimeConfiguration {
             Self::OpenRouter(runtime) => runtime.validate(config),
         }
     }
+    /// Connect this profile with `credentials` for the definition `config`
+    /// (an activation's; `None` where only the profile itself is checked).
     pub(crate) async fn verify_credentials(
         &self,
         credentials: &NativeProviderCredentials,
+        config: Option<&AgentConfig>,
     ) -> Result<Arc<dyn LlmProvider>> {
         match self {
             Self::Ollama(runtime) => {
@@ -337,14 +481,18 @@ impl NativeRuntimeConfiguration {
                     .verify(
                         credentials.ollama_base_url.as_deref(),
                         credentials.ollama_served.as_deref(),
+                        credentials
+                            .ollama_timeouts
+                            .unwrap_or(axocoatl_llm::transport::StreamTimeouts::LOCAL),
                     )
                     .await
             }
             Self::OpenRouter(runtime) => {
                 let key = credentials.openrouter_key()?;
+                let endpoints = runtime.connectable_endpoints(config, key).await;
                 let provider = with_provider_retry(|| {
-                    axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed(
-                        runtime.openrouter_observation.clone(),
+                    axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed_endpoints(
+                        endpoints.clone(),
                         key,
                         runtime.max_output_tokens,
                         runtime.max_response_bytes,
@@ -352,7 +500,17 @@ impl NativeRuntimeConfiguration {
                     )
                 })
                 .await
-                .map_err(error)?;
+                .map_err(error)?
+                .with_stream_timeouts(
+                    credentials
+                        .openrouter_timeouts
+                        .unwrap_or(axocoatl_llm::transport::StreamTimeouts::HOSTED),
+                );
+                let provider = match &credentials.openrouter_served {
+                    Some(log) => provider
+                        .with_served_endpoints(log.for_model(&runtime.openrouter_observation.model)),
+                    None => provider,
+                };
                 Ok(Arc::new(provider))
             }
         }
@@ -360,11 +518,25 @@ impl NativeRuntimeConfiguration {
 }
 #[cfg(test)]
 impl NativeRuntimeConfiguration {
-    /// The OpenRouter endpoint this profile pins, for test evidence.
+    /// The OpenRouter endpoint this profile selects, for test evidence.
     pub(crate) fn openrouter_endpoint(&self) -> Option<&str> {
         match self {
             Self::OpenRouter(runtime) => Some(&runtime.openrouter_observation.endpoint_tag),
             Self::Ollama(_) => None,
+        }
+    }
+
+    /// The OpenRouter endpoints this profile retains for failover, for test
+    /// evidence.
+    pub(crate) fn openrouter_failover_endpoints(&self) -> Vec<&str> {
+        match self {
+            Self::OpenRouter(runtime) => runtime
+                .failover_observations
+                .iter()
+                .flatten()
+                .map(|observation| observation.endpoint_tag.as_str())
+                .collect(),
+            Self::Ollama(_) => Vec::new(),
         }
     }
 }

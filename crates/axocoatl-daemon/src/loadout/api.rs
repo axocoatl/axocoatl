@@ -168,8 +168,8 @@ pub struct RunPreflightRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Whether each Ollama model is loaded, as a run's admission loads it
-    /// (no prompt), and probed with the two one-token contract probes, so
-    /// its loaded context is checked against the run's floor. `true` when
+    /// (no prompt), and probed with the contract probes (a few bounded
+    /// requests), so its loaded context is checked against the run's floor. `true` when
     /// left out. `false` reads Ollama's metadata only: a model that is not
     /// already loaded is not loaded, and its context is not checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,7 +199,7 @@ pub struct PreflightOllamaModel {
     /// `ollama:<model>`.
     pub model: String,
     /// The dry run loaded it (no prompt, as a run's admission does) and ran
-    /// the two one-token contract probes; `false` when it read Ollama's
+    /// the contract probes; `false` when it read Ollama's
     /// metadata only (`load_models: false`), or could not get that far.
     pub loaded: bool,
     /// The context Ollama loaded it with, when known.

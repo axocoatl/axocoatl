@@ -30,6 +30,9 @@ pub(crate) struct NativeOllamaRuntimeConfiguration {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+// A profile is read for one activation or one review at a time, never held
+// in bulk: the OpenRouter variant's size costs nothing that boxing would save.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum NativeRuntimeConfiguration {
     Ollama(NativeOllamaRuntimeConfiguration),
     OpenRouter(NativeOpenRouterRuntimeConfiguration),
@@ -47,7 +50,51 @@ pub(crate) struct NativeOpenRouterRuntimeConfiguration {
     /// non-reasoning model, which keeps 1.2.0 profiles byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<axocoatl_llm_openai::NativeOpenRouterReasoningRequest>,
+    /// Other healthy endpoints of the model, cheapest first, each retained
+    /// exactly, that a call moves to when the selected one fails it before
+    /// producing anything. Each holds at least the selected endpoint's
+    /// context and prompt limit and fits the same output, reasoning setting
+    /// and approved budget. Empty when no other endpoint fits. Absent
+    /// (`None`) in profiles written before 1.5.0's failover, which stay
+    /// byte-identical. Every activation adds the other endpoints the
+    /// catalog lists healthy as it opens and that fit the same way
+    /// ([`NativeRuntimeConfiguration::verify_credentials`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    failover_observations: Option<Vec<axocoatl_llm_openai::NativeOpenRouterObservation>>,
 }
+/// The OpenRouter endpoints that answered one Session's native calls, by
+/// model, and how many calls each answered. A loadout run's Outcome, notes
+/// and receipt name them.
+#[derive(Default)]
+pub(crate) struct OpenRouterServedLog(
+    std::sync::Mutex<BTreeMap<String, Arc<axocoatl_llm_openai::NativeOpenRouterServed>>>,
+);
+
+impl OpenRouterServedLog {
+    fn for_model(&self, model: &str) -> Arc<axocoatl_llm_openai::NativeOpenRouterServed> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(model.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// Each model at least one endpoint answered, with those endpoints in
+    /// the order they first answered.
+    pub(crate) fn endpoints(
+        &self,
+    ) -> BTreeMap<String, Vec<axocoatl_llm_openai::ServedOpenRouterEndpoint>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .iter()
+            .map(|(model, served)| (model.clone(), served.endpoints()))
+            .filter(|(_, endpoints)| !endpoints.is_empty())
+            .collect()
+    }
+}
+
 /// The Ollama versions that served one Session's native calls, by model, as
 /// each provider checked them right before each inference request. A loadout
 /// run's record and receipt name them.
@@ -80,12 +127,25 @@ impl OllamaServedLog {
 #[derive(Clone, Default)]
 pub(crate) struct NativeProviderCredentials {
     pub(crate) ollama_base_url: Option<String>,
+    /// How long native Ollama answers may take to start and to pause
+    /// (`providers.ollama`); `None`: [`StreamTimeouts::LOCAL`].
+    ///
+    /// [`StreamTimeouts::LOCAL`]: axocoatl_llm::transport::StreamTimeouts::LOCAL
+    pub(crate) ollama_timeouts: Option<axocoatl_llm::transport::StreamTimeouts>,
     /// Where this Session's native Ollama providers record the versions that
     /// served them; absent where nothing reads them.
     pub(crate) ollama_served: Option<Arc<OllamaServedLog>>,
     pub(crate) openrouter_api_key: Option<String>,
     pub(crate) openrouter_credits_only: bool,
     pub(crate) openrouter_configuration_error: Option<String>,
+    /// How long native OpenRouter answers may take to start and to pause
+    /// (`providers.openrouter`); `None`: [`StreamTimeouts::HOSTED`].
+    ///
+    /// [`StreamTimeouts::HOSTED`]: axocoatl_llm::transport::StreamTimeouts::HOSTED
+    pub(crate) openrouter_timeouts: Option<axocoatl_llm::transport::StreamTimeouts>,
+    /// Where this Session's native OpenRouter providers record the
+    /// endpoints that answered them; absent where nothing reads them.
+    pub(crate) openrouter_served: Option<Arc<OpenRouterServedLog>>,
 }
 
 pub(crate) struct NativeDefinitionPreparation {
@@ -295,6 +355,34 @@ impl NativeCallReservation {
     }
 }
 
+/// Whether the retained provider profile `configuration` can no longer
+/// serve a turn: an Ollama profile whose observation native Sessions refuse
+/// now (every profile Axocoatl 1.4 or earlier recorded, on Ollama 0.20.6).
+/// Its turns say to review Team & budget again, so applying the Team observes
+/// such a slot again even when nothing else about it changed.
+pub(crate) fn retained_profile_refused(configuration: &str) -> bool {
+    matches!(
+        serde_json::from_str::<NativeRuntimeConfiguration>(configuration),
+        Ok(NativeRuntimeConfiguration::Ollama(runtime))
+            if runtime.observation.refused_when_retained()
+    )
+}
+
+/// Connect the retained provider profile `configuration` with
+/// `credentials`, as an activation under it connects: the step at which a
+/// turn or a delegated helper refuses a profile it can no longer use.
+#[cfg(test)]
+pub(crate) async fn connect_retained_profile(
+    configuration: &str,
+    credentials: &NativeProviderCredentials,
+) -> Result<()> {
+    serde_json::from_str::<NativeRuntimeConfiguration>(configuration)
+        .map_err(error)?
+        .verify_credentials(credentials, None)
+        .await
+        .map(|_| ())
+}
+
 /// What one model call reserves under the retained provider profile
 /// `configuration` of the definition `config`. `None` for a profile that is
 /// not a native one (an external program's).
@@ -322,6 +410,35 @@ pub(crate) fn retained_call_reservation(
             })
         }
         NativeRuntimeConfiguration::OpenRouter(runtime) => runtime.call_reservation(config),
+    }
+}
+
+/// What one request of the model a retained native provider profile
+/// `configuration` serves may hold, as its provider states it to the host
+/// that fits each request: its context, and the output allowance each
+/// request reserves of it. `None` for a profile that is not a native one.
+pub(crate) fn retained_request_window(configuration: &str) -> Option<(usize, usize)> {
+    match serde_json::from_str::<NativeRuntimeConfiguration>(configuration).ok()? {
+        NativeRuntimeConfiguration::Ollama(runtime) => Some((
+            runtime.observation.context_tokens,
+            runtime.max_output_tokens,
+        )),
+        NativeRuntimeConfiguration::OpenRouter(runtime) => {
+            // As the provider's capabilities: the context less the
+            // reasoning allowance, within the endpoint's own prompt limit.
+            let observation = &runtime.openrouter_observation;
+            let output = runtime.max_output_tokens;
+            let reasoning = observation
+                .response_allowance(output, runtime.reasoning)
+                .saturating_sub(output);
+            Some((
+                observation
+                    .context_tokens
+                    .saturating_sub(reasoning)
+                    .min(observation.prompt_limit().saturating_add(output)),
+                output,
+            ))
+        }
     }
 }
 
@@ -364,6 +481,11 @@ impl NativeDefinitionPreparation {
 
     pub(crate) fn model(&self) -> &str {
         &self.config.model
+    }
+
+    /// The definition being prepared.
+    pub(crate) fn config(&self) -> &AgentConfig {
+        &self.config
     }
 
     fn definition_content(&self) -> Result<ActivationEvidenceContent> {
@@ -486,6 +608,7 @@ impl NativeOllamaRuntimeConfiguration {
         &self,
         configured_base_url: Option<&str>,
         served: Option<&OllamaServedLog>,
+        timeouts: axocoatl_llm::transport::StreamTimeouts,
     ) -> Result<Arc<dyn LlmProvider>> {
         if configured_base_url.is_some_and(|configured| configured != self.observation.base_url) {
             return Err(error(
@@ -498,7 +621,8 @@ impl NativeOllamaRuntimeConfiguration {
             self.max_response_bytes,
         )
         .await
-        .map_err(error)?;
+        .map_err(error)?
+        .with_stream_timeouts(timeouts);
         let provider = match served {
             Some(log) => {
                 provider.with_served_versions(log.for_model(&self.observation.requested_model))
@@ -660,7 +784,7 @@ impl AutonomousActivationFactory for NativeActivationFactory {
         let before = self.resolve(input).map_err(|error| error.to_string())?;
         let provider = before
             .runtime
-            .verify_credentials(&self.credentials)
+            .verify_credentials(&self.credentials, Some(&before.config))
             .await
             .map_err(|error| error.to_string())?;
         // Metadata verification yields. Stop, new epochs, changed grants and

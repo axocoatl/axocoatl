@@ -4,12 +4,14 @@
 use super::{
     accepted_server_version, check_shown_model,
     contract_probe::{self, ProbeKey},
-    invalid, local_client, metadata_request, ollama_version_refusal, reports_cloud_disabled,
-    shown_name, NativeOllamaConfig, NativeOllamaProvider,
+    invalid, local_client, metadata_request, metadata_request_within, ollama_version_refusal,
+    reports_cloud_disabled, shown_name, NativeOllamaConfig, NativeOllamaProvider,
 };
+use axocoatl_llm::transport::{LOCAL_FIRST_TOKEN_TIMEOUT, RESPONSE_TIMEOUT};
 use axocoatl_llm::ProviderError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 
 /// The `schema_version` this Axocoatl writes. Version 2 (Ollama 0.40): the
 /// observed server version is recorded (not a constant), the model was loaded
@@ -38,6 +40,18 @@ pub struct NativeOllamaContextObservation {
     pub load_acknowledged_at: String,
     pub tools_supported: bool,
     pub thinking_supported: bool,
+}
+
+impl NativeOllamaContextObservation {
+    /// Whether native Sessions refuse to connect from this retained
+    /// observation: its schema is not the one this Axocoatl writes, or the
+    /// server version it recorded is refused now (every observation Axocoatl
+    /// 1.4 or earlier recorded: Ollama 0.20.6). Only observing the model
+    /// again, as Team & budget's Apply does, replaces it.
+    pub fn refused_when_retained(&self) -> bool {
+        self.schema_version != OBSERVATION_SCHEMA_VERSION
+            || ollama_version_refusal(&self.server_version).is_some()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -148,8 +162,9 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
             return Err(invalid(format!(
                 "Ollama loaded {} with its MLX runner, which holds the model's own maximum \
                  context, not num_ctx, as its limit; native execution accepts only GGUF models \
-                 that Ollama runs in llama.cpp's llama-server",
-                shown_name(&expected.name)
+                 that Ollama runs in llama.cpp's llama-server: {}",
+                shown_name(&expected.name),
+                super::gguf_fix(&shown_name(&expected.name))
             )))
         }
         runner => {
@@ -271,9 +286,33 @@ fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderEr
 /// Aliases, tags and runner identity must agree across bounded metadata reads.
 /// Concurrent external model changes cannot be made atomic by these APIs; this
 /// is point-in-time evidence and any detected disagreement is refused.
+/// The load and each probe may take [`LOCAL_FIRST_TOKEN_TIMEOUT`]
+/// ([`observe_native_ollama_context_within`] takes another).
 pub async fn observe_native_ollama_context(
     base_url: &str,
     model: &str,
+) -> Result<NativeOllamaContextObservation, ProviderError> {
+    observe_native_ollama_context_within(base_url, model, LOCAL_FIRST_TOKEN_TIMEOUT).await
+}
+
+/// [`observe_native_ollama_context`] whose model load and contract probes
+/// may each take `load_timeout` (`providers.ollama.first_token_timeout_secs`,
+/// and never less than two minutes): Ollama answers a load once the model is
+/// in memory, which on a CPU-only computer or from a slow disk can take
+/// minutes. Giving up closes the connection, and Ollama then stops loading.
+pub async fn observe_native_ollama_context_within(
+    base_url: &str,
+    model: &str,
+    load_timeout: Duration,
+) -> Result<NativeOllamaContextObservation, ProviderError> {
+    observe(base_url, model, load_timeout.max(RESPONSE_TIMEOUT)).await
+}
+
+/// [`observe_native_ollama_context_within`] with `load_timeout` as given.
+async fn observe(
+    base_url: &str,
+    model: &str,
+    load_timeout: Duration,
 ) -> Result<NativeOllamaContextObservation, ProviderError> {
     model_key(model)?;
     let client = local_client(base_url)?;
@@ -286,13 +325,19 @@ pub async fn observe_native_ollama_context(
     // for the empty prompt. Omitting options preserves the server/model choice
     // of context; shift:false starts the runner without context shifting, as
     // every inference request asks (v0.40.6 server/sched.go needsReload).
-    let loaded = metadata_request(
-        &client,
-        base_url,
-        "api/generate",
-        Some(json!({"model": first.name, "stream": false, "shift": false})),
+    let loaded = tokio::time::timeout(
+        load_timeout,
+        metadata_request_within(
+            &client,
+            base_url,
+            "api/generate",
+            Some(json!({"model": first.name, "stream": false, "shift": false})),
+            // Past the deadline above, so that one names the setting.
+            load_timeout + Duration::from_secs(5),
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| load_timed_out(&first.name, load_timeout))??;
     let load_acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
     let context = loaded_context(
         &metadata_request(&client, base_url, "api/ps", None).await?,
@@ -326,8 +371,10 @@ pub async fn observe_native_ollama_context(
             server_version: capabilities.version.clone(),
             model_digest: first.digest.clone(),
             context_tokens: context,
+            tools: capabilities.tools,
         },
         model,
+        load_timeout,
     )
     .await?;
     let observed_at_ms = std::time::SystemTime::now()
@@ -348,6 +395,17 @@ pub async fn observe_native_ollama_context(
         tools_supported: capabilities.tools,
         thinking_supported: capabilities.thinking,
     })
+}
+
+/// The error of a model load that did not finish within `after`, naming
+/// the setting that gives it longer.
+fn load_timed_out(model: &str, after: Duration) -> ProviderError {
+    ProviderError::Network(format!(
+        "Ollama did not finish loading {model} within {} s (timed out); a computer that loads \
+         models slowly, such as one without a GPU or with the model on a slow disk, may need \
+         longer (providers.ollama.first_token_timeout_secs)",
+        after.as_secs()
+    ))
 }
 
 /// What metadata alone says of `model`, without loading it: the server runs
@@ -409,6 +467,7 @@ fn probe_key(observation: &NativeOllamaContextObservation, server_version: &str)
         server_version: server_version.to_owned(),
         model_digest: observation.model_digest.clone(),
         context_tokens: observation.context_tokens,
+        tools: observation.tools_supported,
     }
 }
 
@@ -425,7 +484,13 @@ pub(super) async fn ensure_probed(
         contract_probe::remember_passed(key);
         return Ok(());
     }
-    contract_probe::ensure_contract(&provider.client, key, &observation.requested_model).await
+    contract_probe::ensure_contract(
+        &provider.client,
+        key,
+        &observation.requested_model,
+        provider.stream_timeouts.first_token.max(RESPONSE_TIMEOUT),
+    )
+    .await
 }
 
 /// Why a retained observation recorded on a server version this Axocoatl no
@@ -471,9 +536,7 @@ impl NativeOllamaProvider {
         max_output_tokens: usize,
         max_response_bytes: usize,
     ) -> Result<Self, ProviderError> {
-        if observation.schema_version != OBSERVATION_SCHEMA_VERSION
-            || ollama_version_refusal(&observation.server_version).is_some()
-        {
+        if observation.refused_when_retained() {
             return Err(retained_version_refusal(&observation).await);
         }
         if model_key(&observation.requested_model)? != model_key(&observation.resolved_model)?

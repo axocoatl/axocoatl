@@ -316,6 +316,28 @@ fn migration_history_identity(data_root: &SecureDir) -> Result<(String, String)>
     ))
 }
 
+/// Why a copy of a data root whose conversion stopped after it started
+/// converting Session `session` cannot finish it, and what to do.
+fn copied_half_way(data_root: &std::path::Path, session: &str) -> String {
+    format!(
+        "'{}' is a copy of a data directory whose Session storage upgrade stopped half-way \
+         (it had started converting Session '{session}'), and a copy cannot finish it: finish \
+         the upgrade where it started (start Axocoatl, or run `axocoatl session upgrade \
+         --confirm`, on the original data directory) and copy that, or restore a backup made \
+         before the upgrade",
+        data_root.display()
+    )
+}
+
+/// Whether `identity` is a `device:inode` pair as this module records it.
+fn is_inode_identity(identity: &str) -> bool {
+    identity.split_once(':').is_some_and(|(device, inode)| {
+        [device, inode]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
 #[cfg(not(unix))]
 fn migration_history_identity(_: &SecureDir) -> Result<(String, String)> {
     Err(failure(
@@ -406,8 +428,111 @@ impl PreparedStartupMigration {
             };
         let preparation: Self =
             serde_json::from_slice(&bytes).map_err(|error| failure(error.to_string()))?;
+        let preparation = preparation.relocated(data_root, checkpoints)?;
         preparation.verify_sources(data_root, checkpoints)?;
         Ok(Some(preparation))
+    }
+
+    /// This record for the data root it is read from. A root copied in the
+    /// middle of an interrupted conversion (a restored backup, a migrated
+    /// Mac), or whose files were copied back into it, holds the same legacy
+    /// history and checkpoints in other files: only the identities this
+    /// record pins differ (the root's and the history's inodes, and the
+    /// checkpoint sources' digests, which name their files' inodes), and they
+    /// are recorded again, as the format ownership manifest's are. That
+    /// needs the history's content to be the same; anything else that
+    /// differs, the role mapping the checkpoints and history prove above
+    /// all, is left for [`Self::verify_sources`] to refuse.
+    ///
+    /// A Session whose conversion started sealed its history as the
+    /// original directory's, durably: another directory (a copy) cannot
+    /// finish it, and is refused with what to do instead.
+    fn relocated(self, data_root: &SecureDir, checkpoints: &CheckpointStore) -> Result<Self> {
+        let root_inode = data_root
+            .inode_identity()
+            .map_err(|error| failure(error.to_string()))?;
+        let (history_inode, history_sha256) = migration_history_identity(data_root)?;
+        if (self.root_inode == root_inode && self.history_inode == history_inode)
+            || self.history_sha256 != history_sha256
+            || !is_inode_identity(&self.root_inode)
+            || !is_inode_identity(&self.history_inode)
+        {
+            return Ok(self);
+        }
+        if self.root_inode != root_inode {
+            if let Some(started) = self
+                .sessions
+                .iter()
+                .find(|session| session.state != StartupMigrationState::Prepared)
+            {
+                return Err(failure(copied_half_way(
+                    data_root.path(),
+                    &started.specification.session_id,
+                )));
+            }
+        }
+        let mut sessions = self.sessions.clone();
+        for session in &mut sessions {
+            session.checkpoint_source_sha256 = checkpoints
+                .capture_legacy_session_checkpoints(&session.specification.session_id)
+                .map_err(|error| failure(error.to_string()))?
+                .source_sha256()
+                .into();
+        }
+        let relocated = Self {
+            root_inode,
+            history_inode,
+            sessions,
+            ..self
+        };
+        relocated.verify_sources(data_root, checkpoints)?;
+        relocated.persist(data_root)?;
+        tracing::warn!(
+            "the interrupted Session storage upgrade in '{}' was copied or moved; recorded \
+             its new location and continued it",
+            data_root.path().display()
+        );
+        Ok(relocated)
+    }
+
+    /// Record, in the interrupted conversion `data_root` holds (if any), the
+    /// location of a root copied or moved since (see [`Self::relocated`]):
+    /// whether it was recorded.
+    fn record_location(data_root: &SecureDir, checkpoints: &CheckpointStore) -> Result<bool> {
+        let bytes =
+            match data_root.read_limited(STARTUP_MIGRATION_FILE, STARTUP_MIGRATION_MAX_BYTES) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(error) => return Err(failure(error.to_string())),
+            };
+        let preparation: Self =
+            serde_json::from_slice(&bytes).map_err(|error| failure(error.to_string()))?;
+        let recorded = (
+            preparation.root_inode.clone(),
+            preparation.history_inode.clone(),
+        );
+        let preparation = preparation.relocated(data_root, checkpoints)?;
+        Ok((preparation.root_inode, preparation.history_inode) != recorded)
+    }
+
+    /// Whether `other` is this record for another location of the same data
+    /// root: everything but the identities that name inodes is the same (see
+    /// [`Self::relocated`]), the history's content included.
+    fn same_but_location(&self, other: &Self) -> bool {
+        let at = |preparation: &Self| {
+            let mut sessions = preparation.sessions.clone();
+            for session in &mut sessions {
+                session.checkpoint_source_sha256.clear();
+            }
+            serde_json::to_vec(&Self {
+                root_inode: String::new(),
+                history_inode: String::new(),
+                sessions,
+                ..preparation.clone()
+            })
+            .ok()
+        };
+        at(self).is_some() && at(self) == at(other)
     }
 
     /// Call only after role-free orphan and checkpoint transaction settlement,
@@ -468,6 +593,14 @@ impl PreparedStartupMigration {
             return Err(failure("migration preparation exceeds its retention bound"));
         }
         match data_root.read_limited(STARTUP_MIGRATION_FILE, STARTUP_MIGRATION_MAX_BYTES) {
+            // The same preparation made before the root was copied or moved.
+            Ok(existing)
+                if existing != bytes
+                    && serde_json::from_slice::<Self>(&existing)
+                        .is_ok_and(|existing| existing.same_but_location(&preparation)) =>
+            {
+                preparation.persist(data_root)?;
+            }
             Ok(existing) if existing != bytes => {
                 return Err(failure(
                     "an existing migration preparation has different source or role assignments",
@@ -777,7 +910,176 @@ fn failure(message: impl Into<String>) -> DaemonError {
     DaemonError::Session(format!("Session execution migration: {}", message.into()))
 }
 
+/// What [`super::AxocoatlDaemon::record_data_root_location`] recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedLocation {
+    /// What it recorded of the data root's location; `None` when the root
+    /// was already recorded where it is.
+    pub location: Option<String>,
+    /// When asked to record that the data root it was copied from was
+    /// deleted: how many runtime authorities of that one it made its own.
+    pub adopted: Option<usize>,
+}
+
 impl super::AxocoatlDaemon {
+    /// Record a copied or moved data root's new location, as a daemon start
+    /// does, and change nothing else: under the data root's leases (so never
+    /// beside a daemon that runs on it), only its ownership record, an
+    /// interrupted conversion's and the runtime authorities it keeps are
+    /// rewritten. Nothing is reconciled, no Session is opened or converted,
+    /// and no directory is created: a release from 1.1.0 to 1.4.0, which
+    /// refuses a copied root, then starts on a restored backup.
+    ///
+    /// With `original_deleted`, also record that the data root this one was
+    /// copied from was deleted (a move by copying, as across volumes): the
+    /// runtime authorities kept of it become previous ones, as a move's, so
+    /// the next start removes the volumes its Sessions left there as its own.
+    pub fn record_data_root_location(
+        data_dir: &std::path::Path,
+        original_deleted: bool,
+    ) -> Result<RecordedLocation> {
+        let data = SecureDir::open_existing_all(data_dir).map_err(|error| {
+            failure(format!(
+                "the data directory '{}' cannot be opened: {error}",
+                data_dir.display()
+            ))
+        })?;
+        {
+            use axocoatl_session::execution_ownership::{
+                inspect_format_ownership, FormatOwnershipReport,
+            };
+            // Never make a directory that holds no ownership record into
+            // one: the daemon records it when it first starts there.
+            match inspect_format_ownership(data.path()) {
+                FormatOwnershipReport::Unrecorded => {
+                    return Err(failure(format!(
+                        "'{}' holds no Axocoatl data directory ownership record",
+                        data.path().display()
+                    )))
+                }
+                FormatOwnershipReport::Refused(reason) => {
+                    return Err(failure(format!(
+                        "the ownership record of '{}' is refused: {reason}",
+                        data.path().display()
+                    )))
+                }
+                _ => {}
+            }
+        }
+        super::admit_and_restrict_data_root(&data)?;
+        let (lease, relocated) = super::DataDirLease::acquire_relocating(&data)?;
+        let own = super::local_runtime_authority(&data)?;
+        super::record_moved_from(&data, relocated.as_ref(), &own)?;
+        let adopted = original_deleted
+            .then(|| super::runtime_volumes::adopt_copied_from(&data, &own))
+            .transpose()?;
+        let upgrade = match data.existing_child("checkpoints") {
+            Ok(_) => PreparedStartupMigration::record_location(
+                &data,
+                &CheckpointStore::new_in_secure(
+                    &data,
+                    "checkpoints",
+                    axocoatl_memory::CheckpointPolicy::Manual,
+                )
+                .map_err(|error| failure(error.to_string()))?,
+            )?,
+            // No legacy checkpoints: no conversion was prepared here.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(failure(error.to_string())),
+        };
+        drop(lease);
+        let mut recorded = Vec::new();
+        if let Some(relocated) = relocated {
+            recorded.push(format!(
+                "its new location ({})",
+                relocated.recorded.describe()
+            ));
+        }
+        if upgrade {
+            recorded.push("the new location of its interrupted Session storage upgrade".into());
+        }
+        Ok(RecordedLocation {
+            location: (!recorded.is_empty()).then(|| recorded.join(" and ")),
+            adopted,
+        })
+    }
+
+    /// What `doctor` says of an interrupted Session storage upgrade in the
+    /// data root at `data_dir`, read without its leases and changing nothing:
+    /// `None` when there is none; the line when the next start finishes it;
+    /// the line and what to do when the daemon will not start on it (a copy
+    /// of a root whose upgrade stopped half-way through a Session, see
+    /// [`PreparedStartupMigration::relocated`]).
+    pub fn interrupted_upgrade_doctor_line(
+        data_dir: &std::path::Path,
+    ) -> Option<std::result::Result<String, (String, String)>> {
+        let data = SecureDir::open_existing_all(data_dir).ok()?;
+        let bytes = match data.read_limited(STARTUP_MIGRATION_FILE, STARTUP_MIGRATION_MAX_BYTES) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                let line = format!(
+                    "Session storage upgrade: interrupted, and its record cannot be read: \
+                     {error}"
+                );
+                let file = data.path().join(STARTUP_MIGRATION_FILE);
+                return Some(Err((line, format!("Check {}", file.display()))));
+            }
+            Ok(bytes) => bytes,
+        };
+        let Ok(preparation) = serde_json::from_slice::<PreparedStartupMigration>(&bytes) else {
+            return Some(Err((
+                "Session storage upgrade: interrupted, and its record is not one Axocoatl wrote"
+                    .to_string(),
+                "Restore a backup made before the upgrade".to_string(),
+            )));
+        };
+        let copied = data
+            .inode_identity()
+            .is_ok_and(|root| root != preparation.root_inode);
+        let half_way = preparation
+            .sessions
+            .iter()
+            .find(|session| session.state != StartupMigrationState::Prepared);
+        if let (true, Some(started)) = (copied, half_way) {
+            return Some(Err((
+                "Session storage upgrade: stopped half-way in the data directory this one was \
+                 copied from; the daemon will not start here"
+                    .to_string(),
+                copied_half_way(data.path(), &started.specification.session_id),
+            )));
+        }
+        // The start continues only from the legacy history it recorded.
+        match migration_history_identity(&data) {
+            Ok((_, history)) if history == preparation.history_sha256 => {}
+            Ok(_) => {
+                return Some(Err((
+                    "Session storage upgrade: interrupted, and the legacy Session history is no \
+                     longer the one it recorded; the daemon will not start here"
+                        .to_string(),
+                    "Restore the backup made before the upgrade (or, for a copy, copy the \
+                     original data directory again)"
+                        .to_string(),
+                )))
+            }
+            Err(error) => {
+                return Some(Err((
+                    format!(
+                        "Session storage upgrade: interrupted, and its legacy Session history \
+                         cannot be read: {error}"
+                    ),
+                    "Restore the backup made before the upgrade".to_string(),
+                )))
+            }
+        }
+        Some(Ok(if copied {
+            "Session storage upgrade: interrupted, in a copied data directory; the next start \
+             records its new location and finishes it"
+                .to_string()
+        } else {
+            "Session storage upgrade: interrupted; the next start finishes it".to_string()
+        }))
+    }
+
     /// Explicit offline conversion. Holding the normal data-root leases prevents
     /// racing a daemon; no provider, actor, automation or webhook is started.
     /// The caller must explain the historical-context boundary before invoking.

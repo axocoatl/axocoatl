@@ -46,10 +46,11 @@ export async function captureLive(plan, outputDirectory, {token}) {
   const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
   const browser = await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
   const context = await browser.newContext({viewport:{width:1280,height:720},deviceScaleFactor:1,colorScheme:plan.theme,reducedMotion:'reduce'});
-  // Signed in as `/?token=` would: the workbench runs on localhost, and API
-  // evidence may also be read from the plan's loopback IP origin.
+  // Signed in as `/?token=` would: the workbench runs on 127.0.0.1 (a plan
+  // at another loopback origin is redirected there), and API evidence may
+  // also be read from the plan's own loopback origin.
   const port = new URL(origin).port || '80';
-  await context.addCookies([...new Set(['localhost',new URL(origin).hostname])].map(host=>({name:`axocoatl-token-${port}`,value:token,url:`http://${host}:${port}/`,httpOnly:true,sameSite:'Strict'})));
+  await context.addCookies([...new Set(['127.0.0.1',new URL(origin).hostname])].map(host=>({name:`axocoatl-token-${port}`,value:token,url:`http://${host}:${port}/`,httpOnly:true,sameSite:'Strict'})));
   const page = await context.newPage(),errors=[],observations=[];
   page.setDefaultTimeout(60000);
   page.on('pageerror',error=>errors.push(error.message));

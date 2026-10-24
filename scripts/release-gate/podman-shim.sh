@@ -13,8 +13,9 @@
 #               libkrun provider (the podman.io package's default)
 #
 # (A missing Podman is no shim on PATH at all.) `machine start` turns a
-# stopped machine on, as a run's admission does. Anything else, which would
-# create or change something, fails and is logged.
+# stopped machine on, as a run's admission does, and `info --format
+# {{.Host.Security.Rootless}}` answers its rootless probe. Anything else,
+# which would create or change something, fails and is logged.
 state_file=${PODMAN_SHIM_STATE:?PODMAN_SHIM_STATE names the state file}
 log=${PODMAN_SHIM_LOG:?PODMAN_SHIM_LOG names the call log}
 state=$(cat "$state_file")
@@ -57,7 +58,10 @@ runtime_info() {
 case "$1 ${2:-}" in
   "--version "* | "version "*) echo "podman version $version" ;;
   "info "*)
-    if [ "$running" = true ]; then
+    if [ "$running" = true ] && [ "$*" = 'info --format {{.Host.Security.Rootless}}' ]; then
+      # The rootless probe a run's admission makes.
+      if [ "$rootful" = true ]; then echo false; else echo true; fi
+    elif [ "$running" = true ]; then
       runtime_info
     else
       # Podman's own message, backquotes and all.

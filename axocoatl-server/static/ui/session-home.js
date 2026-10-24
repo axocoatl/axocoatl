@@ -273,6 +273,10 @@ function deepActiveElement() {
   return active;
 }
 
+// How long Create session waits for the New Session picker's readiness read:
+// a daemon whose Podman check hangs must not keep it disabled for good.
+const PICKER_READINESS_WAIT_MS = 10_000;
+
 const MODAL_FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** What the New Session picker shows of a readiness report: the Podman step
@@ -433,6 +437,8 @@ export class AxSessionHome extends HTMLElement {
   #pathPhase = 'idle';
   #pathError = '';
   #refreshGeneration = 0;
+  // The latest read of the Workspace and Session lists (refresh).
+  #reading = null;
   #pathGeneration = 0;
   #navigationGeneration = 0;
   #picker = null;
@@ -568,7 +574,13 @@ export class AxSessionHome extends HTMLElement {
     this.#renderSidebar(); this.#renderPath(); this.#renderRows();
   }
 
-  async refresh() {
+  refresh() {
+    const read = this.#readLists();
+    this.#reading = read;
+    return read;
+  }
+
+  async #readLists() {
     // A shell may deliberately prime the element before it connects. Count
     // that as the initial load so connectedCallback does not issue a duplicate
     // sessions read after upgrade.
@@ -690,14 +702,32 @@ export class AxSessionHome extends HTMLElement {
 
   openWorkspace(initialPath = '') { this.#openPicker('workspace', initialPath); }
 
-  newSession(workspaceId = this.#selectedWorkspaceId) {
-    const workspace = this.workspace(workspaceId);
+  /** Open the New Session picker for `workspaceId`. The rail reads the
+   *  Workspaces itself, so it can offer one this list has not read yet:
+   *  right after the workbench opens, or one opened elsewhere since. The
+   *  list is read again then, and only a Workspace it still lacks is
+   *  refused. */
+  async newSession(workspaceId = this.#selectedWorkspaceId) {
+    const workspace = this.workspace(workspaceId) || await this.#readWorkspace(workspaceId);
     if (!workspace) {
       this.#notify('Open a Workspace first', 'A Session always belongs to one project folder.', 'err');
       return false;
     }
     this.#openPicker('session', workspaceDirectory(workspace), workspace.id);
     return true;
+  }
+
+  /** `id`'s Workspace once the lists have been read again (a newer read
+   *  replaces the one awaited, so the last one counts), or null. */
+  async #readWorkspace(id) {
+    if (!id) return null;
+    let read = this.refresh();
+    for (;;) {
+      await read;
+      if (read === this.#reading || this.workspace(id)) break;
+      read = this.#reading;
+    }
+    return this.workspace(id);
   }
 
   /** Open the explicit runtime/setup decision for a persisted Session. */
@@ -1158,7 +1188,7 @@ export class AxSessionHome extends HTMLElement {
       kind, workspaceId, path: kind === 'session' ? initialPath : '', requestedPath: initialPath || '',
       dirs: [], parent: null, phase: kind === 'session' ? 'ready' : 'loading',
       error: '', skills: [], skillsError: '', probe: null, probeError: '',
-      probePending: kind === 'session', busy: false,
+      probePending: kind === 'session', readinessPending: kind === 'session', busy: false,
       generation: 0, form,
     };
     this.#renderPicker();
@@ -1192,20 +1222,39 @@ export class AxSessionHome extends HTMLElement {
   }
 
   /** Read readiness again as a Session is about to be created: Podman may
-   *  have been set up since the last read. */
+   *  have been set up since the last read, or removed. Create session waits
+   *  for this read (at most PICKER_READINESS_WAIT_MS), so it cannot be
+   *  clicked before a missing Podman blocks it. */
   async #loadPickerReadiness() {
     const picker = this.#picker; if (!picker) return;
+    let shown = pickerReadinessView(this.#readiness);
+    const render = () => {
+      shown = pickerReadinessView(this.#readiness);
+      this.#renderPicker();
+    };
+    // A change to the Podman step the picker shows needs a render, and so
+    // does Create session once nothing else holds it; the project probe's
+    // own render does that while it is still pending.
+    const stopWaiting = () => {
+      if (this.#picker !== picker || !picker.readinessPending) return;
+      picker.readinessPending = false;
+      if (pickerReadinessView(this.#readiness) !== shown || !picker.probePending) render();
+    };
+    const timer = setTimeout(stopWaiting, PICKER_READINESS_WAIT_MS);
     try {
       const report = await this.#request('/api/readiness');
-      if (this.#picker !== picker || !report || typeof report !== 'object') return;
-      const shown = pickerReadinessView(this.#readiness);
-      this.#readiness = report;
-      this.dispatchEvent(new CustomEvent('readiness-change', {
-        detail: { report }, bubbles: true, composed: true,
-      }));
-      // Only a change to the Podman step the picker shows needs a render.
-      if (pickerReadinessView(report) !== shown) this.#renderPicker();
-    } catch { /* The daemon refuses creation itself when Podman cannot run it. */ }
+      if (this.#picker === picker && report && typeof report === 'object') {
+        this.#readiness = report;
+        this.dispatchEvent(new CustomEvent('readiness-change', {
+          detail: { report }, bubbles: true, composed: true,
+        }));
+      }
+    } catch { /* Unread, nothing blocks: the daemon refuses a Session it cannot prepare. */ }
+    clearTimeout(timer);
+    if (this.#picker !== picker) return;
+    if (picker.readinessPending) stopWaiting();
+    // A read that came after the wait ended still blocks what it blocks.
+    else if (pickerReadinessView(this.#readiness) !== shown) render();
   }
 
   async #loadPickerSkills() {
@@ -1323,6 +1372,48 @@ export class AxSessionHome extends HTMLElement {
     this.#notify('Copied config', session.name, 'ok'); this.#renderPicker();
   }
 
+  /** The readiness item that blocks Create session (Podman missing or
+   *  without a machine), or null. */
+  #pickerPodmanBlock(picker) {
+    return picker.kind === 'session' && this.#readiness?.sessions_blocked
+      ? (this.#readiness.sections?.sandbox || []).find((item) => item.id === 'podman') || null : null;
+  }
+
+  /** Whether the picker's Create session, Open workspace or Apply and
+   *  rebuild is disabled. A render and every edit of a name ask this, so
+   *  typing a name never enables what something else holds. */
+  #pickerUseDisabled(picker) {
+    const nameMissing = picker.kind === 'workspace'
+      ? !picker.form.workspaceName.trim()
+      : picker.kind === 'session' ? !picker.form.sessionName.trim() : false;
+    const environmentKind = picker.kind === 'session' || picker.kind === 'environment';
+    const malformedDevcontainerBlocksCreation = picker.kind === 'session'
+      && picker.probe?.devcontainer?.error;
+    const malformedDevcontainerNeedsImageDecision = picker.kind === 'environment'
+      && picker.probe?.devcontainer?.error && !picker.form.imageTouched;
+    const projectProbeFailureBlocksCreation = picker.kind === 'session' && picker.probeError;
+    const requestedImage = (picker.form.imagePreset === '__custom__'
+      ? picker.form.customImage : picker.form.imagePreset).trim();
+    const remoteImageConflict = picker.probe?.runtime?.supports_session_image === false
+      && Boolean(requestedImage);
+    const customTeamState = picker.kind === 'session' && picker.form.modeKind === 'custom'
+      ? customTeamSelectionState(this.#agents, picker.form.customAgents) : null;
+    const selectedLatticeTeamId = picker.form.workflowId || this.#teams[0]?.id || '';
+    const latticeTeamMissing = picker.kind === 'session' && picker.form.modeKind === 'lattice'
+      && !this.#teams.some((team) => team.id === selectedLatticeTeamId);
+    const protectedFolder = picker.kind === 'workspace' && picker.scope?.code === 'workspace_protected';
+    return Boolean(picker.busy || picker.phase !== 'ready' || !picker.path || nameMissing
+      || protectedFolder || this.#pickerPodmanBlock(picker) !== null
+      || (picker.kind === 'session' && picker.readinessPending)
+      || (environmentKind && picker.probePending)
+      || projectProbeFailureBlocksCreation
+      || malformedDevcontainerBlocksCreation
+      || malformedDevcontainerNeedsImageDecision
+      || remoteImageConflict
+      || latticeTeamMissing
+      || customTeamState?.valid === false);
+  }
+
   #renderPicker() {
     const host = this.#root.querySelector('.picker-host');
     if (!host) return;
@@ -1406,8 +1497,7 @@ export class AxSessionHome extends HTMLElement {
     } else {
       modal.append(this.#environmentPickerConfig(picker, targetSession));
     }
-    const podman = picker.kind === 'session' && this.#readiness?.sessions_blocked
-      ? (this.#readiness.sections?.sandbox || []).find((item) => item.id === 'podman') : null;
+    const podman = this.#pickerPodmanBlock(picker);
     if (podman) {
       const blocked = element('div', 'inline-error picker-blocked');
       blocked.setAttribute('role', 'alert');
@@ -1428,34 +1518,7 @@ export class AxSessionHome extends HTMLElement {
       : picker.kind === 'workspace' ? 'Open workspace'
         : picker.kind === 'environment' ? 'Apply and rebuild' : 'Create session');
     use.type = 'button'; use.dataset.action = 'picker-use';
-    const nameMissing = picker.kind === 'workspace'
-      ? !picker.form.workspaceName.trim()
-      : picker.kind === 'session' ? !picker.form.sessionName.trim() : false;
-    const environmentKind = picker.kind === 'session' || picker.kind === 'environment';
-    const malformedDevcontainerBlocksCreation = picker.kind === 'session'
-      && picker.probe?.devcontainer?.error;
-    const malformedDevcontainerNeedsImageDecision = picker.kind === 'environment'
-      && picker.probe?.devcontainer?.error && !picker.form.imageTouched;
-    const projectProbeFailureBlocksCreation = picker.kind === 'session' && picker.probeError;
-    const requestedImage = (picker.form.imagePreset === '__custom__'
-      ? picker.form.customImage : picker.form.imagePreset).trim();
-    const remoteImageConflict = picker.probe?.runtime?.supports_session_image === false
-      && Boolean(requestedImage);
-    const customTeamState = picker.kind === 'session' && picker.form.modeKind === 'custom'
-      ? customTeamSelectionState(this.#agents, picker.form.customAgents) : null;
-    const selectedLatticeTeamId = picker.form.workflowId || this.#teams[0]?.id || '';
-    const latticeTeamMissing = picker.kind === 'session' && picker.form.modeKind === 'lattice'
-      && !this.#teams.some((team) => team.id === selectedLatticeTeamId);
-    const protectedFolder = picker.kind === 'workspace' && picker.scope?.code === 'workspace_protected';
-    use.disabled = picker.busy || picker.phase !== 'ready' || !picker.path || nameMissing
-      || protectedFolder || Boolean(podman)
-      || (environmentKind && picker.probePending)
-      || projectProbeFailureBlocksCreation
-      || malformedDevcontainerBlocksCreation
-      || malformedDevcontainerNeedsImageDecision
-      || remoteImageConflict
-      || latticeTeamMissing
-      || customTeamState?.valid === false;
+    use.disabled = this.#pickerUseDisabled(picker);
     foot.append(cancel, use); modal.append(foot); overlay.append(modal); host.append(overlay);
     queueMicrotask(() => {
       if (this.#picker !== picker || !modal.isConnected) return;
@@ -2201,11 +2264,11 @@ export class AxSessionHome extends HTMLElement {
       this.#picker.form.workspaceName = event.target.value;
       this.#picker.form.workspaceNameTouched = true;
       const use = this.#root.querySelector('[data-action="picker-use"]');
-      if (use) use.disabled = this.#picker.busy || !event.target.value.trim();
+      if (use) use.disabled = this.#pickerUseDisabled(this.#picker);
     } else if (field === 'session-name' && this.#picker) {
       this.#picker.form.sessionName = event.target.value;
       const use = this.#root.querySelector('[data-action="picker-use"]');
-      if (use) use.disabled = this.#picker.busy || !event.target.value.trim();
+      if (use) use.disabled = this.#pickerUseDisabled(this.#picker);
     }
     else if (field === 'ports' && this.#picker) this.#picker.form.exposedPorts = event.target.value;
     else if (field === 'setup-command' && this.#picker) {
@@ -2217,6 +2280,8 @@ export class AxSessionHome extends HTMLElement {
     }
     else if (field === 'custom-image' && this.#picker) {
       this.#picker.form.customImage = event.target.value; this.#picker.form.imageTouched = true;
+      const use = this.#root.querySelector('[data-action="picker-use"]');
+      if (use) use.disabled = this.#pickerUseDisabled(this.#picker);
     }
   }
 

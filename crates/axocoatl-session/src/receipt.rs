@@ -198,7 +198,10 @@ pub struct AgentFacts {
     /// The pinned version of an external program; for a native Agent on
     /// Ollama, the Ollama server that served its calls (`ollama 0.40.6`;
     /// several versions comma-separated when Ollama was upgraded during the
-    /// run).
+    /// run); for one on OpenRouter, the endpoints that answered its calls in
+    /// the order they first answered (`openrouter endpoint deepinfra/fp8
+    /// (DeepInfra)`; `openrouter endpoints …`, comma-separated, when a call
+    /// moved to another endpoint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     pub provider: String,
@@ -224,6 +227,10 @@ pub struct SandboxFacts {
     /// a verifier that does not know the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<EnvironmentFacts>,
+    /// The resource caps the Session's container got, and those its host
+    /// could not apply (receipts since 1.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<crate::SessionResourceLimits>,
 }
 
 /// What a loadout run's admission chose for its Session's environment, and
@@ -358,9 +365,10 @@ pub struct ReviewFacts {
     pub provider: String,
     pub model: String,
     pub runtime: String,
-    /// For a native reviewer on Ollama, the Ollama server that served its
-    /// calls (`ollama 0.40.6`), as [`AgentFacts::program_version`] says it.
-    /// Absent otherwise; a verifier that does not know the field ignores it.
+    /// For a native reviewer, the Ollama server that served its calls
+    /// (`ollama 0.40.6`) or the OpenRouter endpoints that answered them, as
+    /// [`AgentFacts::program_version`] says it. Absent otherwise; a verifier
+    /// that does not know the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub program_version: Option<String>,
     /// `approved`, `changes`, ... (the Outcome's review state).
@@ -1218,7 +1226,39 @@ pub fn describe(statement: &Statement) -> Vec<String> {
         "Sandbox: {}, network {}, {} workload",
         predicate.sandbox.backend, predicate.sandbox.network, predicate.sandbox.workload
     ));
+    if let Some(limits) = &predicate.sandbox.limits {
+        lines.push(limits_line(limits));
+    }
     lines
+}
+
+/// `Resource caps: memory 2g, 2 CPUs, 512 processes; not applied: ...`.
+fn limits_line(limits: &crate::SessionResourceLimits) -> String {
+    let mut applied = Vec::new();
+    if let Some(memory) = &limits.memory {
+        applied.push(format!("memory {memory}"));
+    }
+    if let Some(cpus) = &limits.cpus {
+        applied.push(format!("{cpus} CPUs"));
+    }
+    if let Some(pids) = limits.pids {
+        applied.push(format!("{pids} processes"));
+    }
+    let mut line = format!(
+        "Resource caps: {}",
+        if applied.is_empty() {
+            "none".to_string()
+        } else {
+            applied.join(", ")
+        }
+    );
+    if !limits.not_applied.is_empty() {
+        line.push_str(&format!(
+            "; not applied, this host does not delegate their cgroup controllers: {}",
+            limits.not_applied.join(", ")
+        ));
+    }
+    line
 }
 
 #[cfg(test)]
@@ -1296,6 +1336,7 @@ mod tests {
                         routes: Vec::new(),
                     }],
                     environment: None,
+                    limits: None,
                 },
                 network: NetworkSummary::default(),
                 checks: vec![CheckFacts {
@@ -1435,6 +1476,32 @@ mod tests {
     /// bytes: OpenSSL 3.6's `openssl pkeyutl -sign -rawin` with the same
     /// seed over the same PAE.
     const FIXED_SIGNATURE: &str = "61b99fe7e00f01ff848c7afb1e1525654a6ffb6848df2793bfff712b79c3323720e0170343091638bb3321b46b108e86ea735837e274c8fc7b9ef2d86da2ad0d";
+
+    /// The resource caps (1.5) are an optional field of the sandbox facts:
+    /// absent, the statement is 1.4's; present, they are signed and said,
+    /// with the caps the host could not apply.
+    #[test]
+    fn resource_caps_are_optional_and_said_with_those_not_applied() {
+        let key_pair = key(RFC8032_SEED);
+        let mut statement = statement(public_key_of(&key_pair).signer());
+        let plain = serde_json::to_string(&statement.predicate.sandbox).unwrap();
+        assert!(!plain.contains("limits"), "{plain}");
+        assert!(!describe(&statement)
+            .iter()
+            .any(|line| line.starts_with("Resource caps")));
+        statement.predicate.sandbox.limits = Some(crate::SessionResourceLimits {
+            memory: Some("2g".into()),
+            cpus: None,
+            pids: Some(512),
+            not_applied: vec!["CPU (2 CPUs, cgroup controller cpu)".into()],
+        });
+        let text = serde_json::to_string(&statement.predicate.sandbox).unwrap();
+        assert!(text.contains(r#""limits":{"memory":"2g","pids":512,"not_applied":["CPU (2 CPUs, cgroup controller cpu)"]}"#), "{text}");
+        let read: SandboxFacts = serde_json::from_str(&text).unwrap();
+        assert_eq!(read, statement.predicate.sandbox);
+        let said = describe(&statement);
+        assert!(said.contains(&"Resource caps: memory 2g, 512 processes; not applied, this host does not delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)".to_string()), "{said:?}");
+    }
 
     /// Environment facts (1.5) are an optional field of the sandbox facts:
     /// absent, a statement is byte for byte what 1.4 signed; present, a

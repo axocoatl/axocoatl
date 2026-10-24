@@ -247,6 +247,13 @@ struct Scenario {
     /// How each reviewer generation's model call fails after its stream
     /// started, by generation (index 0 is generation 1); `None` answers.
     reviewer_failures: Vec<Option<ReviewerFailure>>,
+    /// Reviewer generations whose model calls a tool that fails and then
+    /// gives no answer, by generation; the rest answer.
+    reviewer_loops: Vec<bool>,
+    /// When each reviewer generation's model calls started.
+    reviewer_started: std::sync::Mutex<Vec<(u32, std::time::Instant)>>,
+    /// The context the reviewer's model states, when it states one.
+    reviewer_context: Option<usize>,
     /// A shell command the lead runs with bash before it answers.
     lead_command: Option<String>,
     lead_requests: std::sync::Mutex<Vec<(ActivationRef, String)>>,
@@ -258,6 +265,9 @@ impl Scenario {
             verdicts: verdicts.iter().map(|verdict| verdict.to_string()).collect(),
             lead_fails_first: false,
             reviewer_failures: vec![],
+            reviewer_loops: vec![],
+            reviewer_started: std::sync::Mutex::new(vec![]),
+            reviewer_context: None,
             lead_command: None,
             lead_requests: std::sync::Mutex::new(vec![]),
             reviewer_requests: std::sync::Mutex::new(vec![]),
@@ -278,7 +288,11 @@ impl Scenario {
 #[derive(Clone, Copy)]
 enum ReviewerFailure {
     Status(u16),
+    /// A status whose response stated a `Retry-After`, in seconds.
+    StatusAfter(u16, u64),
     Refusal,
+    /// A native Ollama response that held neither an answer nor a tool call.
+    NoAnswer,
 }
 impl ReviewerFailure {
     fn error(self) -> ProviderError {
@@ -288,10 +302,21 @@ impl ReviewerFailure {
                 status,
                 message: "upstream failure".into(),
             },
+            Self::StatusAfter(status, seconds) => ProviderError::ApiError {
+                provider: "ollama".into(),
+                status,
+                message: crate::provider_retry::with_retry_after(
+                    "upstream failure".into(),
+                    Some(Duration::from_secs(seconds)),
+                ),
+            },
             Self::Refusal => ProviderError::ContentFiltered {
                 provider: "ollama".into(),
                 reason: "safety".into(),
             },
+            Self::NoAnswer => ProviderError::Stream(
+                "native Ollama: native response has no final content or tool call".into(),
+            ),
         }
     }
 }
@@ -318,6 +343,11 @@ impl LlmProvider for ScriptedProvider {
         ProviderCapabilities {
             streaming: true,
             tool_calling: true,
+            max_context_tokens: self
+                .scenario
+                .reviewer_context
+                .filter(|_| self.reviewer)
+                .unwrap_or_default(),
             ..Default::default()
         }
     }
@@ -344,10 +374,54 @@ impl LlmProvider for ScriptedProvider {
         let generation = self.activation.generation;
         let answer = if self.reviewer {
             self.scenario
+                .reviewer_started
+                .lock()
+                .unwrap()
+                .push((generation, std::time::Instant::now()));
+            let first = !self
+                .scenario
+                .reviewer_requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(activation, _)| *activation == self.activation);
+            self.scenario
                 .reviewer_requests
                 .lock()
                 .unwrap()
                 .push((self.activation.clone(), text));
+            if self
+                .scenario
+                .reviewer_loops
+                .get(generation as usize - 1)
+                .copied()
+                .unwrap_or(false)
+            {
+                // A read of a file that is not there, then no answer.
+                let events = if first {
+                    vec![
+                        StreamEvent::ToolCallDelta {
+                            index: Some(0),
+                            id: format!("reviewer-read-{generation}"),
+                            name: Some("read_file".into()),
+                            args_delta: serde_json::json!({ "path": "no-such-file.txt" })
+                                .to_string(),
+                        },
+                        StreamEvent::Usage(TokenUsageStats::new(5, 5)),
+                        StreamEvent::Done {
+                            finish_reason: FinishReason::ToolUse,
+                        },
+                    ]
+                } else {
+                    vec![
+                        StreamEvent::Usage(TokenUsageStats::new(5, 5)),
+                        StreamEvent::Done {
+                            finish_reason: FinishReason::Stop,
+                        },
+                    ]
+                };
+                return Ok(Box::pin(tokio_stream::iter(events.into_iter().map(Ok))));
+            }
             if let Some(failure) = self
                 .scenario
                 .reviewer_failures
@@ -958,6 +1032,49 @@ async fn a_reviewer_without_a_verdict_is_asked_again_about_the_same_result() {
     assert_eq!(review.round, Some(2));
 }
 
+/// An answer without a verdict line that takes more than the room the
+/// reviewer's request keeps for it is not shown again: the host asks again
+/// about the same result, saying the answer is too long to show, so the
+/// request still fits as the first round's did.
+#[tokio::test]
+async fn a_long_answer_without_a_verdict_is_asked_again_without_showing_it() {
+    let fixture = review_fixture(2).await;
+    let long = "I read every file and found no defects in the change. ".repeat(200);
+    let scenario = Scenario::new(&[&long, "VERDICT: APPROVE\nNothing must change."]);
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    let requests = scenario.reviewer_requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let again = &requests[1].1;
+    assert!(
+        again.contains(
+            "Your previous answer did not contain a verdict line, and it is too long to show \
+             again here."
+        ),
+        "{again}"
+    );
+    assert!(
+        !again.contains("I read every file and found no defects"),
+        "{again}"
+    );
+    let reviewer: Vec<_> = contract
+        .activations()
+        .iter()
+        .filter(|item| item.activation.node_id == reviewer_node())
+        .collect();
+    assert_eq!(reviewer.len(), 2);
+    assert!(reviewer[1].input.revision_context.is_none());
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].1["round"], 2);
+    assert_eq!(observations[0].1["verdict"], "approve");
+}
+
 /// A reviewer that writes its findings first and its verdict on the last
 /// line, as a live reviewer did, is read: its approval completes the turn in
 /// the first round, and the findings are the text before the verdict.
@@ -1443,10 +1560,13 @@ async fn a_second_transient_reviewer_failure_ends_the_review() {
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].0.outcome, ConditionOutcome::Failed);
     assert_eq!(observations[0].1["round"], 2);
+    // The reason says why: the reviewer's own failure, quoted.
     let reason = observations[0].1["reason"].as_str().unwrap();
-    assert!(
-        reason.starts_with("The reviewer did not finish, so nothing approved this result."),
-        "{reason}"
+    assert_eq!(
+        reason,
+        "The reviewer did not finish, so nothing approved this result: LLM provider error: \
+         ollama API error: 503 - upstream failure. Select the reviewer and Continue to run it \
+         again, or Finish."
     );
     assert_eq!(review_retries(&run).len(), 1);
 }
@@ -1490,4 +1610,334 @@ async fn a_transient_failure_in_the_last_round_is_not_run_again() {
     );
     assert_eq!(scenario.reviewer_requests.lock().unwrap().len(), 1);
     assert!(review_retries(&run).is_empty());
+}
+
+/// A scenario whose reviewer's generations call a tool that fails and then
+/// give no answer as `loops` says, and answer `verdicts` otherwise.
+fn looping_reviewer(loops: &[bool], verdicts: &[&str]) -> Arc<Scenario> {
+    Arc::new(Scenario {
+        reviewer_loops: loops.to_vec(),
+        ..Arc::into_inner(Scenario::new(verdicts)).unwrap()
+    })
+}
+
+/// When each reviewer generation's first model call started, by generation.
+fn reviewer_started(scenario: &Scenario) -> Vec<(u32, std::time::Instant)> {
+    let mut started: Vec<(u32, std::time::Instant)> = Vec::new();
+    for (generation, at) in scenario.reviewer_started.lock().unwrap().iter() {
+        if !started.iter().any(|(seen, _)| seen == generation) {
+            started.push((*generation, *at));
+        }
+    }
+    started
+}
+
+/// A reviewer whose model kept calling tools and gave no answer (as the
+/// local gpt-oss:20b did once, ending a correct fix needing attention) runs
+/// the same round again, once, in a fresh conversation with the same prompt,
+/// and that run's approval completes the turn. The control plane shows the
+/// run again with its cause; it is no provider retry.
+#[tokio::test]
+async fn a_reviewer_that_gave_no_answer_runs_its_round_again_once() {
+    let fixture = review_fixture(3).await;
+    let scenario = looping_reviewer(&[true], &["", "VERDICT: APPROVE\nNothing must change."]);
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    assert_eq!(scenario.lead_generations(), vec![1]);
+    let reviewer: Vec<_> = contract
+        .activations()
+        .iter()
+        .filter(|item| item.activation.node_id == reviewer_node())
+        .collect();
+    assert_eq!(reviewer.len(), 2);
+    assert_eq!(reviewer[0].state, ActivationState::Failed);
+    assert_eq!(reviewer[0].input.guidance, reviewer[1].input.guidance);
+    let requests = scenario.reviewer_requests.lock().unwrap().clone();
+    // Generation 1: the tool call, then the empty answer; generation 2 starts
+    // fresh, with the same prompt and none of that conversation.
+    assert_eq!(
+        requests
+            .iter()
+            .map(|(activation, _)| activation.generation)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 2]
+    );
+    assert_eq!(requests[0].1, requests[2].1);
+    assert!(
+        !requests[2].1.contains("no-such-file.txt"),
+        "{}",
+        requests[2].1
+    );
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
+    assert_eq!(observations[0].1["reviewer"]["generation"], 2);
+    assert!(review_retries(&run).is_empty());
+    let plane = run.controller.control_plane().unwrap();
+    let reruns: Vec<_> = plane
+        .nodes
+        .iter()
+        .flat_map(|node| &node.activations)
+        .flat_map(|activation| &activation.evidence)
+        .filter(|evidence| evidence.kind == "review_rerun")
+        .collect();
+    assert_eq!(reruns.len(), 1, "{reruns:?}");
+    let crate::session_control_plane::EvidenceValue::Available { value } = &reruns[0].summary
+    else {
+        panic!("{:?}", reruns[0].summary)
+    };
+    assert_eq!(
+        value,
+        "The reviewer did not finish (its model kept calling tools and gave no answer); its \
+         review round 1 was run again, once, in a fresh conversation on the same result"
+    );
+}
+
+/// A reviewer that gives no answer again in the run again ends the review:
+/// the turn needs attention, and the reason says why in the reviewer's own
+/// words.
+#[tokio::test]
+async fn a_reviewer_that_gives_no_answer_twice_ends_the_review_saying_why() {
+    let fixture = review_fixture(3).await;
+    let scenario = looping_reviewer(&[true, true], &["VERDICT: APPROVE"]);
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    assert_eq!(reviewer_started(&scenario).len(), 2);
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].1["round"], 2);
+    let reason = observations[0].1["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(
+            "The reviewer did not finish, so nothing approved this result: Tool call failed: \
+             agent tool loop - the model returned no final answer after 1 tool calls"
+        ),
+        "{reason}"
+    );
+    assert!(
+        reason.ends_with("Select the reviewer and Continue to run it again, or Finish."),
+        "{reason}"
+    );
+}
+
+/// A reviewer whose native Ollama model gave no answer and called no tool it
+/// was offered (gpt-oss:20b called a `search` tool, which Ollama dropped,
+/// and the review of a passing fix ended needing attention) runs the same
+/// round again at once, in a fresh conversation, and that run's approval
+/// completes the turn; it is no provider retry.
+#[tokio::test]
+async fn a_reviewer_whose_model_answered_nothing_runs_its_round_again_once() {
+    let fixture = review_fixture(3).await;
+    let scenario = failing_reviewer(
+        &[Some(ReviewerFailure::NoAnswer)],
+        &["", "VERDICT: APPROVE\nNothing must change."],
+    );
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "{contract:?}"
+    );
+    assert_eq!(
+        reviewer_started(&scenario)
+            .iter()
+            .map(|(generation, _)| *generation)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
+    assert!(review_retries(&run).is_empty());
+    let plane = run.controller.control_plane().unwrap();
+    let reruns: Vec<_> = plane
+        .nodes
+        .iter()
+        .flat_map(|node| &node.activations)
+        .flat_map(|activation| &activation.evidence)
+        .filter(|evidence| evidence.kind == "review_rerun")
+        .collect();
+    assert_eq!(reruns.len(), 1, "{reruns:?}");
+    let crate::session_control_plane::EvidenceValue::Available { value } = &reruns[0].summary
+    else {
+        panic!("{:?}", reruns[0].summary)
+    };
+    assert_eq!(
+        value,
+        "The reviewer did not finish (its model gave no answer and called no tool it was \
+         offered); its review round 1 was run again, once, in a fresh conversation on the \
+         same result"
+    );
+}
+
+/// A review round a transient failure ended runs again only after the
+/// provider's Retry-After, from when the failure was recorded; without one,
+/// after the backoff (4 seconds for the turn's first run again).
+#[tokio::test]
+async fn a_review_round_runs_again_after_the_retry_after_or_the_backoff() {
+    for (failure, wait) in [
+        (ReviewerFailure::StatusAfter(429, 2), Duration::from_secs(2)),
+        (ReviewerFailure::Status(502), Duration::from_secs(4)),
+    ] {
+        let fixture = review_fixture(3).await;
+        let scenario = failing_reviewer(
+            &[Some(failure)],
+            &["", "VERDICT: APPROVE\nNothing must change."],
+        );
+        let run = run_turn(&fixture, scenario.clone()).await;
+        assert_eq!(
+            run.outcome.snapshot.contract().state(),
+            Some(LogicalTurnState::Completed)
+        );
+        let started = reviewer_started(&scenario);
+        assert_eq!(
+            started
+                .iter()
+                .map(|(generation, _)| *generation)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        let waited = started[1].1.duration_since(started[0].1);
+        assert!(
+            waited >= wait && waited < wait + Duration::from_secs(3),
+            "{waited:?} for {wait:?}"
+        );
+        assert_eq!(review_retries(&run).len(), 1);
+    }
+    // The backoff doubles for each round the turn already ran again, up to
+    // the longest Retry-After honored.
+    use crate::session_dispatch::review_rerun_backoff;
+    assert_eq!(review_rerun_backoff(0), Duration::from_secs(4));
+    assert_eq!(review_rerun_backoff(1), Duration::from_secs(8));
+    assert_eq!(review_rerun_backoff(2), Duration::from_secs(16));
+    assert_eq!(review_rerun_backoff(3), Duration::from_secs(30));
+    assert_eq!(review_rerun_backoff(usize::MAX), Duration::from_secs(30));
+}
+
+/// A Stop while a review round waits to run again ends the wait: the turn
+/// stops without running the reviewer again.
+#[tokio::test]
+async fn a_stop_ends_the_wait_for_a_review_round_to_run_again() {
+    let fixture = review_fixture(3).await;
+    let scenario = failing_reviewer(
+        &[Some(ReviewerFailure::StatusAfter(429, 30))],
+        &["", "VERDICT: APPROVE"],
+    );
+    let (controller, repository) = begin(&fixture, &fixture.request);
+    let bus = crate::stream::StreamBus::new(64);
+    let factory = Arc::new(ReviewFactory {
+        controller: controller.clone(),
+        scenario: scenario.clone(),
+        resolved: std::sync::Mutex::new(vec![]),
+    });
+    let NativeFirstTurnStart::Prepared(prepared) = finish_owned_setup(
+        &fixture.registry,
+        controller.clone(),
+        repository,
+        &fixture.request.source().unwrap(),
+        bus,
+        factory,
+    )
+    .unwrap() else {
+        panic!("owned native driver")
+    };
+    let stop = async {
+        // Wait until the round waits to run again, then Stop.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while controller.review_rerun_wait().unwrap().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the round never waited"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Meanwhile the review is shown as under way, not as never run.
+        let review = controller.control_plane().unwrap().required_review.unwrap();
+        assert_eq!(review.state, "running");
+        assert_eq!(
+            review.reason,
+            "The reviewer did not finish; its round runs again shortly when a new run can help, \
+             or the review ends saying why."
+        );
+        let snapshot = controller.snapshot().unwrap();
+        controller
+            .request_human_turn_stop(
+                snapshot.owner().session_id.as_str(),
+                snapshot.turn_id().as_str(),
+            )
+            .unwrap();
+        std::time::Instant::now()
+    };
+    // The Retry-After is 30 seconds: the turn ends long before.
+    let (outcome, stopped) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(prepared.run(), stop)
+    })
+    .await
+    .expect("the stop ended the wait");
+    let outcome = outcome.unwrap();
+    assert!(stopped.elapsed() < Duration::from_secs(10));
+    assert_ne!(
+        outcome.snapshot.contract().state(),
+        Some(LogicalTurnState::Completed)
+    );
+    assert_eq!(reviewer_started(&scenario).len(), 1);
+    let review = controller.control_plane().unwrap().required_review.unwrap();
+    assert_ne!(review.state, "running", "{review:?}");
+}
+
+/// A reviewer whose request does not fit its model's context does not run
+/// again, since the same request would not fit either: the review ends, and
+/// its reason, which a run prints on its Needs attention line, says how many
+/// tokens the request needed and the limit.
+#[tokio::test]
+async fn a_reviewer_request_too_large_for_its_model_says_so() {
+    let fixture = review_fixture(3).await;
+    let scenario = Arc::new(Scenario {
+        reviewer_context: Some(512),
+        ..Arc::into_inner(Scenario::new(&["VERDICT: APPROVE"])).unwrap()
+    });
+    let run = run_turn(&fixture, scenario.clone()).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::NeedsAttention));
+    assert!(scenario.reviewer_requests.lock().unwrap().is_empty());
+    let reviewer: Vec<_> = contract
+        .activations()
+        .iter()
+        .filter(|item| item.activation.node_id == reviewer_node())
+        .collect();
+    assert_eq!(reviewer.len(), 1, "not run again");
+    let observations = review_observations(&run);
+    assert_eq!(observations.len(), 1);
+    let reason = observations[0].1["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(
+            "The reviewer did not finish, so nothing approved this result: its request needed "
+        ) && reason.contains(" tokens of its model's context, more than the ")
+            && reason.contains(
+                " one request may take with its output allowance, so the change, the Agents' \
+                 answers and its instructions did not fit. Select the reviewer and Continue"
+            ),
+        "{reason}"
+    );
+    let plane = run.controller.control_plane().unwrap();
+    let observed = crate::bootstrap::loadout_runs::observation_from_control_plane(
+        &plane,
+        &[],
+        None,
+        &std::collections::HashMap::new(),
+    );
+    let attention = observed.attention_reason.unwrap();
+    assert!(
+        attention.starts_with(
+            "The reviewer did not finish, so nothing approved this result: its request needed "
+        ) && attention.ends_with("and its instructions did not fit."),
+        "{attention}"
+    );
 }

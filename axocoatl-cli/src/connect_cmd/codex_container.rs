@@ -120,6 +120,14 @@ server.on('error', () => client.destroy()); \
 const READ_NONE: i32 = 3;
 /// Exit status of the read script when `auth.json` is not a regular file.
 const READ_NOT_FILE: i32 = 4;
+/// How long a failed read waits for Podman to finish stopping and removing
+/// a login container whose lifetime has passed ([`Container::read_failure`]):
+/// for about three seconds after its `--timeout`, Podman 6.1 still lists it
+/// (`container exists`) while `container inspect` no longer finds it. Short
+/// in this crate's unit tests, whose fake `podman` never settles in one case.
+const SETTLE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 10 });
+/// How often [`Container::read_failure`] asks Podman again while it waits.
+const SETTLE_POLL: Duration = Duration::from_millis(250);
 
 /// A new container name.
 pub(crate) fn container_name() -> String {
@@ -556,9 +564,19 @@ impl Container {
 
     /// Why `auth.json` could not be read (`message`): the lifetime ran out
     /// ([`timed_out`], exit code [`exit::NO_TOKEN`]), the container ended
-    /// before that ([`ended_early`]), or `message` itself.
+    /// before that ([`ended_early`]), or `message` itself. Once the lifetime
+    /// has passed, a container Podman still shows running, or cannot
+    /// describe, is given up to [`SETTLE`] to end first.
     pub(crate) fn read_failure(&self, message: String) -> ReadFailure {
-        let (failure, timed_out) = match self.state() {
+        let mut state = self.state();
+        if self.outlived() {
+            let deadline = Instant::now() + SETTLE;
+            while state != State::Ended && Instant::now() < deadline {
+                std::thread::sleep(SETTLE_POLL);
+                state = self.state();
+            }
+        }
+        let (failure, timed_out) = match state {
             State::Ended if self.outlived() => {
                 (failure(exit::NO_TOKEN, timed_out(self.lifetime)), true)
             }

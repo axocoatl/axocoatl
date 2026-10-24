@@ -5,7 +5,7 @@ pub use session_knowledge_routes::*;
 use axum::{
     extract::{
         ws::{Message as AxumWsMessage, WebSocket as AxumWebSocket},
-        ConnectInfo, FromRequestParts, OriginalUri, Path, Query, State, WebSocketUpgrade,
+        ConnectInfo, FromRequestParts, Path, Query, State, WebSocketUpgrade,
     },
     http::{header, uri::Authority, HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::Next,
@@ -27,21 +27,10 @@ use crate::AppState;
 const DASHBOARD_HTML: &str = include_str!("../static/index.html");
 
 /// The app. One route, because there is one product: a session, its chat, and
-/// modules that open around it.
-pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Response {
-    if let Some(location) = canonical_workbench_location(&headers, &uri) {
-        let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
-        let response_headers = response.headers_mut();
-        response_headers.insert(header::LOCATION, location);
-        // The query may hold a sign-in token; keep it out of Referer and
-        // caches on the way to the canonical host.
-        response_headers.insert(
-            header::REFERRER_POLICY,
-            HeaderValue::from_static("no-referrer"),
-        );
-        response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return response;
-    }
+/// modules that open around it. With the local API token, the token check
+/// in front of it first moves other loopback names to [`WORKBENCH_HOST`]
+/// ([`workbench_address_redirect`]).
+pub async fn dashboard() -> Response {
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         DASHBOARD_HTML,
@@ -49,33 +38,66 @@ pub async fn dashboard(headers: HeaderMap, OriginalUri(uri): OriginalUri) -> Res
         .into_response()
 }
 
-/// Keep the browser workbench and its `<session>-p<port>.localhost` Preview
-/// frames on the same browser site so ordinary app cookies keep working. Only
-/// the exact dashboard route calls this helper: API, health, asset, CLI, and
-/// non-loopback operator hosts never redirect. Local token auth calls it too,
-/// so sign-in always happens on the canonical host.
+/// The redirect to [`canonical_workbench_location`].
+pub(crate) fn workbench_address_redirect(location: HeaderValue) -> Response {
+    let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
+    let response_headers = response.headers_mut();
+    response_headers.insert(header::LOCATION, location);
+    // The query may hold a sign-in token; keep it out of Referer and caches
+    // on the way to the canonical host.
+    response_headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// The one address the browser workbench is served at.
+///
+/// A page on a `*.localhost` address can set a cookie for `Domain=localhost`
+/// in Safari on macOS, and Safari then sends it to `localhost` on every
+/// port. A cookie for `localhost` never matches an IP address, so at
+/// `127.0.0.1` the workbench never receives one, in any browser, while every
+/// Preview keeps its own `<session>-p<port>.localhost` origin.
+pub(crate) const WORKBENCH_HOST: &str = "127.0.0.1";
+
+/// Move a workbench opened at `localhost` or another loopback address to
+/// [`WORKBENCH_HOST`] on the same listener port, query included. Only local
+/// token auth calls this, for the exact dashboard route, so sign-in always
+/// happens on the canonical host: API, health, asset, CLI, and non-loopback
+/// operator hosts never redirect. Configured credentials and
+/// `allow_unauthenticated` set no cookie for a page to shadow, and a proxy
+/// on the same host may send any loopback name, `Host: localhost` included,
+/// so the workbench is served at the name the request used.
 pub(crate) fn canonical_workbench_location(headers: &HeaderMap, uri: &Uri) -> Option<HeaderValue> {
     let authority = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| Authority::from_str(value).ok())?;
-    let host = authority
-        .host()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    let ip = host.parse::<std::net::IpAddr>().ok()?;
-    if !ip.is_loopback() {
+    if !host_is_other_loopback_name(authority.host()) {
         return None;
     }
     let listener = authority
         .port_u16()
-        .map(|port| format!("localhost:{port}"))
-        .unwrap_or_else(|| "localhost".to_string());
+        .map(|port| format!("{WORKBENCH_HOST}:{port}"))
+        .unwrap_or_else(|| WORKBENCH_HOST.to_string());
     let path_and_query = uri
         .path_and_query()
         .map(|value| value.as_str())
         .unwrap_or("/");
     HeaderValue::from_str(&format!("http://{listener}{path_and_query}")).ok()
+}
+
+/// Whether a `Host` name is `localhost` or a loopback IP address other than
+/// [`WORKBENCH_HOST`]. A Preview's `*.localhost` name is not: the Preview
+/// Host boundary answers those before the workbench router.
+pub(crate) fn host_is_other_loopback_name(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback() && host != WORKBENCH_HOST)
 }
 
 // --- @axocoatl/lattice — embedded graph-canvas ES modules ---
@@ -317,8 +339,10 @@ pub async fn llm_health(State(state): State<AppState>) -> Json<LlmHealthResponse
 
 async fn ollama_tags(base_url: &str) -> Result<Vec<String>, String> {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    // Ollama is on this computer or its network: never through a proxy.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
@@ -636,22 +660,24 @@ fn measured_error_response(
     )
 }
 
+/// A failed execute: `409` for a conflict, `422` for a refusal the person
+/// acts on (a request the daemon refuses, or a native provider check's
+/// refusal such as a Team to review again after an Ollama upgrade), `500`
+/// otherwise; the error as the person reads it.
 fn measured_daemon_failure_response(
     failure: axocoatl_daemon::MeasuredDaemonFailure,
 ) -> (StatusCode, Json<MeasuredErrorResponse>) {
-    let status = if matches!(
-        &failure.error,
+    let status = match &failure.error {
         axocoatl_daemon::DaemonError::AttemptConflict(_)
-            | axocoatl_daemon::DaemonError::SessionConflict(_)
-            | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
-    ) {
-        StatusCode::CONFLICT
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
+        | axocoatl_daemon::DaemonError::SessionConflict(_)
+        | axocoatl_daemon::DaemonError::WorkspaceBusy(_) => StatusCode::CONFLICT,
+        axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        error if error.is_provider_refusal() => StatusCode::UNPROCESSABLE_ENTITY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     measured_error_response(
         status,
-        failure.error,
+        failure.error.person_facing(),
         &failure.token_usage,
         failure.token_usage_known,
     )
@@ -827,37 +853,11 @@ pub async fn delete_session_ways_decision(
 }
 /// A Team and budget refusal as the person reads it: a native provider
 /// check's own message, without the layers it passed through
-/// ("Provider setup failed: Session dispatch: Invalid request for ollama: ").
-fn person_facing_team_message(message: &str) -> String {
-    let mut text = message
-        .strip_prefix("Provider setup failed: Session dispatch: ")
-        .unwrap_or(message);
-    if let Some(rest) = text.strip_prefix("Invalid request for ") {
-        if let Some((provider, reason)) = rest.split_once(": ") {
-            if !provider.is_empty()
-                && provider
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
-            {
-                text = reason;
-            }
-        }
-    }
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => message.to_string(),
-    }
-}
-
+/// ([`axocoatl_daemon::person_facing_message`]).
 fn team_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorResponse>) {
-    let (status, Json(ErrorResponse { error })) = attempt_err(error);
-    (
-        status,
-        Json(ErrorResponse {
-            error: person_facing_team_message(&error),
-        }),
-    )
+    let message = error.person_facing();
+    let (status, _) = attempt_err(error);
+    (status, Json(ErrorResponse { error: message }))
 }
 
 pub async fn preview_session_team(
@@ -2837,6 +2837,7 @@ fn attempt_err(error: axocoatl_daemon::DaemonError) -> (StatusCode, Json<ErrorRe
         | axocoatl_daemon::DaemonError::WorkspaceBusy(_)
         | axocoatl_daemon::DaemonError::WorkspaceRefused { .. } => StatusCode::CONFLICT,
         axocoatl_daemon::DaemonError::InvalidRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        error if error.is_provider_refusal() => StatusCode::UNPROCESSABLE_ENTITY,
         axocoatl_daemon::DaemonError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         axocoatl_daemon::DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::BAD_REQUEST,
@@ -4733,7 +4734,11 @@ pub async fn list_models(
                 .as_ref()
                 .map(|o| o.base_url.clone())
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
-            match reqwest::get(format!("{base}/api/tags")).await {
+            let tags = match reqwest::Client::builder().no_proxy().build() {
+                Ok(client) => client.get(format!("{base}/api/tags")).send().await,
+                Err(error) => Err(error),
+            };
+            match tags {
                 Ok(resp) => match resp.json::<serde_json::Value>().await {
                     Ok(v) => v["models"]
                         .as_array()
@@ -6319,6 +6324,11 @@ async fn dispatch_ws_command(
                                     "call_id": id, "name": name,
                                     "result": result, "is_error": is_error,
                                 }),
+                                // How a model response ended is recorded for
+                                // Sessions; a chat shows nothing for it.
+                                axocoatl_actor::AgentStreamChunk::ProviderResponse { .. } => {
+                                    continue
+                                }
                             };
                             let _ = out.send(f.to_string());
                         }
@@ -7008,14 +7018,24 @@ pub async fn run_automation(
 
 // --- Browser-pane proxy (DOM-picker enabler) ---
 
-fn session_preview_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+/// The Session app's URL at the loopback address and port Podman published
+/// its port on (`[::1]` or `127.0.0.2`, beside the workbench's address).
+fn session_preview_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("http://127.0.0.1:{host_port}/{tail}{query}")
+    format!("http://{published}/{tail}{query}")
 }
 
-fn session_preview_websocket_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+fn session_preview_websocket_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("ws://127.0.0.1:{host_port}/{tail}{query}")
+    format!("ws://{published}/{tail}{query}")
 }
 
 const LEGACY_PREVIEW_SANDBOX_CSP: &str =
@@ -7321,8 +7341,9 @@ fn rewrite_preview_location(value: &HeaderValue) -> HeaderValue {
 /// An upstream `Set-Cookie` without its `Domain` attributes, so the browser
 /// stores the cookie host-only on the Preview origin that answered. Safari
 /// on macOS accepts `Domain=localhost` from a top-level `<name>.localhost`
-/// page and then sends that cookie to the workbench and to every other
-/// Session's Preview; Chromium refuses it. A `Domain` naming the Preview's
+/// page and then sends that cookie to every other Session's Preview and to
+/// every other app on a `localhost` address (never to the workbench, at
+/// [`WORKBENCH_HOST`]); Chromium refuses it. A `Domain` naming the Preview's
 /// own host only adds subdomains, which no Preview has. One naming another
 /// site (an app's production domain) was refused by every browser and is
 /// now stored host-only on the Preview origin instead. The name, the value
@@ -7384,17 +7405,17 @@ fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
     html
 }
 
-async fn resolve_preview_host_port(
+async fn resolve_preview_address(
     state: &AppState,
     target: &PreviewHostTarget,
-) -> Result<u16, Box<Response>> {
+) -> Result<std::net::SocketAddr, Box<Response>> {
     if let Err(error) = require_ready_session(state, &target.session_id).await {
         return Err(Box::new(error.into_response()));
     }
     state
         .read()
         .await
-        .session_preview_host_port(&target.session_id, target.logical_port)
+        .session_preview_address(&target.session_id, target.logical_port)
         .await
         .map_err(|error| {
             let status = if matches!(
@@ -7426,11 +7447,11 @@ async fn proxy_preview_http(
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    proxy_preview_http_to_port(target, tail, request, mode, host_port).await
+    proxy_preview_http_to_port(target, tail, request, mode, published).await
 }
 
 async fn proxy_preview_http_to_port(
@@ -7438,7 +7459,7 @@ async fn proxy_preview_http_to_port(
     tail: String,
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let method = request.method().clone();
     let query = request.uri().query().map(str::to_string);
@@ -7453,10 +7474,13 @@ async fn proxy_preview_http_to_port(
                 .into_response();
         }
     };
-    let upstream = session_preview_upstream(host_port, &tail, query.as_deref());
+    let upstream = session_preview_upstream(published, &tail, query.as_deref());
+    // The Preview's port is on this computer's loopback: never through a
+    // proxy, which would see the Preview's requests in plain text.
     let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(5))
+        .no_proxy()
         .build()
     {
         Ok(client) => client,
@@ -7683,20 +7707,20 @@ async fn preview_websocket_proxy(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    preview_websocket_proxy_to_port(target, request, host_port).await
+    preview_websocket_proxy_to_port(target, request, published).await
 }
 
 async fn preview_websocket_proxy_to_port(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let tail = request.uri().path().trim_start_matches('/');
-    let upstream = session_preview_websocket_upstream(host_port, tail, request.uri().query());
+    let upstream = session_preview_websocket_upstream(published, tail, request.uri().query());
     let (mut parts, _) = request.into_parts();
     let requested_protocol = parts
         .headers
@@ -8359,30 +8383,63 @@ mod tests {
         assert!(session_environment_route_error(&ready.id, Some(&ready)).is_none());
     }
 
+    /// A native provider check's refusal (here the live error for a Team
+    /// 1.4 reviewed on Ollama 0.20.6, after Ollama was upgraded to 0.40.8)
+    /// is a `422` with the check's own words from execute and from Team &
+    /// budget; a fault is still a `500` from execute.
     #[test]
-    fn team_refusals_lose_their_internal_layers() {
+    fn provider_refusals_are_422s_in_the_providers_own_words() {
+        let upgraded = || {
+            axocoatl_daemon::DaemonError::Provider(
+                "Session dispatch: Invalid request for ollama: Ollama was upgraded from 0.20.6 \
+                 to 0.40.8; review Team & budget again"
+                    .into(),
+            )
+        };
+        let failure = |error| axocoatl_daemon::MeasuredDaemonFailure {
+            error,
+            token_usage: Default::default(),
+            token_usage_known: true,
+        };
+        let (status, Json(body)) = measured_daemon_failure_response(failure(upgraded()));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Session dispatch: Invalid request for ollama: Ollama 0.20.6 is no longer supported"
-            ),
-            "Ollama 0.20.6 is no longer supported"
+            body.error,
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
         );
+        let (status, Json(body)) = team_err(upgraded());
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Session dispatch: Invalid request for openrouter: the smallest call costs more"
-            ),
-            "The smallest call costs more"
+            body.error,
+            "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again"
         );
+        let (status, Json(body)) = team_err(axocoatl_daemon::DaemonError::Provider(
+            "Session dispatch: Invalid request for ollama: qwen3.5:0.8b is run by Ollama's MLX \
+             runner"
+                .into(),
+        ));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body.error, "qwen3.5:0.8b is run by Ollama's MLX runner");
+        let (status, _) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::InvalidRequest("Raise its token limit".into()),
+        ));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (status, Json(body)) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::Provider("Provider 'openrouter' not configured".into()),
+        ));
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
-            person_facing_team_message(
-                "Provider setup failed: Provider 'openrouter' not configured"
-            ),
+            body.error,
             "Provider setup failed: Provider 'openrouter' not configured"
         );
-        assert_eq!(
-            person_facing_team_message("Lead's token limit of 10,000 is too small"),
-            "Lead's token limit of 10,000 is too small"
-        );
+        let (status, _) = team_err(axocoatl_daemon::DaemonError::Provider(
+            "Provider 'openrouter' not configured".into(),
+        ));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = measured_daemon_failure_response(failure(
+            axocoatl_daemon::DaemonError::SessionConflict("busy".into()),
+        ));
+        assert_eq!(status, StatusCode::CONFLICT);
     }
 
     #[test]
@@ -9113,13 +9170,19 @@ mod tests {
         const TERMINAL_JS: &str = include_str!("../static/ui/terminal.js");
         const AXO_TAP_JS: &str = include_str!("../static/axo-tap.js");
 
+        let ipv4: std::net::SocketAddr = "127.0.0.2:43117".parse().unwrap();
+        let ipv6: std::net::SocketAddr = "[::1]:43117".parse().unwrap();
         assert_eq!(
-            session_preview_upstream(43117, "assets/app.js", Some("v=2")),
-            "http://127.0.0.1:43117/assets/app.js?v=2"
+            session_preview_upstream(ipv4, "assets/app.js", Some("v=2")),
+            "http://127.0.0.2:43117/assets/app.js?v=2"
         );
         assert_eq!(
-            session_preview_websocket_upstream(43117, "@vite/client", Some("token=2")),
-            "ws://127.0.0.1:43117/@vite/client?token=2"
+            session_preview_upstream(ipv6, "assets/app.js", None),
+            "http://[::1]:43117/assets/app.js"
+        );
+        assert_eq!(
+            session_preview_websocket_upstream(ipv6, "@vite/client", Some("token=2")),
+            "ws://[::1]:43117/@vite/client?token=2"
         );
 
         let mut headers = HeaderMap::new();
@@ -9243,22 +9306,32 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_canonicalizes_only_loopback_ip_literals_and_preserves_query() {
+    fn dashboard_canonicalizes_other_loopback_names_to_127_0_0_1_and_preserves_query() {
         let uri: Uri = "/?session=ses-123&review=preview".parse().unwrap();
         for (host, expected) in [
             (
-                "127.0.0.1:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                "localhost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "LocalHost:18080",
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
+            ),
+            (
+                "localhost",
+                Some("http://127.0.0.1/?session=ses-123&review=preview"),
             ),
             (
                 "127.42.3.9:8080",
-                Some("http://localhost:8080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:8080/?session=ses-123&review=preview"),
             ),
             (
                 "[::1]:18080",
-                Some("http://localhost:18080/?session=ses-123&review=preview"),
+                Some("http://127.0.0.1:18080/?session=ses-123&review=preview"),
             ),
-            ("localhost:18080", None),
+            ("127.0.0.1:18080", None),
+            ("127.0.0.1", None),
+            ("ses-123-p5173.localhost:18080", None),
             ("operator.example:18080", None),
             ("192.0.2.10:18080", None),
             ("0.0.0.0:18080", None),
@@ -9275,12 +9348,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn dashboard_canonical_redirect_sends_no_referrer() {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, "127.0.0.1:18080".parse().unwrap());
-        let response = dashboard(headers, OriginalUri("/?token=abc".parse().unwrap())).await;
+    #[test]
+    fn workbench_address_redirect_sends_no_referrer() {
+        let response =
+            workbench_address_redirect(HeaderValue::from_static("http://127.0.0.1:18080/"));
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("http://127.0.0.1:18080/")
+        );
         assert_eq!(
             response
                 .headers()
@@ -9512,13 +9591,14 @@ mod tests {
             received
         }
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview upstream");
-        let host_port = listener
+        // Where Podman publishes Session ports on this platform.
+        let listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview upstream");
+        let published = listener
             .local_addr()
-            .expect("real Preview upstream address")
-            .port();
+            .expect("real Preview upstream address");
         let upstream = tokio::spawn(async move {
             let (mut html_socket, _) = listener.accept().await.expect("accept HTML request");
             let html_request = read_request(&mut html_socket).await;
@@ -9573,7 +9653,7 @@ mod tests {
             "forms/save".to_string(),
             request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(html_response.status(), StatusCode::CREATED);
@@ -9637,7 +9717,7 @@ mod tests {
             "assets/blob.bin".to_string(),
             binary_request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(binary_response.status(), StatusCode::OK);
@@ -9701,7 +9781,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real legacy Preview upstream");
-        let host_port = listener.local_addr().expect("upstream address").port();
+        let published = listener.local_addr().expect("upstream address");
         let upstream = tokio::spawn(async move {
             let mut answered = Vec::new();
             for (location, body) in [
@@ -9768,7 +9848,7 @@ mod tests {
                 path.to_string(),
                 request(path),
                 legacy.clone(),
-                host_port,
+                published,
             )
             .await;
             assert_eq!(response.status(), status, "{path}");
@@ -9818,13 +9898,14 @@ mod tests {
     // response; this test needs that callback to inspect and select protocols.
     #[allow(clippy::result_large_err)]
     async fn preview_websocket_proxy_bridges_real_clients_and_upstream() {
-        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        // Where Podman publishes Session ports on this platform.
+        let upstream_listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview WebSocket upstream");
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -9918,7 +9999,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -10017,10 +10098,9 @@ mod tests {
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (cookie_tx, cookie_rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -10075,7 +10155,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

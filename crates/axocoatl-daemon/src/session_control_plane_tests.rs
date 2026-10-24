@@ -38,6 +38,19 @@ fn event(kind: &str, id: &str, at: u64, metadata: Value) -> SessionTurnExecution
 /// multi-Agent turn still renders: one node per Agent, one activation per
 /// recorded generation, and the superseded output marked as such. The removed
 /// coordination records no longer add states, signals or dependencies.
+/// One tool or call is said in the singular.
+#[test]
+fn how_a_model_response_ended_counts_in_words() {
+    assert_eq!(
+        provider_response_summary("stop", 1, 1),
+        "stop; 1 tool offered; 1 call"
+    );
+    assert_eq!(
+        provider_response_summary("max_tokens", 7, 0),
+        "max_tokens; 7 tools offered; 0 calls"
+    );
+}
+
 #[test]
 fn legacy_coordinated_history_still_renders_each_agent_output() {
     let mut turn = turn();

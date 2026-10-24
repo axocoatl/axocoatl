@@ -150,9 +150,11 @@ fn outcome() -> RunOutcome {
             cost_known: true,
             cost_computed: false,
             retries: 1,
+            unreported: Vec::new(),
         },
         network: NetworkSummary::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: None,
     }

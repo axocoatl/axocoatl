@@ -38,7 +38,10 @@ fn model(id: &str, tools: bool, output: &[&str], prompt: &str, completion: &str)
 fn catalog() -> Value {
     json!({"data": [
         model("qwen/qwen3-coder", true, &["text"], "0.00000022", "0.00000095"),
+        model("qwen/qwen3-coder-30b-a3b-instruct", true, &["text"], "0.00000007", "0.00000028"),
         model("openai/gpt-oss-120b", true, &["text"], "0.00000005", "0.00000025"),
+        model("z-ai/glm-4.6", true, &["text"], "0.0000004", "0.0000016"),
+        model("deepseek/deepseek-chat-v3.1", true, &["text"], "0.00000025", "0.00000095"),
         model("vendor/no-tools", false, &["text"], "0", "0"),
         model("vendor/draws", true, &["text", "image"], "0", "0"),
         model("vendor/gratis:free", true, &["text"], "0", "0"),
@@ -56,6 +59,72 @@ fn key_answer() -> Value {
         "is_free_tier": false,
         "free_model_daily_requests": {"used": 3, "limit": 1000, "remaining": 997},
     }})
+}
+
+/// A catalog row of `id` with what native Sessions need: text in and out,
+/// and tools.
+pub(crate) fn catalog_row(id: &str) -> Value {
+    model(id, true, &["text"], "0.0000002", "0.000001")
+}
+
+/// One endpoint of `id`, as OpenRouter lists it, with `status` and its
+/// success rate over the last 30 minutes.
+pub(crate) fn endpoint_row(id: &str, tag: &str, status: i64, uptime: f64) -> Value {
+    json!({
+        "model_id": id,
+        "provider_name": "Fake",
+        "tag": tag,
+        "context_length": 262144,
+        "max_completion_tokens": 65536,
+        "supported_parameters": ["max_tokens", "tools", "tool_choice"],
+        "pricing": {"prompt": "0.0000002", "completion": "0.000001"},
+        "status": status,
+        "uptime_last_30m": uptime,
+    })
+}
+
+/// Serve each model's endpoint list under `prefix` (`/api/v1`, or none)
+/// on `server`: one endpoint, healthy unless `unavailable` names the model,
+/// whose endpoint then has status -5 and 0% uptime.
+pub(crate) async fn mount_endpoints(server: &MockServer, prefix: &str, unavailable: &[&str]) {
+    let unavailable: Vec<String> = unavailable.iter().map(|id| id.to_string()).collect();
+    let pattern = format!("^{prefix}/models/[^/]+/[^/]+/endpoints$");
+    let prefix = prefix.to_string();
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path_regex(pattern))
+        .respond_with(move |request: &wiremock::Request| {
+            let id = request
+                .url
+                .path()
+                .trim_start_matches(&format!("{prefix}/models/"))
+                .trim_end_matches("/endpoints")
+                .to_string();
+            let (status, uptime) = if unavailable.contains(&id) {
+                (-5, 0.0)
+            } else {
+                (0, 100.0)
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "id": id,
+                "endpoints": [endpoint_row(&id, "fake/exact", status, uptime)],
+            }}))
+        })
+        .mount(server)
+        .await;
+}
+
+/// Serve `id`'s endpoint list under `prefix` with its one endpoint
+/// reported down (status -5, 0% uptime), ahead of [`mount_endpoints`].
+pub(crate) async fn mount_unavailable(server: &MockServer, prefix: &str, id: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("{prefix}/models/{id}/endpoints")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+            "id": id,
+            "endpoints": [endpoint_row(id, "fake/exact", -5, 0.0)],
+        }})))
+        .with_priority(1)
+        .mount(server)
+        .await;
 }
 
 /// A fake OpenRouter: the catalog, the exchange and the key's description.
@@ -78,6 +147,7 @@ pub(crate) async fn openrouter(exchange: ResponseTemplate, key: ResponseTemplate
         .respond_with(key)
         .mount(&server)
         .await;
+    mount_endpoints(&server, "/api/v1", &[]).await;
     server
 }
 
@@ -163,13 +233,13 @@ pub(crate) fn stored(data_dir: &Path, name: &str) -> Option<String> {
         .map(|value| String::from_utf8(value.to_vec()).unwrap())
 }
 
-fn request(
+fn request<'a>(
     data_dir: &Path,
     models: &[(&str, &str)],
     browser: Browser,
     endpoints: Endpoints,
     sign_in_time: Duration,
-) -> SignIn {
+) -> SignIn<'a> {
     SignIn {
         data_dir: data_dir.to_path_buf(),
         secret: OPENROUTER_SECRET.to_string(),
@@ -181,6 +251,8 @@ fn request(
         sign_in_time,
         endpoints,
         retry: None,
+        keep_waiting: None,
+        report: None,
     }
 }
 
@@ -889,6 +961,7 @@ async fn connect_stores_the_key_and_points_the_configuration_at_it() {
         models,
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut out,
         &Interrupt::default(),
     )
@@ -940,6 +1013,7 @@ async fn connect_stores_the_key_and_points_the_configuration_at_it() {
         Vec::new(),
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -971,6 +1045,7 @@ async fn with_no_config_only_the_key_is_stored_and_the_lines_are_shown() {
         models,
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1061,6 +1136,8 @@ fn doctor_names_where_the_key_is_and_how_to_store_it() {
         api_key_secret: secret.map(str::to_string),
         base_url: None,
         fallback: None,
+        first_token_timeout_secs: None,
+        idle_timeout_secs: None,
     };
     assert_eq!(
         doctor_key_line(
@@ -1127,6 +1204,7 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
         browser,
         endpoints(&server),
         "axocoatl onboard --writer openrouter",
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1148,6 +1226,7 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
         browser,
         endpoints(&server),
         "axocoatl onboard --writer openrouter",
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1166,6 +1245,7 @@ async fn onboarding_signs_in_and_stores_the_key_without_touching_a_configuration
         cancelling,
         endpoints(&server),
         "axocoatl onboard --writer openrouter",
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1344,6 +1424,7 @@ async fn the_suggested_writer_fits_the_configuration_and_the_stored_sign_ins() {
         models,
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1421,6 +1502,7 @@ async fn a_missing_user_configuration_is_written_after_the_sign_in() {
         Vec::new(),
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1437,6 +1519,7 @@ async fn a_missing_user_configuration_is_written_after_the_sign_in() {
         models,
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1496,6 +1579,7 @@ async fn a_missing_user_configuration_is_written_after_the_sign_in() {
         Vec::new(),
         browser,
         endpoints(&server),
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &Interrupt::default(),
     )
@@ -1549,6 +1633,8 @@ async fn a_key_given_where_a_secret_name_belongs_is_never_repeated() {
         api_key_secret: Some(secret.to_string()),
         base_url: None,
         fallback: None,
+        first_token_timeout_secs: None,
+        idle_timeout_secs: None,
     };
     for (provider, key) in [
         ("Mistral", "FAKEmistralKEY0123456789abcdef"),
@@ -1607,6 +1693,7 @@ async fn the_callers_interrupt_stops_the_onboarding_sign_in() {
         browser,
         endpoints(&server),
         "axocoatl onboard --writer openrouter",
+        crate::connect_cmd::openrouter::Hooks::default(),
         &mut Vec::new(),
         &interrupt,
     )
@@ -1638,6 +1725,7 @@ fn the_onboarding_sign_in_leaves_signals_to_the_process() {
             None,
             true,
             "axocoatl onboard",
+            crate::connect_cmd::openrouter::Hooks::default(),
             &mut std::io::stderr(),
         ));
         // Reached only if a signal stopped the sign-in instead of the
@@ -1708,4 +1796,292 @@ fn the_onboarding_sign_in_leaves_signals_to_the_process() {
     let rest: Vec<String> = receiver.try_iter().collect();
     assert_eq!(status.signal(), Some(15), "{status:?} {seen:?} {rest:?}");
     assert_eq!(stored(&data_dir, OPENROUTER_SECRET), None);
+}
+
+/// What a sign-in printed so far, shared with the test while it runs.
+#[derive(Clone, Default)]
+struct Shared(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Shared {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Shared {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+
+    /// The first printed line that holds `marker`, once one does.
+    async fn line_with(&self, marker: &str) -> String {
+        for _ in 0..500 {
+            if let Some(line) = self.text().lines().find(|line| line.contains(marker)) {
+                return line.trim().to_string();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("nothing printed {marker}: {}", self.text());
+    }
+}
+
+/// Return to the sign-in's callback with OpenRouter's code and the state of
+/// the sign-in page `address`.
+async fn return_from(address: &str) {
+    let url = reqwest::Url::parse(address).unwrap();
+    let get = |name: &str| {
+        url.query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
+            .unwrap()
+    };
+    super::openrouter_pkce::tests::browse(&format!(
+        "{}?code={CODE}&state={}",
+        get("callback_url"),
+        get("state")
+    ))
+    .await;
+}
+
+/// The real browser paths: with this computer's opener (here a fake `open`
+/// or `xdg-open` on a test PATH) the page is opened with its address as the
+/// one argument, said, and printed for a browser elsewhere; with
+/// `--no-browser` it is only printed, with how to forward the port.
+#[tokio::test]
+async fn the_page_opens_with_the_opener_or_is_only_printed() {
+    let server = openrouter(issued(), described()).await;
+    let root = data_root();
+    let bin = tempfile::tempdir().unwrap();
+    let (directory, opened) = super::tests::fake_opener(bin.path(), 0);
+    let opener = super::browser::Opener::find(Some(directory.as_os_str())).unwrap();
+    let out = Shared::default();
+    let sign_in_task = {
+        let (data_dir, endpoints, mut out) =
+            (root.path().to_path_buf(), endpoints(&server), out.clone());
+        tokio::spawn(async move {
+            sign_in(
+                request(
+                    &data_dir,
+                    &[],
+                    Browser::Open(opener),
+                    endpoints,
+                    Duration::from_secs(30),
+                ),
+                &mut out,
+                &Interrupt::default(),
+            )
+            .await
+        })
+    };
+    let printed = out.line_with("/auth?").await;
+    // The opener got the page's address, the one printed.
+    for _ in 0..500 {
+        if std::fs::read_to_string(&opened).is_ok_and(|text| text.contains("arg=")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(&opened).unwrap(),
+        format!("argc=1\narg={printed}\n")
+    );
+    out.line_with(super::browser::OPENED).await;
+    return_from(&printed).await;
+    let connected = sign_in_task.await.unwrap().unwrap();
+    assert_eq!(connected.secret, OPENROUTER_SECRET);
+    let text = out.text();
+    assert!(
+        text.contains("If no browser opens, open this address in a browser on this computer:"),
+        "{text}"
+    );
+
+    // --no-browser: printed only, with the port to forward from elsewhere.
+    let root = data_root();
+    let out = Shared::default();
+    let sign_in_task = {
+        let (data_dir, endpoints, mut out) =
+            (root.path().to_path_buf(), endpoints(&server), out.clone());
+        tokio::spawn(async move {
+            sign_in(
+                request(
+                    &data_dir,
+                    &[],
+                    Browser::PrintOnly,
+                    endpoints,
+                    Duration::from_secs(30),
+                ),
+                &mut out,
+                &Interrupt::default(),
+            )
+            .await
+        })
+    };
+    let printed = out.line_with("/auth?").await;
+    return_from(&printed).await;
+    sign_in_task.await.unwrap().unwrap();
+    let text = out.text();
+    let port = reqwest::Url::parse(&printed)
+        .unwrap()
+        .query_pairs()
+        .find(|(key, _)| key == "callback_url")
+        .and_then(|(_, value)| reqwest::Url::parse(&value).ok()?.port())
+        .unwrap();
+    assert!(
+        text.contains(&format!(
+            "Open this address in a browser on this computer (on another computer, forward the \
+             port first: ssh -L {port}:127.0.0.1:{port} …):"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("If no browser opens"), "{text}");
+    assert!(!text.contains(super::browser::OPENED), "{text}");
+}
+
+/// At a terminal, the end of the sign-in time asks whether to keep
+/// waiting: yes waits that long again, and a return then still signs in;
+/// no stops it as before, saying how long it waited in all. Each
+/// connection to the loopback server is reported in a line, never with the
+/// code or the state.
+#[tokio::test]
+async fn at_a_terminal_the_sign_in_asks_to_keep_waiting_and_reports_each_return() {
+    let server = openrouter(issued(), described()).await;
+    let root = data_root();
+    let asked = Arc::new(Mutex::new(Vec::<Duration>::new()));
+    let ask = {
+        let asked = asked.clone();
+        move |time: Duration| {
+            asked.lock().unwrap().push(time);
+            true
+        }
+    };
+    let reported = Arc::new(Mutex::new(Vec::<String>::new()));
+    let report = {
+        let reported = reported.clone();
+        move |line: &str| reported.lock().unwrap().push(line.to_string())
+    };
+    // The browser returns after the first wait has ended, with a stray
+    // request first.
+    let browser = Browser::Fake(Box::new(|address: String| {
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let url = reqwest::Url::parse(&address).unwrap();
+            let callback = url
+                .query_pairs()
+                .find(|(key, _)| key == "callback_url")
+                .map(|(_, value)| value.into_owned())
+                .unwrap();
+            let origin = callback.trim_end_matches("/callback").to_string();
+            super::openrouter_pkce::tests::browse(&format!("{origin}/favicon.ico")).await;
+            return_from(&address).await;
+        });
+    }));
+    let mut sign_in_request = request(
+        root.path(),
+        &[],
+        browser,
+        endpoints(&server),
+        Duration::from_millis(400),
+    );
+    sign_in_request.keep_waiting = Some(&ask);
+    sign_in_request.report = Some(&report);
+    let mut out = Vec::new();
+    let connected = sign_in(sign_in_request, &mut out, &Interrupt::default())
+        .await
+        .unwrap();
+    assert_eq!(connected.secret, OPENROUTER_SECRET);
+    assert_eq!(*asked.lock().unwrap(), [Duration::from_millis(400)]);
+    let output = String::from_utf8_lossy(&out);
+    assert!(
+        output.contains("Waiting 1 minute more for the sign-in (Ctrl-C stops it)…"),
+        "{output}"
+    );
+    let reported = reported.lock().unwrap().clone();
+    assert_eq!(reported.len(), 2, "{reported:?}");
+    assert!(
+        reported[0].starts_with("OpenRouter sign-in: GET /favicon.ico (Host 127.0.0.1:")
+            && reported[0].ends_with("): answered 404 and ignored"),
+        "{reported:?}"
+    );
+    assert!(
+        reported[1].starts_with("OpenRouter sign-in: GET /callback (Host 127.0.0.1:")
+            && reported[1].ends_with("): the sign-in's code, with its state"),
+        "{reported:?}"
+    );
+    for line in &reported {
+        assert!(!line.contains(CODE) && !line.contains("state="), "{line}");
+    }
+
+    // No: it stops at the end of the wait, saying how long it waited.
+    let root = data_root();
+    let no = |_: Duration| false;
+    let (browser, _) = browser_never_returning();
+    let mut stopped = request(
+        root.path(),
+        &[],
+        browser,
+        endpoints(&server),
+        Duration::from_millis(200),
+    );
+    stopped.keep_waiting = Some(&no);
+    let Failure { code, message } = sign_in(stopped, &mut Vec::new(), &Interrupt::default())
+        .await
+        .unwrap_err();
+    assert_eq!(code, exit::NO_TOKEN);
+    assert!(
+        message.starts_with(
+            "The OpenRouter sign-in was not completed within 1 minute; nothing was stored. No \
+             browser came back to http://127.0.0.1:"
+        ) && message.contains("/callback in that time."),
+        "{message}"
+    );
+    assert_eq!(stored(root.path(), OPENROUTER_SECRET), None);
+    // The question, as a terminal shows it.
+    assert_eq!(
+        keep_waiting_question(Duration::from_secs(600)),
+        "No sign-in came back within 10 minutes. Keep waiting 10 minutes more? (No stops the \
+         sign-in; nothing is stored.)"
+    );
+}
+
+/// `connect openrouter`'s log is made by its first line, a connection to
+/// the sign-in's address: a run that ends before any leaves no log, and a
+/// failure names the log only once it has a line.
+#[test]
+fn the_sign_in_log_is_made_by_the_first_connection() {
+    let directory = tempfile::tempdir().unwrap();
+    let logs = directory.path().join("Logs");
+    let log = SignInLog::new(Some(logs.clone()));
+    assert_eq!(log.path(), None);
+    assert!(!logs.exists());
+    log.line("OpenRouter sign-in: GET /favicon.ico (Host 127.0.0.1:4100): answered 404");
+    log.line("OpenRouter sign-in: a connection was closed before it sent a whole request");
+    let path = log.path().unwrap().to_path_buf();
+    assert!(path.starts_with(&logs), "{}", path.display());
+    let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("connect-openrouter-") && name.ends_with(".log"),
+        "{name}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+    assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);
+    assert_eq!(
+        log_hint(&path),
+        format!(
+            "\n  Each connection to the sign-in's address on this computer is logged in {} \
+             (never a code)",
+            path.display()
+        )
+    );
+    // Without a home directory no log is kept.
+    let none = SignInLog::new(None);
+    none.line("a line");
+    assert_eq!(none.path(), None);
+}
+
+fn browser_never_returning() -> (Browser, Arc<Seen>) {
+    browser(|_| None)
 }

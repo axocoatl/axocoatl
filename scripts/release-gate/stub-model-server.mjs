@@ -9,7 +9,8 @@
 //   `find` text, replaces it with edit_file, then says it is done;
 // - the reviewer (any other request with tools, or one that asks for a
 //   VERDICT line) approves;
-// - Axocoatl's two contract probes get the answers Ollama 0.40.6 gives.
+// - Axocoatl's contract probes get the answers Ollama 0.40 gives
+//   (`axocoatl_llm_ollama::ContractProbe`).
 //
 // It needs only Node 18 or later, binds only 127.0.0.1, sends nothing
 // anywhere, and keeps counters at GET /__gate/stats so the gate can prove a
@@ -28,8 +29,10 @@ import { fileURLToPath } from 'node:url';
 
 /** The Ollama release native Axocoatl was audited against. */
 export const OLLAMA_VERSION = '0.40.6';
-/** The stop probe's prompt (`axocoatl_llm_ollama::CONTRACT_STOP_PROBE_PROMPT`). */
+/** The probes' prompts (`axocoatl_llm_ollama::ContractProbe`). */
 export const STOP_PROBE_PROMPT = 'Reply with the single word: ready';
+export const LONG_OUTPUT_PROBE_PROMPT = 'Write the numbers from 1 to 300, one per line. Write only the numbers.';
+export const TOOL_PROBE_PROMPT = 'Call the report_ready tool with word set to ready.';
 /** The models a new user's onboarding chooses on a 48 GB machine. */
 export const DEFAULT_MODELS = ['qwen3-coder:30b', 'gpt-oss:20b'];
 export const DEFAULT_CONTEXT = 32768;
@@ -86,11 +89,19 @@ export function digestOf(model) {
   return createHash('sha256').update(`axocoatl-gate-stub:${model}`).digest('hex');
 }
 
+/** Which of Axocoatl's contract probes a parsed `/api/chat` body is: `over-long`, `stop`, `long`, `tool`, or null. */
+export function contractProbe(body) {
+  if (body?.truncate !== false) return null;
+  const content = body?.messages?.[0]?.content;
+  if (content === STOP_PROBE_PROMPT) return 'stop';
+  if (content === LONG_OUTPUT_PROBE_PROMPT) return 'long';
+  if (content === TOOL_PROBE_PROMPT) return 'tool';
+  return typeof content === 'string' && content.startsWith('x x ') ? 'over-long' : null;
+}
+
 /** Whether a parsed `/api/chat` body is one of Axocoatl's contract probes. */
 export function isContractProbe(body) {
-  if (body?.options?.num_predict !== 1 || body?.truncate !== false) return false;
-  const content = body?.messages?.[0]?.content;
-  return content === STOP_PROBE_PROMPT || (typeof content === 'string' && content.startsWith('x x '));
+  return contractProbe(body) !== null;
 }
 
 function textOf(content) {
@@ -281,16 +292,28 @@ export function createStubServer(options = {}) {
   };
 
   function ollamaChat(body, res) {
-    if (isContractProbe(body)) {
+    const probe = contractProbe(body);
+    if (probe !== null) {
       count('probe');
-      log({ path: '/api/chat', role: 'probe', model: body.model });
-      if (body.messages[0].content !== STOP_PROBE_PROMPT) {
+      log({ path: '/api/chat', role: 'probe', probe, model: body.model });
+      if (probe === 'over-long') {
         json(res, 400, { error: 'request exceeds the available context size, try increasing it' });
         return;
       }
-      const record = { model: body.model, created_at: CREATED_AT, message: { role: 'assistant', content: 'ready' }, done: true, done_reason: 'length', prompt_eval_count: 14, eval_count: 1 };
+      const record = (message, fields) => ({ model: body.model, created_at: CREATED_AT, message: { role: 'assistant', ...message }, ...fields });
+      const records = {
+        stop: [record({ content: 'ready' }, { done: true, done_reason: 'length', prompt_eval_count: 14, eval_count: 1 })],
+        long: [
+          record({ content: '1\n2\n3\n' }, { done: false }),
+          record({ content: '' }, { done: true, done_reason: 'length', prompt_eval_count: 33, eval_count: body.options?.num_predict }),
+        ],
+        tool: [record(
+          { content: '', tool_calls: [{ id: 'call_probe', function: { index: 0, name: 'report_ready', arguments: { word: 'ready' } } }] },
+          { done: true, done_reason: 'stop', prompt_eval_count: 138, eval_count: 31 },
+        )],
+      }[probe];
       res.writeHead(200, { 'content-type': 'application/x-ndjson' });
-      res.end(`${JSON.stringify(record)}\n`);
+      res.end(records.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
       return;
     }
     if (!known(body?.model)) {

@@ -70,8 +70,8 @@ pub fn normalize_secret_value(value: &[u8]) -> Result<Zeroizing<Vec<u8>>, Secret
     if trimmed.is_empty() {
         return Err(SecretStoreError::Invalid(
             "the value is empty; pipe it on stdin or name a variable with --from-env (for \
-             Claude Code, run `axocoatl connect claude-code`; for Codex's API key, \
-             `axocoatl connect codex --api-key`)"
+             Claude Code, run `axocoatl connect claude-code`; for Codex, `axocoatl connect \
+             codex`)"
                 .into(),
         ));
     }
@@ -262,8 +262,9 @@ pub fn check_can_store(data_dir: &Path, name: &str) -> Result<(), SecretStoreErr
 /// [`check_can_store`] for several secrets stored together: each name is
 /// valid and absent or a regular file, and all the names not stored yet fit
 /// under [`MAX_SECRETS`] together, so a command that stores them all after
-/// a sign-in (`axocoatl connect codex --api-key`) is refused before the
-/// sign-in rather than after storing only some of them.
+/// a sign-in (`axocoatl connect codex` with `--api-key`, once that route is
+/// open) is refused before the sign-in rather than after storing only some
+/// of them.
 pub fn check_can_store_all(data_dir: &Path, names: &[&str]) -> Result<(), SecretStoreError> {
     for name in names {
         check_name(name)?;
@@ -440,9 +441,11 @@ fn is_codex_chatgpt_secret(name: &str) -> bool {
 /// `axocoatl connect claude-code`, which obtains and stores a new token
 /// without anyone seeing it; for the ChatGPT sign-in, run again (the daemon
 /// asks for a new access token after a rejection) or `axocoatl connect
-/// codex`; for Codex's OpenAI API key, `axocoatl connect codex --api-key`;
-/// otherwise pipe in only the token. For the refusal of a credential
-/// a model API rejected and for `secret set`'s warnings.
+/// codex`; for Codex's OpenAI API key, the ChatGPT sign-in instead (this
+/// version does not store a key through `axocoatl connect codex --api-key`),
+/// or a key from the environment; otherwise pipe in only the token.
+/// For the refusal of a credential a model API rejected and for `secret
+/// set`'s warnings.
 pub fn store_again_hint(name: &str) -> String {
     if is_codex_chatgpt_secret(name) {
         return "the daemon asks OpenAI for a new access token after a rejection, so run \
@@ -458,16 +461,12 @@ pub fn store_again_hint(name: &str) -> String {
         );
     }
     if is_codex_api_key_secret(name) {
-        return format!(
-            "connect again with `axocoatl connect codex --api-key`, which signs you in in the \
-             browser and stores the OpenAI API key OpenAI issues with that sign-in without \
-             showing it ({AUTOMATION})"
-        );
+        return format!("{CHATGPT_INSTEAD}; or store a working OpenAI API key ({AUTOMATION})");
     }
     format!("store it again with `axocoatl secret set {name}`, piping in only the token")
 }
 
-/// Codex's OpenAI API key, which `axocoatl connect codex --api-key` stores.
+/// Codex's OpenAI API key (`codex-openai`).
 fn is_codex_api_key_secret(name: &str) -> bool {
     name == crate::external_agent::codex::CODEX_SECRET
 }
@@ -477,6 +476,14 @@ const AUTOMATION: &str = "only for automation without a browser: `axocoatl secre
                           codex-openai --from-env VAR` stores a key already in the \
                           environment variable VAR";
 
+/// The ChatGPT sign-in, in place of the API key this version does not
+/// store through a sign-in.
+const CHATGPT_INSTEAD: &str = "sign in with your ChatGPT plan instead with `axocoatl connect \
+                               codex`, which stores the sign-in as codex-chatgpt without \
+                               showing it, and run with `--param credential=codex-chatgpt` \
+                               (`axocoatl connect codex --api-key` is not available in this \
+                               version)";
+
 /// How to store secret `name` when a route names it and it is missing.
 pub fn how_to_store(name: &str) -> String {
     if is_codex_chatgpt_secret(name) {
@@ -485,11 +492,7 @@ pub fn how_to_store(name: &str) -> String {
             .to_string();
     }
     if is_codex_api_key_secret(name) {
-        return format!(
-            "run `axocoatl connect codex --api-key` (it signs you in in the browser and stores \
-             the OpenAI API key OpenAI issues with that sign-in without showing it; \
-             {AUTOMATION})"
-        );
+        return format!("{CHATGPT_INSTEAD}; {AUTOMATION}");
     }
     if is_claude_code_secret(name) {
         format!(
@@ -928,14 +931,24 @@ mod tests {
         );
         let again = store_again_hint("codex-openai");
         assert!(
-            again.starts_with("connect again with `axocoatl connect codex --api-key`"),
+            again.starts_with(
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`"
+            ),
             "{again}"
         );
         assert!(
-            again.contains("only for automation without a browser"),
+            again.contains(
+                "; or store a working OpenAI API key (only for automation without a browser"
+            ),
             "{again}"
         );
-        assert!(how_to_store("codex-openai").starts_with("run `axocoatl connect codex --api-key`"));
+        assert!(again.contains("--api-key` is not available"), "{again}");
+        let how = how_to_store("codex-openai");
+        assert!(
+            how.starts_with("sign in with your ChatGPT plan instead with `axocoatl connect codex`"),
+            "{how}"
+        );
+        assert!(how.contains("--from-env VAR"), "{how}");
         assert_eq!(
             store_again_hint("example-token"),
             "store it again with `axocoatl secret set example-token`, piping in only the token"

@@ -55,7 +55,7 @@ each step.
 | `--toolchain <NAME>` | `detected` (the default for such a loadout), `node`, `python`, `rust` or `go`, or `none` for the image as the loadout names it, with no detected install. Several toolchains whose check does not say which is a usage error that lists them. |
 | `--image <REF>` | Run this curated or trusted image as it is, without a toolchain. Give its installs with `--setup`. You cannot combine it with `--toolchain <language>`. |
 | `--no-setup` | Run no setup, not even the detected install. |
-| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` builds the image first and prints what it builds, its size and Podman's progress on standard error. |
+| `--no-build` | Refuse the run when its toolchain image is not built, naming the `axocoatl recipe build` command. Without this flag, `axocoatl run` first has the daemon check the run as [`--dry-run`](#the-dry-run) does, without loading any model, so a run that cannot start (a credential that is not stored, a reviewer on a provider that cannot review) is refused with that check's message and exit code and nothing is built; then it builds the image and prints what it builds, its size and Podman's progress on standard error. |
 | `--no-probe` | Skip the probe that refuses a run whose check cannot work in its image, for a check the probe is wrong about. |
 
 With a toolchain, `--setup` replaces the detected install and gets the same registries,
@@ -95,7 +95,15 @@ restart it", and a run that starts anyway notes it.
 The daemon checks a run in one pass before it creates anything (admission), and refuses it
 with every problem it found, in one message:
 
-1. The loadout, the task and the repository.
+1. The loadout, the task and the repository. The repository becomes the run's Workspace,
+   which its Session mounts read-write, so it keeps to the rules of Open workspace…: one
+   of Axocoatl's own directories (its data, configuration, lease or control-socket
+   directory, or a folder inside one) is refused (`workspace_protected`), and so is a
+   folder too broad to be a Workspace, such as the file system root, your home folder
+   and the folders above it, or a folder that contains one of Axocoatl's own directories
+   (`workspace_too_broad`), unless you opened it with Open workspace… in the workbench
+   and confirmed it. A broad folder that Axocoatl 1.4 registered as a Workspace without
+   asking is refused until you do.
 2. The parameters, with the defaults above. Every missing parameter is named at once, with
    the `--model ROLE=provider:model` (or `--param`) that sets it and the `run.models` key
    that can.
@@ -140,9 +148,9 @@ with every problem it found, in one message:
 
 Usage problems (exit code 3) come before infrastructure ones (5). A run with a usage
 problem never asks Podman, and a run with any other problem only asks it, so a run that
-cannot start never starts a Podman machine. A refused run leaves nothing behind: no
-Workspace, Session, container, volume, run record or receipt. One problem is printed as
-itself; several as a numbered list:
+cannot start never starts a Podman machine. A run refused by these checks leaves nothing
+behind: no Workspace, Session, container, volume, run record or receipt. One problem is
+printed as itself; several as a numbered list:
 
 ```text
 axocoatl run: 2 problems stop this run, and nothing was started:
@@ -157,8 +165,10 @@ nothing: no Workspace, Session or run record is created, and Podman is asked
 (`podman info`, `podman machine list`) but never started, so a stopped machine is reported
 as "a run starts it first" rather than as a problem, and an image that is not built is
 noted as one a run builds first. It is not free for Ollama: as a run's
-admission does, it loads each Ollama model once, without a prompt, and runs the two
-one-token contract probes, so the model then holds its memory until Ollama unloads it.
+admission does, it loads each Ollama model once, without a prompt, and runs the
+contract probes (a few bounded requests: at most 64 generated tokens, and 1,024 for the
+tool-call probe of a model with tool calling), so the model then holds its memory until
+Ollama unloads it.
 `--task` is optional (without one the task is not checked, and none is sent); `--junit`,
 `--record` and `--receipt` are refused, since there is no run. When the check takes more
 than a few seconds, a line says what it is doing. It prints the Ollama models with the
@@ -235,6 +245,23 @@ stops each of its own turns that did not complete, such as one that needs attent
 a person's Stop would (a `closing_turn` phase line on standard error), so the next run
 on the repository is admitted. The Outcome keeps each turn as it was observed.
 
+Then the run stops its Session's runtime, before its network summary, receipt and
+Outcome are written: the Session's container, egress sidecar and browser stop, as when
+the daemon stops, so a run that ended leaves nothing running. A run that ends at its
+environment (the setup or the toolchain failed, or its read-only Agents cannot read the
+repository) stops it too. The Session stays open with its turns, History, team, network
+record and changes, so Keep, the record bundle and the workbench work as before, and what
+needs its container again, such as its Terminal in the workbench, starts it again. When
+the runtime cannot be stopped, for example because another Session's turn holds the
+Workspace, the run has the warning `session_runtime_not_stopped`, which names the Session
+and `axocoatl session close`; the verdict and the exit code do not change.
+
+A run can still be refused after its Session was made: by the check probe, which runs in
+the Session's container, or when its run record cannot be written. That closes the
+Session, so nothing of it runs on; the repository stays in the list of Workspaces with
+that closed Session, and no run record or receipt is left. A run whose record could be
+made before a later write failed ends in the record as failed, with the refusal.
+
 ## What it prints
 
 1. Once the daemon has admitted the run: the run id, the Session id and any warnings, on
@@ -246,7 +273,8 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    stops the run), then prepares the Session's environment; when that takes more than a
    few seconds, a line says what it is doing. A refused run prints every problem admission found
    ([Before a run starts](#before-a-run-starts)) and never says that it started.
-2. One line per phase, turn start and end, warning, not-covered entry and provider retry,
+2. One line per phase, turn start and end, warning, not-covered entry and provider retry
+   (a move of a call to another OpenRouter endpoint of the same model included),
    on standard error, while the run proceeds. Each warning is printed once.
 3. When the run finishes, a summary on standard output: the verdict; each check with its
    state, exit code and report counts; the review verdict and rounds; each adjudication
@@ -254,9 +282,11 @@ on the repository is admitted. The Outcome keeps each turn as it was observed.
    when known, and "fails on clean build" shown as such; every not-covered entry with its
    reason; the notes (what was neither a gap nor a warning, such as the stored
    credential an external writer's route sent and, for `credential: auto`, why, what an
-   audit worker said it did not reach, or the files an audit gave to its area `rest`); the
+   audit worker said it did not reach, the files an audit gave to its area `rest`, or the
+   OpenRouter endpoints that answered each model and how many calls each answered); the
    warnings, including the same-model warning; usage (marked "known subtotal"
-   when a call's usage is unknown, with the cost as "$X (includes cost computed from
+   when a call's usage is unknown, naming each Agent and generation with how many of its
+   calls did not report, with the cost as "$X (includes cost computed from
    reported tokens at list prices)" when part of it is computed from a program's reported
    tokens, such as a Codex writer's, and as "cost unknown (reserved up to $X)" when a
    call's cost is not known, such as a Codex writer's on a model without a price);
@@ -284,7 +314,12 @@ the run passed but one of the files could not be written, `axocoatl run` exits w
 error's code instead of 0.
 
 **Ctrl-C** asks the daemon to stop the run, waits up to 30 seconds for its Outcome,
-writes `--junit`, `--record` and `--receipt`, and exits with code 6.
+writes `--junit`, `--record` and `--receipt`, and exits with code 6. Ctrl-C before the
+daemon has admitted the run, while it checks the run or prepares the Session's
+environment, ends `axocoatl run` at once with code 6 and writes only `--junit`, as for a
+run that never started. The daemon finishes the admission on its own: a run it refuses
+cleans up as above, and a run it admits stops before its first turn, as interrupted,
+and stops its Session's runtime, so nothing of it runs on. `GET /api/runs` lists that run.
 
 ## Exit codes
 
@@ -293,7 +328,7 @@ writes `--junit`, `--record` and `--receipt`, and exits with code 6.
 | 0 | Pass: every required check passed, the review (if any) approved, every review finding was answered, nothing is not covered, and no finding the loadout fails on. |
 | 1 | A required check failed or timed out on the final result. |
 | 2 | Needs attention: the review did not pass, a finding was not answered, something was not covered, an audit area's findings could not be read, a check never ran on the final result, a turn needs attention or was blocked, a budget or the wall clock ran out, findings the loadout fails on (`fail_on_findings`), or Keep failed. |
-| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a missing or unknown parameter; a writer and reviewer on the same model because of a [default from your setup](#models-from-your-setup); a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; an external writer's credential that is not stored (the one it names, or none of its runtime's for `credential: auto`), a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; a native model (an Agent's or the reviewer's) on a provider other than Ollama or OpenRouter, or on one that is not configured; an Ollama server that cannot be reached, runs a refused version or has its cloud models on, or a model it does not have, that is not GGUF, that fails the contract probes, or that it loads with less than 16,384 tokens of context; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for one model call, or for the run's checks or review. Admission reports every one it finds at once. |
+| 3 | Usage: a bad flag; an unknown loadout or one that cannot be used; a repository that is one of Axocoatl's own directories, or too broad to be a Workspace and not confirmed as one; a missing or unknown parameter; a writer and reviewer on the same model because of a [default from your setup](#models-from-your-setup); a built-in id that a file of yours also declares; a `detected` check with no detected command and no `--check`; an external writer's credential that is not stored (the one it names, or none of its runtime's for `credential: auto`), a route credential that is neither configured nor stored, or a route that differs from one your configuration has for the same host; a native model (an Agent's or the reviewer's) on a provider other than Ollama or OpenRouter, or on one that is not configured; an Ollama server that cannot be reached, runs a refused version or has its cloud models on, or a model it does not have, that is not GGUF, that fails the contract probes, or that it loads with less than 16,384 tokens of context; for `qa`, no `browser:` block or a URL the browser cannot reach; an e2e model that OpenRouter does not list with tool calls and image input; or budgets that cannot pay for one model call, or for the run's checks or review. Admission reports every one it finds at once. |
 | 4 | The daemon could not be reached, or it refused the credential; with `--dry-run`, also a daemon too old to have a dry run. |
 | 5 | Infrastructure: Podman is not installed, has no machine, cannot start its machine or does not answer; Ollama is still busy after one retry, fails to load a model (HTTP 500) or stops answering while admission checks a model; the Session could not run under egress with the `hardened` workload (rootful Podman, `backend: e2b`); a recipe image was not built; the Session environment failed; OpenRouter's catalog could not be read for an e2e check; a provider failed when the Session started; or another daemon error. |
 | 6 | You interrupted the run. |
@@ -450,5 +485,6 @@ run only while the daemon process that admitted it is running.
 
 <Aside>
 A run is an ordinary Session. Open it in the workbench to read its turns, the Agent graph,
-the network record and Git while it runs or after it ends.
+the network record and Git while it runs or after it ends. Once the run has ended, its
+container is stopped until something in the Session needs it again.
 </Aside>

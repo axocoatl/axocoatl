@@ -338,6 +338,9 @@ pub struct ProviderUsage {
     pub cost_known: bool,
     pub calls: u32,
     pub unsettled_calls: u32,
+    /// Calls whose usage or cost is not known: not settled, or settled
+    /// without complete usage or a known cost.
+    pub unreported_calls: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2696,6 +2699,7 @@ fn provider_usage_for(
         cost_known: true,
         calls: 0,
         unsettled_calls: 0,
+        unreported_calls: 0,
     };
     for call in data
         .provider_calls
@@ -2708,6 +2712,7 @@ fn provider_usage_for(
             .ok_or(AuthorityError::Capacity)?;
         let Some(outcome) = &call.outcome else {
             result.unsettled_calls += 1;
+            result.unreported_calls += 1;
             result.tokens.complete = false;
             // A valid enforced zero ceiling proves zero provider inference API
             // charge, not zero computation or a settled execution. Preserve the
@@ -2739,9 +2744,13 @@ fn provider_usage_for(
             .cost_microunits
             .checked_add(outcome.cost_microunits.unwrap_or(0))
             .ok_or(AuthorityError::Capacity)?;
-        result.cost_known &= outcome.cost_known
+        let cost_known = outcome.cost_known
             || (call.intent.reservation.cost_microunits == 0
                 && outcome.cost_microunits.unwrap_or(0) == 0);
+        result.cost_known &= cost_known;
+        if !outcome.usage.complete || !cost_known {
+            result.unreported_calls += 1;
+        }
     }
     Ok(result)
 }
@@ -4428,9 +4437,42 @@ mod provider_tests {
         assert_eq!(usage.calls, 2);
         assert_eq!(usage.cost_microunits, 2);
         assert!(!usage.cost_known);
+        assert_eq!(usage.unreported_calls, 1);
         // The completed call settled to its 20 reported tokens; the
         // interrupted one keeps its whole reservation.
         assert_eq!(gate.usage("grant").unwrap().tokens, 120);
+    }
+
+    /// A call that failed but reported that it used nothing and cost
+    /// nothing (a provider refused it before generating) is a reported
+    /// call: it gives its whole reservation back and leaves the usage exact.
+    #[test]
+    fn a_failed_call_known_to_cost_nothing_is_reported_and_releases_its_reservation() {
+        let (_root, gate, lease) = fixture();
+        let refused = gate
+            .claim_provider_call(&lease, intent("refused"), 100)
+            .unwrap();
+        gate.settle_provider_call(
+            &refused,
+            &ProviderCallOutcome {
+                kind: ProviderCallTerminal::Failed,
+                usage: MeasuredTokenUsage::known(TokenUsageStats::default()),
+                cost_microunits: Some(0),
+                cost_known: true,
+            },
+        )
+        .unwrap();
+        let answered = gate
+            .claim_provider_call(&lease, intent("answered"), 100)
+            .unwrap();
+        gate.settle_provider_call(&answered, &outcome()).unwrap();
+        let usage = gate.provider_usage(&activation("a")).unwrap();
+        assert_eq!(usage.calls, 2);
+        assert_eq!(usage.unreported_calls, 0);
+        assert!(usage.tokens.complete && usage.cost_known);
+        assert_eq!(usage.cost_microunits, 2);
+        let charged = gate.usage("grant").unwrap();
+        assert_eq!((charged.tokens, charged.cost_microunits), (20, 2));
     }
 
     #[test]
@@ -4467,6 +4509,7 @@ mod provider_tests {
         );
         assert_eq!(usage.calls, 2);
         assert_eq!(usage.unsettled_calls, 1);
+        assert_eq!(usage.unreported_calls, 1);
         assert!(!usage.cost_known);
         for requested in [
             vec![activation("a"), activation("a")],

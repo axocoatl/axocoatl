@@ -150,7 +150,7 @@ agents:
   - id: coder
     name: Coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     system_prompt: Work in the selected repository and verify changes.
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     writes: [src/, "*.md"]
@@ -222,6 +222,8 @@ providers:
   ollama:
     base_url: "http://127.0.0.1:11434"
     model: llama3.2
+    first_token_timeout_secs: 600   # default; how long an answer may take to start
+    idle_timeout_secs: 90           # default; longest pause within an answer
   openai:
     api_key: "${OPENAI_API_KEY}"
     base_url: null
@@ -257,6 +259,24 @@ leaves model history. Missing, conflicting, or stale route markers fail closed.
 A known smaller fallback rejects an already oversized request locally, while
 unknown custom-model constraints remain endpoint-validated.
 
+Every provider block, `ollama` and the hosted ones, takes `first_token_timeout_secs`
+and `idle_timeout_secs`. The first is how long a model may take to start its answer,
+from the request to the first chunk: 600 seconds for Ollama, which loads the model and
+reads the whole prompt first (minutes on a CPU-only computer or for a long prompt), and
+120 seconds for a hosted provider; 1 to 3600. The second is the longest pause between
+chunks after that: 90 seconds, 1 to 900. A request whose answer is not streamed has the
+first-token timeout, and at least 120 seconds, for the whole answer. For Ollama that
+includes loading a model to read its context, which a native Session does before its
+first call and `axocoatl doctor` and `axocoatl onboard` do for each model, and the
+contract probes after it.
+When either passes, the call fails with `first-token timeout` or `stream idle timeout`
+(a load with `did not finish loading`) and the name of the setting, and Axocoatl closes
+the connection, which makes Ollama abandon that answer or that model's load (Ollama
+0.40.8 logs "aborting completion request due to client closing the connection" and
+"client connection closed before llama-server finished loading, aborting load"). Once a
+streamed answer has started, it ends 15 minutes after its first chunk in any case
+(`stream total timeout`), however long the first-token timeout is.
+
 Native Sessions accept reviewed local Ollama profiles or eligible OpenRouter-credit
 profiles, reasoning models included. `openrouter_billing: credits` declares credit
 billing with no connected BYOK provider keys; it does not change the account. Native
@@ -286,7 +306,7 @@ loopback listener requires the per-daemon
 [local API token](/operate/security/#the-local-api-token), and non-loopback
 binding fails. `allow_unauthenticated: true` turns both off; use it only behind
 a proxy that enforces authentication. On loopback the Host check against DNS
-rebinding stays on, so a proxy on the same host must send `Host: localhost`. The rate-limit values apply per client IP
+rebinding stays on, so a proxy on the same host must send `Host: localhost` or a loopback IP such as `127.0.0.1`; in this mode the workbench does not redirect between them. The rate-limit values apply per client IP
 only when enabled.
 
 ## Sandbox
@@ -506,7 +526,11 @@ endpoints get the checks of [Requests to model APIs](/configure/credentials/#req
 besides. A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud mygpt`) keeps its
 cloud host under a name no check can recognize, so a Session opens the route only when
 Ollama on that port reports its cloud features disabled (`GET /api/status`), and
-`axocoatl network reload` refuses to turn the route on otherwise. When
+`axocoatl network reload` refuses to turn the route on otherwise. The route also asks
+`GET /api/status` again before each request it sends: while Ollama reports its cloud
+features on, or does not report them, a request gets `403 ollama_cloud_not_off` (`502`
+when Ollama does not answer) and nothing is sent, so turning them on while a Session
+is open cannot reach `ollama.com` through the route. When
 `sandbox.network` is `bridge` or `none`, only [loadout](/configure/loadouts/) Sessions,
 which always run under `egress`, reach it, and validation warns. Without it, the name is
 refused like any unlisted host.

@@ -565,6 +565,21 @@ impl SessionTurnControlPlane {
                         ActivationStreamPayload::ProviderRetry { reason } => {
                             ("provider_retry", bounded_text(reason))
                         }
+                        ActivationStreamPayload::ProviderResponse {
+                            finish_reason,
+                            offered_tools,
+                            tool_calls,
+                        } => (
+                            "provider_response",
+                            bounded_text(&format!(
+                                "Model response ended: {}",
+                                provider_response_summary(
+                                    finish_reason,
+                                    *offered_tools,
+                                    *tool_calls
+                                )
+                            )),
+                        ),
                         ActivationStreamPayload::ReasoningSummary { delta } => {
                             ("reasoning_summary", bounded_text(delta))
                         }
@@ -610,18 +625,36 @@ impl SessionTurnControlPlane {
                             .map(|output| (previous, output))
                     });
                     if let Some((previous, output)) = failed {
-                        if let Some(failure) = crate::provider_retry::transient_failure_of_text(
-                            &output.content.output.text,
-                        ) {
+                        let text = &output.content.output.text;
+                        let round = previous.activation.activation.generation;
+                        // A provider's transient failure is a provider
+                        // retry; a reviewer that did not finish in a way a
+                        // fresh conversation can is a run again of its own.
+                        let rerun = match crate::provider_retry::transient_failure_of_text(text) {
+                            Some(failure) => Some((
+                                "provider_retry",
+                                crate::provider_retry::review_retry_note(&failure, round),
+                            )),
+                            None => crate::session_dispatch::review_rerun_cause_of_text(text).map(
+                                |cause| {
+                                    (
+                                        "review_rerun",
+                                        format!(
+                                            "The reviewer did not finish ({cause}); its review \
+                                             round {round} was run again, once, in a fresh \
+                                             conversation on the same result"
+                                        ),
+                                    )
+                                },
+                            ),
+                        };
+                        if let Some((kind, note)) = rerun {
                             evidence.push(ControlPlaneEvidence {
-                                kind: "provider_retry".into(),
+                                kind: kind.into(),
                                 reference: EvidenceValue::available(
                                     output.reference.as_str().into(),
                                 ),
-                                summary: bounded_text(&crate::provider_retry::review_retry_note(
-                                    &failure,
-                                    previous.activation.activation.generation,
-                                )),
+                                summary: bounded_text(&note),
                                 recorded_at: EvidenceValue::available(
                                     output.content.output.recorded_at_unix_ms,
                                 ),
@@ -959,6 +992,20 @@ fn bounded_json(value: Value) -> EvidenceValue<Value> {
             original_byte_len: serialized.len() as u64,
         }
     }
+}
+
+/// How a model response ended, in words: `stop; 1 tool offered; 0 calls`.
+pub(crate) fn provider_response_summary(
+    finish_reason: &str,
+    offered_tools: usize,
+    tool_calls: usize,
+) -> String {
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
+    format!(
+        "{finish_reason}; {offered_tools} tool{} offered; {tool_calls} call{}",
+        plural(offered_tools),
+        plural(tool_calls)
+    )
 }
 
 fn bounded_text(value: &str) -> EvidenceValue<String> {

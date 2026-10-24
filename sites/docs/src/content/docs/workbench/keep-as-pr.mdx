@@ -67,6 +67,16 @@ you choose.
 
 ## The pull request
 
+Opening a pull request works with GitHub only: Keep pushes with your `git` and opens the
+pull request with `gh`, GitHub's command-line tool, which must be signed in to the
+remote's host. Only github.com has been tried. For a repository on GitLab, Bitbucket or
+another host, use `--keep branch` (or **Keep as PR** without **Open a PR**), then push the
+branch and open the merge request yourself. The commit and its trailers are the same,
+but Keep writes no description and so no receipt block: verify the receipt that
+`--receipt` wrote (or that **Download receipt** saves in the workbench) with
+`axocoatl receipt verify`. The commit's `Axocoatl-Receipt` trailer holds the SHA-256 of
+that receipt's signed statement.
+
 With `--keep pr`, **Open a PR**, or `"open_pr": true`:
 
 - Keep refuses a branch name equal to the remote's default branch;
@@ -84,8 +94,12 @@ and the run id with the command to verify its
 [record bundle](/reference/run/#record-bundle). The body ends with the receipt itself, the
 DSSE envelope as base64 inside an `<!-- axocoatl-receipt:v1 … -->` comment, which GitHub
 does not display. The body is cut to fit a pull request description; the cut never
-reaches the receipt block. `axocoatl receipt verify` reads a saved description
-directly:
+reaches the receipt block. A receipt block longer than 40,000 characters (the receipt
+lists every file the run changed, so a run that changes many files can pass it) is left
+out, and the body says so. Verify that receipt from the file `--receipt` wrote or from
+the run's record bundle; the [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions)
+finds none in the description, which fails it unless `require-receipt` is `false`.
+`axocoatl receipt verify` reads a saved description directly:
 
 ```sh
 gh pr view 7 --json body --jq .body > body.md

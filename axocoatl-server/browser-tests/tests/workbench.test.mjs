@@ -1502,6 +1502,161 @@ test('Source Control exposes a normal turn absolute write in Last turn', async (
   }
 });
 
+// Source Control opens a changed file in Monaco's diff editor, the part of the
+// vendored Monaco that renders its own DOM most and that ships the DOMPurify
+// it sanitizes Markdown with. The journey reads both sides, switches between
+// side by side and inline, and shows a hover whose Markdown asks for HTML:
+// the bold text and a plain span stay, an image's onerror and a script are
+// removed, and nothing runs.
+test('Source Control opens a change in Monaco\'s diff editor, side by side and inline, and its Markdown hover is sanitized', async () => {
+  const session = runtime.fixtures.alpha.sessions[0];
+  const ready = structuredClone(session);
+  ready.status = 'active';
+  ready.environment = { ...ready.environment, state: 'ready', error: null, setup_results: [] };
+  const original = 'export function total(orders) {\n  let sum = 0;\n  for (const order of orders) sum += order.amount;\n  return sum;\n}\n';
+  const changed = 'export function total(orders) {\n  return orders.reduce((sum, order) => sum + order.amount, 0);\n}\n\nexport const EMPTY = 0;\n';
+  const diffReads = [];
+  const { context, page, browserErrors } = await openSession(
+    session,
+    { width: 1600, height: 900 },
+    runtime,
+    async ({ page: target }) => {
+      for (const url of [`**/api/workspaces/${encodeURIComponent(session.workspace_id)}/sessions`, '**/api/sessions']) {
+        await target.route(url, (route) => route.fulfill({ json: [ready] }));
+      }
+      await target.route(`**/api/sessions/${session.id}/tree**`, (route) => route.fulfill({ json: [] }));
+      await target.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
+        json: route.request().method() === 'GET'
+          ? [{ id: 'diff-editor-shell', kind: 'terminal', command: 'sh', status: 'running' }]
+          : { id: 'unexpected-diff-editor-shell' },
+      }));
+      await target.route(`**/api/sessions/${session.id}/git/**`, (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname.endsWith('/git/diff')) {
+          diffReads.push(url.searchParams.get('path'));
+          return route.fulfill({ json: { path: url.searchParams.get('path'), old: original, new: changed } });
+        }
+        const body = url.pathname.endsWith('/git/status')
+          ? {
+            branch: 'main', clean: false,
+            files: [{ path: 'lib/orders.js', state: 'modified', added: 3, removed: 3, staged: false, unstaged: true, last_turn: true }],
+          }
+          : url.pathname.endsWith('/git/branches') ? { current: 'main', branches: ['main'] } : {};
+        return route.fulfill({ json: body });
+      });
+    },
+  );
+  try {
+    await page.waitForFunction(() => sessionRuntimeSurfaceReady(S.session));
+    await page.locator('[data-session-view="files"]').click();
+    await page.locator('[data-etab="git"]').click();
+    const sourceControl = page.locator('#source-control');
+    await sourceControl.locator('.file[data-path="lib/orders.js"] .file-main').click();
+    await page.waitForFunction(() => S.session.gitDiff?.editor
+      && document.querySelector('#file-viewer .monaco-diff-editor'));
+    assert.deepEqual(diffReads, ['lib/orders.js']);
+
+    const diffState = () => page.evaluate(() => {
+      const diff = S.session.gitDiff.editor;
+      const root = document.querySelector('#file-viewer .monaco-diff-editor');
+      return {
+        original: diff.getOriginalEditor().getModel().getValue(),
+        modified: diff.getModifiedEditor().getModel().getValue(),
+        language: diff.getModifiedEditor().getModel().getLanguageId(),
+        readOnly: diff.getModifiedEditor().getOption(window.axMonacoIfLoaded().editor.EditorOption.readOnly),
+        sideBySide: root.classList.contains('side-by-side'),
+        changes: (diff.getLineChanges() || []).length,
+        inserted: root.querySelectorAll('.line-insert, .char-insert').length,
+        deleted: root.querySelectorAll('.line-delete, .char-delete').length,
+        mode: document.querySelector('#git-diff-mode')?.textContent,
+      };
+    });
+    // The diff is computed in a worker; wait for its decorations.
+    await page.waitForFunction(() => (S.session.gitDiff.editor.getLineChanges() || []).length > 0
+      && document.querySelector('#file-viewer .monaco-diff-editor .line-insert, #file-viewer .monaco-diff-editor .char-insert'));
+    const sideBySide = await diffState();
+    assert.equal(sideBySide.original, original);
+    assert.equal(sideBySide.modified, changed);
+    assert.equal(sideBySide.language, 'javascript');
+    assert.equal(sideBySide.readOnly, true);
+    assert.equal(sideBySide.sideBySide, true);
+    assert.equal(sideBySide.mode, 'Side by side');
+    assert.ok(sideBySide.changes >= 1, JSON.stringify(sideBySide));
+    assert.ok(sideBySide.inserted >= 1 && sideBySide.deleted >= 1, JSON.stringify(sideBySide));
+    // Monaco renders spaces as no-break spaces.
+    const originalLines = (await page.locator('#file-viewer .monaco-diff-editor .editor.original .view-line')
+      .allTextContents()).map((line) => line.replaceAll('\u00a0', ' '));
+    assert.ok(originalLines.some((line) => line.includes('for (const order of orders)')), originalLines.join('\n'));
+
+    await page.locator('#git-diff-mode').click();
+    await page.waitForFunction(() => !document.querySelector('#file-viewer .monaco-diff-editor')?.classList.contains('side-by-side'));
+    const inline = await diffState();
+    assert.equal(inline.sideBySide, false);
+    assert.equal(inline.mode, 'Inline');
+    assert.equal(inline.modified, changed);
+
+    // A hover with Markdown that asks for HTML, through Monaco's own renderer
+    // and sanitizer, in the diff's modified editor.
+    const hover = await page.evaluate(async () => {
+      const monaco = window.axMonacoIfLoaded();
+      const editor = S.session.gitDiff.editor.getModifiedEditor();
+      globalThis.__diffHoverRan = false;
+      const provider = monaco.languages.registerHoverProvider(editor.getModel().getLanguageId(), {
+        provideHover: (model, position) => (position.lineNumber === 2 ? {
+          range: new monaco.Range(2, 3, 2, 9),
+          contents: [{
+            value: '**diff-hover-bold** <img src="data:," onerror="globalThis.__diffHoverRan = true">'
+              + ' <span title="kept">diff-hover-span</span> <script>globalThis.__diffHoverRan = true</script>',
+            supportHtml: true,
+            isTrusted: false,
+          }],
+        } : null),
+      });
+      try {
+        editor.setPosition({ lineNumber: 2, column: 4 });
+        editor.focus();
+        editor.trigger('browser-test', 'editor.action.showHover', {});
+        const node = await new Promise((resolve, reject) => {
+          const started = Date.now();
+          const look = () => {
+            const found = [...document.querySelectorAll('.monaco-hover')]
+              .find((candidate) => candidate.textContent.includes('diff-hover-bold'));
+            if (found) return resolve(found);
+            if (Date.now() - started > 15_000) return reject(new Error('the Markdown hover never rendered'));
+            return setTimeout(look, 50);
+          };
+          look();
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return {
+          bold: [...node.querySelectorAll('strong, b')].some((element) => element.textContent === 'diff-hover-bold'),
+          span: [...node.querySelectorAll('span')].some((element) => element.textContent === 'diff-hover-span'),
+          onerror: node.querySelectorAll('[onerror]').length,
+          scripts: node.querySelectorAll('script').length,
+          ran: globalThis.__diffHoverRan,
+        };
+      } finally {
+        provider.dispose();
+      }
+    });
+    assert.deepEqual(hover, { bold: true, span: true, onerror: 0, scripts: 0, ran: false });
+
+    await page.locator('#files-detail-close').click();
+    await page.waitForFunction(() => !S.session.gitDiff && !document.querySelector('#file-viewer .monaco-diff-editor'));
+    // WebKit reports this once as the diff editor opens (measured; Chromium
+    // reports nothing): Monaco's observer of the diff editor lays it out,
+    // which resizes the gutter that another of Monaco's observers watches,
+    // in the same frame, so that notification arrives a frame later. It is
+    // the only error allowed here.
+    const deferredResize = 'pageerror: ResizeObserver loop completed with undelivered notifications.';
+    const webkit = browser.browserType().name() === 'webkit';
+    assert.deepEqual(browserErrors.filter((error) => !(webkit && error === deferredResize)), [],
+      browserErrors.join('\n'));
+  } finally {
+    await context.close();
+  }
+});
+
 test('a failed Session renders bounded, text-only durable setup evidence in the banner and review', async () => {
   const evidenceSession = runtime.fixtures.alpha.sessions[1];
   const lazySession = runtime.fixtures.beta.sessions[0];
@@ -2408,33 +2563,36 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
       await page.route('**/api/sessions', (route) => route.fulfill({
         status: 200, contentType: 'application/json', body: JSON.stringify([failed]),
       }));
-      await page.evaluate(() => {
-        S.session.environment = { ...S.session.environment, state: 'ready', error: null };
-        renderSessionEnvironment(S.session);
-      });
-
-      if (scenario === 'turn') {
-        await page.evaluate((sessionId) => handleWsFrame({
-          kind: 'session-error', session: sessionId, error: 'runtime activation failed',
-        }), session.id);
-      } else if (scenario === 'tasks') {
+      if (scenario === 'tasks') {
         await page.route(`**/api/sessions/${session.id}/tasks`, (route) => route.fulfill({
           status: 409,
           contentType: 'application/json',
           body: JSON.stringify({ error: 'runtime activation failed' }),
         }));
-        await page.evaluate((sessionId) => refreshSessionTasks(sessionId), session.id);
-      } else {
+      } else if (scenario === 'preview') {
         await page.route(/ses-[a-z0-9-]+-p\d+\.localhost:\d+\//, (route) => route.fulfill({
           status: 409,
           contentType: 'application/json',
           body: JSON.stringify({ error: 'runtime activation failed' }),
         }));
-        await page.evaluate((sessionId) => {
+      }
+      // The stale Ready state and the failure that reveals it, in one task:
+      // a Session list refresh the page makes on its own reads the failed
+      // record above too, and one that landed between them used to apply
+      // Failed first. The Preview's gate then refused browserGo, and the
+      // Preview stayed bound only because this journey had bound it.
+      await page.evaluate(({ scenario, sessionId }) => {
+        S.session.environment = { ...S.session.environment, state: 'ready', error: null };
+        renderSessionEnvironment(S.session);
+        if (scenario === 'turn') {
+          handleWsFrame({ kind: 'session-error', session: sessionId, error: 'runtime activation failed' });
+        } else if (scenario === 'tasks') {
+          void refreshSessionTasks(sessionId);
+        } else {
           document.querySelector('#browser').session = sessionId;
           browserGo('http://localhost:3000');
-        }, session.id);
-      }
+        }
+      }, { scenario, sessionId: session.id });
 
       await page.waitForFunction(() =>
         document.querySelector('#session-environment')?.dataset.state === 'failed');
@@ -2461,7 +2619,7 @@ test('turn, task-poll, and Preview failures all reconcile a stale Ready cockpit'
 // as the daemon does.
 const PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
 const EMBEDDED_PREVIEW_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-modals';
-const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for the workbench and for other Sessions, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
+const PREVIEW_STAYS_EMBEDDED = /^In Safari, a Preview in its own tab could set cookies for other Sessions and other apps on localhost, so Previews stay in this pane\. For a full-page Preview, open the workbench in another browser\.$/;
 const SAFARI_MAC_USER_AGENT = /^Mozilla\/5\.0 \(Macintosh; Intel Mac OS X [\d_]+\) AppleWebKit\/[\d.]+ \(KHTML, like Gecko\) Version\/[\d.]+ Safari\/[\d.]+$/;
 const keepsPreviewsEmbedded = () => browser.browserType().name() === 'webkit';
 
@@ -2653,7 +2811,7 @@ test('Preview app code cannot cross from its dedicated origin into the workbench
     assert.equal(directResponse.headers()['content-type'], 'text/plain; charset=utf-8');
     assert.equal(directResponse.headers()['content-security-policy'], "sandbox; default-src 'none'");
     assert.match(await directPage.locator('body').textContent(),
-      /^The legacy Preview path serves a Session's app only to fetch\(\) and XMLHttpRequest/);
+      /^The legacy Preview path serves a Session's app only to data requests such as fetch\(\) and XMLHttpRequest/);
     await directPage.close();
     assertNoBrowserErrors();
   } finally {
@@ -2665,7 +2823,8 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   const session = runtime.fixtures.alpha.sessions[0];
   // Safari's WebKit on macOS lets a top-level page on <name>.localhost set a
   // Domain=localhost cookie, which it then sends to localhost and to every
-  // other <name>.localhost (measured in Playwright WebKit on macOS).
+  // other <name>.localhost (measured in Playwright WebKit on macOS), never to
+  // the workbench at 127.0.0.1.
   // Chromium refuses it, and so does WebKit on Linux (libsoup). So in Safari
   // the workbench never runs a Preview top-level, and Playwright's WebKit is
   // taken for Safari on Linux too (keepsPreviewsEmbedded): the full-page step
@@ -2679,9 +2838,10 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   // requests. preview-cookies.test.mjs asserts the same against a real
   // Preview app behind the real proxy, and that in Safari the daemon refuses
   // a Preview page that would run top-level (typed, redirected, or opened by
-  // a real Command-click in the frame); signed-out.test.mjs, the 51 large and
-  // 9 filler Path=/api cookies that a page on another *.localhost address can
-  // set to sign Safari out of the API.
+  // a real Command-click in the frame); signed-out.test.mjs, that such
+  // cookies never reach the workbench, and the 51 large and 9 filler
+  // Path=/api cookies that a page on another 127.0.0.1 port can set to sign
+  // Safari out of the API.
   const safariKeepsPreviewsEmbedded = keepsPreviewsEmbedded();
   const {
     context, page, browserErrors, browserRequests, assertNoBrowserErrors,
@@ -2689,10 +2849,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
   let cookieEcho = null;
   try {
     cookieEcho = await startCookieEcho();
-    assert.equal(new URL(page.url()).hostname, 'localhost');
-    assert.ok(browserRequests.some((request) =>
-      new URL(request.url).hostname === '127.0.0.1'
-      && new URL(request.url).pathname === '/'));
+    // The workbench's one address; nothing redirected it to another.
+    assert.equal(new URL(page.url()).hostname, '127.0.0.1');
+    assert.equal(browserRequests.some((request) => new URL(request.url).hostname === 'localhost'), false);
     const ready = structuredClone(session);
     ready.status = 'active';
     ready.environment = {
@@ -3102,7 +3261,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // The embedded Preview's script tried a host-only and a Domain=localhost
     // cookie. Third-party cookie policy refuses both in the workbench's
     // frame in every engine, so nothing reached the workbench's host.
-    const embeddedAtWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    const embeddedAtWorkbench = await cookieEcho.cookieAt(context, '127.0.0.1');
     assert.equal(/preview-(?:parent-attempt|host-only)=/.test(embeddedAtWorkbench), false);
 
     const fullPreviewButton = page.locator('ax-browser [data-act="open-full"]');
@@ -3122,7 +3281,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       const pagesBeforeClick = new Set(context.pages());
       await fullPreviewButton.click();
       assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeClick), []);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
 
       // Nor can the Preview's own code. A real click on its target=_blank
       // link opens nothing. On a real click in the frame its window.open of
@@ -3167,7 +3326,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
           browserErrors.splice(index, 1);
         }
       }
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
       assert.equal(new URL(previewFrame.url()).pathname, '/app');
       // A Command-click the Preview's script makes up stays in the frame: it
       // navigates the frame itself (the fixture answers /landed with 404),
@@ -3175,7 +3334,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
       await previewFrame.locator('#meta-click').click({ noWaitAfter: true });
       await previewFrame.waitForURL(`${previewOrigin}/landed`);
       assert.deepEqual(await pagesOpenedWithin(context, pagesBeforeFrameAttempts), []);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
       assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     } else {
       // Modern browsers block ordinary third-party cookies in the embedded
@@ -3223,7 +3382,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // other Preview port and to another Session's Preview, read from the
     // real Cookie headers before any proxy sees them.
     const otherSession = runtime.fixtures.alpha.sessions[1];
-    const atWorkbench = await cookieEcho.cookieAt(context, 'localhost');
+    const atWorkbench = await cookieEcho.cookieAt(context, '127.0.0.1');
     const atPreviews = [
       await cookieEcho.cookieAt(context, `${session.id}-p5000.localhost`),
       await cookieEcho.cookieAt(context, `${otherSession.id}-p3000.localhost`),
@@ -3233,7 +3392,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     const realToken = `axocoatl-token-${listenerPort}=${runtime.token}`;
     const forgedToken = `axocoatl-token-${listenerPort}=forged-by-a-preview`;
     const signedIn = `axocoatl-token-${listenerPort}-signed-in=1`;
-    // The workbench's own sign-in cookies are host-only on localhost: the
+    // The workbench's own sign-in cookies are host-only on 127.0.0.1: the
     // workbench gets them, and no request to a Preview origin carries them,
     // in every engine.
     assert.equal(pairs(atWorkbench).includes(realToken), true, cookieNames(atWorkbench));
@@ -3247,9 +3406,9 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     // Its Domain=localhost cookies reach nothing: Chromium and WebKit on
     // Linux refuse them, and Safari on macOS never ran the Preview top-level
     // to set them. (From a Preview address someone opens in its own Safari
-    // tab they would reach the workbench and every other Preview, forged
-    // axocoatl-token-* cookies included; the Preview proxies strip those
-    // before an app sees them: preview-cookies.test.mjs.)
+    // tab they would reach every other Preview, forged axocoatl-token-*
+    // cookies included, but never the workbench at 127.0.0.1; the Preview
+    // proxies strip those before an app sees them: preview-cookies.test.mjs.)
     for (const cookie of [atWorkbench, ...atPreviews]) {
       const sent = pairs(cookie);
       for (const [label, present] of [
@@ -3276,7 +3435,7 @@ test('Preview browser contract keeps modules, app APIs, storage, forms, assets, 
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     const workbenchAgain = await context.newPage();
     try {
-      const response = await workbenchAgain.goto(`http://localhost:${listenerPort}/`);
+      const response = await workbenchAgain.goto(`http://127.0.0.1:${listenerPort}/`);
       assert.equal(response?.status(), 200);
       assert.notEqual(await workbenchAgain.title(), 'Sign in to Axocoatl');
       await workbenchAgain.waitForFunction(() =>
@@ -3430,7 +3589,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
       const refusalsBefore = await refusals();
       await citation.click(options);
       await expectOpened(before, `${what} on a link to a Preview`, refusalsBefore, mustOpen);
-      assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`, what);
+      assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`, what);
     }
     // Its context menu (Safari's own holds Open Link in New Tab) and
     // dragging it out are refused too.
@@ -3497,7 +3656,7 @@ test('in Safari no link, window.open or terminal link in the workbench opens a P
       assert.equal(await notices.count(), 0);
       assert.equal(await refusals(), 0);
     }
-    assert.equal(new URL(page.url()).host, `localhost:${listenerPort}`);
+    assert.equal(new URL(page.url()).host, `127.0.0.1:${listenerPort}`);
     assert.equal(await page.evaluate(async () => (await fetch('/api/agents')).status), 200);
     assertNoBrowserErrors();
   } finally {

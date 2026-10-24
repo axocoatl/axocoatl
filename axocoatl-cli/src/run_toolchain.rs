@@ -3,9 +3,12 @@
 //! (`axocoatl_daemon::loadout::toolchain::plan`), and when its recipe image
 //! is not built on this computer, build it here so Podman's progress shows
 //! on this terminal's standard error, saying what it builds and about how
-//! large it is. With `--no-build` nothing is built and the daemon refuses
-//! the run, naming the `axocoatl recipe build` command. Owner: workstream
-//! `toolchain`.
+//! large it is. Before it builds, the daemon checks the run as `--dry-run`
+//! does, so a run that cannot start (a credential that is not stored, a
+//! reviewer that cannot review) is refused without building hundreds of
+//! megabytes first. With `--no-build` nothing is built and the daemon
+//! refuses the run, naming the `axocoatl recipe build` command. Owner:
+//! workstream `toolchain`.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -60,12 +63,14 @@ pub(crate) fn build_line(image: &str, recipes: &[String]) -> String {
     }
 }
 
-/// Build the run's toolchain image when it is missing and building is
-/// allowed. A loadout the daemon cannot show is left to admission, which
-/// decides the same way and says why.
+/// Build the run's toolchain image when it is missing, building is allowed
+/// and the daemon finds nothing else that stops the run (`request` is the
+/// run's `POST /api/runs` body). A loadout the daemon cannot show is left
+/// to admission, which decides the same way and says why.
 pub(super) async fn prepare_image(
     daemon: &Daemon,
     plan: &RunPlan,
+    request: &serde_json::Value,
     config: &Path,
     console: &mut Console,
 ) -> Result<(), Failure> {
@@ -100,6 +105,7 @@ pub(super) async fn prepare_image(
     if built.is_some() || !plan.environment.build_images {
         return Ok(());
     }
+    refuse_before_build(daemon, request).await?;
     let image = environment.image_text();
     console.note(&build_line(&image, &environment.recipes));
     let started = Instant::now();
@@ -113,7 +119,7 @@ pub(super) async fn prepare_image(
              it again with `{}`",
             environment
                 .build_command()
-                .unwrap_or_else(|| "axocoatl recipe build <recipes>".into())
+                .unwrap_or_else(|| "axocoatl recipe build RECIPE".into())
         ),
             })?;
     recipe_images::record_image_at(&data_dir, record.clone()).map_err(|error| Failure {
@@ -130,6 +136,22 @@ pub(super) async fn prepare_image(
         &record.image_id[..12.min(record.image_id.len())]
     ));
     Ok(())
+}
+
+/// Check the run `request` as `--dry-run` does, loading no model, before
+/// its image is built: a problem that stops it is refused now, in the words
+/// and with the exit code admission would use, and nothing is built. A
+/// daemon without a dry run (older than 1.5) leaves it to admission.
+async fn refuse_before_build(daemon: &Daemon, request: &serde_json::Value) -> Result<(), Failure> {
+    let mut dry = request.clone();
+    dry["load_models"] = serde_json::Value::Bool(false);
+    match super::try_preflight(daemon, &dry).await? {
+        super::Preflight::Checked(preflight) if !preflight.ready => Err(Failure {
+            code: preflight.exit_code,
+            message: axocoatl_daemon::loadout::admission::refusal_text(&preflight.problems),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// The `environment` of `POST /api/runs` from the flags.

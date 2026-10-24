@@ -59,16 +59,21 @@ memory, processors and free disk (for the models, and for Podman when that is an
 file system), and looks for Homebrew, Podman, Ollama, `claude`, `codex`, `gh`, `git`,
 a running Axocoatl daemon and its version, and an installed Always-On Service. It
 checks whether port 8080 is free only when `--port` does not name the port. It stops if it runs as root
-(loadout runs need rootless Podman) or in WSL 1 (`wsl --set-version <distro> 2`). On
-macOS a missing `git` is the Command Line Tools stub; onboarding offers
-`xcode-select --install`.
+(loadout runs need rootless Podman) or in WSL 1 (`wsl --set-version DISTRO 2`, where
+DISTRO is the name `wsl -l -v` lists). On macOS a missing `git` is the Command Line
+Tools stub, which onboarding does not run (`xcode-select -p` finds no tools; running
+the stub opens Apple's installer); onboarding offers `xcode-select --install`. It also
+names a platform the release gate does not verify (an Intel Mac, a Linux other than
+Ubuntu 24.04, WSL2, SELinux enforcing), and warns when `HTTPS_PROXY`, `HTTP_PROXY` or
+`ALL_PROXY` is set: a Session's network connects directly, never through a proxy (see
+[Proxies, VPNs and rate limits](/start/install/#proxies-vpns-and-rate-limits)).
 
 ### Step 1: who writes the code
 
 ```text
 Who writes the code?
 > Claude Code (your Claude Pro or Max plan; claude found at ~/.local/bin/claude)
-  Codex (your ChatGPT plan, or an OpenAI API key)
+  Codex (your ChatGPT plan)
   A local model on this computer (Ollama, no account, needs 48 GB memory or more)
   A hosted model (OpenRouter credits)
 ```
@@ -145,8 +150,9 @@ On **Linux and WSL2**:
   | openSUSE, SLES | `sudo zypper install -y podman` |
 
 - Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (the 1.5.0
-  release gate ran Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
-  or newer. Podman 4.3 to 4.8 is accepted and reported as not tested.
+  release gate runs Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04
+  or newer. Any other Podman from 4.3 on (4.3 to 4.8, or Fedora's 5.x and Arch's 6.x)
+  is accepted and reported as not tested on Linux yet; 4.9 is the tested one.
 - No range of subordinate user ids, or fewer than 65536, in `/etc/subuid` and
   `/etc/subgid` (rootless Podman cannot unpack images or start Sessions without one;
   its sandbox container fails with `crun: write to /proc/sys/net/ipv4/ping_group_range:
@@ -170,12 +176,19 @@ On **Linux and WSL2**:
   is gone, or it lost its setuid bit or file capabilities, an install would do nothing,
   so onboarding offers the reinstall: `sudo apt-get install --reinstall -y uidmap`,
   `sudo dnf reinstall -y shadow-utils` on Fedora and RHEL (where shadow-utils is always
-  installed), `sudo pacman -S --noconfirm shadow` on Arch. If an install or reinstall
-  runs and the helpers still cannot map, onboarding says so and does not offer it again
-  in that run (`axocoatl doctor` still names it, and a later onboarding offers it again).
-  If the install or reinstall itself fails, the step says why: a build dnf no longer has
-  (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date lists (run `sudo
-  apt-get update` first), or what the command reported, to fix before running it again.
+  installed), `sudo pacman -S --noconfirm shadow` on Arch. Onboarding and doctor first
+  read what the package manager would do: a dpkg diversion, stat override or
+  `path-exclude`, dnf set to `nocaps`, an rpm that gives the helpers no privilege, or
+  pacman's `NoExtract` or `NoUpgrade` for a helper each keep a reinstall from restoring
+  it, and then the fix says what to change first instead of offering the reinstall. If an
+  install or reinstall runs and the helpers still cannot map (something on the computer
+  changes them afterwards, which no package record shows), or the command fails,
+  onboarding says so and keeps what happened in your Axocoatl data directory
+  (`onboarding/id-map-attempt.json`): `axocoatl doctor` and later onboarding runs say
+  it, with the date, and do not offer the same command again while the helpers are the
+  same files (an upgrade that writes them again ends that). A failure says why: a build
+  dnf no longer has (run `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date
+  lists (run `sudo apt-get update` first), or what the command reported.
   Helpers in `/usr/bin` while `/usr/bin` is not on `PATH` are reported as such, with no
   install, and so is a copy earlier on `PATH` that the package does not own; on other
   distributions the fix says what to install or reinstall. Doctor names the
@@ -188,7 +201,8 @@ On **Linux and WSL2**:
   run their read-only reviewer, and onboarding says how to get a newer kernel (Debian
   12: bookworm-backports; WSL: `wsl --update`). ABI 3 works, but read-only helper
   shells need Linux 6.7.
-- SELinux enforcing is reported as not yet verified; WSL without systemd is told that
+- SELinux is reported with what Axocoatl does about it: Session and browser
+  containers run with SELinux labelling off; WSL without systemd is told that
   the Always-On Service is unavailable and that `axocoatl dev` works.
 
 Then one throwaway container proves the setup: onboarding pulls
@@ -234,17 +248,25 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
 
    This also turns off Ollama's web search.
 4. **Models by memory.** Models already installed come first, at any memory size.
-   Among those that fit this computer, onboarding picks a writer (Qwen3-Coder first, then
-   the largest coding model, then the largest other model, vision models last); when
-   another of them is a gpt-oss model or is larger than that writer, it suggests the two,
-   and Enter (or `--yes`) takes them. Any model larger than about 0.65 of this computer's
+   Among those that fit this computer and call tools, onboarding picks a writer
+   (Qwen3-Coder first, then the largest coding model, then the largest other model,
+   vision models last); when another of them is a gpt-oss model or is larger than that
+   writer, it suggests the two, and Enter (or `--yes`) takes them. A model whose
+   `capabilities` Ollama lists without `tools`, or Qwen2.5-Coder, which returns its tool
+   calls as JSON text that never runs, is offered but never suggested, and onboarding
+   says why. Any model larger than about 0.65 of this computer's
    memory is labelled too large and never preselected. With no such pair installed:
 
    | Memory | Writer | Reviewer | What is known |
    | --- | --- | --- | --- |
    | 96 GB or more | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:120b` (65.4 GB) | gpt-oss 120B is the reviewer Axocoatl has measured |
-   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | Ran end to end on a 48 GB Mac in the 1.5.0 release gate; this reviewer's quality has not been measured |
-   | Under 48 GB | — | — | Not yet verified with local models. Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
+   | 48 to 95 GB | `qwen3-coder:30b` (18.6 GB) | `gpt-oss:20b` (13.8 GB) | How well this reviewer reviews has not been measured |
+   | Under 48 GB | — | — | Onboarding offers no local pair by default: it says which of these models fit and offers OpenRouter, Claude Code or Codex instead |
+
+   The 1.5.0 release gate requires runs with the local models onboarding sets up on its
+   Mac to pass. It checks neither that Mac's memory nor which models onboarding chose
+   there, and its evidence names both, so those runs verify local models only on that
+   memory ([Install](/start/install/)).
 
    Under 48 GB onboarding suggests a model only when it fits this computer, as `doctor`
    judges it (at most about 0.65 of its memory): on a 24 GB Mac only `gpt-oss:20b` of
@@ -261,18 +283,20 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    free here.` A model too large for this computer's memory is named in that question,
    and Enter does not pull it; `--yes` pulls it only with `--pull`. Its step left names
    `axocoatl onboard` with the writer you chose, so it does not ask again who writes: a
-   smaller model with `axocoatl onboard --replace --writer ollama`, or a hosted writer and
-   reviewer with `axocoatl onboard --replace --writer openrouter` (or `--writer
+   smaller model with `axocoatl onboard --update --writer ollama`, or a hosted writer and
+   reviewer with `axocoatl onboard --update --writer openrouter` (or `--writer
    claude-code`, or `--writer codex`); for Claude Code and Codex, a smaller reviewer, or
-   `--reviewer openrouter:openai/gpt-oss-120b`. It says `--replace`, which backs the
-   configuration up and writes the team for the new models, when an Agent in the
-   configuration runs the model: `--update` keeps a configuration's Agents and changes
-   only `run.models`, so it would leave them on it. Otherwise it says `--update`. With
+   `--reviewer openrouter:openai/gpt-oss-120b`. `--update` moves the Agents onboarding
+   wrote, and `run.models`, to the new models. It says `--replace`, which backs the
+   configuration up and writes the team for the new models, when an Agent that `--update`
+   keeps as it is (one that differs from what onboarding writes, or your own) runs the
+   model. With
    `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
    step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
-   (the MLX variant on Apple silicon), it offers `ollama pull --runner llamacpp <model>`
-   (an undocumented Ollama flag) to pull the GGUF one.
+   (the MLX variant on Apple silicon), it offers to remove it and pull the GGUF one with
+   `ollama rm MODEL && ollama pull --runner llamacpp MODEL` (an undocumented Ollama flag,
+   which does not replace a variant already installed).
 6. **Context.** Onboarding loads each model once without generating, reads the context
    Ollama gives it, and runs the contract probes. Ollama picks 4096 tokens below about
    23 GiB of graphics memory, and a fix run's first writer call needs about 9.7k, so a
@@ -308,12 +332,12 @@ open for that step; see [Repository toolchains](/configure/toolchains/).
 ### Step 3C: Codex
 
 Codex works the same way through `axocoatl connect codex`, which builds the Codex
-sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Onboarding
-asks which account pays for Codex runs, your ChatGPT plan (recommended) or an OpenAI API
-key (`axocoatl connect codex --api-key-only`; it needs an OpenAI Platform organization
-and is billed at API rates), and names that credential on the run command it prints
-(`--param credential=codex-chatgpt` or `codex-openai`), so storing a key later does not
-move a ChatGPT-plan setup to API billing.
+sandbox image (about 0.8 to 1.2 GB) once and signs in through the browser. Codex runs
+bill to your ChatGPT plan: onboarding names that credential on the run command it prints
+(`--param credential=codex-chatgpt`), so a key stored later does not move the setup to
+API billing. 1.5.0 stores no OpenAI API key for Codex (`axocoatl connect codex
+--api-key` is not available); a configuration that already names `codex-openai` keeps it
+when that key is stored, and otherwise moves to your ChatGPT plan and says so.
 
 ### Step 3D: OpenRouter
 
@@ -322,7 +346,7 @@ to your OpenRouter account at `https://openrouter.ai/settings/integrations`, so 
 provider bills you and Axocoatl cannot count the cost. Native Sessions refuse it, and a
 new account has none. It asks you to confirm that OpenRouter credits pay and the
 account has no BYOK keys, then asks for two models: the writer (default
-`qwen/qwen3-coder`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
+`qwen/qwen3-coder-30b-a3b-instruct`) and the reviewer (default `openai/gpt-oss-120b`, another vendor),
 and refuses the same model for both. The writer's output limit is 4096 tokens.
 
 The key, in this order:
@@ -342,15 +366,23 @@ The key, in this order:
    - **Sign in to OpenRouter in your browser (recommended)**, the default: the same
      sign-in as [`axocoatl connect openrouter`](/configure/providers/#configure-openrouter).
      It checks both models in OpenRouter's catalog, opens OpenRouter's sign-in page
-     in your browser and prints its address, waits up to 10 minutes for the browser
-     to return to `http://127.0.0.1:<port>/callback`, and stores the key OpenRouter
-     issues as the secret `openrouter` in Axocoatl's secret store (`0600`), never
-     showing it. The configuration gets `api_key_secret: openrouter` and
+     in your browser (in WSL with `wslview`, in Windows' browser) and prints its
+     address, waits up to 10 minutes for the browser to return to
+     `http://127.0.0.1:<port>/callback`, and stores the key OpenRouter issues as the
+     secret `openrouter` in Axocoatl's secret store (`0600`), never showing it. When
+     the 10 minutes end without a sign-in, it asks whether to keep waiting (Enter
+     waits 10 minutes more). Each connection to that address is written to the
+     onboarding log, its method, path and `Host` only, never the code, so a sign-in
+     that never comes back can be diagnosed. The configuration gets
+     `api_key_secret: openrouter` and
      `openrouter_billing: credits`, never the key. The callback is a loopback port,
-     so from a VM, open the link in a browser that can reach that port (Lima
-     forwards a guest's loopback ports to the host; elsewhere, forward it with
-     `ssh -L`). Cancelling in the browser or running out of time stores nothing, and
-     the step left says to run onboarding again.
+     so from a VM, open the link in a browser that can reach that port: Lima
+     forwards a guest's loopback ports to the host unless the VM is plain
+     (`limactl create --plain`, or `plain: true`), which turns forwarding off. In a
+     plain or cloud VM, forward the port first from the computer with the browser,
+     with `ssh -L PORT:127.0.0.1:PORT` and the VM's address, as onboarding says when
+     it cannot open a browser itself. Cancelling in the browser or running out of
+     time stores nothing, and the step left says to run onboarding again.
    - **Read it from an environment variable**: you name it (default
      `OPENROUTER_API_KEY`); the configuration names the variable, not the key.
    - **Enter it at a hidden prompt**: the key is then stored in the owner-only
@@ -365,9 +397,26 @@ again, which uses that key. Without a key nothing is saved, and the step left gi
 account pays). With `--writer openrouter` the reviewer runs on OpenRouter too; a
 `--reviewer ollama:…` is a usage error. Before writing anything, onboarding checks that
 OpenRouter accepts the key and lists both models (after a sign-in, the sign-in has
-checked both). A key you connected that OpenRouter refuses is a step left that signs
-in again with `axocoatl connect openrouter`. OpenRouter uses your OpenRouter credits;
-BYOK is not supported for native Sessions.
+checked both). A key you connected that OpenRouter refuses, or a stored secret that
+holds no OpenRouter key: at a terminal, onboarding offers its browser sign-in in its
+place; with `--yes` it is a step left that signs in again with `axocoatl connect
+openrouter`. When the browser sign-in replaces a key that was written in the
+configuration file, the backup onboarding makes leaves that key out (it is no longer
+used; delete it at `https://openrouter.ai/settings/keys`).
+
+Onboarding then reads each model's endpoints as a run does. A run uses an endpoint
+only while OpenRouter reports it healthy (status 0), since a degraded one fails part of
+its calls after they cost credits, so a model whose every usable endpoint OpenRouter
+reports unavailable or degraded right now, or that has no endpoint native Sessions can
+use, cannot run now. Onboarding says so, with each endpoint's status and its success rate
+over the last 30 minutes for OpenRouter's status (which can pass, so running onboarding
+again later may work), or why no endpoint fits (which waiting does not change); at a
+terminal you can name another model (Enter takes the
+first of `qwen/qwen3-coder-30b-a3b-instruct`, `z-ai/glm-4.6`,
+`deepseek/deepseek-chat-v3.1`, `qwen/qwen3-coder` and `openai/gpt-oss-120b` that can
+run now and is not the other role's model), and with `--yes` it is a step left that
+names that model, and nothing is saved.
+OpenRouter uses your OpenRouter credits; BYOK is not supported for native Sessions.
 
 ### Step 4: the configuration
 
@@ -398,10 +447,11 @@ after it, written to `server.port` (`--port` chooses one).
 
 Onboarding runs the same checks as [`axocoatl doctor`](#run-doctor), without loading
 again the models Step 3 just loaded, and says exactly what is ready. A `·` marks a
-writer you have not set up, which is optional, not a failure; its command builds the
-writer's image and signs in, and leaves the configuration as it is (`axocoatl onboard
---update --writer claude-code` would also record Claude Code as this setup's writer and
-drop `run.models.writer`):
+writer you have not set up, which is optional, not a failure, and a `!` one you set up
+only in part (its image without its sign-in, say); its command builds the writer's
+image and signs in, and leaves the configuration as it is (`axocoatl onboard
+--update --writer claude-code` would also record Claude Code as this setup's writer, drop
+`run.models.writer` and move the team's Agents to the reviewer's model):
 
 ```text
 Ready for: axocoatl run fix, workbench Sessions
@@ -432,10 +482,23 @@ How should Axocoatl run?
   I'll start it later
 ```
 
-The service is installed only after this question (or `--start service`). A service
+The service is installed only after this question (or `--start service`): onboarding
+runs `axocoatl service install` and then `axocoatl service restart`, which starts the
+service, or, when one already runs (it asks first, since that ends its Session turns
+and runs in progress), restarts it with the new definition and configuration. When the
+daemon does not start, onboarding shows the line it logged and lists the step as left
+to do. A service
 cannot read keys from your shell's environment, so onboarding refuses to install one
-while the configuration names an environment variable for a key. The terminal choice
-starts `axocoatl dev` as its own process; Ctrl+C stops it.
+while the configuration names an environment variable for a key. On Linux the service
+is a `systemctl --user` unit: in a login without a systemd user session (reached with
+`su -`, `sudo -iu`, or an SSH login that started none, where `systemctl --user` reaches
+no manager) onboarding does not offer it and says to log in as that user directly,
+and, unless linger is on already, to run `loginctl enable-linger USER` in that login
+to keep it running after you log out.
+The terminal choice starts `axocoatl dev` as its own process; Ctrl+C stops it.
+
+A Podman machine that onboarding starts (Step 2) runs in a session of its own: a
+Ctrl+C during onboarding, or closing its terminal, ends onboarding but not the machine.
 
 ### Step 7: a first run
 
@@ -452,10 +515,14 @@ temporary directory only you can open, uses the daemon that runs (it waits for t
 Always-On Service Step 6 just started, or a daemon that already runs, and never starts
 a second one beside it), or starts one for the run and stops it afterwards (its first
 start downloads an 87 MB embedding model once). A daemon that started before the
-configuration last changed, or that does not say when it started (before 1.5.0), would
-run the old configuration: onboarding asks to restart the Always-On Service, or to stop
-that daemon (either ends its Session turns and runs in progress; `--yes` answers yes),
-and waits for it to exit. It then runs
+configuration last changed would run the old configuration, and one that is another
+version than this `axocoatl` (any before 1.5.0, which does not say when it started) would
+not run this one: onboarding asks to restart the Always-On Service, or to stop that
+daemon (either ends its Session turns and runs in progress; `--yes` answers yes), and
+waits for it to exit (at its port, when its process cannot be seen). When the service
+runs another `axocoatl` than this one (an older release at another path), onboarding
+installs it again from this one before it restarts it, and uses it only once it
+answers as this version. It then runs
 `axocoatl run fix --task "Fix the bug: paging skips the last item"` (or fix-claude-code or
 fix-codex) with your models and a receipt beside the copy, and checks the receipt with
 `axocoatl receipt verify <receipt> --key "$(axocoatl receipt key)" --repo <copy>`. It
@@ -506,12 +573,20 @@ With a configuration already there, onboarding offers:
 
 - **Update this setup** (the default, and what `--yes` does): keep the file, back it
   up, and change only what is missing or what this run chose: a provider section it
-  needs, the OpenRouter key when you chose another, `run`, and `server.port`. The
-  writer, the run models, the Codex credential and the OpenRouter key the setup has are
-  kept unless a flag names others (a key connected in the browser is used without
-  asking); `axocoatl onboard --update --port 8081` changes only
-  the port. Everything else, comments included, stays as it was, and the change is
-  shown as a diff first, with every secret value hidden.
+  needs, the OpenRouter key when you chose another, `run`, `server.port`, and the
+  Agents onboarding wrote. The writer, the run models, the Codex credential and the
+  OpenRouter key the setup has are kept unless a flag names others (a key connected in
+  the browser is used without asking); `axocoatl onboard --update --port 8081` changes
+  only the port of a setup this release wrote. The Agents onboarding wrote (Lead,
+  Scout, Reviewer and the Assistant, as this release or 1.1.0 to 1.4.0 wrote them) are
+  written as this release writes them, each where it is in the file: on the models
+  chosen, and with this release's prompts (a Lead from an earlier release gets this
+  release's Lead prompt). An Agent that differs from what onboarding writes (one you
+  edited: its prompt, tools or another field, or a model that is not the one onboarding
+  gave it; or 1.0's Assistant, which had no tools), and an Agent of your own, stay as
+  they are, and onboarding names the Agents of its team it kept on other models.
+  Everything else, comments included, stays as it was, and the change is shown as a
+  diff first, with every secret value hidden.
 - **Replace it**: write a new configuration; the old file is backed up first and is
   not shown (only the new file is, with its key hidden).
 - **Leave it unchanged**: check the file as it is (Step 5) and stop: exit 0 when it is
@@ -583,13 +658,14 @@ list of `{"name", "status": "ok|warn|fail", "detail", "fix"}`), `ready_for` and
 | Section | Checks | Failure level |
 |---|---|---|
 | Sandbox | Podman installed, its machine (on macOS) created, rootless, 4.3 or later, and, rootless, a range of subordinate ids; the client and server versions, the machine's provider, CPUs and memory (under 4 GiB warns), the kernel | FAIL, except a stopped machine (OK: it starts on first use), an untested version or provider, and a small machine (WARN) |
-| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns); SELinux on Linux (warns) | As described |
+| Sandbox | Landlock ABI on Linux (below 3 fails, 3 warns; on ABI 1 it also says that Rust builds fail with "Invalid cross-device link"); SELinux on Linux (OK: containers run with its labelling off); the cgroup controllers rootless Podman can use for Session containers' memory, CPU and process caps (a missing one warns) | As described |
+| Sandbox | The platform: macOS on Apple silicon and Ubuntu 24.04 are what the release gate verifies; an Intel Mac, another Linux release, WSL2 (keep repositories off `/mnt/c`), SELinux enforcing, and local models below 48 GB of memory are named as not yet verified. With `sandbox.backend: e2b`, that `axocoatl run` still runs in Podman | WARN (OK when verified) |
 | Sandbox | Network, workload users, egress routes and credentials (names only), browser image | WARN when something needs attention |
 | Models | The Ollama server: reachable, on this computer, an accepted version (a newer 0.x minor warns), cloud models off | FAIL |
-| Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes | FAIL |
+| Models | Each configured Ollama model: pulled, GGUF, tool calling for an Agent with tools, its size against memory (too large warns), its loaded context (below 16384 fails) and how much of it is in GPU memory; doctor loads each model once to read it and runs the contract probes. While a daemon runs, a model Ollama already holds is not loaded or probed again (a run may be using it): its context is read from Ollama | FAIL |
 | Models | OpenRouter and other hosted-provider keys present (not checked with the provider): a key in the file, or the stored secret `api_key_secret` names. Without `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and changes nothing else, and a secret that is not stored names the same command; for a configuration other than the default one, both add `--config` with its path, so the key is stored in that configuration's data directory | FAIL when an Agent or `run.models` uses OpenRouter without a key, otherwise WARN |
 | Writers | Claude Code and Codex: sandbox image built and credential stored (for Codex, the credential the setup names); the `claude`, `codex` and `gh` CLIs (`gh` signed in, for `--keep pr`); the names of stored credentials | FAIL for the writer the configuration names (its `# Writer:` comment); WARN for one partly set up |
-| Daemon | Configuration valid; data directory writable and owned; a running daemon and its version against the CLI's; the Always-On Service's program; the configured port when no daemon runs; webhooks | FAIL for the configuration and data directory; otherwise WARN |
+| Daemon | Configuration valid; data directory writable and owned, and an interrupted Session storage upgrade in it; `git`, which the daemon runs on your repositories (on macOS, the Command Line Tools); on Linux the systemd user session the Always-On Service needs, and linger when the service is installed; a running daemon and its version against the CLI's (one older than 1.5.0, which does not report it, is named as older); the Always-On Service's program; the configured port when no daemon runs; webhooks; a `hooks:` section, which this version checks but never runs; a proxy variable, which a Session's network does not use | FAIL for the configuration, the data directory (and a copy of a data directory whose upgrade stopped half-way) and a missing `git`; otherwise WARN |
 
 Each FAIL names its fix: the exact command, or `axocoatl onboard`, which makes the
 change after asking. `Ready for` lists `axocoatl run fix` for a local or OpenRouter
@@ -628,7 +704,7 @@ explicit configuration uses a `data/` directory beside the configuration file.
 axocoatl dev
 ```
 
-The app is at `http://localhost:8080`, or the port onboarding wrote to `server.port`.
+The app is at `http://127.0.0.1:8080`, or the port onboarding wrote to `server.port`.
 `dev` holds the port before it starts; when another program already listens there,
 it says which port and how to choose another, and exits. Keep this process running,
 open the `Sign in:` link it prints (or run `axocoatl url`), and choose

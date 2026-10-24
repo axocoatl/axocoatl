@@ -672,6 +672,14 @@ impl crate::loadout::RunHost for AuditHost {
         self.daemon.loadout_ollama_versions(session_id)
     }
 
+    async fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>>
+    {
+        self.daemon.loadout_openrouter_endpoints(session_id)
+    }
+
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.daemon.loadout_run_stop_requested(run_id)
     }
@@ -755,6 +763,11 @@ async fn in_child(name: &str) -> bool {
     );
     true
 }
+
+/// The note every audit on Podman starts with: the environment its run
+/// used (the audit loadout runs no repository check).
+const AUDIT_ENVIRONMENT_NOTE: &str = "image docker.io/library/alpine:3.20 · no toolchain (the \
+     loadout runs no repository check) · no repository check · setup none";
 
 /// What one audit on Podman left for its test to check.
 struct AuditRun {
@@ -1200,6 +1213,7 @@ async fn an_audit_on_podman_follows_up_a_skipped_file_and_passes() {
     assert_eq!(
         outcome.notes,
         [
+            AUDIT_ENVIRONMENT_NOTE,
             "the host made area rest for 1 file no planned area's paths name and that share no \
           directory with them: README.md"
         ]
@@ -1279,6 +1293,7 @@ async fn an_audit_on_podman_splits_a_500_file_area_into_sub_areas() {
     assert_eq!(
         outcome.notes,
         [
+            AUDIT_ENVIRONMENT_NOTE,
             "area big has 500 files to read, about 500 reads of up to 32 KiB (the default read \
           of the worker's model), more than one worker makes within its budget (about 120 \
           reads: 300 invocations at 2 a read, 60 held back for looking around and its \

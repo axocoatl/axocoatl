@@ -168,12 +168,23 @@ test('the panel shows a cost the run does not know as what was reserved, never a
     ...codex, run_id: computedRun,
     usage: { input_tokens: 4107, output_tokens: 60, cost_microunits: 17835, complete: true, cost_known: true, cost_computed: true, retries: 0 },
   };
+  // A run whose calls did not all report usage names them: the first three
+  // and how many more, as the run summary does.
+  const unreportedRun = 'run-00000000-0000-4000-8000-0000000000d0';
+  const unreported = {
+    ...codex, run_id: unreportedRun,
+    usage: { input_tokens: 48235, output_tokens: 1804, cost_microunits: 15100, complete: false, cost_known: false, retries: 1,
+      unreported: ['writer (generation 1): 1 of 9 model calls', 'required-review (generation 1): 2 of 3 model calls',
+        'required-review (generation 2): 1 of 1 model calls', 'helper (generation 1): its usage as recorded'] },
+  };
   await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
-    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${codexRun}"></ax-run-outcome><ax-run-outcome run-id="${RUN}"></ax-run-outcome><ax-run-outcome run-id="${computedRun}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
+    `<!doctype html><html><head><link rel="stylesheet" href="/ui/tokens.css"></head><body><ax-run-outcome run-id="${codexRun}"></ax-run-outcome><ax-run-outcome run-id="${RUN}"></ax-run-outcome><ax-run-outcome run-id="${computedRun}"></ax-run-outcome><ax-run-outcome run-id="${unreportedRun}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
   await page.route(`**/api/runs/${codexRun}`, (route) => route.fulfill({ json: {
     run_id: codexRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: codex } }));
   await page.route(`**/api/runs/${computedRun}`, (route) => route.fulfill({ json: {
     run_id: computedRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: computed } }));
+  await page.route(`**/api/runs/${unreportedRun}`, (route) => route.fulfill({ json: {
+    run_id: unreportedRun, session_id: 'ses-1', loadout: 'fix@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome: unreported } }));
   await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
     run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome } }));
   try {
@@ -188,6 +199,11 @@ test('the panel shows a cost the run does not know as what was reserved, never a
     const priced = page.locator('ax-run-outcome').nth(2).locator('p.usage');
     await priced.waitFor();
     assert.equal(await priced.textContent(), '4107 input + 60 output tokens, $0.0178 (includes cost computed from reported tokens at list prices)');
+    const named = page.locator('ax-run-outcome').nth(3).locator('p.usage');
+    await named.waitFor();
+    assert.equal(await named.textContent(), '48235 input + 1804 output tokens, cost unknown (reserved up to $0.0151), 1 provider retry '
+      + '(known subtotal: usage or cost not reported for writer (generation 1): 1 of 9 model calls; required-review (generation 1): '
+      + '2 of 3 model calls; required-review (generation 2): 1 of 1 model calls; and 1 more)');
     assert.deepEqual(errors, []);
   } finally { await context.close(); }
 });

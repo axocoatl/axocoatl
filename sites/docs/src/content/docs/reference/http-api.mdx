@@ -39,11 +39,11 @@ Browsers get the cookie by opening the sign-in link that `axocoatl dev`,
 `axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, same path and
 age), and sends `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 A wrong token, or `/` without a credential, returns `401` with a short sign-in
-page. One exception: a `GET /` on `localhost` without `?token=` and without a
+page. One exception: a `GET /` on `127.0.0.1` without `?token=` and without a
 valid credential, marked `Sec-Fetch-Site: none` and `Sec-Fetch-Mode: navigate`
 with `Sec-Fetch-Dest: document` or no `Sec-Fetch-Dest`, that carries
 `axocoatl-token-<port>-signed-in=1` (Safari after the redirect from
-`127.0.0.1`, or a token cookie from before the token changed) returns `200`
+`localhost`, or a token cookie from before the token changed) returns `200`
 with a page that opens the same address again from its own origin and clears
 the signed-in cookie. The token cookie is ignored on requests marked
 `Sec-Fetch-Site: cross-site` or `same-site`; the signed-in cookie is never a
@@ -87,15 +87,22 @@ cookies while that origin is embedded; the workbench's **Open full preview**
 action opens the same virtual URL top-level with `noopener`, where host-only
 cookies work without becoming shared sibling cookies. Safari on macOS also
 lets a top-level page's script on a `*.localhost` address set a
-`Domain=localhost` cookie, and sends it to the workbench and to every Preview,
+`Domain=localhost` cookie, and sends it to every Preview and every other
+`localhost` address (never to the workbench, which is served at `127.0.0.1`),
 so in Safari a Preview never runs top-level: the daemon answers a request for
 a Preview page Safari would show in a tab or window of its own with `403` and a
 page that says why, and the workbench keeps Previews embedded and offers no
 **Open full preview**
-([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). A browser GET or HEAD
-for the exact `/` workbench document on a loopback IP literal redirects to
-`localhost` on the same listener and preserves the query. API, health, and
-asset URLs do not redirect.
+([Security](/operate/security/#safari-shares-domainlocalhost-cookies)). With the local
+token, a browser GET or HEAD for the exact `/` workbench document on
+`localhost` or a loopback IP literal other than `127.0.0.1` answers
+`307 Temporary Redirect` to `127.0.0.1` on the same listener and preserves the
+query; from `localhost` it also removes this daemon's two sign-in cookies there
+(`Max-Age=0`), where sign-in links before 1.5.0 stored them. API, health, and
+asset URLs do not redirect. With configured credentials or
+`allow_unauthenticated` there is no sign-in cookie and no redirect: `/` is
+served at the loopback name the request used, so a proxy on the same host may
+send `Host: localhost` or `Host: 127.0.0.1`.
 
 ## App, assets, and health
 
@@ -166,7 +173,7 @@ not permission to choose another activation or team.
 | Method | Path | Request / behavior |
 | --- | --- | --- |
 | GET | `/api/sessions/{id}/team` | Current team revision, selected templates, explicit limits, and expiry. `required_checks` lists the applied team's checks; `suggested_check` is the Session's detected check command as an argument array, offered only and never run unless an Apply includes it. `required_review` is the applied team's review setting, when it has one, and `reviewers` lists the templates that may review: read-only Workers. `warnings` lists warnings about the applied team, such as `{"code": "same_model_reviewer", "message": …}` when the required reviewer runs a writer's provider and model. `suggested_budget` is `{from, agent, helper, free_providers, expires_in_ms}`: the limits the app fills in for an Agent or a helper that has none yet, from the built-in `fix` loadout (`cost_microunits` is 0 for a model of a provider in `free_providers`), and how long such a budget lasts (`expires_in_ms`, 24 hours): the app sets the expiry to that long after it fills the Agent in, so two reads of the same team are equal; it approves nothing |
-| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `check_options` is aligned by index with `required_checks`, one `{name?, timeout_ms?, report?, egress?}` per check or none at all: `timeout_ms` is 1,000 to 1,800,000 (180,000 when omitted), `egress: true` gives the check's process its own egress credential under `network: egress` (an e2e check sets it; other checks have no network there), and `report` is `{format, path}`, with `format` `junit` or `e2e_report_json` and `path` under `/tmp/axocoatl-check-reports/`; a loadout run reads it for its e2e checks and parses it into the run's Outcome, bound to the check's run by the digest it prints (see [The e2e check](/configure/e2e-check/)), and a workbench turn does not read it. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry or one more than a year away, a token limit below what a turn of that Agent reserves (one model call, and with tools a call and the one after it, named in tokens with the model's context and output), a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409`. A refusal from a native provider check carries that check's message alone, without the internal "Provider setup failed: Session dispatch: Invalid request for ollama:" layers |
+| POST | `/api/sessions/{id}/team/preview` | Typed whole-team edit; resolves and reviews future-turn definitions and authority. A slot's `writes` is the whole list of paths that Agent may change: `null` allows any file and `[]` is read-only. Leaving it out keeps the scope of the template or current definition the slot starts from, so omitting it never widens what the Agent may change; the app always sends it. The edit's optional `required_checks` is an array of argument arrays, such as `[["sh", "-c", "npm test"]]`, that the host runs after every turn's required Agents finish; it is refused when no required Agent has `bash`. The optional `check_options` is aligned by index with `required_checks`, one `{name?, timeout_ms?, report?, egress?}` per check or none at all: `timeout_ms` is 1,000 to 1,800,000 (180,000 when omitted), `egress: true` gives the check's process its own egress credential under `network: egress` (an e2e check sets it; other checks have no network there), and `report` is `{format, path}`, with `format` `junit` or `e2e_report_json` and `path` under `/tmp/axocoatl-check-reports/`; a loadout run reads it for its e2e checks and parses it into the run's Outcome, bound to the check's run by the digest it prints (see [The e2e check](/configure/e2e-check/)), and a workbench turn does not read it. The optional `required_review` is `{"template_id", "max_rounds", "limits", "max_output_tokens"}`: a read-only Worker template the host runs after every turn's required Agents and checks, 1 to 3 rounds (2 when omitted), the reviewer's limits for all rounds of one turn, and its output bound per request (the template's when omitted). An edit whose limits cannot pay for what it names (a missing or zero limit, a missing or past expiry or one more than a year away, a token limit below what a turn of that Agent reserves (one model call, and with tools a call and the one after it, named in tokens with the model's context and output), a helper over its lead's limits, review rounds outside 1 to 3, or a check payer, reviewer or lead budget too small for its rounds) is refused with `422` and the reason alone; a stale configuration revision is `409`. A refusal from a native provider check (a model or an Ollama version native Sessions refuse, a Team to review again after an Ollama upgrade) is a `422` too and carries that check's message alone, without the internal "Provider setup failed: Session dispatch: Invalid request for ollama:" layers |
 | POST | `/api/sessions/{id}/team/apply` | `{edit, review_digest}`; exact reviewed future-turn edit |
 | POST | `/api/sessions/{id}/team/cancel` | Cancel the referenced team draft without changing current authority |
 | POST | `/api/sessions/{id}/turns/{turn_id}/control-commands` | Typed human action with exact command/activation/revision identities; returns the canonical receipt |
@@ -197,8 +204,8 @@ which names that Session and turn; [`axocoatl run`](/reference/run/#exit-codes) 
 | GET | `/api/loadouts` | Every built-in and user loadout: `[{id, version, name, description, kind, builtin, opt_in, digest, params, warnings, error?, path?}]`. `params` lists each parameter's `name`, `kind`, `required`, `default` and `description`. A user file that cannot be used has its `path` and `error` and empty `version`, `kind` and `digest`. While a user file declares a built-in id, that built-in's `warnings` hold `user_loadout_uses_builtin_id` (also in `GET /api/loadouts/{id}`), and `POST /api/runs` for the id answers `422` naming the file |
 | GET | `/api/loadouts/{id}` | `{summary, file, text, graph}`: the summary row, the parsed file, its exact text and a display graph of `nodes` (`{id, kind, label, detail}`, `kind` one of `agent`, `check`, `review`, `area_workers`) and `edges` (`{from, to}`). The graph is for display only |
 | POST | `/api/loadouts/validate` | `{text}`, at most 128 KiB. Returns `{valid, error?, warnings, summary?}` without saving anything |
-| POST | `/api/runs` | Start a run: `{loadout, task, repo, params?, keep?, check_command?, setup_command?, request_id}`. `repo` is canonicalized and found or created as a Workspace; `keep` is `none` (the default), `branch` or `pr`; a repeat with the same `request_id` returns the same run; `params` falls back to the configuration's [`run.models`](/reference/config/#run-defaults). Answers `202` with `{run_id, session_id, workspace_id, warnings}`. A run admission refuses answers with every problem it found in `error` ([Before a run starts](/reference/run/#before-a-run-starts)): `422` when one asks for a change, `404` for an unknown loadout alone, `400` for infrastructure problems only. It takes no `dry_run`: a request with a `dry_run` query, whatever its value, is refused with `400` and nothing is started (a dry run is `POST /api/runs/preflight`) |
-| POST | `/api/runs/preflight` | Check a run as admission would, without starting it: the body of `POST /api/runs`, with `task` and `request_id` optional (a run without `task` is checked without it) and `load_models` (default `true`). Answers `200` with `{loadout, ready, exit_code, problems: [{code, exit_code, message}], params, defaults, warnings, notes, sandbox?, ollama_models: [{model, loaded, context_tokens?}]}`; nothing is created, started or recorded, and a stopped Podman machine is not started. With `load_models` `true` each Ollama model is loaded once without a prompt and probed with the two one-token contract probes, as a run's admission does; with `false` only Ollama's metadata is read, so a model that is not already loaded keeps its memory free and its context is not checked (`context_tokens` absent). A daemon older than 1.5 answers `405` here, never a run ([The dry run](/reference/run/#the-dry-run)) |
+| POST | `/api/runs` | Start a run: `{loadout, task, repo, params?, keep?, check_command?, setup_command?, request_id}`. `repo` is canonicalized and found or created as a Workspace, under the rules of `POST /api/workspaces`: one of Axocoatl's own directories is the problem `workspace_protected`, and a folder too broad to be a Workspace is `workspace_too_broad` until its Workspace records the person's confirmation (`POST /api/workspaces` with `confirm_broad` first); `keep` is `none` (the default), `branch` or `pr`; a repeat with the same `request_id` returns the same run, and is `409` while the first is still being admitted; `params` falls back to the configuration's [`run.models`](/reference/config/#run-defaults). Answers `202` with `{run_id, session_id, workspace_id, warnings}`. A run admission refuses answers with every problem it found in `error` ([Before a run starts](/reference/run/#before-a-run-starts)): `422` when one asks for a change, `404` for an unknown loadout alone, `400` for infrastructure problems only. Admission runs to its end even when the client goes away before it answers (Ctrl-C in `axocoatl run`): a refused run is cleaned up as always, and a run admitted then is stopped before its first turn (verdict `interrupted`, with a `stopping` phase that says why) and its Session's runtime stops. It takes no `dry_run`: a request with a `dry_run` query, whatever its value, is refused with `400` and nothing is started (a dry run is `POST /api/runs/preflight`) |
+| POST | `/api/runs/preflight` | Check a run as admission would, without starting it: the body of `POST /api/runs`, with `task` and `request_id` optional (a run without `task` is checked without it) and `load_models` (default `true`). Answers `200` with `{loadout, ready, exit_code, problems: [{code, exit_code, message}], params, defaults, warnings, notes, sandbox?, ollama_models: [{model, loaded, context_tokens?}]}`; nothing is created, started or recorded, and a stopped Podman machine is not started. With `load_models` `true` each Ollama model is loaded once without a prompt and probed with the contract probes (a few bounded requests), as a run's admission does; with `false` only Ollama's metadata is read, so a model that is not already loaded keeps its memory free and its context is not checked (`context_tokens` absent). A daemon older than 1.5 answers `405` here, never a run ([The dry run](/reference/run/#the-dry-run)) |
 | GET | `/api/runs` | Every run, newest first: `[{run_id, session_id, loadout, state, phase, started_at_ms, outcome?, keep?, receipt?}]`; `state` is `preparing`, `running`, `finished`, or `failed` when the run ended with an error |
 | GET | `/api/runs/{run_id}` | One run, with its Outcome once finished, `keep` after Keep as PR, and `receipt` once its signed receipt is written: `{key_id, files, removed, source, complete, statement_sha256}` (the signing key's id, the files covered and removed, where their digests come from, whether every changed path is covered, and the SHA-256 of the signed statement) |
 | GET | `/api/runs/{run_id}/events?after=<seq>&limit=<1-1000>&wait_ms=<0-5000>` | `{events, next_after, finished}`; each event is `[seq, {kind, at_ms, …}]` with `kind` `phase`, `turn_started`, `turn_ended`, `warning`, `adjudication`, `finding`, `not_covered`, `provider_retry` or `ended`. `limit` is 200 when omitted. With nothing new and the run unfinished, the request waits up to `wait_ms` (1,000 when omitted) for an event. Keep results arrive after `ended` as `phase` events named `keep` |
@@ -223,12 +230,17 @@ round's verdict and numbered findings), `adjudications` (`round`, `finding_id`, 
 the run noticed that is neither a gap nor a warning, in words; absent when there are
 none), `warnings`,
 `usage` (`input_tokens`, `output_tokens`, `cost_microunits`, `complete`, `cost_known`,
-`cost_computed` and `retries`; `cost_known` is false when a call's cost is not known, such
-as a Codex writer's on a model without a price, and `cost_microunits` then counts what
-those calls reserved; `cost_computed` is true, and absent otherwise, when part of the cost
-was computed from a program's reported tokens at its model's price, such as a Codex
-writer's), `network` (event,
-connection and route request counts), `keep` and `error`.
+`cost_computed`, `retries` and `unreported`; `cost_known` is false when a call's cost is
+not known, such as a Codex writer's on a model without a price, and `cost_microunits` then
+counts what those calls reserved; `cost_computed` is true, and absent otherwise, when part
+of the cost was computed from a program's reported tokens at its model's price, such as a
+Codex writer's; `retries` counts the calls sent again, a call moved to another OpenRouter
+endpoint included; `unreported` names, when some calls reported no usage or no cost, each
+Agent and generation with how many of its calls, and is absent otherwise), `network` (event,
+connection and route request counts), `openrouter_endpoints` (by model, the OpenRouter
+endpoints the run's native calls went to, in the order each was first counted, each with
+`endpoint`, `provider`, the `calls` it answered and the calls `moved` from it to another
+endpoint after it failed them; absent when there are none), `keep` and `error`.
 
 A Session that a run created carries `loadout`:
 `{run_id, loadout: {id, version, kind, digest, builtin}, network, workload}`. Every other
@@ -287,14 +299,14 @@ below.
 | --- | --- | --- |
 | GET | `/api/session-teams` | Config-owned Lattice teams available to Session creation; separate from mutable Automations |
 | GET | `/api/workspaces` | Every persisted named Workspace, including one with no Sessions |
-| POST | `/api/workspaces` | Register `{path, name?, confirm_broad?}`; canonical path is unique and an omitted name preserves an existing custom label. The file system root, the home folder, the folders above it and a folder that contains one of Axocoatl's own directories are a `409` with `"code": "workspace_too_broad"` unless `confirm_broad` is `true`; a folder at or below Axocoatl's data, lease, control-socket or per-user configuration directory is a `409` with `"code": "workspace_protected"` always |
+| POST | `/api/workspaces` | Register `{path, name?, confirm_broad?}`; canonical path is unique and an omitted name preserves an existing custom label. The file system root, the home folder, the folders above it and a folder that contains one of Axocoatl's own directories are a `409` with `"code": "workspace_too_broad"` unless `confirm_broad` is `true`, and the Workspace then records that confirmation as `broad_confirmed_at` (seconds since the epoch), which Session creation and runs on that folder need: a broad folder registered without it, as Axocoatl 1.4 did, is refused there until it is confirmed here; a folder at or below Axocoatl's data, lease, control-socket or per-user configuration directory is a `409` with `"code": "workspace_protected"` always |
 | GET | `/api/workspaces/{id}` | One Workspace |
 | PATCH | `/api/workspaces/{id}` | Rename with `{name}`; the filesystem path does not change |
 | DELETE | `/api/workspaces/{id}` | Remove the Workspace from the list and return it; its folder is never touched. A Workspace with a Session that is not closed is a `409` with `"code": "workspace_has_open_sessions"`. Its closed Sessions stay listed |
 | GET | `/api/workspaces/{id}/sessions` | Every Session owned by the Workspace, including closed records |
 | POST | `/api/workspaces/{id}/sessions` | Create from `{name, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}` under the Workspace's fixed path. While a Session's turn holds the Workspace, answers `409` at once with `"code": "workspace_busy"`, naming that Session, its run and its turn, and creates nothing (see [A busy Workspace](#a-busy-workspace)) |
 | GET | `/api/sessions` | Every persisted Session, including closed records |
-| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; a folder never opened as a Workspace that `POST /api/workspaces` would refuse is the same `409` with `workspace_too_broad` or `workspace_protected`; any other refusal is a `400` |
+| POST | `/api/sessions` | Compatibility create from `{name, working_dir, mode, enabled_skills?, exposed_ports?, image?, setup_command?, setup_approved?, setup_reviewed?}`; finds or creates the matching Workspace. A busy Workspace is a `409` with `"code": "workspace_busy"` at once, as above; a folder that `POST /api/workspaces` refuses without `confirm_broad` and whose Workspace has no `broad_confirmed_at`, or that it refuses always, is the same `409` with `workspace_too_broad` or `workspace_protected`; any other refusal is a `400` |
 | GET | `/api/sessions/{id}` | One persisted Session, or `404`; a Session a [loadout run](#loadouts-and-runs) created carries `loadout` |
 | PATCH | `/api/sessions/{id}` | Rename with `{name}` |
 | DELETE | `/api/sessions/{id}?force=false` | Close: stops the Session's containers and removes the Podman volumes its runtime fills again on start (`axo-egr-`, `axo-egi-`, `axo-svc-`, `axo-ca-`); the Node dependency volume stays for Reopen. `force=true` deletes the Session record and that volume too. While another Session's turn or any other operation holds the Workspace (another Session's file or Git change, Ways, creation or run admission), both answer `409` at once with `{"error": "…", "code": "workspace_busy"}`, naming that Session and turn or that operation, and change nothing. They wait only for this Session's own work, which they stop: its turn, until its command reaches a safe point (at most 30 seconds), and its running Ways or checks, which they interrupt (at most 15 seconds). A second Close or Delete of the Session while one is in progress is the same `409` at once. Another conflict is a `409` without `code` |
@@ -302,7 +314,7 @@ below.
 | POST | `/api/sessions/{id}/environment/rebuild` | Remove the old runtime and reproduce the persisted reviewed environment plan |
 | POST | `/api/sessions/{id}/environment/confirm-runtime-cleanup` | High-friction E2B recovery acknowledgment. Send exactly one target: `{runtime_id, confirmed:true}` after manually deleting that retained runtime, or `{creation_token, confirmed_all_matching_sandboxes_deleted:true}` after manually deleting every sandbox whose metadata contains `axocoatl_creation_token=<exact token>` |
 | POST | `/api/sessions/{id}/reopen` | Explicitly reactivate a closed Session before any live runtime can be resumed or reconstructed |
-| POST | `/api/sessions/{id}/execute` | `{input}` synchronous compatibility execution with completeness-aware success/error usage; other execute override fields are ignored here |
+| POST | `/api/sessions/{id}/execute` | `{input}` synchronous compatibility execution with completeness-aware success/error usage; other execute override fields are ignored here. A refusal from a native provider check (such as "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again") is a `422` with that check's message alone, a conflict a `409`, and any other failure a `500` |
 | GET | `/api/sessions/{id}/messages` | Transcript projection; `history_version` selects its [form](#session-history-versions) |
 | GET | `/api/sessions/{id}/turns` | Canonical visible durable turns; `history_version` selects their [form](#session-history-versions) |
 | GET | `/api/sessions/{id}/active-turn` | Exact live run/turn ownership for Stop, or `null` |
@@ -862,7 +874,9 @@ directories. Terminal resize is `{"kind":"resize","rows":30,"cols":100}`.
 
 The workbench opens the virtual Preview Host, not the legacy path. The Host
 boundary validates the exact Session and logical port, resolves that pair to
-the sandbox's dynamically assigned loopback transport, and forwards normal app
+the sandbox's dynamically assigned loopback transport (a port Podman publishes
+on `[::1]` on macOS or `127.0.0.2` on Linux, never on the workbench's
+`127.0.0.1`), and forwards normal app
 HTTP methods, query strings, request bodies, cookies, module/root assets, and
 WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
 non-HTML bodies stream without whole-response buffering. The upstream app sees
@@ -874,7 +888,8 @@ attribute, so the browser keeps each one host-only on that Preview origin; the
 rest of the header is unchanged. Whether a page's script may set a
 parent-domain cookie such as `Domain=localhost` is browser policy: Chromium and
 WebKit on Linux refuse it, and Safari on macOS accepts it from a top-level page
-on a `*.localhost` address and sends it to the workbench and to every Preview.
+on a `*.localhost` address and sends it to every Preview and every other
+`localhost` address (not to the workbench, at `127.0.0.1`).
 So when the request comes from Safari's engine (by its `User-Agent`: Safari on
 a Mac, and every browser on iPhone and iPad) and is for a page of its own
 (`Sec-Fetch-Dest: document`, or any navigation that is not a frame; from a
@@ -888,10 +903,12 @@ carry. Both proxies remove `axocoatl-token-*` cookies
 from forwarded requests and drop upstream `Set-Cookie` headers that would set
 one. The legacy `/api/sessions/{id}/proxy/{port}` path sits behind API
 authentication and never forwards Axocoatl credential headers. It shares the
-workbench's origin, so in every browser it answers only `fetch()` and
-`XMLHttpRequest` (`Sec-Fetch-Dest: empty`): a page, frame, script, image or
-other request a browser would show or run gets `403` and a line of text, and
-the app is not asked. Programs that send no Fetch Metadata are served; use a
+workbench's origin, so in every browser it answers only requests the browser
+marks `Sec-Fetch-Dest: empty` that are not navigations (`fetch()`,
+`XMLHttpRequest`, `EventSource`, `navigator.sendBeacon`): any other request a
+browser marks with Fetch Metadata, for something it would show, run or embed
+(a page, frame, embed, object, fenced frame, script, style sheet, image or
+worker), gets `403` and a line of text, and the app is not asked. Programs that send no Fetch Metadata are served; use a
 header credential. It forwards none of the app's `Set-Cookie` headers, and every
 response carries `Content-Security-Policy: sandbox` without
 `allow-same-origin`.

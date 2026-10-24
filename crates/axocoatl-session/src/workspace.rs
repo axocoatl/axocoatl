@@ -35,6 +35,14 @@ pub struct Workspace {
     pub canonical_path: PathBuf,
     pub created_at: u64,
     pub last_active: u64,
+    /// When the person confirmed this folder as a Workspace although it is
+    /// too broad to be one ([`WorkspaceScopeRefusal::Broad`]), with Open
+    /// workspace…, in seconds since the epoch. A broad folder registered
+    /// without it, as by 1.4 (which did not ask) or for a 1.0-format
+    /// Session, is not confirmed: no new Session or run uses it until the
+    /// person confirms it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broad_confirmed_at: Option<u64>,
 }
 
 fn now_secs() -> u64 {
@@ -448,6 +456,7 @@ impl WorkspaceStore {
             canonical_path,
             created_at: now,
             last_active: now,
+            broad_confirmed_at: None,
         };
         self.persist(&workspace)?;
         self.by_identity.insert(identity, workspace.id.clone());
@@ -533,6 +542,7 @@ impl WorkspaceStore {
             canonical_path,
             created_at: session_created_at,
             last_active: session_last_active,
+            broad_confirmed_at: None,
         };
         self.persist(&workspace)?;
         if let Some(identity) = existing_directory_identity(&workspace.canonical_path) {
@@ -576,6 +586,22 @@ impl WorkspaceStore {
             .get_mut(id)
             .ok_or_else(|| WorkspaceError::NotFound(id.to_string()))?;
         workspace.name = name;
+        let snapshot = workspace.clone();
+        self.persist(&snapshot)?;
+        Ok(snapshot)
+    }
+
+    /// Record that the person confirmed Workspace `id`, a folder too broad
+    /// to be one, as their Workspace. The first confirmation is kept.
+    pub fn confirm_broad(&mut self, id: &str) -> Result<Workspace, WorkspaceError> {
+        let workspace = self
+            .workspaces
+            .get_mut(id)
+            .ok_or_else(|| WorkspaceError::NotFound(id.to_string()))?;
+        if workspace.broad_confirmed_at.is_some() {
+            return Ok(workspace.clone());
+        }
+        workspace.broad_confirmed_at = Some(now_secs());
         let snapshot = workspace.clone();
         self.persist(&snapshot)?;
         Ok(snapshot)
@@ -824,6 +850,7 @@ mod tests {
                 canonical_path: project.path().canonicalize().unwrap(),
                 created_at: 1,
                 last_active: 1,
+                broad_confirmed_at: None,
             };
             std::fs::write(
                 store_dir.join(format!("{id}.json")),
@@ -863,6 +890,7 @@ mod tests {
                 canonical_path: path,
                 created_at: 1,
                 last_active: 1,
+                broad_confirmed_at: None,
             };
             std::fs::write(
                 store_dir.join(format!("{id}.json")),
@@ -916,6 +944,7 @@ mod tests {
             canonical_path: project.path().canonicalize().unwrap(),
             created_at: 1,
             last_active: 1,
+            broad_confirmed_at: None,
         };
         std::fs::write(
             store_dir.join("safe.json"),
@@ -962,6 +991,48 @@ mod tests {
         // Opening the folder again makes a new Workspace.
         let again = reopened.register(project.path(), None).unwrap();
         assert_ne!(again.id, workspace.id);
+    }
+
+    /// A broad folder's confirmation is recorded on its Workspace and
+    /// survives a reload; a Workspace record written before 1.5 has none.
+    #[test]
+    fn a_broad_folders_confirmation_is_recorded_and_legacy_records_have_none() {
+        let data = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        let store_dir = data.path().join("workspaces");
+        let mut store = WorkspaceStore::new(&store_dir).unwrap();
+        let registered = store.register(project.path(), None).unwrap();
+        assert_eq!(registered.broad_confirmed_at, None);
+        let bytes = std::fs::read(store_dir.join(format!("{}.json", registered.id))).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("broad_confirmed_at"));
+
+        let confirmed = store.confirm_broad(&registered.id).unwrap();
+        let at = confirmed.broad_confirmed_at.expect("confirmed");
+        assert_eq!(store.confirm_broad(&registered.id).unwrap(), confirmed);
+        // Registering it again, as Open workspace does, keeps it.
+        assert_eq!(
+            store
+                .register(project.path(), None)
+                .unwrap()
+                .broad_confirmed_at,
+            Some(at)
+        );
+        let mut reopened = WorkspaceStore::new(&store_dir).unwrap();
+        reopened.load_all().unwrap();
+        assert_eq!(reopened.get(&registered.id).unwrap(), confirmed);
+        assert!(matches!(
+            store.confirm_broad("wsp-unknown"),
+            Err(WorkspaceError::NotFound(_))
+        ));
+
+        // A 1.4 record: no field, not confirmed.
+        let legacy: Workspace = serde_json::from_str(&format!(
+            r#"{{"id": "wsp-00000000-0000-4000-8000-000000000000", "name": "home",
+                "canonical_path": {:?}, "created_at": 1, "last_active": 2}}"#,
+            project.path().display().to_string()
+        ))
+        .unwrap();
+        assert_eq!(legacy.broad_confirmed_at, None);
     }
 
     #[test]

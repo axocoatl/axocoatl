@@ -871,11 +871,14 @@ async fn helpers_cannot_reach_the_sessions_apps_but_preview_and_the_forwarder_ca
         .await;
         assert!(probe.contains("app-ok"), "{probe}");
 
-        // Preview through axo-pvw-{session} on the host's loopback.
-        let host_port = sandbox.published_host_port(5173).expect("Preview port");
+        // Preview through axo-pvw-{session} on the host's loopback, beside
+        // the workbench's address.
+        let address = sandbox.published_address(5173).expect("Preview port");
+        assert_eq!(address.ip(), axocoatl_isolation::session_port_address());
+        assert_ne!(address.ip().to_string(), "127.0.0.1");
         let mut body = String::new();
         for _ in 0..20 {
-            if let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await {
+            if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
                 body.clear();
@@ -1644,10 +1647,12 @@ async fn hardened_bridge_sessions_publish_ports_and_run_as_the_writer() {
         sandbox.spawn_background(
             "while :; do printf 'HTTP/1.0 200 OK\\r\\n\\r\\nbridge-ok' | nc -l -p 3000 >/dev/null; done",
         );
-        let host_port = sandbox.published_host_port(3000).expect("a published port");
+        let address = sandbox.published_address(3000).expect("a published port");
+        assert_eq!(address.ip(), axocoatl_isolation::session_port_address());
+        assert_ne!(address.ip().to_string(), "127.0.0.1");
         let mut body = String::new();
         for _ in 0..30 {
-            if let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await {
+            if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
                 body.clear();

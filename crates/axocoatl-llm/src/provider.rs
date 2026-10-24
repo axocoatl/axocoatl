@@ -344,6 +344,53 @@ pub trait LlmProvider: Send + Sync + 'static {
         None
     }
 
+    /// How long this provider waits for a streamed answer to start and
+    /// between its chunks (`providers.<name>.first_token_timeout_secs` and
+    /// `idle_timeout_secs`), for one that streams with those deadlines.
+    fn stream_timeouts(&self) -> Option<crate::transport::StreamTimeouts> {
+        None
+    }
+
+    /// The endpoints of this provider's one model that a call can be moved
+    /// between, each under its own retained contract, when there are several
+    /// ([`EndpointFailover`]). `None` (the default): one route.
+    fn endpoint_failover(&self) -> Option<&dyn EndpointFailover> {
+        None
+    }
+
+    /// [`Self::chat_stream`], saying of a call that failed to open what the
+    /// provider knows of it ([`FailedCall`]): whether it is known to have
+    /// cost nothing, and whether the failure was its endpoint's own. Each
+    /// fact is set where the failure happened, never read back from its
+    /// words. Default: the error alone.
+    async fn open_chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, FailedCall>
+    {
+        self.chat_stream(request).await.map_err(FailedCall::unknown)
+    }
+
+    /// What the provider knows of a call whose stream yielded `error` as its
+    /// first item, before any output. The answer had started, so it is never
+    /// known to have cost nothing. Default: the error alone.
+    fn failed_answer(&self, error: ProviderError) -> FailedCall {
+        FailedCall::unknown(error)
+    }
+
+    /// [`Self::chat_with_accounting`], with what the provider knows of the
+    /// call when it failed ([`FailureFacts`]; the default facts when it
+    /// answered). Default: the outcome alone.
+    async fn chat_with_accounting_and_facts(
+        &self,
+        request: ChatRequest,
+    ) -> (AccountedChatOutcome, FailureFacts) {
+        (
+            self.chat_with_accounting(request).await,
+            FailureFacts::default(),
+        )
+    }
+
     /// Non-streaming chat completion.
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, ProviderError>;
 
@@ -381,6 +428,90 @@ pub trait LlmProvider: Send + Sync + 'static {
     fn count_tokens(&self, request: &ChatRequest) -> usize {
         approximate_request_tokens(request)
     }
+}
+
+/// What a provider knows of a call that failed before it yielded anything
+/// to its caller. The provider sets each fact where the failure happened,
+/// so text the provider quotes (an upstream's message) can never set one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FailureFacts {
+    /// The call is known to have used no tokens and cost nothing: the
+    /// provider never sent it, or refused it with an HTTP status before
+    /// generating anything, which it does not bill. A metered host settles
+    /// it to zero and gives its reservation back.
+    pub cost_nothing: bool,
+    /// The failure is the endpoint's own, which another endpoint of the same
+    /// model may not share ([`EndpointFailover`]): an upstream rate limit, an
+    /// outage, a timeout or a closed connection, an endpoint reported
+    /// unavailable now, or one whose retained contract changed.
+    pub endpoint_failure: bool,
+    /// The failure in a few words, as that endpoint's entry when the call
+    /// failed on several endpoints ([`EndpointFailover::exhausted`]); empty
+    /// when the provider gives none.
+    pub summary: String,
+}
+
+/// A call that failed before its provider yielded anything, with what the
+/// provider knows of it.
+#[derive(Debug)]
+pub struct FailedCall {
+    pub error: ProviderError,
+    pub facts: FailureFacts,
+}
+
+impl FailedCall {
+    /// A failure the provider says nothing more of.
+    pub fn unknown(error: ProviderError) -> Self {
+        Self {
+            error,
+            facts: FailureFacts::default(),
+        }
+    }
+}
+
+/// Endpoints of one model that a provider can move its calls between, each
+/// under its own retained contract ([`LlmProvider::endpoint_failover`]). A
+/// metered host moves a call only after the current endpoint failed it
+/// before producing anything with a failure that is that endpoint's own
+/// ([`FailureFacts::endpoint_failure`]), and only once it admitted the call
+/// on the new endpoint, as a new call at that endpoint's own bounds
+/// ([`Self::execution_bounds_on`]). Calls stay on the endpoint they were
+/// moved to.
+pub trait EndpointFailover: Send + Sync {
+    /// How many endpoints there are; calls start on the first.
+    fn endpoint_count(&self) -> usize;
+
+    /// The endpoint calls go to now, below [`Self::endpoint_count`].
+    fn current_endpoint(&self) -> usize;
+
+    /// The endpoints other than the current one that can carry `request`
+    /// within their retained contracts and are not in `excluded`, in the
+    /// order a call moves through them: the next after the current one
+    /// first, wrapping around.
+    fn candidates(&self, request: &ChatRequest, excluded: &[usize]) -> Vec<usize>;
+
+    /// The hard bounds `request` reserves on endpoint `index`, as
+    /// [`LlmProvider::execution_bounds`] gives them for the current one.
+    fn execution_bounds_on(
+        &self,
+        index: usize,
+        request: &ChatRequest,
+    ) -> Option<ProviderExecutionBounds>;
+
+    /// A move from endpoint `from` to endpoint `to`, in words for the
+    /// record: `from endpoint A to endpoint B`.
+    fn describe_move(&self, from: usize, to: usize) -> String;
+
+    /// Send calls to endpoint `to` from now on. `failed`: the current
+    /// endpoint failed the call that moves; otherwise the move is the host's
+    /// choice (a cheaper endpoint for a call the grant cannot pay on the
+    /// current one).
+    fn move_to(&self, to: usize, failed: bool);
+
+    /// The error one call reports after the endpoints it was sent to failed
+    /// it before it produced anything: `failures` holds each endpoint and
+    /// its failure, in order.
+    fn exhausted(&self, failures: Vec<(usize, FailedCall)>) -> ProviderError;
 }
 
 /// The shared provider-agnostic estimate of a request's input tokens: its

@@ -6,7 +6,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFil
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { browserEngines, launchTestDaemon, newAuthorizedContext } from '../support/daemon.mjs';
+import { browserEngines, isWebKitLoadDiagnostic, launchTestDaemon, newAuthorizedContext } from '../support/daemon.mjs';
 
 // The workbench's first screen says what the first Session still needs.
 // The daemon here sees a Podman it cannot use, and an Ollama server that
@@ -249,6 +249,93 @@ for (const engine of engines) {
       assert.match(await blocked.textContent(), macos ? /has no machine/ : /Podman is not installed/);
       assert.equal(await blocked.locator('code').textContent(), fix.replaceAll('`', ''));
       assert.equal(await page.locator('ax-session-home [data-action="picker-use"]').isDisabled(), true);
+      assert.deepEqual(errors, []);
+    } finally {
+      await context?.close();
+      await browser.close();
+    }
+  });
+
+  // The New Session picker reads readiness again when it opens. Until that
+  // read is in, nothing says whether Podman can run a Session, so Create
+  // session waits for it, for at most ten seconds; a read that fails blocks
+  // nothing (the daemon refuses a Session it cannot prepare), and a read that
+  // comes late still blocks. Typing a name never enables a Create session
+  // that readiness or anything else holds.
+  test(`${engine.name}: Create session waits for the picker's readiness read, and typing a name does not enable a blocked one`, { timeout: 120_000 }, async () => {
+    const browser = await engine.launch();
+    let context;
+    try {
+      context = await newAuthorizedContext(browser, { viewport: { width: 1280, height: 860 } });
+      const page = await context.newPage();
+      const errors = [];
+      // WebKit reports the readiness reads this journey aborts as page errors.
+      page.on('pageerror', (error) => {
+        if (!isWebKitLoadDiagnostic(error)) errors.push(error.message);
+      });
+      let readiness = 'fail';
+      const held = [];
+      await page.route('**/api/readiness', (route) => {
+        if (readiness === 'fail') return route.abort();
+        if (readiness === 'pass') return route.continue();
+        held.push(route);
+        return undefined;
+      });
+      await page.goto(`${runtime.baseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => typeof closeCockpit === 'function'
+        && document.querySelector('ax-session-home')?._wired
+        && (document.querySelector('ax-session-home')?.workspaces?.length || 0) > 0);
+      await page.evaluate(() => closeCockpit({ homeScope: 'all' }));
+      const workspace = runtime.fixtures.alpha.workspace;
+      const name = page.locator('ax-session-home [data-field="session-name"]');
+      const create = page.locator('ax-session-home [data-action="picker-use"]');
+      const openPicker = async () => {
+        const reads = Promise.all([
+          page.waitForResponse((response) => new URL(response.url()).pathname === '/api/fs/project'),
+          page.waitForResponse((response) => new URL(response.url()).pathname === '/api/skills'),
+        ]);
+        await page.evaluate((id) => document.querySelector('ax-session-home').newSession(id), workspace.id);
+        await name.waitFor();
+        await reads;
+      };
+
+      // A readiness read that fails: nothing blocks.
+      const failed = page.waitForEvent('requestfailed',
+        (request) => new URL(request.url()).pathname === '/api/readiness');
+      await openPicker();
+      await failed;
+      await name.fill('After a failed readiness read');
+      await page.waitForFunction(() => document.querySelector('ax-session-home')?.shadowRoot
+        ?.querySelector('[data-action="picker-use"]')?.disabled === false);
+      assert.equal(await page.locator('ax-session-home .picker-blocked').count(), 0);
+      await page.locator('ax-session-home [data-action="picker-cancel"]').click();
+
+      // A read under way: Create session waits for it, with a name typed and
+      // the project probe in, and stops waiting after ten seconds.
+      readiness = 'hold';
+      const pending = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/readiness');
+      const opened = Date.now();
+      await openPicker();
+      await pending;
+      await name.fill('Before readiness');
+      assert.equal(await create.isDisabled(), true, 'Create session must wait for readiness');
+      assert.equal(await page.locator('ax-session-home .picker-blocked').count(), 0);
+      await page.waitForFunction(() => document.querySelector('ax-session-home')?.shadowRoot
+        ?.querySelector('[data-action="picker-use"]')?.disabled === false, null, { timeout: 30_000 });
+      assert.ok(Date.now() - opened >= 9_500, `Create session waited only ${Date.now() - opened} ms`);
+
+      // The read arrives late: Podman blocks Sessions here, and typing a name
+      // leaves Create session blocked.
+      readiness = 'pass';
+      for (const route of held.splice(0)) await route.continue();
+      const blocked = page.locator('ax-session-home .picker-blocked');
+      await blocked.waitFor();
+      assert.match(await blocked.textContent(), /No Session can run yet/);
+      assert.equal(await create.isDisabled(), true);
+      await name.fill('Typed after readiness');
+      assert.equal(await create.isDisabled(), true, 'typing a name must not enable a blocked Create session');
+      await name.press('Backspace');
+      assert.equal(await create.isDisabled(), true);
       assert.deepEqual(errors, []);
     } finally {
       await context?.close();

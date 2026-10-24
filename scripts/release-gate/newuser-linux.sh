@@ -10,6 +10,19 @@
 # checks; and the negative cases. Evidence goes to
 # <evidence-root>/<version>/<commit>/<label>.json and <label>/.
 #
+# Tier D1 (--live, a person at the terminal of a brand-new account made
+# with adduser in an Ubuntu 24.04 VM): no stub. It records that the account
+# has no Axocoatl and no Podman, removes the account's own range of
+# subordinate ids (with sudo, after a backup) so that onboarding must add
+# one beside another user's, then runs onboarding interactively (Podman
+# with apt, the range, OpenRouter's browser sign-in) and records what it
+# did; doctor; `axocoatl dev`; the README's command on every fixture with
+# the models onboarding configured; then the Always-On Service: chosen in
+# Step 6 of `onboard --update`, restarted by Step 7 after a second
+# `onboard --update` changes the writer model, a fix through it, `service
+# status`, `stop` and `uninstall`. The session is recorded with script(1),
+# flushed as it goes, and each answer is kept in answers.txt.
+#
 # Usage:
 #   newuser-linux.sh --tarball DIST/axocoatl-vX.Y.Z-<target>.tar.gz [options]
 # Options:
@@ -27,6 +40,12 @@
 #                           edits /etc/subuid with sudo and restores it
 #   --command TEXT          run TEXT on each fixture instead of the README's
 #                           command (live VMs whose models differ)
+#   --service-writer-model PROVIDER:MODEL
+#                           with --live, the writer model the second
+#                           `onboard --update` switches to (default: the
+#                           first of openrouter:z-ai/glm-4.6 and
+#                           openrouter:deepseek/deepseek-chat-v3.1 that is
+#                           neither the writer nor the reviewer)
 #   --keep-work             keep the temporary HOME and repositories
 #
 # Depends on (being built in parallel; see docs/RELEASE_GATE.md):
@@ -47,7 +66,7 @@ usage() {
 
 original_args=("$@")
 tarball='' label='' commit='' evidence_root="$gate_repo/release-evidence" port='' port_given=0
-expect_refusal='' live=0 system_changes=0 keep_work=0 run_command=
+expect_refusal='' live=0 system_changes=0 keep_work=0 run_command='' service_writer_model=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --tarball) tarball=${2:?}; shift ;;
@@ -60,6 +79,7 @@ while [ $# -gt 0 ]; do
     --system-changes) system_changes=1 ;;
     --keep-work) keep_work=1 ;;
     --command) run_command=${2:?}; shift ;;
+    --service-writer-model) service_writer_model=${2:?}; shift ;;
     -h | --help) usage ;;
     *) gate_die "unknown argument: $1 (see --help)" ;;
   esac
@@ -110,12 +130,21 @@ fi
 
 work=$(mktemp -d "${GATE_TMPDIR:-/tmp}/axo-gate.XXXXXX")
 real_home=$HOME
-stub_pid='' dev_pid='' subuid_backup=''
+stub_pid='' dev_pid='' subuid_backup='' own_subids_backup=''
+# The files of subordinate ids; a simulated run (never evidence) uses
+# copies, written without sudo.
+subid_files=/etc/subuid:/etc/subgid
+subid_sudo=sudo
+if [ "$simulation" = 1 ] && [ -n "${GATE_SUBID_FILES:-}" ]; then
+  subid_files=$GATE_SUBID_FILES
+  subid_sudo=''
+fi
 # shellcheck disable=SC2329 # the EXIT trap runs it
 cleanup() {
   [ -n "$dev_pid" ] && kill "$dev_pid" 2>/dev/null && wait "$dev_pid" 2>/dev/null
   [ -n "$stub_pid" ] && kill "$stub_pid" 2>/dev/null && wait "$stub_pid" 2>/dev/null
   restore_subuid
+  restore_own_subids
   if [ "$keep_work" = 1 ]; then
     gate_say "kept $work"
   else
@@ -137,6 +166,26 @@ restore_subuid() {
   gate_say "FAILED to restore /etc/subuid and /etc/subgid; the originals are kept in $subuid_backup: restore them with sudo cp"
   return 1
 }
+# A live run removed this account's own range for onboarding to add one
+# again; when onboarding did not, the backup goes back.
+# shellcheck disable=SC2329 # cleanup runs it
+restore_own_subids() {
+  [ -n "$own_subids_backup" ] || return 0
+  own_subid_lines | grep -q . && return 0
+  local file n=0
+  for file in ${subid_files//:/ }; do
+    n=$((n + 1))
+    $subid_sudo cp "$own_subids_backup/$n" "$file" || gate_say "FAILED to restore $file; the original is kept in $own_subids_backup/$n"
+  done
+  gate_say "onboarding added no subordinate id range: restored $subid_files"
+}
+# own_subid_lines: this account's lines in the files of subordinate ids.
+own_subid_lines() {
+  local file
+  for file in ${subid_files//:/ }; do
+    awk -F: -v user="$(id -un)" -v uid="$(id -u)" '$1 == user || $1 == uid' "$file" 2>/dev/null
+  done
+}
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
@@ -146,7 +195,9 @@ if [ "$live" = 1 ] && [ -z "${GATE_IN_SCRIPT:-}" ]; then
   transcript="${GATE_TMPDIR:-/tmp}/axo-gate-live-$(date -u +%Y%m%dT%H%M%SZ).txt"
   echo "Recording this session to $transcript"
   rm -rf "$work"
-  GATE_IN_SCRIPT=$transcript exec script -q -e -c "$(printf '%q ' bash "$0" "${original_args[@]}")" "$transcript"
+  # -f: written to the file as it happens, so the copy taken at the end
+  # holds every question and answer.
+  GATE_IN_SCRIPT=$transcript exec script -q -e -f -c "$(printf '%q ' bash "$0" "${original_args[@]}")" "$transcript"
 fi
 
 gate_begin "$evidence_root" "$version" "$commit" "$label" "$([ "$live" = 1 ] && echo D || echo A)"
@@ -156,8 +207,10 @@ gate_host_json "$GATE_TMP/host.json"
 if [ "$live" = 0 ]; then
   exec > >(tee "$GATE_ATTACH/transcript.txt") 2>&1
 fi
+touch "$GATE_TMP/began"
 # Write this path's evidence and exit with its verdict (0 pass, 1 fail).
 finish() {
+  gate_keep_onboarding_logs "$GATE_TMP/began"
   [ -n "${GATE_IN_SCRIPT:-}" ] && cp "$GATE_IN_SCRIPT" "$GATE_ATTACH/transcript.txt" 2>/dev/null
   gate_tools_json "$GATE_TMP/tools.json"
   cp "$work/guard.log" "$GATE_ATTACH/logs/guard.log" 2>/dev/null || true
@@ -184,6 +237,61 @@ else
   gate_record "start without axocoatl on PATH" pass '' '' '' "HOME=$HOME"
 fi
 
+# A live run's account, before anything: what the public text says it
+# started without. (A state directory of Axocoatl's already refused the run
+# above.)
+podman_before=''
+if [ "$live" = 1 ]; then
+  gate_record "the account started without Axocoatl, its data or stored secrets" pass '' '' '' \
+    "none of $(gate_config_path), $(gate_data_dir), $(gate_log_dir), ~/.axocoatl or ~/.local/bin/axocoatl exists"
+  if command -v podman >/dev/null 2>&1 || dpkg -s podman >/dev/null 2>&1; then
+    podman_before="present: $(command -v podman 2>/dev/null || echo 'the podman package')"
+    gate_record "the account started without Podman" fail '' '' '' "$podman_before: onboarding cannot show its install; use a new VM"
+  else
+    podman_before=absent
+    gate_record "the account started without Podman" pass '' '' '' 'no podman on PATH, no podman package'
+  fi
+  # Lima forwards a port the VM listens on to the Mac only when the VM is
+  # not plain (its guest agent runs); OpenRouter's sign-in calls back to
+  # one. Elsewhere the person forwards it with the ssh -L line onboarding
+  # prints.
+  if [ -d /mnt/lima-cidata ]; then
+    if systemctl is-active --quiet lima-guestagent 2>/dev/null; then
+      gate_record "Lima forwards this VM's loopback ports to the Mac (its guest agent runs)" pass '' '' '' '' optional
+    else
+      gate_record "Lima forwards this VM's loopback ports to the Mac (its guest agent runs)" fail '' '' '' \
+        "no lima-guestagent runs (a --plain VM forwards no port): forward the sign-in's callback port with the ssh -L line onboarding prints" optional
+    fi
+  fi
+  # The collision case of onboarding's question about subordinate ids: this
+  # account's own range goes (after a backup), so onboarding must add one
+  # that overlaps no other user's, while another user's overlaps the first
+  # one it would otherwise take (100000-165535).
+  own_subids_backup="$work/own-subids"
+  mkdir -p "$own_subids_backup"
+  n=0 removed=1
+  for file in ${subid_files//:/ }; do
+    n=$((n + 1))
+    cp "$file" "$own_subids_backup/$n" 2>/dev/null || removed=0
+  done
+  other=$(awk -F: -v user="$(id -un)" -v uid="$(id -u)" '$1 != user && $1 != uid && $2 < 165536 && $2 + $3 > 100000 { print $1; exit }' \
+    "${subid_files%%:*}" 2>/dev/null)
+  if [ "$removed" = 1 ]; then
+    for file in ${subid_files//:/ }; do
+      # cp onto the file keeps its owner and mode.
+      awk -F: -v user="$(id -un)" -v uid="$(id -u)" '$1 != user && $1 != uid' "$file" >"$work/subid-new" \
+        && $subid_sudo cp "$work/subid-new" "$file" || removed=0
+    done
+  fi
+  if [ "$removed" = 1 ] && [ -n "$other" ] && ! own_subid_lines | grep -q .; then
+    gate_record "the gate removed this account's subordinate ids; another user's range overlaps 100000-165535" pass '' '' '' \
+      "$(id -un) has no line in $subid_files now (backup: $own_subids_backup); $other's range overlaps 100000-165535"
+  else
+    gate_record "the gate removed this account's subordinate ids; another user's range overlaps 100000-165535" fail '' '' '' \
+      "$([ "$removed" = 1 ] || echo "the files could not be backed up or changed with sudo; ")$([ -n "$other" ] || echo "no other user's range overlaps 100000-165535, so the range onboarding adds collides with nothing")"
+  fi
+fi
+
 # 2. The scripted model server.
 stub_url=''
 if [ "$live" = 0 ]; then
@@ -192,9 +300,9 @@ if [ "$live" = 0 ]; then
     --log "$GATE_ATTACH/logs/stub-model-server.jsonl" >"$GATE_ATTACH/logs/stub-model-server.log" 2>&1 &
   stub_pid=$!
   for _ in $(seq 1 100); do [ -s "$work/stub.port" ] && break; sleep 0.1; done
-  if [ -s "$work/stub.port" ] && curl -fsS "http://127.0.0.1:$(cat "$work/stub.port")/api/version" >/dev/null; then
+  if [ -s "$work/stub.port" ] && gate_curl -fsS "http://127.0.0.1:$(cat "$work/stub.port")/api/version" >/dev/null; then
     stub_url="http://127.0.0.1:$(cat "$work/stub.port")"
-    GATE_OLLAMA_VERSION="gate stub reporting $(curl -fsS "$stub_url/api/version" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+    GATE_OLLAMA_VERSION="gate stub reporting $(gate_curl -fsS "$stub_url/api/version" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
     export GATE_OLLAMA_VERSION
     gate_record "scripted model server ($GATE_OLLAMA_VERSION, cloud off)" pass '' '' '' "$stub_url"
   else
@@ -202,7 +310,7 @@ if [ "$live" = 0 ]; then
   fi
 fi
 stub_stat() {
-  curl -fsS "$stub_url/__gate/stats" | node -e '
+  gate_curl -fsS "$stub_url/__gate/stats" | node -e '
     let s = ""; process.stdin.on("data", (d) => s += d).on("end", () => {
       const stats = JSON.parse(s); const key = process.argv[1];
       process.stdout.write(String(key === "model-calls" ? stats.writer + stats.reviewer + stats.other : stats[key]));
@@ -276,14 +384,119 @@ if [ -n "$expect_refusal" ]; then
   finish
 fi
 
+# live_onboarding_steps: what a live onboarding did, as the public text
+# says it: Podman installed with apt, a range of subordinate ids added
+# that overlaps no other user's, OpenRouter connected through its browser
+# sign-in, and no Ollama installed (a CPU-only VM writes and reviews on
+# OpenRouter).
+live_onboarding_steps() {
+  if [ "$podman_before" = absent ] && command -v podman >/dev/null 2>&1 && dpkg -s podman >/dev/null 2>&1; then
+    gate_record "onboarding installed Podman with apt" pass '' '' '' "$(dpkg-query -W -f '${Package} ${Version}' podman 2>/dev/null)"
+  else
+    gate_record "onboarding installed Podman with apt" fail '' '' '' \
+      "before: ${podman_before:-not recorded}; now: $(command -v podman || echo 'no podman'), $(dpkg -s podman >/dev/null 2>&1 && echo 'the podman package is installed' || echo 'no podman package')"
+  fi
+  local overlap overlap_status
+  # shellcheck disable=SC2086 # the files, split on purpose
+  overlap=$(node -e '
+    const fs = require("fs");
+    const [user, uid, ...files] = process.argv.slice(1);
+    const problems = [];
+    for (const file of files) {
+      const lines = fs.readFileSync(file, "utf8").split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split(":"));
+      const mine = lines.filter(([owner]) => owner === user || owner === uid).map(([, first, count]) => [Number(first), Number(first) + Number(count)]);
+      const others = lines.filter(([owner]) => owner !== user && owner !== uid).map(([owner, first, count]) => [owner, Number(first), Number(first) + Number(count)]);
+      if (mine.reduce((sum, [a, b]) => sum + b - a, 0) < 65536) problems.push(`${file}: ${user} has fewer than 65536 ids`);
+      for (const [a, b] of mine) for (const [owner, c, d] of others) if (a < d && c < b) problems.push(`${file}: ${user}\u0027s ${a}-${b - 1} overlaps ${owner}\u0027s ${c}-${d - 1}`);
+    }
+    console.log(problems.join("; "));
+    process.exit(problems.length ? 1 : 0);
+  ' "$(id -un)" "$(id -u)" ${subid_files//:/ } 2>&1)
+  overlap_status=$?
+  if [ "$overlap_status" = 0 ] && [ -n "$own_subids_backup" ]; then
+    gate_record "onboarding added a subordinate id range that no other user's overlaps" pass '' '' '' "$(own_subid_lines | tr '\n' ' ')"
+  else
+    [ -n "$overlap" ] || overlap="the gate did not remove the account's range first"
+    gate_record "onboarding added a subordinate id range that no other user's overlaps" fail '' '' '' "$overlap"
+  fi
+  local stored lines
+  gate_secret_stored openrouter
+  stored=$?
+  if [ "$stored" = 0 ]; then
+    gate_ask "When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter in the Mac's browser (no key typed or pasted)?"
+    if [ "$ANSWER" = y ]; then
+      gate_record "OpenRouter was connected through the browser sign-in during onboarding" pass '' '' '' \
+        "the secret openrouter was stored during this account's first onboarding, and the operator ($(id -un)) answered yes"
+    else
+      gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' "the operator answered no: ${ANSWER_NOTE:-no note}"
+    fi
+  elif [ "$stored" = 2 ]; then
+    gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' \
+      "cannot tell whether onboarding stored openrouter: $GATE_SECRET_ERROR"
+  else
+    # What reached the sign-in's callback, one line per connection, tells a
+    # sign-in nobody finished from one whose callback never arrived.
+    lines=$(gate_onboarding_log_lines "$GATE_TMP/began" 'OpenRouter sign-in:')
+    gate_record "OpenRouter was connected through the browser sign-in during onboarding" fail '' '' '' \
+      "onboarding ended without the secret openrouter stored; $([ -n "$lines" ] && printf "onboarding's log: %s" "$lines" || printf "onboarding's log has no 'OpenRouter sign-in:' line, so no connection reached the sign-in's callback")"
+  fi
+  if command -v ollama >/dev/null 2>&1 || [ -e /etc/systemd/system/ollama.service ]; then
+    gate_record "onboarding did not install Ollama" fail '' '' '' "$(command -v ollama || echo /etc/systemd/system/ollama.service)"
+  else
+    gate_record "onboarding did not install Ollama" pass '' '' '' 'no ollama on PATH, no ollama service'
+  fi
+}
+
+# forward_check: whether the browser the person signs in with reaches a
+# loopback port of this account, as OpenRouter's browser sign-in must call
+# back to one (http://127.0.0.1:<port>/callback). Checked before
+# onboarding, by a request the gate's own listener must receive, so that a
+# sign-in that never calls back afterwards is not the forwarding: 1.5.0's
+# first D1 attempts used a plain Lima VM, which forwards no port, and one
+# with an ssh -L tunnel also timed out, for a reason nobody found.
+forward_check() {
+  local name="the sign-in browser reached a loopback port of this account, as OpenRouter's callback must"
+  local token port listener log="$GATE_ATTACH/logs/forward-check.log"
+  token=$(node -e 'process.stdout.write(require("crypto").randomBytes(12).toString("hex"))')
+  node -e '
+    const fs = require("fs");
+    const [portFile, log, token] = process.argv.slice(1);
+    const server = require("http").createServer((req, res) => {
+      const hit = req.url === `/${token}`;
+      fs.appendFileSync(log, `${req.method} ${hit ? "/<the gate path>" : req.url.split("?")[0]} Host ${req.headers.host}\n`);
+      res.writeHead(hit ? 200 : 404, { "content-type": "text/plain; charset=utf-8" });
+      res.end(hit ? "Axocoatl gate: this page reached the VM.\n" : "Axocoatl gate: not the address the gate printed.\n");
+    }).listen(0, "127.0.0.1", () => fs.writeFileSync(portFile, String(server.address().port)));
+  ' "$GATE_TMP/forward.port" "$log" "$token" &
+  listener=$!
+  for _ in $(seq 1 50); do [ -s "$GATE_TMP/forward.port" ] && break; sleep 0.1; done
+  port=$(cat "$GATE_TMP/forward.port" 2>/dev/null)
+  printf '\nBefore onboarding: open this address in the browser you will sign in to OpenRouter with (the Mac'"'"'s):\n\n    http://127.0.0.1:%s/%s\n\n' "$port" "$token"
+  printf 'In a Lima VM that is not plain it opens after a few seconds. In a plain or cloud VM, first run on the Mac, with your login'"'"'s port, key and host:\n\n    ssh -N -L %s:127.0.0.1:%s -p SSH_PORT -i KEY %s@HOST\n' "$port" "$port" "$(id -un)"
+  # A simulated person opens it with curl.
+  [ "${GATE_SIMULATION:-0}" = 1 ] && gate_curl -fsS "http://127.0.0.1:$port/$token" >/dev/null 2>&1
+  gate_ask "Did the page say 'Axocoatl gate: this page reached the VM.'?"
+  kill "$listener" 2>/dev/null
+  wait "$listener" 2>/dev/null
+  if grep -q '^GET /<the gate path> ' "$log" 2>/dev/null && [ "$ANSWER" = y ]; then
+    gate_record "$name" pass '' '' '' "the gate's listener on 127.0.0.1:$port received the request ($(grep -m 1 '^GET /<the gate path> ' "$log")), and the operator ($(id -un)) answered yes"
+  else
+    gate_record "$name" fail '' '' '' \
+      "$(grep -q '^GET /<the gate path> ' "$log" 2>/dev/null && echo 'the request arrived' || echo "the gate's listener on 127.0.0.1:${port:-?} received no request for its address"); the operator answered ${ANSWER}${ANSWER_NOTE:+: $ANSWER_NOTE}. Forward the port (a VM that is not plain, or ssh -L) before onboarding's sign-in"
+  fi
+}
+
 # 4. Onboarding, then doctor.
 if [ "$live" = 1 ]; then
+  forward_check
   # Every consent prompt is answered by the operator. --start none: the gate
   # starts `axocoatl dev` itself, with its output (and sign-in link) kept
   # out of the transcript.
   onboard_live=(axocoatl onboard --start none)
   [ "$port_given" = 1 ] && onboard_live+=(--port "$port")
   gate_step "onboard (interactive, every consent answered by the operator; --start none)" --interactive -- "${onboard_live[@]}"
+  gate_record "onboarding was answered live in the terminal" pass '' '' '' "every prompt was answered by the operator ($(id -un)); the transcript holds each"
+  live_onboarding_steps
 else
   sudo_mark=$(gate_sudo_mark)
   gate_step "onboard --yes --writer ollama with no terminal" -- \
@@ -331,20 +544,26 @@ fi
 gate_step "doctor exits 0" -- axocoatl doctor
 gate_doctor_text_check "$GATE_ATTACH/logs/$(gate_slug "doctor exits 0").log"
 
-# 5. The daemon, on its configured port.
+# 5. The daemon, on its configured port: an Axocoatl /health that names its
+# version and started after the configuration last changed.
 cd "$work" || finish
+GATE_DAEMON_PORT=$port
+export GATE_DAEMON_PORT
 axocoatl dev >"$GATE_ATTACH/logs/dev.log" 2>&1 &
 dev_pid=$!
-ready=0
-for _ in $(seq 1 600); do
-  if curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null 2>&1; then ready=1; break; fi
+state=none
+deadline=$((SECONDS + 300))
+while [ "$SECONDS" -lt "$deadline" ]; do
+  state=$(gate_daemon_state "$port" "$config")
+  [ "$state" = current ] && break
   kill -0 "$dev_pid" 2>/dev/null || break
   sleep 0.5
 done
-if [ "$ready" = 1 ]; then
-  gate_record "axocoatl dev serves on port $port" pass '' '' '' ''
+if [ "$state" = current ]; then
+  gate_record "axocoatl dev serves on its configured port" pass '' '' '' "port $port"
 else
-  gate_record "axocoatl dev serves on port $port" fail '' '' '' "$(tail -n 3 "$GATE_ATTACH/logs/dev.log" | tr '\n' ' ')"
+  gate_record "axocoatl dev serves on its configured port" fail '' '' '' \
+    "$(gate_daemon_state_says "$state" "$port"); $(tail -n 3 "$GATE_ATTACH/logs/dev.log" | tr '\n' ' ')"
 fi
 
 # 6-7. The README's command, verbatim, on every fixture, then the
@@ -360,17 +579,24 @@ fi
 printf '%s\n' "$readme_command" >"$GATE_ATTACH/readme-command.txt"
 fixtures=()
 while IFS= read -r fixture; do fixtures+=("$fixture"); done < <(gate_fixture_names)
+fixtures_status=0
+[ -n "$readme_command" ] || fixtures_status=1
 for fixture in "${fixtures[@]}"; do
   [ -n "$readme_command" ] || break
   fixture_command=$readme_command
   [ -n "$run_command" ] || fixture_command=$(gate_fixture_command "$fixture" "$readme_command")
-  [ "$live" = 0 ] && curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
-  gate_run_fixture "$fixture" "$fixture_command" "$work/repos/$fixture"
+  [ "$live" = 0 ] && gate_curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
+  gate_run_fixture "$fixture" "$fixture_command" "$work/repos/$fixture" || fixtures_status=1
   if [ "$live" = 0 ]; then
-    edits=$(curl -fsS "$stub_url/__gate/stats" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).edits.map(e=>e.fixture).join(",")))')
+    edits=$(gate_curl -fsS "$stub_url/__gate/stats" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).edits.map(e=>e.fixture).join(",")))')
     gate_check "the model fixed $fixture once" "the stub's edits: ${edits:-none}" -- test "$edits" = "$fixture"
   fi
 done
+if [ "$fixtures_status" = 0 ]; then
+  gate_record "the README's command passed on every fixture, each receipt and record verified" pass '' '' '' "fixtures: ${fixtures[*]}"
+else
+  gate_record "the README's command passed on every fixture, each receipt and record verified" fail '' '' '' "fixtures: ${fixtures[*]}: see the failing steps above"
+fi
 
 # 8. Negative cases.
 task=$(printf '%s\n' "$readme_command" | sed -n 's/.*--task "\([^"]*\)".*/\1/p')
@@ -384,7 +610,7 @@ if [ "$live" = 0 ]; then
   git -C "$missing" init -q -b main
   git -C "$missing" -c user.name='New User' -c user.email='new-user@example.invalid' add -A
   git -C "$missing" -c user.name='New User' -c user.email='new-user@example.invalid' commit -qm start
-  curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
+  gate_curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
   t0=$(date +%s)
   gate_step "a check program that is absent: exit 3" --expect 3 -- \
     /bin/bash -c 'cd "$1" && axocoatl run fix --task "$2"' gate-run "$missing" "$task"
@@ -398,7 +624,7 @@ if [ "$live" = 0 ]; then
   gate_fixture_repo node-deps "$repo"
   axocoatl session list >"$work/sessions-before.txt" 2>&1
   before_containers=$(podman ps -a --format '{{.Names}}' 2>/dev/null | grep -c . || true)
-  curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
+  gate_curl -fsS -X POST "$stub_url/__gate/reset" -d '{}' >/dev/null
   gate_step "reviewer anthropic:x: exit 3" --expect 3 -- /bin/bash -c \
     'cd "$1" && axocoatl run fix --task "$2" --model "writer=$3" --model reviewer=anthropic:x' \
     gate-run "$repo" "$task" "$writer_model"
@@ -468,7 +694,7 @@ if [ "$live" = 0 ]; then
       gate_record "back up /etc/subuid and /etc/subgid" fail '' '' '' "they could not be copied, so the case did not run and nothing was changed"
     fi
   else
-    gate_skip "doctor FAILs an empty /etc/subuid with the usermod fix" "needs --system-changes and passwordless sudo (CI)"
+    gate_skip "doctor FAILs the subuid range with the usermod fix" "needs --system-changes and passwordless sudo (CI)"
   fi
 else
   gate_skip "negative cases with the scripted model server" "a live run (Tier D) has no stub" optional
@@ -488,6 +714,46 @@ if [ -n "$dev_pid" ] && kill -0 "$dev_pid" 2>/dev/null; then
   dev_status=$?
   dev_pid=''
   gate_check "Ctrl+C stops axocoatl dev with exit 0" "exit $dev_status" optional -- test "$dev_status" = 0
+fi
+
+# 11. Live: the Always-On Service (a systemd user unit), as a person meets
+# it. Step 6 of `onboard --update` installs and starts it; a second
+# `onboard --update` changes the writer model while it runs, and its Step 7
+# restarts it; a fix runs through it; then `service status`, `stop` and
+# `uninstall`.
+if [ "$live" = 1 ]; then
+  if [ "$simulation" = 1 ] || systemctl --user show-environment >/dev/null 2>&1; then
+    gate_record "this login has a systemd user session (the service needs one)" pass '' '' '' "$(id -un)"
+  else
+    gate_record "this login has a systemd user session (the service needs one)" fail '' '' '' \
+      "systemctl --user cannot reach the user's manager: log in as $(id -un) over SSH (not with su or sudo -iu)"
+  fi
+  printf '\nIn Step 6 ("How should Axocoatl run?"), choose "Always on, starting at login" and agree to install it.\n'
+  gate_step "onboard --update: Step 6, the Always-On Service (interactive)" --interactive -- axocoatl onboard --update
+  gate_service_status "onboarding installed and started the Always-On Service (Step 6)" yes yes
+  state=$(gate_wait_daemon "$port" "$config" 300)
+  gate_check "the service answers on port $port" "$(gate_daemon_state_says "$state" "$port")" -- test "$state" = current
+  writer=$(gate_run_model "$config" writer)
+  reviewer=$(gate_run_model "$config" reviewer)
+  if [ -z "$service_writer_model" ]; then
+    for candidate in openrouter:z-ai/glm-4.6 openrouter:deepseek/deepseek-chat-v3.1; do
+      [ "$candidate" != "$writer" ] && [ "$candidate" != "$reviewer" ] && { service_writer_model=$candidate; break; }
+    done
+  fi
+  from=$(wc -c <"${GATE_IN_SCRIPT:-/dev/null}" 2>/dev/null || echo 0)
+  gate_step "onboard --update --writer-model $service_writer_model --smoke-test (the configuration changes while the service runs)" --interactive -- \
+    axocoatl onboard --update --writer-model "$service_writer_model" --smoke-test --start none
+  tail -c +"$((from + 1))" "${GATE_IN_SCRIPT:-/dev/null}" >"$work/onboard-output.txt" 2>/dev/null
+  gate_service_restart_steps "$config" "$port" "$work/onboard-output.txt"
+  service_command=$readme_command
+  [ -n "$run_command" ] || service_command=$(gate_fixture_command node-deps "$readme_command")
+  if gate_run_fixture node-deps "$service_command" "$work/repos/service-node-deps" service-node-deps; then
+    gate_record "a fix through the Always-On Service passed, its receipt and record verified" pass '' '' '' "node-deps, writer $service_writer_model, port $port"
+  else
+    gate_record "a fix through the Always-On Service passed, its receipt and record verified" fail '' '' '' "node-deps, writer $service_writer_model: see the failing steps above"
+  fi
+  gate_service_status "axocoatl service status: installed and running" yes yes
+  gate_service_end "$port"
 fi
 
 finish

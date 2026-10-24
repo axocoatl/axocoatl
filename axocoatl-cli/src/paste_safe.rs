@@ -9,13 +9,15 @@
 //! A flag's value written as choices outside a command, `--toolchain
 //! node|go` or `--task-file <file|->`, is the same pipeline once a person
 //! adds it to a command line: it is a placeholder too (`--toolchain
-//! <language>`), with the choices in words.
+//! LANGUAGE`), with the choices in words. A placeholder is in capitals,
+//! never in angle brackets, which a shell reads as a redirection.
 //!
 //! These checks read the printed texts (doctor's and onboarding's fixes,
 //! onboarding's text without a terminal, every command's `--help`, and the
-//! messages built at run time from a list of choices) and the sources of
-//! the CLI and its crates: every backticked span of a string, every flag
-//! written with its value, and every `|` joined into a text at run time.
+//! messages built at run time from a list of choices), the sources of the
+//! CLI, the server and the crates (every backticked span of a string, every
+//! flag written with its value, and every `|` joined into a text at run
+//! time), and the commands the workbench's scripts show.
 
 use std::path::{Path, PathBuf};
 
@@ -93,6 +95,42 @@ pub(crate) fn problems(command: &str) -> Vec<&'static str> {
     if command.contains("[-") {
         found.push("an optional [--flag], which a shell reads as a glob");
     }
+    if !angle_placeholders(command).is_empty() {
+        found.push("a <placeholder>, which a shell reads as a redirection");
+    }
+    found
+}
+
+/// The `<word>` placeholders in `text`: a `<`, a letter, then letters,
+/// digits, spaces, `-`, `_`, `.` or a `{format argument}` (in a source),
+/// and a `>`. Pasted into a shell, `<name>` reads a file called `name>` (or
+/// fails), so a printed command names a value in capitals instead (`NAME`,
+/// `CONFIG`, `DISTRO`).
+pub(crate) fn angle_placeholders(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('<') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('>') else {
+            break;
+        };
+        let inside = &after[..end];
+        if let Some(inner) = inside.find('<') {
+            rest = &after[inner..];
+            continue;
+        }
+        if inside
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+            && inside
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || " -_.{}".contains(c))
+        {
+            found.push(format!("<{inside}>"));
+        }
+        rest = &after[end..];
+    }
     found
 }
 
@@ -140,6 +178,62 @@ pub(crate) fn flag_choices(text: &str) -> Vec<String> {
     found
 }
 
+/// The flags in a printed `text` whose value is, or holds, an `<angle>`
+/// placeholder (`--config <config>`, `--toolchain <another language>`,
+/// `--setup "pip install <package>"`), outside backticks too: added to a
+/// command line as written, the placeholder is a redirection, or, quoted,
+/// a command nobody can run.
+pub(crate) fn flag_placeholders(text: &str) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut found = Vec::new();
+    for (index, word) in words.iter().enumerate() {
+        let word = word.trim_start_matches(['`', '"', '\'', '(']);
+        let flag = word.starts_with("--")
+            && word[2..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric());
+        if !flag {
+            continue;
+        }
+        let value = match word.split_once('=') {
+            Some((_, value)) => value.to_string(),
+            None => flag_value(&words[index + 1..]),
+        };
+        if !angle_placeholders(&value).is_empty() {
+            let value = value.trim_end_matches(['`', ',', '.', ';', ':', ')']);
+            found.push(format!(
+                "{} {value}",
+                word.split('=').next().unwrap_or(word)
+            ));
+        }
+    }
+    found
+}
+
+/// The value written after a flag, from `words`: its first word, or, when
+/// that opens a quote or an `<angle>` placeholder it does not close, the
+/// words up to the one that does (at most eight).
+fn flag_value(words: &[&str]) -> String {
+    let Some(first) = words.first() else {
+        return String::new();
+    };
+    let bare = first.trim_start_matches(['\\', '"', '\'']);
+    let quoted = bare.len() != first.len() && !bare.contains(['"', '\'']);
+    let angle = bare.starts_with('<') && !bare.contains('>');
+    if !quoted && !angle {
+        return first.to_string();
+    }
+    let mut value = vec![*first];
+    for word in words.iter().skip(1).take(7) {
+        value.push(word);
+        if (quoted && word.contains(['"', '\''])) || (!quoted && word.contains('>')) {
+            break;
+        }
+    }
+    value.join(" ")
+}
+
 /// The commands in a printed `text`: its backticked spans, and its lines
 /// that hold only a command, indented (as onboarding prints one to run).
 pub(crate) fn commands(text: &str) -> Vec<String> {
@@ -172,6 +266,11 @@ pub(crate) fn assert_paste_safe(text: &str) {
         flag_choices(text)
             .into_iter()
             .map(|flag| format!("{flag}: a flag value written as choices")),
+    );
+    unsafe_commands.extend(
+        flag_placeholders(text)
+            .into_iter()
+            .map(|flag| format!("{flag}: a flag value written as a <placeholder>")),
     );
     assert!(
         unsafe_commands.is_empty(),
@@ -306,8 +405,8 @@ fn the_check_finds_alternatives_and_optional_parts() {
     assert_eq!(flag_choices(&equals), [format!("--podman=create{bar}skip")]);
     assert!(std::panic::catch_unwind(|| assert_paste_safe(&toolchain)).is_err());
     for safe in [
-        "pass --toolchain <language>, where <language> is node, python or go",
-        "--task-file <file> (- reads the task from standard input)",
+        "pass --toolchain LANGUAGE, where LANGUAGE is node, python or go",
+        "--task-file FILE (- reads the task from standard input)",
         "podman info || podman system migrate",
         "\"severity\": \"low|medium|high|critical\"",
         "curl -fsSL https://ollama.com/install.sh | sh",
@@ -322,6 +421,71 @@ fn the_check_finds_alternatives_and_optional_parts() {
         runtime_bars("let x = a || b;\nlet y = |v| { v };\n"),
         Vec::<usize>::new()
     );
+}
+
+/// A value in angle brackets is a redirection once pasted: found in a
+/// command, as a flag's value and in a literal's commands, never in a real
+/// redirection (`< file`), a heredoc or an HTML tag outside a command.
+#[test]
+fn the_check_finds_angle_placeholders() {
+    // Built here so that the source scan does not find them.
+    let (open, close) = ('<', '>');
+    let name = format!("{open}name{close}");
+    let secret = format!("axocoatl secret set {name} --from-env VAR");
+    assert_eq!(
+        problems(&secret),
+        ["a <placeholder>, which a shell reads as a redirection"]
+    );
+    assert_eq!(angle_placeholders(&secret), std::slice::from_ref(&name));
+    for safe in [
+        "axocoatl secret set NAME < token-file",
+        "podman info 2>/dev/null",
+        "cat <<EOF",
+        "axocoatl secret set NAME --from-env VAR",
+    ] {
+        assert!(problems(safe).is_empty(), "{safe}");
+    }
+    let config = format!("Pass --config {open}config{close}, or --check \"{open}command{close}\".");
+    assert_eq!(
+        flag_placeholders(&config),
+        [
+            format!("--config {open}config{close}"),
+            format!("--check \"{open}command{close}\""),
+        ]
+    );
+    assert!(flag_placeholders("--toolchain LANGUAGE, where LANGUAGE is go").is_empty());
+    // A placeholder of several words, or inside a quoted value (with a
+    // format argument, as a source writes it), is found too.
+    let words = format!(
+        "pass --toolchain {open}another language{close} when it runs another one, or --setup \
+         \"pip install {open}package{close}\", or --setup \\\"{open}command that installs \
+         {{program}}{close}\\\"; or --check \"npm test\" < input"
+    );
+    assert_eq!(
+        flag_placeholders(&words),
+        [
+            format!("--toolchain {open}another language{close}"),
+            format!("--setup \"pip install {open}package{close}\""),
+            format!("--setup \\\"{open}command that installs {{program}}{close}\\\""),
+        ]
+    );
+    assert!(flag_placeholders(
+        "--setup \"pip install PACKAGE\", or --setup \"COMMAND\", where COMMAND installs it"
+    )
+    .is_empty());
+    let literal = format!("Build one with: axocoatl recipe build {open}recipe{close}. Then run it");
+    assert_eq!(
+        literal_commands(&literal),
+        [format!("axocoatl recipe build {open}recipe{close}")]
+    );
+    // A command inside an HTML tag is not read; a closing tag is no
+    // placeholder.
+    assert!(
+        literal_commands("<h1>Signed in</h1><p>run <code>axocoatl onboard</code> again</p>")
+            .is_empty()
+    );
+    assert!(angle_placeholders("axocoatl onboard</code> again</p>").is_empty());
+    assert!(std::panic::catch_unwind(|| assert_paste_safe(&format!("Run `{secret}`"))).is_err());
 }
 
 /// The string literals in `line`, without their quotes (escapes kept).
@@ -368,11 +532,12 @@ fn runtime_bars(source: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The sources of the CLI and of every crate, but this file.
+/// The sources of the CLI, the server and every crate, but this file.
 fn all_sources() -> Vec<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     sources(&manifest.join("src"), &mut files);
+    sources(&manifest.join("../axocoatl-server/src"), &mut files);
     if let Ok(crates) = std::fs::read_dir(manifest.join("../crates")) {
         for entry in crates.flatten() {
             sources(&entry.path().join("src"), &mut files);
@@ -384,10 +549,58 @@ fn all_sources() -> Vec<PathBuf> {
         files.iter().any(|file| file.ends_with("src/doctor.rs"))
             && files
                 .iter()
-                .any(|file| file.ends_with("axocoatl-session/src/toolchain.rs")),
+                .any(|file| file.ends_with("axocoatl-session/src/toolchain.rs"))
+            && files
+                .iter()
+                .any(|file| file.ends_with("axocoatl-server/src/routes.rs")),
         "the scan read no sources: {files:?}"
     );
     files
+}
+
+/// The workbench's scripts, which show commands for a person to run too.
+fn workbench_scripts() -> Vec<PathBuf> {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../axocoatl-server/static/ui");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "js"))
+        .collect();
+    files.sort();
+    assert!(
+        files.iter().any(|file| file.ends_with("run-outcome.js"))
+            && files
+                .iter()
+                .any(|file| file.ends_with("settings-loadouts.js")),
+        "the scan read no scripts: {files:?}"
+    );
+    files
+}
+
+/// The string literals in a line of JavaScript (`'…'`, `"…"` and `` `…` ``),
+/// without their quotes.
+fn script_literals(line: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut open: Option<(char, String)> = None;
+    let mut escaped = false;
+    for c in line.chars() {
+        match open.as_mut() {
+            Some((_, text)) if escaped => {
+                text.push(c);
+                escaped = false;
+            }
+            Some((_, text)) if c == '\\' => {
+                text.push(c);
+                escaped = true;
+            }
+            Some((quote, _)) if c == *quote => found.extend(open.take().map(|(_, text)| text)),
+            Some((_, text)) => text.push(c),
+            None if matches!(c, '\'' | '"' | '`') => open = Some((c, String::new())),
+            None => {}
+        }
+    }
+    found
 }
 
 /// The texts that join a `|` in at run time and are no command or flag a
@@ -438,6 +651,154 @@ fn no_printed_flag_offers_its_value_as_choices() {
     );
 }
 
+/// The commands a string literal `text` prints, each from its first word
+/// (one of [`COMMANDS`]) to the end of its clause: a backtick, a line
+/// break (`\n` in the literal), `;` or the end of a sentence.
+fn literal_commands(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (start, _) in text.char_indices() {
+        let before = &text[..start];
+        let boundary = before.is_empty()
+            || before.ends_with("\\n")
+            || before.ends_with([' ', '`', '"', '(', ':']);
+        if !boundary {
+            continue;
+        }
+        let rest = &text[start..];
+        let Some(word) = rest
+            .split(' ')
+            .next()
+            .filter(|word| COMMANDS.contains(word))
+        else {
+            continue;
+        };
+        if rest.len() == word.len() {
+            continue;
+        }
+        let end = ["`", "\\n", ";", ". "]
+            .iter()
+            .filter_map(|stop| rest.find(stop))
+            .min()
+            .unwrap_or(rest.len());
+        found.push(rest[..end].to_string());
+    }
+    found
+}
+
+/// The sources whose `<angle>` placeholders are no command Axocoatl tells a
+/// person to run, each with why.
+const ANGLE_PLACEHOLDERS: &[(&str, &str)] = &[
+    (
+        "axocoatl-exec/src/main.rs",
+        "the internal supervisor's usage synopsis, which no person runs (a byte changed there \
+         changes the embedded supervisor's hash)",
+    ),
+    (
+        "axocoatl-service/src/launchd.rs",
+        "a test's CONTAINER_CONNECTION value with shell metacharacters, checked for quoting",
+    ),
+    (
+        "axocoatl-cli/src/connect_cmd/ink_model.rs",
+        "Claude Code's own screen, which the sign-in tests model and Axocoatl never prints",
+    ),
+    (
+        "axocoatl-cli/src/connect_cmd/redact/tests.rs",
+        "Claude Code's own screen, which the redaction tests feed in",
+    ),
+];
+
+/// No string in the CLI and its crates names a value in a printed command
+/// as an `<angle>` placeholder, which a shell reads as a redirection: not in
+/// a command (`axocoatl secret set <name>`, backticked or not) nor as a
+/// flag's value written beside one (`--config <config>`). A value to fill
+/// in is a placeholder in capitals (`NAME`, `CONFIG`, `DISTRO`).
+#[test]
+fn no_printed_command_names_a_value_in_angle_brackets() {
+    let mut found = Vec::new();
+    for file in all_sources() {
+        if ANGLE_PLACEHOLDERS
+            .iter()
+            .any(|(path, _)| file.ends_with(path))
+        {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file).unwrap();
+        for (line, text) in joined_lines(&source) {
+            for literal in string_literals(&text) {
+                for flag in flag_placeholders(&literal) {
+                    found.push(format!("{}:{line}: {flag}", file.display()));
+                }
+                for command in literal_commands(&literal) {
+                    if !angle_placeholders(&command).is_empty() {
+                        found.push(format!("{}:{line}: {command}", file.display()));
+                    }
+                }
+            }
+        }
+    }
+    found.dedup();
+    assert!(
+        found.is_empty(),
+        "commands with <placeholders> that paste as redirections:\n{}",
+        found.join("\n")
+    );
+}
+
+/// No command the workbench shows (its scripts' strings) names a value as
+/// an `<angle>` placeholder or writes `a|b` choices or an `[--optional]`
+/// part: a person copies these from the page into a shell.
+#[test]
+fn no_workbench_command_is_unsafe_to_paste() {
+    let mut found = Vec::new();
+    let mut commands = 0;
+    for file in workbench_scripts() {
+        let source = std::fs::read_to_string(&file).unwrap();
+        for (number, line) in source.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with('*') || code.starts_with("/*") {
+                continue;
+            }
+            for literal in script_literals(line) {
+                for flag in flag_placeholders(&literal) {
+                    found.push(format!("{}:{}: {flag}", file.display(), number + 1));
+                }
+                for command in literal_commands(&literal) {
+                    commands += 1;
+                    let problems = problems(&command);
+                    if !problems.is_empty() {
+                        found.push(format!(
+                            "{}:{}: `{command}`: {}",
+                            file.display(),
+                            number + 1,
+                            problems.join("; ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(commands > 5, "the scan found {commands} commands");
+    assert!(
+        found.is_empty(),
+        "workbench commands unsafe to paste:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The workbench scan reads each kind of JavaScript string.
+#[test]
+fn the_workbench_scan_reads_every_kind_of_string() {
+    assert_eq!(
+        script_literals(r#"h('p', "a \"b\"", `run ${x}`) + 'it\'s'"#),
+        ["p", r#"a \"b\""#, "run ${x}", r"it\'s"]
+    );
+    let shown = script_literals("'Check it with axocoatl receipt verify <file> --keys <keys>. '");
+    assert_eq!(
+        literal_commands(&shown[0]),
+        ["axocoatl receipt verify <file> --keys <keys>"]
+    );
+}
+
 /// The usage errors built from the repository's toolchains, and the probe
 /// refusal's fixes, name the choices in words.
 #[test]
@@ -461,7 +822,7 @@ fn messages_built_from_a_list_of_choices_name_them_in_words() {
         assert!(!message.contains('|'), "{message}");
     }
     assert!(ambiguous_message(&candidates, None)
-        .contains("Pass --toolchain <language>, where <language> is node, python or go"));
+        .contains("Pass --toolchain LANGUAGE, where LANGUAGE is node, python or go"));
 
     let repository = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -492,8 +853,8 @@ fn messages_built_from_a_list_of_choices_name_them_in_words() {
     let message = probe_refusal(&plan, "jest", &ProbeMissing::Program("jest".into()), None);
     assert!(
         message.contains(
-            "pass --toolchain <language> for Axocoatl's image of the repository's language, \
-             where <language> is node, python, rust or go"
+            "pass --toolchain LANGUAGE for Axocoatl's image of the repository's language, \
+             where LANGUAGE is node, python, rust or go"
         ),
         "{message}"
     );

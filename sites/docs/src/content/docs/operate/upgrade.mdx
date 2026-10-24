@@ -74,7 +74,10 @@ format, as one the daemon creates does, and keeps the files in it.
    ```
 
    Scripts send `Authorization: Bearer <token>` with the contents of
-   `local-api-token` in the data root.
+   `local-api-token` in the data root. The first start of 1.5.0 or later
+   replaces a token an earlier version created, once, because sign-in links
+   before 1.5.0 left it in a cookie for `localhost`: open the new link, and
+   give scripts that kept the old token the new one.
 7. Inspect Sessions, Automation run history, Agent status, and logs before
    resuming automatic triggers.
 
@@ -135,14 +138,100 @@ config, environment, and Workspace copies as one set, as
 
 A restored data root is a copy, and Axocoatl 1.1.0 through 1.4.0 do not start on a
 copied data root: they exit with `failed data-directory format ownership admission`.
-1.5.0 and later record a copied root's new location when they start. To return to
-1.4.0, restore the set, start Axocoatl 1.5.0 on the restored data root once and stop
-it, then start 1.4.0. Returning to a release before 1.4.0 this way has not been tested.
+To return to one of them, restore the set, run `axocoatl session record-location` with
+1.5.0 (or later) on the restored data root while Axocoatl is stopped, then start the
+older release. That command records the copy's new location and changes nothing else.
+This was tested with 1.1.2, 1.2.0, 1.3.2 and 1.4.0, each on a restored backup holding
+a Session it had made. Starting 1.5.0 on the restored root also records the location,
+but it converts each Session's journals, which 1.2 and earlier then refuse (`unknown
+field segments`).
 </Aside>
 
 Future-version Session ledger or attachment schemas are rejected rather than
 silently interpreted. That protects against accidental corruption, but it is
 not an automatic migration path.
+
+## Upgrading from 1.4
+
+Axocoatl 1.5 starts on the data root 1.4 used, in place or as a restored copy, and keeps
+its Sessions, their History and the records of `axocoatl run`. Native Sessions now need
+Ollama 0.40.6 or later (1.4 needed 0.20.6), so the upgrade includes Ollama.
+
+<Steps>
+
+1. Finish or stop running work, and note the version and the service:
+
+   ```sh
+   axocoatl --version
+   axocoatl service status
+   ```
+
+2. Stop the daemon: `axocoatl service stop` for the Always-On Service, or **Ctrl-C** in
+   the terminal that runs `axocoatl dev`.
+3. Make a [complete cold backup](/operate/data-backup/#make-a-cold-backup) of the data
+   root and the configuration, and keep the 1.4 binary with it. It is the only way back
+   to 1.4 (see [Data written by 1.5](#data-written-by-15)).
+4. Install 1.5:
+
+   ```sh
+   curl -fsSL https://axocoatl.ai/install.sh | sh
+   ```
+
+   The installer names the copy it replaces and says when a daemon still runs: a daemon
+   keeps running the binary it started from until it restarts.
+5. Upgrade Ollama to 0.40.6 or later: `brew upgrade ollama && brew services restart ollama`
+   with Homebrew, or `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`
+   on Linux. With the Ollama app on macOS, download it again from
+   [ollama.com/download](https://ollama.com/download), then quit and reopen it so that the
+   new version answers. `axocoatl onboard` upgrades a Homebrew or Linux install after
+   asking, and says what to do for the app.
+6. Check the setup. Doctor says when Ollama still runs 0.20.6, when a configured model is
+   missing, and when a daemon that is still running is older than 1.5.0:
+
+   ```sh
+   axocoatl doctor
+   ```
+
+7. Start the daemon: `axocoatl service start`, or `axocoatl dev`. If the binary is at
+   another path than before, run `axocoatl service install` first.
+8. In each Session you continue, open **Team & budget**, select **Edit**, then
+   **Preview** and **Apply**; nothing needs to change. A Team reviewed on Ollama 0.20.6
+   says "Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again" until
+   then, and so does each helper an Agent delegates to. Apply observes each of its Ollama
+   Agents and their Ollama helpers again on the Ollama that runs now. Preview shows each
+   such Agent as replaced, with a new conversation, since Ollama 0.40 runs the model in
+   another engine; a helper starts a new conversation each time it is given work.
+   `axocoatl run` needs nothing: every run applies its loadout's team in a new Session.
+
+</Steps>
+
+## Data written by 1.5
+
+Axocoatl 1.5 records how each model response of a native Session ended (a
+`provider_response` event in the Session's history), from the first workbench Session
+turn or `axocoatl run` it runs on the data root, and it records a change whose patch is
+larger than 512 KiB by the patch's digest, its size and its first 12 KiB. Axocoatl 1.4
+reads neither, so 1.4.0 does not start on a data root on which 1.5 ran a turn or a run,
+whatever the size of its change. It says:
+
+```text
+Failed to bootstrap daemon: Session error: could not recover canonical history for Session '…': Session error: execution content serialization: unknown variant `provider_response`, expected one of `text`, `provider_retry`, `reasoning_summary`, `tool_proposed`, `tool_result` at line 1 column …; existing data was not replaced and no work was replayed
+```
+
+or, for a large change, `… invalid execution content: invalid checked repository identity; …`.
+
+No command converts these records into ones 1.4 reads. To go back to 1.4, restore the
+cold backup you made before upgrading, as [Restore](/operate/data-backup/#restore)
+describes, with the 1.4 binary: start Axocoatl 1.5 on the restored data root once and
+stop it, so that it records the copy's location (1.4.0 refuses a restored copy until
+then), then start 1.4.0. Work done with 1.5 is not in that backup. Axocoatl 1.4.0 runs
+native Ollama Sessions only on Ollama 0.20.6.
+
+The backup holds the data root, not your repositories. A large file that a 1.5 run left
+uncommitted in a repository can be a change too large for 1.4.0 to capture: with a
+1 MiB file left by a 1.5 run, 1.4.0's runs in that repository end needing attention
+("repository command output is incomplete or exceeds its capture bound"). Commit or
+move such a file before you run 1.4.0 there.
 
 ## Data written by 1.4
 
@@ -152,7 +241,8 @@ that field. Once a 1.4 daemon has recorded a capture in a data root, a 1.3 daemo
 not start on that data root, and says
 `could not recover canonical history for Session …: unknown field changed_manifest`.
 To go back to 1.3, restore the cold backup you made before upgrading, as described
-above. A 1.3 daemon does not start on a restored copy either (see the caution above).
+above, and run `axocoatl session record-location` with 1.5.0 on it before you start 1.3
+(see the caution above).
 
 ## Sessions written by 1.2 and earlier
 
@@ -169,8 +259,9 @@ cannot be made, for example because the disk is full, the Session is not convert
 does not open; free the space and open it again.
 
 The copies stay until you remove them. They cover Session journals only: to return a
-whole data root to 1.2, restore the cold backup you made before upgrading. A 1.2 daemon
-does not start on a restored copy either (see the caution above).
+whole data root to 1.2, restore the cold backup you made before upgrading, and run
+`axocoatl session record-location` with 1.5.0 on it before you start 1.2 (see the caution
+above).
 
 To put a Session back as 1.2 left it:
 

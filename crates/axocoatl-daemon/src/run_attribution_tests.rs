@@ -278,6 +278,84 @@ fn a_large_repository_takes_digests_from_the_changed_lines_of_the_judged_tree() 
     assert!(files.facts.read_at_finish.is_empty());
 }
 
+/// A change past what a capture's manifest and patch record is attributed
+/// from the captures' lines of the paths that differ from HEAD, on one
+/// HEAD. When HEAD moved, or a capture lists none of those paths (more than
+/// the 10,000 it lists), the reason says which, and names that limit.
+#[test]
+fn a_change_past_the_capture_bounds_is_attributed_from_its_changed_lines_or_says_why_not() {
+    let lines = |digest: &str| {
+        format!(
+            "{}{}",
+            line("a.txt", "file", &digest.repeat(64)),
+            line("b.txt", "file", &"9".repeat(64))
+        )
+    };
+    let mut before = capture(CapturePhase::Before, None);
+    before.changed = Some(lines("1"));
+    before.head = Some("h1".into());
+    let mut after = capture(CapturePhase::After, None);
+    after.changed = Some(lines("2"));
+    after.head = Some("h1".into());
+    assert_eq!(
+        attribute_activation(&[before.clone(), after.clone()]),
+        ActivationChanges::Changed(["a.txt".to_owned()].into())
+    );
+    let mut moved = after.clone();
+    moved.head = Some("h2".into());
+    assert_eq!(
+        attribute_activation(&[before.clone(), moved]),
+        ActivationChanges::Unknown(
+            "HEAD moved between its captures, and a patch is not recorded whole (a capture \
+             records at most 512 KiB of it, within its output), so they cannot be compared"
+                .into()
+        )
+    );
+    for (name, before, after) in [
+        (
+            "After",
+            before.clone(),
+            CaptureFacts {
+                changed: None,
+                ..after.clone()
+            },
+        ),
+        (
+            "Before",
+            CaptureFacts {
+                changed: None,
+                ..before.clone()
+            },
+            after.clone(),
+        ),
+    ] {
+        let ActivationChanges::Unknown(reason) = attribute_activation(&[before, after]) else {
+            panic!("attributed");
+        };
+        assert_eq!(
+            reason,
+            format!(
+                "its {name} capture lists none of the paths that differ from HEAD (it lists at \
+                 most 10,000, within its output), and a patch is not recorded whole (a capture \
+                 records at most 512 KiB of it, within its output), so the captures cannot be \
+                 compared"
+            )
+        );
+        // With a team node's name and a turn's id, the receipt's warning
+        // names it whole.
+        let named = format!(
+            "team-node-2b98db5db047e10c209d5b91 (generation 10) in turn \
+             turn-823c34fb-e018-4c9e-80ff-6a7cea65d4ad: {reason}"
+        );
+        let warning = crate::bootstrap::receipts::receipt_incomplete(std::slice::from_ref(&named));
+        assert!(
+            warning.message.contains(&format!("{named}. Review")),
+            "{}",
+            warning.message
+        );
+    }
+}
+
 /// Source Control's Last turn for a native turn: the paths its activations'
 /// captures show they changed, sorted, and a reason instead of an empty
 /// list when an activation's changes cannot be known.
@@ -312,18 +390,16 @@ fn last_turn_names_the_changed_paths_or_why_they_are_unknown() {
 
     // An After capture that could not record the repository says why in
     // its own words, without the host's internal layers.
-    let mut too_large = capture(CapturePhase::After, None);
-    too_large.unavailable = Some(
-        "Session dispatch: The change is larger than Axocoatl records: its patch against HEAD \
-         passes the 64 MiB a capture may write, about 49 MiB of new binary file data"
+    let mut unavailable = capture(CapturePhase::After, None);
+    unavailable.unavailable = Some(
+        "Session dispatch: IO error: repository command did not complete normally: TimedOut."
             .into(),
     );
     assert_eq!(
-        attribute_activation(&[capture(CapturePhase::Before, Some(&before)), too_large]),
+        attribute_activation(&[capture(CapturePhase::Before, Some(&before)), unavailable]),
         ActivationChanges::Unknown(
-            "its After capture is unavailable (The change is larger than Axocoatl records: its \
-             patch against HEAD passes the 64 MiB a capture may write, about 49 MiB of new \
-             binary file data)"
+            "its After capture is unavailable (repository command did not complete normally: \
+             TimedOut)"
                 .into()
         )
     );

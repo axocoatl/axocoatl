@@ -52,6 +52,22 @@ impl KindDriver for SingleTurnDriver {
     }
 }
 
+/// The warning of a run whose Session's runtime could not be stopped when
+/// the run ended.
+pub const SESSION_RUNTIME_NOT_STOPPED: &str = "session_runtime_not_stopped";
+
+/// [`SESSION_RUNTIME_NOT_STOPPED`] for `session_id`, with why.
+pub fn session_runtime_not_stopped(session_id: &str, reason: &str) -> RunWarning {
+    RunWarning {
+        code: SESSION_RUNTIME_NOT_STOPPED.into(),
+        message: format!(
+            "the container and egress sidecar of the run's Session {session_id} could not be \
+             stopped, so they may still be running: {reason}. Close the Session with \
+             `axocoatl session close {session_id}` or in the workbench to stop them"
+        ),
+    }
+}
+
 /// Now, in Unix milliseconds.
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -366,13 +382,19 @@ fn usage(turns: &[TurnObservation], events: &[RunEvent]) -> RunUsage {
         usage.cost_known &= turn.usage.cost_known;
         usage.cost_computed |= turn.usage.cost_computed;
         usage.retries = usage.retries.saturating_add(turn.usage.retries);
+        usage
+            .unreported
+            .extend(turn.usage.unreported.iter().cloned());
     }
-    let unobserved = events.iter().any(|event| {
-        matches!(event, RunEvent::TurnStarted { turn_id, .. }
-            if !turns.iter().any(|turn| &turn.turn_id == turn_id))
-    });
-    if unobserved {
-        usage.complete = false;
+    for event in events {
+        if let RunEvent::TurnStarted { turn_id, .. } = event {
+            if !turns.iter().any(|turn| &turn.turn_id == turn_id) {
+                usage.complete = false;
+                usage
+                    .unreported
+                    .push(format!("turn {turn_id}, which the run could not observe"));
+            }
+        }
     }
     let recorded = events
         .iter()
@@ -415,6 +437,7 @@ pub fn empty_outcome(run: &RunContext, started_at_ms: u64) -> RunOutcome {
         usage: RunUsage::default(),
         network: Default::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: None,
     }
@@ -534,6 +557,15 @@ pub async fn run_to_outcome_with(
         .cloned()
         .collect();
     outcome.warnings = warnings(run, &report, &report.turns);
+    // Nothing more runs in the Session: its runtime stops before its
+    // network record is summed up, so the Outcome counts what stopping it
+    // recorded and a finished run leaves no container or egress sidecar
+    // running.
+    if let Err(reason) = host.stop_session_runtime(&run.session_id).await {
+        outcome
+            .warnings
+            .push(session_runtime_not_stopped(&run.session_id, &reason));
+    }
     let events = host.recorded_events(&run.run_id).await.unwrap_or_default();
     outcome.usage = usage(&report.turns, &events);
     outcome.network = host
@@ -541,6 +573,15 @@ pub async fn run_to_outcome_with(
         .await
         .unwrap_or_default();
     outcome.ollama_versions = host.ollama_versions(&run.session_id).await;
+    // Which OpenRouter endpoints answered each model, and how many calls.
+    outcome.openrouter_endpoints = host.openrouter_endpoints(&run.session_id).await;
+    for (model, endpoints) in &outcome.openrouter_endpoints {
+        outcome
+            .notes
+            .push(axocoatl_session::run_outcome::openrouter_endpoints_note(
+                model, endpoints,
+            ));
+    }
     let final_state = report.turns.last().map(|turn| turn.state);
     let turn_needs_attention = match final_state {
         Some(TurnState::Completed) => false,
@@ -666,6 +707,7 @@ mod tests {
     use crate::SessionTeamEdit;
     use axocoatl_config::loadout::{parse_loadout, resolve_loadout, LoadoutSource, ParamValues};
     use axocoatl_session::run_outcome::*;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
 
     const CUSTOM: &str = r#"
@@ -796,6 +838,7 @@ prompt: "{task}"
                 cost_known: true,
                 cost_computed: false,
                 retries: 0,
+                unreported: Vec::new(),
             },
         }
     }
@@ -821,6 +864,14 @@ prompt: "{task}"
         /// When set, the receipt does not cover every path the run changed,
         /// for these reasons.
         seal_incomplete: Option<Vec<String>>,
+        /// The Sessions whose runtime the host was asked to stop.
+        stopped_runtimes: Mutex<Vec<String>>,
+        /// When set, stopping the runtime fails with this reason.
+        stop_error: Option<String>,
+        /// Whether the runtime was stopped when the network record was read.
+        summed_after_stop: Mutex<Option<bool>>,
+        /// The OpenRouter endpoints that answered the Session's calls.
+        openrouter_endpoints: BTreeMap<String, Vec<ServedEndpoint>>,
     }
 
     impl FakeHost {
@@ -899,9 +950,31 @@ prompt: "{task}"
                     .map(crate::bootstrap::receipts::receipt_incomplete)),
             }
         }
+        async fn network_summary(&self, _: &str) -> Result<NetworkSummary, RunError> {
+            *self.summed_after_stop.lock().unwrap() =
+                Some(!self.stopped_runtimes.lock().unwrap().is_empty());
+            Ok(NetworkSummary::default())
+        }
+        async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+            assert!(
+                self.sealed.lock().unwrap().is_none(),
+                "the runtime stops before the receipt is signed"
+            );
+            self.stopped_runtimes
+                .lock()
+                .unwrap()
+                .push(session_id.into());
+            match &self.stop_error {
+                Some(reason) => Err(reason.clone()),
+                None => Ok(()),
+            }
+        }
         async fn finish(&self, _: &str, outcome: &RunOutcome) -> Result<(), RunError> {
             *self.finished.lock().unwrap() = Some(outcome.clone());
             Ok(())
+        }
+        async fn openrouter_endpoints(&self, _: &str) -> BTreeMap<String, Vec<ServedEndpoint>> {
+            self.openrouter_endpoints.clone()
         }
     }
 
@@ -954,6 +1027,81 @@ prompt: "{task}"
         assert_eq!(outcome.verdict, RunVerdict::Interrupted);
         assert_eq!(outcome.exit_code, exit_code::INTERRUPTED);
         assert!(!outcome.usage.complete);
+        // The usage line names what was not reported.
+        assert_eq!(
+            outcome.usage.unreported,
+            ["turn turn-1, which the run could not observe"]
+        );
+        assert!(outcome
+            .usage
+            .text()
+            .ends_with("(known subtotal: usage or cost not reported for turn turn-1, which the run could not observe)"));
+    }
+
+    /// The OpenRouter endpoints that answered the run's calls are in its
+    /// Outcome, which the receipt is signed from, and in its notes, one per
+    /// model; a turn's calls that reported no usage are named in its usage.
+    #[tokio::test]
+    async fn the_openrouter_endpoints_that_answered_are_in_the_outcome_and_its_notes() {
+        let run = context(&[], later());
+        let mut turn = observation(
+            TurnState::Completed,
+            vec![check(CheckState::Passed)],
+            review(true, "openai/gpt-oss-120b"),
+        );
+        turn.usage.complete = false;
+        turn.usage.cost_known = false;
+        turn.usage.unreported = vec!["required-review (generation 1): 1 of 3 model calls".into()];
+        let served = |endpoint: &str, provider: &str, calls| ServedEndpoint {
+            endpoint: endpoint.into(),
+            provider: provider.into(),
+            calls,
+            moved: 0,
+        };
+        let endpoints: BTreeMap<String, Vec<ServedEndpoint>> = [
+            (
+                "openai/gpt-oss-120b".to_string(),
+                vec![
+                    ServedEndpoint {
+                        moved: 2,
+                        ..served("near-ai/fp4", "Near AI", 1)
+                    },
+                    served("deepinfra/bf16", "DeepInfra", 2),
+                ],
+            ),
+            (
+                "qwen/qwen3-coder".to_string(),
+                vec![served("deepinfra/fp8", "DeepInfra", 7)],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let host = FakeHost {
+            openrouter_endpoints: endpoints.clone(),
+            ..host(vec![turn])
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(outcome.openrouter_endpoints, endpoints);
+        let sealed = host.sealed.lock().unwrap().clone().unwrap().0;
+        assert_eq!(sealed.openrouter_endpoints, endpoints);
+        for note in [
+            "openai/gpt-oss-120b on OpenRouter: 1 call answered by endpoint near-ai/fp4 (Near \
+             AI), 2 by deepinfra/bf16 (DeepInfra); 2 calls moved on from endpoint near-ai/fp4 \
+             (Near AI), which failed them before answering",
+            "qwen/qwen3-coder on OpenRouter: 7 calls answered by endpoint deepinfra/fp8 \
+             (DeepInfra)",
+        ] {
+            assert!(
+                outcome.notes.iter().any(|line| line == note),
+                "{:?}",
+                outcome.notes
+            );
+        }
+        assert_eq!(
+            outcome.usage.unreported,
+            ["required-review (generation 1): 1 of 3 model calls"]
+        );
     }
 
     /// A turn whose cost is not known (a Codex writer's) leaves the run's
@@ -1008,6 +1156,58 @@ prompt: "{task}"
         assert!(events
             .iter()
             .any(|event| matches!(event, RunEvent::TurnStarted { .. })));
+    }
+
+    /// Once nothing more runs in it, the runtime of the run's Session
+    /// stops: before its network record is summed up and before the receipt
+    /// and the `Ended` event. A runtime that cannot be stopped is the
+    /// warning `session_runtime_not_stopped`, recorded before the end, and
+    /// never changes the verdict or the exit code.
+    #[tokio::test]
+    async fn the_sessions_runtime_stops_before_the_end_and_a_failure_is_only_a_warning() {
+        let run = context(&[], later());
+        let passing = || {
+            vec![observation(
+                TurnState::Completed,
+                vec![check(CheckState::Passed)],
+                review(true, "openai/gpt-oss-120b"),
+            )]
+        };
+        let host = host(passing());
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(*host.stopped_runtimes.lock().unwrap(), ["ses-1"]);
+        assert_eq!(*host.summed_after_stop.lock().unwrap(), Some(true));
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+
+        let host = FakeHost {
+            waits: Mutex::new(passing()),
+            stop_error: Some("another Session's turn holds the Workspace".into()),
+            ..FakeHost::default()
+        };
+        let outcome = run_to_outcome(&host, &run).await.unwrap();
+        assert_eq!(outcome.exit_code, exit_code::PASS);
+        assert_eq!(outcome.verdict, RunVerdict::Pass);
+        let warning = outcome
+            .warnings
+            .iter()
+            .find(|warning| warning.code == SESSION_RUNTIME_NOT_STOPPED)
+            .unwrap_or_else(|| panic!("{:?}", outcome.warnings));
+        assert_eq!(
+            warning.message,
+            "the container and egress sidecar of the run's Session ses-1 could not be stopped, \
+             so they may still be running: another Session's turn holds the Workspace. Close \
+             the Session with `axocoatl session close ses-1` or in the workbench to stop them"
+        );
+        let events = host.events.lock().unwrap().clone();
+        let warned = events
+            .iter()
+            .position(|event| {
+                matches!(event, RunEvent::Warning { warning, .. } if warning.code == SESSION_RUNTIME_NOT_STOPPED)
+            })
+            .expect("the warning is recorded");
+        assert!(matches!(events.last(), Some(RunEvent::Ended { .. })));
+        assert!(warned < events.len() - 1);
     }
 
     /// The host signs the final Outcome before the `Ended` event and the
@@ -1075,8 +1275,10 @@ prompt: "{task}"
     #[tokio::test]
     async fn a_pass_whose_receipt_does_not_cover_every_path_carries_a_warning() {
         let run = context(&[], later());
-        let reason = "writer (generation 1) in turn turn-1: its captures are larger than the \
-                      recorded manifest and patch bounds, so they cannot be compared";
+        let reason = "writer (generation 1) in turn turn-1: its After capture lists none of the \
+                      paths that differ from HEAD (it lists at most 10,000, within its output), \
+                      and a patch is not recorded whole (a capture records at most 512 KiB of \
+                      it, within its output), so the captures cannot be compared";
         let host = FakeHost {
             waits: Mutex::new(vec![observation(
                 TurnState::Completed,
@@ -1126,7 +1328,7 @@ prompt: "{task}"
         );
         // Many reasons: the first three, each bounded, and how many more.
         let reasons: Vec<String> = (0..5)
-            .map(|index| format!("activation {index}: {}", "x".repeat(400)))
+            .map(|index| format!("activation {index}: {}", "x".repeat(500)))
             .collect();
         let warning = crate::bootstrap::receipts::receipt_incomplete(&reasons);
         assert!(
@@ -1144,7 +1346,7 @@ prompt: "{task}"
             "{}",
             warning.message
         );
-        assert!(warning.message.len() < 1200, "{}", warning.message.len());
+        assert!(warning.message.len() < 1500, "{}", warning.message.len());
     }
 
     #[tokio::test]

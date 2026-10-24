@@ -29,9 +29,12 @@ pre-authentication encoding of the statement's exact bytes.
     then, and the `origin` remote as `https://host/path` without credentials (absent when
     there is none or it is a local path);
   - `loadout`: id, version, kind, digest, built-in or yours;
-  - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), the
-    pinned program version of an external writer, provider and model, and the name (never
-    the value) of the credential an external writer's route sends;
+  - `agents`: each Agent's id, role, runtime (`native`, `claude-code`, `codex`), its
+    `program_version` (the pinned version of an external writer; for a native Agent the
+    Ollama that served its calls, `ollama 0.40.6`, or the OpenRouter endpoints that
+    answered them in the order they first answered, `openrouter endpoint deepinfra/fp8
+    (DeepInfra)`), provider and model, and the name (never the value) of the credential an
+    external writer's route sends;
   - `sandbox`: the backend, the Session's network (`egress` or `none`), the `hardened`
     workload, and the last network policy the Session's record holds for each scope: its
     revision, digest, and the allowlist hosts and routes as the record renders them, and
@@ -40,12 +43,17 @@ pre-authentication encoding of the statement's exact bytes.
     fetch a URL, search the web, connect to an MCP server or run a tool itself
     ([Requests to model APIs](/configure/credentials/#requests-to-model-apis)), `allow`
     when the route sent bodies unread (`provider_fetch: allow`), and absent for a route to
-    a host that is not a model API;
+    a host that is not a model API; and, in receipts since 1.5.0, under `limits` the
+    resource caps the Session's container got (`memory`, `cpus`, `pids`) and, under
+    `not_applied`, each cap its host could not apply because rootless Podman lacks that
+    cgroup controller ([Sandboxes](/configure/sandboxes/)), which `axocoatl receipt verify`
+    prints;
   - `network`: the Outcome's network summary;
   - `checks`: each required check's name, state, exit code, timeout, command and the tree
     it ran on;
-  - `review` (model, verdict, rounds, number of findings) and `adjudications` (each
-    finding id and the writer's decision);
+  - `review` (model, the `program_version` of a native reviewer as for an Agent, verdict,
+    rounds, number of findings) and `adjudications` (each finding id and the writer's
+    decision);
   - `verdict`, `exit_code`, `attention`, `not_covered` (count and areas) and the warning
     codes;
   - `usage`: tokens and cost, with whether they are complete and whether the cost is
@@ -170,6 +178,9 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
    listed with its path.
 4. With `--record BUNDLE`, it verifies the bundle and checks that its `receipt` section is
    this receipt, for the same run.
+5. With `--require-pass`, it fails a receipt whose run's verdict is not `pass` (checks
+   failed, needs attention, interrupted or error). Without it, such a receipt verifies
+   like any other: it says truthfully what the run did, and its verdict is in the output.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -178,10 +189,12 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
 | 2 | The signature is valid, but by a key you did not give as trusted, including when you gave none |
 | 3 | Usage: a bad flag, a file that cannot be read, a key line that is not one |
 | 4 | A covered file differs, a removed path exists, or the record does not verify or carry this receipt |
+| 6 | With `--require-pass`: the receipt verifies, but its run's verdict is not `pass` |
 
-When several apply, the first of 1, 2, 4 wins. `--json` prints the result as one JSON
+When several apply, the first of 1, 2, 4, 6 wins. `--json` prints the result as one JSON
 document (`exit_code`, `result`, `problems`, `signature`, `key_id`, `run_id`, `verdict`,
-`statement_sha256`, `files` with each mismatch, `record`).
+`statement_sha256`, `files` with each mismatch, `record`); `result` is `valid`,
+`malformed`, `invalid`, `untrusted`, `mismatch`, `not-passed` or `usage`.
 
 `axocoatl receipt show FILE` prints what a receipt says in words (run, verdict, signer,
 agents, checks, review, files, network policy) without verifying it, and says so;
@@ -207,8 +220,14 @@ cuts.
 ## Checking pull requests in GitHub Actions
 
 `axocoatl/axocoatl/actions/verify-receipt` is a composite action that checks the receipt a
-pull request's description carries, the way Keep as PR puts it there. Set it up in this
-order, each step through a pull request of its own:
+pull request's description carries, the way Keep as PR puts it there. Both are for GitHub
+only: the action runs in GitHub Actions and reads the pull request through GitHub's API,
+and [Keep as PR](/workbench/keep-as-pr/) opens pull requests with `gh`. On GitLab,
+Bitbucket or another host there is no such action, and Keep writes no description
+there: `axocoatl receipt verify` (above), with `--require-pass`, checks the receipt file
+the run wrote (`--receipt`, or **Download receipt** in the workbench), kept with the
+merge request, in any CI job that can run it. Set the action up in this order, each step
+through a pull request of its own:
 
 1. Trust the computer that signs. On it, with the daemon's `--config` and data
    directory, add its key line to the keys file, and merge that file into the branch pull

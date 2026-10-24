@@ -607,11 +607,32 @@ fn bind_loopback_peer(
     }
 }
 
+/// The error for a loopback listener whose IPv4 peer, `127.0.0.1`, does not
+/// exist on this computer: the workbench is served only at that address
+/// ([`routes::WORKBENCH_HOST`]), and the sign-in link names it. `None` when
+/// the missing address is IPv6, which the workbench does not need.
+fn missing_workbench_address(peer_address: std::net::SocketAddr) -> Option<std::io::Error> {
+    peer_address.is_ipv4().then(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!(
+                "this computer has no IPv4 loopback address, so Axocoatl cannot listen on \
+                 {peer_address}. The workbench is served only at {}:{}, which keeps cookies \
+                 that pages on `localhost` addresses set away from it.",
+                routes::WORKBENCH_HOST,
+                peer_address.port()
+            ),
+        )
+    })
+}
+
 /// Bind the HTTP listeners for `host:port`. A loopback host also holds the
 /// same port on the other loopback address family: browsers, curl and Node
 /// try `[::1]` before `127.0.0.1` for `localhost`, so a process that listened
-/// there would receive the sign-in link and the workbench's cookies. Startup
-/// fails when another process already holds it.
+/// there would receive what was meant for Axocoatl at `localhost`: a sign-in
+/// link from before 1.5.0, a browser's old sign-in cookie, a script's token.
+/// Startup fails when another process already holds it, and when the
+/// workbench's own address, `127.0.0.1`, does not exist.
 async fn bind_listeners(host: &str, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let Some((primary, peer)) = loopback_bind_addresses(host) else {
         return Ok(vec![
@@ -629,6 +650,9 @@ async fn bind_listeners(host: &str, port: u16) -> std::io::Result<Vec<tokio::net
         match bind_loopback_peer(peer_address) {
             Ok(Some(peer_listener)) => return Ok(vec![listener, peer_listener]),
             Ok(None) => {
+                if let Some(error) = missing_workbench_address(peer_address) {
+                    return Err(error);
+                }
                 tracing::debug!(addr = %peer_address, "no loopback address in this family; serving one listener");
                 return Ok(vec![listener]);
             }
@@ -699,6 +723,34 @@ pub fn local_token_mode(host: &str, auth: &axocoatl_config::ServerAuthYaml) -> b
     is_loopback_host(host) && !auth.is_enabled() && !auth.allow_unauthenticated
 }
 
+/// With the local API token the workbench is served only at `127.0.0.1`
+/// ([`routes::WORKBENCH_HOST`]), the address its sign-in link names. A
+/// listener on another IPv4 loopback address, such as `127.0.0.2`, does not
+/// hold it, so that link would reach nothing, or another program: refuse to
+/// start there.
+pub fn check_workbench_address(
+    host: &str,
+    auth: &axocoatl_config::ServerAuthYaml,
+) -> std::io::Result<()> {
+    let other_ipv4_loopback = host
+        .trim()
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|ip| ip.is_loopback() && ip != std::net::Ipv4Addr::LOCALHOST);
+    if !other_ipv4_loopback || !local_token_mode(host, auth) {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "server.host is {host}, but with the local API token the workbench is served only \
+             at {}, the address its sign-in link names, which a listener on {host} does not \
+             hold. Set server.host to 127.0.0.1 or localhost, or configure server.auth \
+             credentials.",
+            routes::WORKBENCH_HOST
+        ),
+    ))
+}
+
 /// The browser sign-in link for a daemon about to serve on `host:port`, or
 /// `None` when the local token does not apply. Creates the token on first
 /// start; [`serve_shared`] loads the same file.
@@ -765,7 +817,7 @@ async fn serve_shared_on(
     bound: Option<BoundListeners>,
 ) -> std::io::Result<()> {
     // Pull auth + CORS from the live config.
-    let (auth, cors_origins, allow_unauthenticated, token_mode, rate_cfg) = {
+    let (auth, cors_origins, allow_unauthenticated, token_mode, workbench_address, rate_cfg) = {
         let d = state.read().await;
         let s = &d.config.server;
         (
@@ -773,6 +825,7 @@ async fn serve_shared_on(
             s.cors_origins.clone(),
             s.auth.allow_unauthenticated,
             local_token_mode(host, &s.auth),
+            check_workbench_address(host, &s.auth),
             s.rate_limit.clone(),
         )
     };
@@ -791,6 +844,17 @@ async fn serve_shared_on(
         state.read().await.begin_shutdown();
         let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
         let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, msg);
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => std::io::Error::other(format!(
+                "{error}; Session runtime cleanup after the rejected bind was incomplete: {cleanup_error}"
+            )),
+        });
+    }
+    if let Err(error) = workbench_address {
+        tracing::error!("{error}");
+        state.read().await.begin_shutdown();
+        let cleanup = state.read().await.shutdown_session_runtimes_checked().await;
         return Err(match cleanup {
             Ok(()) => error,
             Err(cleanup_error) => std::io::Error::other(format!(
@@ -1005,6 +1069,9 @@ async fn wait_for_shutdown_request(state: AppState) {
 mod missing_workspace_tests;
 
 #[cfg(all(test, unix))]
+mod run_admission_tests;
+
+#[cfg(all(test, unix))]
 mod workspace_scope_tests;
 
 #[cfg(test)]
@@ -1159,6 +1226,64 @@ mod tests {
             ..ServerAuthYaml::default()
         };
         assert!(!local_token_mode("127.0.0.1", &open));
+    }
+
+    /// With the local token, the workbench and its sign-in link are at
+    /// `127.0.0.1`: a listener on another IPv4 loopback address does not
+    /// start. Configured credentials and `allow_unauthenticated` serve the
+    /// workbench at any name, and `localhost` and `[::1]` hold `127.0.0.1`
+    /// beside them.
+    #[test]
+    fn the_local_token_needs_the_workbench_address() {
+        let token = axocoatl_config::ServerAuthYaml::default();
+        for host in [
+            "127.0.0.1",
+            "localhost",
+            "::1",
+            "[::1]",
+            "0.0.0.0",
+            "192.0.2.4",
+        ] {
+            assert!(
+                super::check_workbench_address(host, &token).is_ok(),
+                "{host}"
+            );
+        }
+        for host in ["127.0.0.2", "127.1.2.3"] {
+            let error = super::check_workbench_address(host, &token).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(
+                error.to_string().contains("served only at 127.0.0.1"),
+                "{error}"
+            );
+            assert!(
+                error.to_string().contains("Set server.host to 127.0.0.1"),
+                "{error}"
+            );
+        }
+        let configured = axocoatl_config::ServerAuthYaml {
+            api_keys: vec!["k".into()],
+            ..Default::default()
+        };
+        let open = axocoatl_config::ServerAuthYaml {
+            allow_unauthenticated: true,
+            ..Default::default()
+        };
+        for auth in [configured, open] {
+            assert!(super::check_workbench_address("127.0.0.2", &auth).is_ok());
+        }
+    }
+
+    /// A loopback listener on `[::1]` serves the workbench through its
+    /// `127.0.0.1` peer; without one, it does not start.
+    #[test]
+    fn a_loopback_listener_needs_the_workbench_address() {
+        let ipv4: std::net::SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let error = super::missing_workbench_address(ipv4).expect("127.0.0.1 is required");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrNotAvailable);
+        assert!(error.to_string().contains("127.0.0.1:8080"), "{error}");
+        let ipv6: std::net::SocketAddr = "[::1]:8080".parse().unwrap();
+        assert!(super::missing_workbench_address(ipv6).is_none());
     }
 
     #[test]

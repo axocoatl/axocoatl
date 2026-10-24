@@ -49,6 +49,8 @@ mod session_writers;
 #[path = "bootstrap_workspace_operation.rs"]
 pub(crate) mod workspace_operation;
 pub use runtime_volumes::RuntimeVolumeCheck;
+use runtime_volumes::{record_copied_from, record_previous_runtime_authority};
+pub use session_migration::RecordedLocation;
 
 // 1.3 loadouts. Each file has one owning workstream; see
 // docs/design/1.3-loadouts.md ("Ownership").
@@ -117,6 +119,30 @@ use crate::error::{
     WORKSPACE_TOO_BROAD_CODE,
 };
 use crate::scheduler::ScheduleTable;
+
+/// How long `providers.ollama`'s answers may take to start and to pause:
+/// [`StreamTimeouts::LOCAL`] with what the block sets.
+///
+/// [`StreamTimeouts::LOCAL`]: axocoatl_llm::transport::StreamTimeouts::LOCAL
+pub(crate) fn ollama_stream_timeouts(
+    ollama: &axocoatl_config::OllamaCredentials,
+) -> axocoatl_llm::transport::StreamTimeouts {
+    axocoatl_llm::transport::StreamTimeouts::LOCAL
+        .configured(ollama.first_token_timeout_secs, ollama.idle_timeout_secs)
+}
+
+/// How long a hosted provider's answers may take to start and to pause:
+/// [`StreamTimeouts::HOSTED`] with what its block sets.
+///
+/// [`StreamTimeouts::HOSTED`]: axocoatl_llm::transport::StreamTimeouts::HOSTED
+pub(crate) fn hosted_stream_timeouts(
+    credentials: &axocoatl_config::ProviderCredentials,
+) -> axocoatl_llm::transport::StreamTimeouts {
+    axocoatl_llm::transport::StreamTimeouts::HOSTED.configured(
+        credentials.first_token_timeout_secs,
+        credentials.idle_timeout_secs,
+    )
+}
 
 /// Active E2B lease window. Live handles refresh this TTL; auto-pause preserves
 /// the runtime if the daemon hard-crashes, and explicit pause is the normal
@@ -1221,6 +1247,8 @@ fn partial_output_text(chunk: &axocoatl_actor::AgentStreamChunk) -> Option<&str>
     }
 }
 
+/// The live frame a stream chunk shows, if any: how a provider response
+/// ended is recorded, not shown live.
 pub(crate) fn agent_chunk_stream_frame(
     chunk: &axocoatl_actor::AgentStreamChunk,
     workflow: &str,
@@ -1228,11 +1256,11 @@ pub(crate) fn agent_chunk_stream_frame(
     turn_id: Option<&str>,
     tool_occurrence: Option<u64>,
     coordination_generation: Option<u32>,
-) -> crate::stream::StreamFrame {
+) -> Option<crate::stream::StreamFrame> {
     use crate::stream::StreamFrame;
     use axocoatl_actor::AgentStreamChunk;
 
-    match chunk {
+    Some(match chunk {
         AgentStreamChunk::Text(delta) => StreamFrame::Token {
             workflow: workflow.to_string(),
             agent: outer_agent.to_string(),
@@ -1291,7 +1319,8 @@ pub(crate) fn agent_chunk_stream_frame(
             result: Some(result.clone()),
             is_error: *is_error,
         },
-    }
+        AgentStreamChunk::ProviderResponse { .. } => return None,
+    })
 }
 
 fn coordinator_worker_runtime_id(worker_scope: Option<&str>, worker_id: &str) -> AgentId {
@@ -2728,7 +2757,22 @@ struct PreparedSessionSandbox {
     effective_image: String,
     runtime: Option<SessionRuntimeIdentity>,
     setup_results: Vec<SessionSetupResult>,
+    /// The resource caps a local container got.
+    resource_limits: Option<axocoatl_session::SessionResourceLimits>,
     rollback_armed: bool,
+}
+
+/// What a Session's record says of the resource caps its container got.
+pub(crate) fn recorded_resource_limits(
+    caps: axocoatl_isolation::container_host::ResourceCaps,
+) -> axocoatl_session::SessionResourceLimits {
+    use axocoatl_isolation::container_host::{CPUS_CAP, MEMORY_CAP, PIDS_CAP};
+    axocoatl_session::SessionResourceLimits {
+        memory: caps.memory.then(|| MEMORY_CAP.to_string()),
+        cpus: caps.cpus.then(|| CPUS_CAP.to_string()),
+        pids: caps.pids.then(|| PIDS_CAP.parse().ok()).flatten(),
+        not_applied: caps.not_applied(),
+    }
 }
 
 struct CreatedE2bSandbox {
@@ -2951,12 +2995,23 @@ struct DataDirLease {
 /// Canonicalization makes equivalent path spellings share the same authority,
 /// while the digest keeps host paths out of container metadata.
 fn local_runtime_authority(data_root: &SecureDir) -> Result<String, DaemonError> {
+    Ok(runtime_authority_of(data_root))
+}
+
+/// The runtime authority of the daemon whose data directory is `data_root`:
+/// the label its containers and volumes carry
+/// ([`local_runtime_authority`]).
+pub fn runtime_authority_of(data_root: &SecureDir) -> String {
     use sha2::{Digest, Sha256};
 
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(root_authority_bytes(data_root))
-    ))
+    format!("{:x}", Sha256::digest(root_authority_bytes(data_root)))
+}
+
+/// The toolchain cache volume of the Workspace at `workspace` (canonical)
+/// of the daemon whose data directory is `data_root`: the name that daemon
+/// gives it (`AxocoatlDaemon::toolchain_cache_volume`).
+pub fn toolchain_cache_volume_of(data_root: &SecureDir, workspace: &Path) -> String {
+    SessionSandbox::toolchain_cache_volume_name(&runtime_authority_of(data_root), workspace)
 }
 
 #[cfg(test)]
@@ -2964,6 +3019,34 @@ fn external_lease_name(data_root: &SecureDir) -> String {
     use sha2::{Digest, Sha256};
 
     format!("{:x}.lock", Sha256::digest(root_authority_bytes(data_root)))
+}
+
+/// Keep the runtime authority of the path the data root had when admission
+/// recorded that it was moved: the same directory at another path, so no
+/// data root of its own is left at that path. The daemon then reaps the
+/// volumes of its Sessions that carry it (see `reap_leaked_runtime_volumes`).
+/// A copy is another directory: its original keeps its own authority, and
+/// what the original was moved from, so a copy keeps none as its own, only
+/// as the authorities of the data root it was copied from.
+fn record_moved_from(
+    data_root: &SecureDir,
+    relocated: Option<&axocoatl_session::execution_ownership::Relocated>,
+    runtime_authority: &str,
+) -> Result<(), DaemonError> {
+    match relocated {
+        Some(relocated) if relocated.recorded.directory_changed => record_copied_from(
+            data_root,
+            &relocated.previous_root_authority,
+            runtime_authority,
+        ),
+        Some(relocated)
+            if relocated.recorded.path_changed
+                && relocated.previous_root_authority != runtime_authority =>
+        {
+            record_previous_runtime_authority(data_root, &relocated.previous_root_authority)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn root_authority_bytes(data_root: &SecureDir) -> Vec<u8> {
@@ -3051,10 +3134,24 @@ fn open_ipc_control_root() -> Result<SecureDir, DaemonError> {
 
 impl DataDirLease {
     fn acquire(data_root: &SecureDir) -> Result<Self, DaemonError> {
+        Self::acquire_relocating(data_root).map(|(lease, _)| lease)
+    }
+
+    /// [`Self::acquire`], with what admission recorded when the data root
+    /// was copied or moved since its ownership was recorded.
+    fn acquire_relocating(
+        data_root: &SecureDir,
+    ) -> Result<
+        (
+            Self,
+            Option<axocoatl_session::execution_ownership::Relocated>,
+        ),
+        DaemonError,
+    > {
         use axocoatl_session::execution_ownership::{DataRootFormatOwnership, OwnershipError};
 
-        let (ownership, relocation) =
-            DataRootFormatOwnership::acquire_for_root_reporting(data_root).map_err(|error| {
+        let (ownership, relocated) =
+            DataRootFormatOwnership::acquire_for_root_relocating(data_root).map_err(|error| {
                 let context = match &error {
                     OwnershipError::Busy("controller (external lease)") => {
                         "is already owned by another daemon/bootstrap"
@@ -3072,7 +3169,8 @@ impl DataDirLease {
                     data_root.path().display()
                 ))
             })?;
-        if let Some(relocation) = relocation {
+        if let Some(relocated) = &relocated {
+            let relocation = relocated.recorded;
             tracing::warn!(
                 path_changed = relocation.path_changed,
                 directory_changed = relocation.directory_changed,
@@ -3082,7 +3180,7 @@ impl DataDirLease {
                 relocation.describe()
             );
         }
-        Ok(Self { ownership })
+        Ok((Self { ownership }, relocated))
     }
 
     fn external_root(&self) -> &SecureDir {
@@ -4784,7 +4882,7 @@ impl AxocoatlDaemon {
         data_root: &SecureDir,
         created: Option<session_recovery::CreatedDataRoot>,
     ) -> Result<(DataDirLease, String, SecureDir, bool), DaemonError> {
-        let lease = DataDirLease::acquire(data_root)?;
+        let (lease, relocated) = DataDirLease::acquire_relocating(data_root)?;
         let lease = match created {
             Some(created) => created.upgrade(lease)?,
             None => lease,
@@ -4792,6 +4890,7 @@ impl AxocoatlDaemon {
         // Physical orphan cleanup remains first. Version-selected canonical
         // recovery below prevents upgraded roots from reaching legacy writers.
         let runtime_authority = local_runtime_authority(data_root)?;
+        record_moved_from(data_root, relocated.as_ref(), &runtime_authority)?;
         let ipc_root = open_ipc_control_root()?;
         Self::reconcile_interrupted_runtimes_before_bootstrap(
             config,
@@ -5936,7 +6035,8 @@ impl AxocoatlDaemon {
                 .or(ollama.model.as_deref())
                 .unwrap_or("llama3.2");
             return Ok(Arc::new(
-                axocoatl_llm_ollama::OllamaProvider::with_base_url(&ollama.base_url, model),
+                axocoatl_llm_ollama::OllamaProvider::with_base_url(&ollama.base_url, model)
+                    .with_stream_timeouts(ollama_stream_timeouts(ollama)),
             ));
         }
         registry.get(provider_name).cloned().ok_or_else(|| {
@@ -6333,7 +6433,8 @@ impl AxocoatlDaemon {
                         openai.api_key.expose_secret(),
                         "gpt-4o", // Default model — agents specify their own
                     ),
-                };
+                }
+                .with_stream_timeouts(hosted_stream_timeouts(openai));
                 registry.register(Arc::new(provider));
                 match &openai.base_url {
                     Some(base_url) => {
@@ -6355,7 +6456,8 @@ impl AxocoatlDaemon {
                     "openai/gpt-4o-mini", // Default — agents pick their own
                     "https://openrouter.ai/api/v1",
                 )
-                .with_provider_id("openrouter");
+                .with_provider_id("openrouter")
+                .with_stream_timeouts(hosted_stream_timeouts(openrouter));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered OpenRouter provider");
             }
@@ -6367,7 +6469,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_anthropic::AnthropicProvider::new(
                     anthropic.api_key.expose_secret(),
                     "claude-sonnet-4-6",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(anthropic));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Anthropic provider");
             }
@@ -6379,7 +6482,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_gemini::GeminiProvider::new(
                     gemini.api_key.expose_secret(),
                     "gemini-2.5-flash",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(gemini));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Gemini provider");
             }
@@ -6391,7 +6495,8 @@ impl AxocoatlDaemon {
                 let provider = axocoatl_llm_mistral::MistralProvider::new(
                     mistral.api_key.expose_secret(),
                     "mistral-large-latest",
-                );
+                )
+                .with_stream_timeouts(hosted_stream_timeouts(mistral));
                 registry.register(Arc::new(provider));
                 tracing::info!("Registered Mistral provider");
             }
@@ -6501,33 +6606,56 @@ impl AxocoatlDaemon {
     /// folder and the folders above it, a folder that contains one of
     /// Axocoatl's own directories) is refused with the code
     /// [`WORKSPACE_TOO_BROAD_CODE`] unless the person confirmed it
-    /// (`confirm_broad`); one of Axocoatl's own directories, or a folder
-    /// inside one, is refused with [`WORKSPACE_PROTECTED_CODE`] always.
+    /// (`confirm_broad`), and the Workspace records that confirmation
+    /// (`broad_confirmed_at`), which Session creation and runs then accept;
+    /// one of Axocoatl's own directories, or a folder inside one, is refused
+    /// with [`WORKSPACE_PROTECTED_CODE`] always.
     pub async fn open_workspace(
         &self,
         path: &str,
         name: Option<&str>,
         confirm_broad: bool,
     ) -> Result<Workspace, DaemonError> {
-        self.check_workspace_scope(path, confirm_broad)?;
-        self.register_workspace(path, name).await
+        let broad = self.check_workspace_scope(path, confirm_broad)?;
+        let workspace = self.register_workspace(path, name).await?;
+        if !broad {
+            return Ok(workspace);
+        }
+        self.workspace_store
+            .lock()
+            .await
+            .confirm_broad(&workspace.id)
+            .map_err(|error| DaemonError::Session(error.to_string()))
+    }
+
+    /// Whether the person confirmed the Workspace registered at `path`, a
+    /// folder too broad to be one, with Open workspace…. A broad folder
+    /// registered without that confirmation (by 1.4, which did not ask, or
+    /// for a 1.0-format Session) is not.
+    pub(crate) async fn broad_workspace_confirmed(&self, path: &std::path::Path) -> bool {
+        self.workspace_store
+            .lock()
+            .await
+            .get_by_path(path)
+            .is_some_and(|workspace| workspace.broad_confirmed_at.is_some())
     }
 
     /// Refuse `path` as a Workspace when [`Self::workspace_scope`] does; a
-    /// broad folder passes once the person confirmed it. A path that does
-    /// not resolve is left to registration, which names it.
-    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<(), DaemonError> {
+    /// broad folder passes once the person confirmed it, and is then said
+    /// to be broad (`true`). A path that does not resolve is left to
+    /// registration, which names it.
+    fn check_workspace_scope(&self, path: &str, confirm_broad: bool) -> Result<bool, DaemonError> {
         let Ok(canonical) = std::fs::canonicalize(path) else {
-            return Ok(());
+            return Ok(false);
         };
         match self.workspace_scope().check(&canonical) {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(false),
             Err(WorkspaceScopeRefusal::Broad(_)) if confirm_broad => {
                 tracing::warn!(
                     path = %canonical.display(),
                     "a broad folder was opened as a Workspace after the person confirmed it"
                 );
-                Ok(())
+                Ok(true)
             }
             Err(WorkspaceScopeRefusal::Broad(message)) => Err(DaemonError::WorkspaceRefused {
                 code: WORKSPACE_TOO_BROAD_CODE,
@@ -6738,19 +6866,15 @@ impl AxocoatlDaemon {
         setup_reviewed: bool,
     ) -> Result<Session, DaemonError> {
         validate_session_mode(&self.config, &mode)?;
-        // This path names its folder directly. A folder already opened as a
-        // Workspace was accepted then, after confirmation when it is broad;
-        // any other broad folder must be opened with Open workspace… first.
-        let registered = match std::fs::canonicalize(working_dir) {
-            Ok(canonical) => self
-                .workspace_store
-                .lock()
-                .await
-                .get_by_path(&canonical)
-                .is_some(),
+        // This path names its folder directly. A broad folder is accepted
+        // only once the person confirmed its Workspace with Open workspace…;
+        // being registered is not enough (1.4 registered broad folders
+        // without asking).
+        let confirmed = match std::fs::canonicalize(working_dir) {
+            Ok(canonical) => self.broad_workspace_confirmed(&canonical).await,
             Err(_) => false,
         };
-        self.check_workspace_scope(working_dir, registered)?;
+        self.check_workspace_scope(working_dir, confirmed)?;
         let workspace = self.register_workspace(working_dir, None).await?;
         // A lifecycle action never waits for the Workspace: a busy one
         // refuses at once, naming who holds it.
@@ -7101,6 +7225,7 @@ impl AxocoatlDaemon {
     pub async fn close_session(&self, id: &str) -> Result<(), DaemonError> {
         let gone = self.session_folder_gone(id).await;
         self.close_session_inner(id).await?;
+        self.loadout_runs.forget_served(id);
         self.after_session_folder_lifecycle(id, "closed", gone);
         Ok(())
     }
@@ -7251,6 +7376,7 @@ impl AxocoatlDaemon {
     pub async fn delete_session(&self, id: &str) -> Result<(), DaemonError> {
         let gone = self.session_folder_gone(id).await;
         self.delete_session_inner(id).await?;
+        self.loadout_runs.forget_served(id);
         self.after_session_folder_lifecycle(id, "deleted", gone);
         Ok(())
     }
@@ -8590,21 +8716,22 @@ impl AxocoatlDaemon {
     }
 
     /// Resolve one logical Session container port to its unique loopback host
-    /// transport. The logical URL stays stable (`localhost:3000`); this mapping
-    /// is process-local to the live isolation instance and never leaks one
-    /// sibling Session into another.
-    pub async fn session_preview_host_port(
+    /// transport, an address and port beside the workbench's. The logical URL
+    /// stays stable (`localhost:3000`); this mapping is process-local to the
+    /// live isolation instance and never leaks one sibling Session into
+    /// another.
+    pub async fn session_preview_address(
         &self,
         session_id: &str,
         container_port: u16,
-    ) -> Result<u16, DaemonError> {
+    ) -> Result<std::net::SocketAddr, DaemonError> {
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         Self::require_session_preview_port(&session, container_port)?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        sandbox.published_host_port(container_port).ok_or_else(|| {
+        sandbox.published_address(container_port).ok_or_else(|| {
             DaemonError::Session(format!(
                 "port {container_port} is not published for Session '{session_id}'; Preview requires local bridge networking"
             ))
@@ -8924,6 +9051,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(runtime),
                     setup_results,
+                    resource_limits: None,
                     rollback_armed: true,
                 })
             }
@@ -9095,6 +9223,7 @@ impl AxocoatlDaemon {
                     .effective_image()
                     .unwrap_or(axocoatl_isolation::session_sandbox::DEFAULT_IMAGE)
                     .to_string();
+                let resource_limits = sandbox.resource_caps().map(recorded_resource_limits);
                 let setup_results = match sandbox.run_setup_commands(&commands).await {
                     Ok(results) => persisted_setup_results(results),
                     Err(error) => {
@@ -9139,6 +9268,7 @@ impl AxocoatlDaemon {
                     effective_image,
                     runtime: Some(Self::podman_runtime_identity(&session.id)),
                     setup_results,
+                    resource_limits,
                     rollback_armed: true,
                 })
             }
@@ -9238,13 +9368,12 @@ impl AxocoatlDaemon {
                     .session_store
                     .lock()
                     .await
-                    .set_environment(
+                    .set_environment_ready(
                         &session.id,
-                        SessionEnvironmentState::Ready,
                         Some(prepared.effective_image.clone()),
                         prepared.runtime.clone(),
                         prepared.setup_results.clone(),
-                        None,
+                        prepared.resource_limits.clone(),
                     )
                     .map_err(|error| DaemonError::Session(error.to_string()));
                 match ready {
@@ -22292,7 +22421,8 @@ trap - 0 1 2 15
                     }
                     AgentStreamChunk::Text(_)
                     | AgentStreamChunk::Reasoning(_)
-                    | AgentStreamChunk::ProviderRetry { .. } => None,
+                    | AgentStreamChunk::ProviderRetry { .. }
+                    | AgentStreamChunk::ProviderResponse { .. } => None,
                 };
                 match &chunk {
                     AgentStreamChunk::ToolCallStarted {
@@ -22384,7 +22514,8 @@ trap - 0 1 2 15
                     )),
                     AgentStreamChunk::Text(_)
                     | AgentStreamChunk::Reasoning(_)
-                    | AgentStreamChunk::ProviderRetry { .. } => None,
+                    | AgentStreamChunk::ProviderRetry { .. }
+                    | AgentStreamChunk::ProviderResponse { .. } => None,
                 };
                 let persisted = if let Some((operation, event)) = tool_event {
                     ledger
@@ -22411,15 +22542,16 @@ trap - 0 1 2 15
                     cancel_on_error.cancel();
                     continue;
                 }
-                let frame = agent_chunk_stream_frame(
+                if let Some(frame) = agent_chunk_stream_frame(
                     &chunk,
                     &run_id,
                     &agent_id,
                     Some(&turn_id),
                     tool_occurrence,
                     None,
-                );
-                let _ = bus.send(frame);
+                ) {
+                    let _ = bus.send(frame);
+                }
                 drop(stream_commit);
                 let _ = caller_sink.send(chunk);
             }
@@ -22793,7 +22925,10 @@ trap - 0 1 2 15
                     let tool_occurrence = match &chunk {
                         C::ToolCallStarted { id, .. } => Some(tool_occurrences.start(id)),
                         C::ToolCallResult { id, .. } => Some(tool_occurrences.finish(id)),
-                        C::Text(_) | C::Reasoning(_) | C::ProviderRetry { .. } => None,
+                        C::Text(_)
+                        | C::Reasoning(_)
+                        | C::ProviderRetry { .. }
+                        | C::ProviderResponse { .. } => None,
                     };
                     if let Some(t) = &trace {
                         match &chunk {
@@ -22921,7 +23056,7 @@ trap - 0 1 2 15
                                     .record_execution(turn_id, operation, event)
                                     .map(|_| ())
                             }
-                            C::Reasoning(_) => Ok(()),
+                            C::Reasoning(_) | C::ProviderResponse { .. } => Ok(()),
                         }
                     } else {
                         Ok(())
@@ -22936,15 +23071,16 @@ trap - 0 1 2 15
                         }
                         continue;
                     }
-                    let frame = agent_chunk_stream_frame(
+                    if let Some(frame) = agent_chunk_stream_frame(
                         &chunk,
                         &rid,
                         &aid,
                         turn_id.as_deref(),
                         tool_occurrence,
                         None,
-                    );
-                    let _ = bus.send(frame);
+                    ) {
+                        let _ = bus.send(frame);
+                    }
                     drop(stream_commit);
                 }
             });
@@ -23720,6 +23856,14 @@ mod session_podman_missing_tests;
 #[cfg(all(test, unix))]
 #[path = "bootstrap_copied_data_root_tests.rs"]
 mod copied_data_root_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_upgrade_from_1_4_tests.rs"]
+mod upgrade_from_1_4_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_recovered_turn_tests.rs"]
+mod recovered_turn_tests;
 
 #[cfg(test)]
 mod tests {
@@ -27205,7 +27349,8 @@ agents:
             Some("turn-a"),
             Some(0),
             Some(2),
-        );
+        )
+        .unwrap();
         let coordinated = serde_json::to_value(coordinated).unwrap();
         assert_eq!(coordinated["kind"], "tool-call");
         assert_eq!(coordinated["call_id"], "call_0");
@@ -27219,7 +27364,8 @@ agents:
             Some("turn-b"),
             Some(0),
             None,
-        );
+        )
+        .unwrap();
         assert!(serde_json::to_value(direct)
             .unwrap()
             .get("coordination_generation")

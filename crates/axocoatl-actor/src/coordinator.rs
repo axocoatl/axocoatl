@@ -583,7 +583,8 @@ async fn forward_worker_tool_stream(
             }
             AgentStreamChunk::Text(_)
             | AgentStreamChunk::Reasoning(_)
-            | AgentStreamChunk::ProviderRetry { .. } => continue,
+            | AgentStreamChunk::ProviderRetry { .. }
+            | AgentStreamChunk::ProviderResponse { .. } => continue,
         };
         if parent.send(forwarded).is_err() {
             break;
@@ -4847,7 +4848,8 @@ mod tests {
             }
             AgentStreamChunk::Text(_)
             | AgentStreamChunk::Reasoning(_)
-            | AgentStreamChunk::ProviderRetry { .. } => true,
+            | AgentStreamChunk::ProviderRetry { .. }
+            | AgentStreamChunk::ProviderResponse { .. } => true,
         }));
         let checkpoint = checkpoint_store
             .load_latest(&AgentId::new("lead"))

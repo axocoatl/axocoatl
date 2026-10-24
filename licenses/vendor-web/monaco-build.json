@@ -5,8 +5,26 @@
   "monaco_editor_core": "0.56.0-dev-20260625",
   "dompurify": "3.4.17",
   "upstream_bundled_dompurify_issue": "https://github.com/microsoft/monaco-editor/issues/5454",
-  "dompurify_security_advisory": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cg2g-xh64-v4q7",
-  "dompurify_advisory_affected": ">=3.4.4 <=3.4.16",
+  "dompurify_security_advisories": [
+    {
+      "id": "GHSA-cg2g-xh64-v4q7",
+      "url": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cg2g-xh64-v4q7",
+      "severity": "critical",
+      "affected": ">=3.4.4 <=3.4.16"
+    },
+    {
+      "id": "GHSA-mrv2-3pqr-j5jr",
+      "url": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-mrv2-3pqr-j5jr",
+      "severity": "high",
+      "affected": "<=3.4.16"
+    },
+    {
+      "id": "GHSA-c6gr-qvv4-5v3f",
+      "url": "https://github.com/cure53/DOMPurify/security/advisories/GHSA-c6gr-qvv4-5v3f",
+      "severity": "low",
+      "affected": "<=3.4.16"
+    }
+  ],
   "dompurify_advisory_fixed": "3.4.17",
   "dompurify_source": "node_modules/dompurify/dist/purify.es.mjs",
   "dompurify_source_sha256": "60c5d5ccbb466de3de3ba863461a92bf134f8c156cef7992da43e0f659bc5cbd",
@@ -22,5 +40,22 @@
   "payload_files": 151,
   "entry_chunk": "editor-BufjFmqp.js",
   "entry_chunk_sha256": "d9fde788b9c1934fed962a56fe6a1a14b5cffbedc44cd2dcd12e635a9d17cac0",
-  "editor_main_sha256": "7eb0abac3d7389d44095ce7fd2e9852dfdf7d632034c08646c3ad5defa7643b4"
+  "editor_main_sha256": "7eb0abac3d7389d44095ce7fd2e9852dfdf7d632034c08646c3ad5defa7643b4",
+  "build_tooling_audit": {
+    "command": "npm audit --package-lock-only on the source archive's package-lock.json",
+    "date": "2026-10-23",
+    "findings": { "low": 1, "moderate": 13, "high": 21 },
+    "not_counted": "dompurify and monaco-editor-core, whose finding is the DOMPurify copy monaco-editor-core bundles, which the build replaces with 3.4.17",
+    "packages": [
+      "@octokit/core", "@octokit/graphql", "@octokit/plugin-paginate-rest", "@octokit/request",
+      "@octokit/request-error", "@octokit/rest", "baseline-browser-mapping", "brace-expansion",
+      "braces", "browserslist", "del", "diff", "fast-glob", "fast-uri", "follow-redirects",
+      "globby", "js-yaml", "micromatch", "minimatch", "mocha", "nanoid", "pin-github-action",
+      "postcss", "postcss-modules-local-by-default", "postcss-modules-scope",
+      "postcss-selector-parser", "postcss-url", "qs", "rollup", "rollup-plugin-delete",
+      "serialize-javascript", "source-map-js", "undici", "vite", "ws"
+    ],
+    "shipped": false,
+    "why": "They are the source tree's build, test and release tooling (Vite, Rollup, PostCSS, Mocha, the GitHub release scripts), which runs only while building. The payload is the bundler's output of monaco-editor-core and Monaco's src with DOMPurify 3.4.17, pinned file by file above, and none of the 151 files holds any of these packages' code (searched for each package's name and distinctive strings)."
+  }
 }

@@ -217,3 +217,54 @@ fn uncertain_stream_acknowledgement_requires_reopen_and_keeps_immutable_event_id
         retained[0]
     );
 }
+
+/// How each provider response ended is recorded as it is observed and read
+/// back after a reopen; an unknown ending or an impossible count is refused.
+#[test]
+fn provider_response_observations_record_how_each_response_ended() {
+    let root = tempfile::tempdir().unwrap();
+    let mut canonical = canonical(&root);
+    let dir = tempfile::tempdir().unwrap();
+    let identity = canonical.identity().unwrap();
+    let mut content = store(dir.path(), identity.clone());
+    let snapshot = streaming_fixture(&mut canonical, &mut content);
+    let response = |sequence, finish_reason: &str, offered_tools, tool_calls| {
+        let mut event = observation(&snapshot, sequence);
+        event.payload = ActivationStreamPayload::ProviderResponse {
+            finish_reason: finish_reason.into(),
+            offered_tools,
+            tool_calls,
+        };
+        event
+    };
+    for invalid in [
+        response(0, "done", 7, 0),
+        response(0, "stop", 7, 129),
+        response(0, "stop", (1 << 20) + 1, 0),
+    ] {
+        assert!(content.record_activation_stream(&snapshot, invalid).is_err());
+    }
+    let first = response(0, "tool_use", 7, 1);
+    let last = response(1, "stop", 7, 0);
+    content
+        .record_activation_stream(&snapshot, first.clone())
+        .unwrap();
+    content
+        .record_activation_stream(&snapshot, last.clone())
+        .unwrap();
+    drop(content);
+    let reopened = store(dir.path(), identity);
+    let activation = &snapshot.contract().activations()[0].activation;
+    let recorded: Vec<_> = reopened
+        .activation_stream(&snapshot, activation)
+        .unwrap()
+        .into_iter()
+        .map(|view| view.content)
+        .collect();
+    assert_eq!(recorded, [first, last]);
+    assert_eq!(
+        serde_json::to_value(&recorded[1].payload).unwrap(),
+        serde_json::json!({"kind":"provider_response","finish_reason":"stop",
+            "offered_tools":7,"tool_calls":0})
+    );
+}

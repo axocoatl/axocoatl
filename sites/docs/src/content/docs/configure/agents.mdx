@@ -18,7 +18,7 @@ agents:
   - id: coder
     name: Coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     system_prompt: |
       Work inside the authorized repository. Make small verified changes and
       report the commands used to check them.
@@ -70,7 +70,7 @@ agents:
     model: llama3.2
     role: autonomous
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    system_prompt: "You own this change. 1. Look first: find the relevant files and tests for code you do not know. If you have helpers, ask scout to find them. 2. Make the change. 3. Run the check command from the project instructions (AXOCOATL.md), or the tests, and fix failures. 4. Check your diff against the task. If you have helpers, ask reviewer to review it. Fix each defect found. Then summarize what you changed."
+    system_prompt: "Answer only with tool calls until the change is made and checked; then write a short summary of what you changed. You own this change: find the relevant code and tests (if you have helpers, ask scout to find code you do not know), make the change, run the check command from the project instructions (AXOCOATL.md) or the tests and fix failures, then check your diff against the task (if you have helpers, ask reviewer to review it) and fix each defect found."
     sampling: { max_tokens: 4096 }
   - id: scout
     name: Scout
@@ -180,7 +180,7 @@ agents:
   - id: scout
     name: Scout
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     tools: [read_file, list_dir, grep, glob]
     writes: []
     role: worker
@@ -226,13 +226,13 @@ agents:
   - id: docs-writer
     name: Docs writer
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
     tools: [read_file, write_file, edit_file, list_dir, grep, glob, bash]
     writes: [docs/, "*.md"]
   - id: reviewer
     name: Reviewer
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: gpt-oss:20b
     tools: [read_file, list_dir, grep, glob, bash]
     writes: []
 ```
@@ -319,7 +319,12 @@ Agent that could not pay for them. A lead that pays cannot start a helper whose 
 would cut into the allowance. Each check may run for three minutes unless the team sets
 another timeout for it, from 1 second to 30 minutes (a [loadout](/configure/loadouts/#checks)'s
 `timeout`, or `check_options` in the [Team and budget API](/reference/http-api/#native-session-controls)),
-and keeps up to 768 KiB of output and 256 KiB of errors.
+and keeps up to 768 KiB of output and 256 KiB of errors. Each repository capture may
+run for three minutes. It reads every file in the repository: on a 6-CPU Podman machine
+a repository of 50,000 files took 12 seconds, and 12,288 new files took 16. A very large
+repository or change (hundreds of thousands of files), or a busy computer, can take
+longer; the turn then needs attention and says that the capture did not finish within
+its 180 seconds.
 
 If the checks cannot be paid for because the paying Agent's budget is spent, has
 expired or was revoked, the turn needs attention and says why, for example "Required
@@ -345,8 +350,17 @@ round: 12 invocations for one check and two rounds.
 After the required Agents finish and the required checks pass, Axocoatl, not the lead,
 starts the reviewer in a fresh conversation. It is shown the request, each required
 Agent's final answer (up to 16 KiB each) and the change the turn made: every file
-whose patch against HEAD differs from the one captured when the turn began, up to 48
-KiB, with a note when it was cut. It is asked to start its answer with `VERDICT: APPROVE`
+whose patch against HEAD differs from the one captured when the turn began. A binary
+file is named with its size, never shown as data. The rest is shown whole when it fits
+beside the rest of the reviewer's request (the request, the answers, its instructions,
+its attachments and the room kept for asking it again): three quarters of what one
+request to its model may hold beside the output allowance (85% of the context), and at
+most 48 KiB.
+A larger change is shown source first, then generated and dense text, then binary
+files, each file whole when it fits and else cut at a hunk boundary; a note first says
+that not all of it is shown, and the files left out are listed with their bytes. The
+reviewer is told it has not seen that part and is asked to read those files before it
+judges them. It is asked to start its answer with `VERDICT: APPROVE`
 or `VERDICT: CHANGES`, followed by findings, each on its own line, numbered `F1`, `F2`, …
 and written as `path:line: what to change`. A verdict
 line anywhere in the answer counts, ignoring case and Markdown emphasis, and the rest of
@@ -354,10 +368,27 @@ the answer is the findings. The turn completes only when the reviewer approves t
 result it was shown. An answer without a readable verdict approves nothing: one with no
 verdict line, verdict lines that disagree, or a verdict line that says anything else.
 While a round remains, Axocoatl asks the reviewer once more, in the next round, about
-the same result, showing it the answer that had no verdict; that uses the round. The
+the same result, showing it the answer that had no verdict when that answer fits the room
+every round's request keeps for it (a sixteenth of what one request may hold beside the
+output allowance, at most 2,048 tokens) and otherwise saying it is too long to show
+again; that uses the round. The
 verdict is bound to the answers and the repository tree it judged: a later revision of
 the lead makes it stale, and when the reviewer can capture the repository, a tree that
 changed before or while it read fails the verdict.
+
+When the reviewer does not finish for one of the reasons below, Axocoatl runs its round
+again, once, while a round remains, with the same prompt in a fresh conversation. After
+a transient failure of its model call (a 429, a 5xx, a timeout or a reset connection) it
+first waits for the provider's `Retry-After`, or 4 seconds when the provider states
+none, doubled for each round already run again in the turn, at most 30 seconds; a
+`Retry-After` longer than 30 seconds is not waited for, and the review ends. While it
+waits, the workbench shows the review as under way, and **Stop** ends the wait. When its
+model kept calling tools and gave no answer, even when asked for its final answer without
+tools, gave no answer and called no tool it was offered, used every tool round of its
+activation or reached its token limit for the activation, it runs again at once. Otherwise, or when the run again does not finish
+either, the turn needs your attention and the review says why in the reviewer's own
+words: for a request larger than its model takes, how many tokens it needed and the
+limit. A run prints that reason on its `Needs attention` line.
 
 When the reviewer asks for changes, Axocoatl sends its findings to the lead as a
 revision in a new epoch, the way **Revise** does, then runs the required checks and the

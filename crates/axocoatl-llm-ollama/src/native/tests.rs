@@ -1292,21 +1292,11 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
             workbench_request(),
         ),
         (
-            "<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n\
-             </tool_call>\nAfter that I will read the file and report back.",
-            workbench_request(),
-        ),
-        (
             "```\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n\
              </function>\n</tool_call>",
             workbench_request(),
         ),
         (many_calls.as_str(), workbench_request()),
-        (
-            "Run.\n<function=delete_all>\n<parameter=path>\n/\n</parameter>\n</function>\n\
-             <function=glob>\n<parameter=pattern>\n*\n</parameter>\n</function>\n</tool_call>",
-            workbench_request(),
-        ),
         (
             "Example:\n~~~\n<function=bash>\n<parameter=command>\nrm -rf build\n</parameter>\n\
              </function>\n",
@@ -1315,31 +1305,6 @@ async fn text_that_is_not_a_recoverable_call_stays_the_answer() {
         (
             "Example:\n\n    <function=bash>\n    <parameter=command>\n    rm -rf build\n    \
              </parameter>\n    </function>\n",
-            workbench_request(),
-        ),
-        // A value missing its </parameter> would swallow the next call.
-        (
-            "I'll write the file and run it.\n<function=write_file>\n<parameter=path>\nsrc/a.js\n\
-             </parameter>\n<parameter=content>\nconst a = 1;\n</function>\n<function=bash>\n\
-             <parameter=command>\nnode src/a.js\n</parameter>\n</function>\n</tool_call>",
-            workbench_request(),
-        ),
-        // A malformed block (a key twice) before a well-formed one.
-        (
-            "Plan.\n<function=bash>\n<parameter=command>\nmkdir out\n</parameter>\n\
-             <parameter=command>\nx\n</parameter>\n</function>\n<function=glob>\n\
-             <parameter=pattern>\nout/*\n</parameter>\n</function>",
-            workbench_request(),
-        ),
-        // A value missing its </parameter>, with the next tags on its line.
-        (
-            "Reading it.\n<function=read_file>\n<parameter=path>src/a.js<parameter=limit>10\
-             </parameter>\n</function>",
-            workbench_request(),
-        ),
-        (
-            "<function=write_file><parameter=path>a.js</parameter><parameter=content>ok;\
-             </function><function=bash><parameter=command>node a.js</parameter></function>",
             workbench_request(),
         ),
         // A fence behind a lone CR, and one closed by a line with an NBSP.
@@ -1583,11 +1548,12 @@ async fn recovered_calls_take_ids_unique_across_the_history() {
         ));
         ids.push(call.id);
     }
-    assert_eq!(ids, ["call_text_0", "call_text_1"]);
+    assert_ne!(ids[0], ids[1]);
+    assert!(ids.iter().all(|id| id.starts_with("call_text_")), "{ids:?}");
     provider.validate_request(&request).unwrap();
     let body = provider.wire_request(&request).unwrap();
-    assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call_text_0");
-    assert_eq!(body["messages"][3]["tool_calls"][0]["id"], "call_text_1");
+    assert_eq!(body["messages"][1]["tool_calls"][0]["id"], ids[0].as_str());
+    assert_eq!(body["messages"][3]["tool_calls"][0]["id"], ids[1].as_str());
     assert_eq!(body["messages"][4]["tool_name"], "glob");
 }
 
@@ -1617,33 +1583,400 @@ async fn recovered_values_take_the_types_their_schema_declares() {
     );
 }
 
+/// The events of one streamed response to `request` made of `records`.
+async fn stream_events(
+    records: &[Value],
+    request: ChatRequest,
+) -> Vec<Result<StreamEvent, ProviderError>> {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(&server, records).await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let stream = provider.chat_stream(request).await.unwrap();
+    stream.collect().await
+}
+
+fn shown_text(events: &[Result<StreamEvent, ProviderError>]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(StreamEvent::TextDelta { delta }) => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An answer that calls an offered tool in a way that cannot run ends as a
+/// refusal after its text and its terminal usage: the turn needs attention
+/// instead of ending "done" having run nothing.
+#[tokio::test]
+async fn a_call_that_cannot_run_is_refused_after_its_text_and_usage() {
+    for (content, says) in [
+        (
+            "<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</parameter>\n</function>\n\
+             </tool_call>\nAfter that I will read the file and report back.",
+            "text follows the call markup",
+        ),
+        (
+            "Run.\n<function=delete_all>\n<parameter=path>\n/\n</parameter>\n</function>\n\
+             <function=glob>\n<parameter=pattern>\n*\n</parameter>\n</function>\n</tool_call>",
+            "delete_all, which this turn does not offer",
+        ),
+        // A value missing its </parameter> would swallow the next call.
+        (
+            "I'll write the file and run it.\n<function=write_file>\n<parameter=path>\nsrc/a.js\n\
+             </parameter>\n<parameter=content>\nconst a = 1;\n</function>\n<function=bash>\n\
+             <parameter=command>\nnode src/a.js\n</parameter>\n</function>\n</tool_call>",
+            "not well formed",
+        ),
+        // A key twice.
+        (
+            "Plan.\n<function=bash>\n<parameter=command>\nmkdir out\n</parameter>\n\
+             <parameter=command>\nx\n</parameter>\n</function>\n<function=glob>\n\
+             <parameter=pattern>\nout/*\n</parameter>\n</function>",
+            "not well formed",
+        ),
+        (
+            "Reading it.\n<function=read_file>\n<parameter=path>src/a.js<parameter=limit>10\
+             </parameter>\n</function>",
+            "not well formed",
+        ),
+        (
+            "<function=write_file><parameter=path>a.js</parameter><parameter=content>ok;\
+             </function><function=bash><parameter=command>node a.js</parameter></function>",
+            "not well formed",
+        ),
+        // A value its schema does not allow is not run as read_file{limit:"lots"}.
+        (
+            "<function=read_file>\n<parameter=path>\nsrc/a.js\n</parameter>\n\
+             <parameter=limit>\nlots\n</parameter>\n</function>",
+            "read_file gives limit a value that is not integer",
+        ),
+    ] {
+        let events = stream_events(
+            &[
+                record(content, false),
+                counted(record("", true), json!(2054), json!(55)),
+            ],
+            workbench_request(),
+        )
+        .await;
+        assert_eq!(shown_text(&events), content);
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
+        )));
+        assert!(
+            matches!(
+                &events[events.len() - 2..],
+                [
+                    Ok(StreamEvent::UsageObservation(usage)),
+                    Err(ProviderError::RefusedResponse { message, .. }),
+                ] if usage.complete
+                    && usage.usage == TokenUsageStats::new(2054, 55)
+                    && message.contains(says)
+                    && message.contains("done_reason \"stop\" and 4 tools offered")
+            ),
+            "{content}: {events:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_call_cut_at_the_output_limit_is_refused() {
+    let mut done = counted(record("", true), json!(2054), json!(256));
+    done["done_reason"] = json!("length");
+    let content = &TEXT_CALL[..TEXT_CALL.find("</parameter>").unwrap()];
+    let events = stream_events(&[record(content, false), done], workbench_request()).await;
+    assert_eq!(shown_text(&events), content);
+    assert!(matches!(
+        events.last(),
+        Some(Err(ProviderError::RefusedResponse { message, .. }))
+            if message.contains("output limit") && message.contains("done_reason \"length\"")
+    ));
+}
+
+/// Text held as a possible call is shown when the response ends without its
+/// `done` record, so the abandoned output is not lost; nothing in it runs.
+#[tokio::test]
+async fn held_text_is_shown_when_the_response_ends_early() {
+    for records in [
+        vec![record(TEXT_CALL, false)],
+        vec![
+            record(TEXT_CALL, false),
+            json!({"error": "error parsing tool call"}),
+        ],
+    ] {
+        let events = stream_events(&records, workbench_request()).await;
+        assert_eq!(shown_text(&events), TEXT_CALL);
+        assert!(matches!(
+            events.last(),
+            Some(Err(ProviderError::IncompleteStream { .. }))
+        ));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { .. }))));
+    }
+}
+
+/// With a structured call the text is shown before it, in the order the
+/// model wrote them, and markup in the text stays text.
+#[tokio::test]
+async fn text_before_a_structured_call_arrives_before_it() {
+    let mut done = counted(record("", true), json!(2054), json!(55));
+    done["message"]["tool_calls"] = json!([{"id":"call_native","function":{"index":0,
+        "name":"read_file","arguments":{"path":"src/paginate.js"}}}]);
+    let events = stream_events(&[record("Let me check.", false), done], workbench_request()).await;
+    let text = events
+        .iter()
+        .position(|event| matches!(event, Ok(StreamEvent::TextDelta { delta }) if delta == "Let me check."))
+        .unwrap();
+    let call = events
+        .iter()
+        .position(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { .. })))
+        .unwrap();
+    assert!(text < call, "{events:?}");
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish_reason: FinishReason::ToolUse
+        }))
+    ));
+}
+
 #[test]
-fn text_values_are_typed_only_as_their_schema_declares() {
-    let schema = json!({"type":"object","properties":{
-        "limit":{"type":"integer"}, "ratio":{"type":"number"}, "all":{"type":"boolean"},
-        "count":{"type":["integer","null"]}, "path":{"type":"string"}, "loose":{}}});
-    let mut arguments = json!({"limit":"100", "ratio":"1.5", "all":"True", "count":" 7 ",
-        "path":"100", "loose":"true", "other":"false"});
-    coerce_text_arguments(&mut arguments, &schema);
-    assert_eq!(
-        arguments,
-        json!({"limit":100, "ratio":1.5, "all":true, "count":7, "path":"100", "loose":"true",
-            "other":"false"})
+fn a_call_mentioned_mid_answer_does_not_hold_the_text_after_it() {
+    let mut state =
+        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    let first = state
+        .record(&record("I'll use <function=glob> later.\n", false), 200)
+        .unwrap();
+    assert_eq!(text_of(&first), "I'll use <function=glob> later.\n");
+    let second = state
+        .record(&record("First the plan.\n", false), 200)
+        .unwrap();
+    assert_eq!(text_of(&second), "First the plan.\n");
+}
+
+/// The finishing events are charged as they are made, so a response whose
+/// replay metadata would overflow its byte limit fails before any of them,
+/// a recovered call included, is released.
+#[test]
+fn a_finish_that_overflows_releases_nothing() {
+    let mut state =
+        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    state.record(&record(TEXT_CALL, false), 200).unwrap();
+    state.record(&record("", true), 200).unwrap();
+    state.emitted = state.cap - ACCOUNTING_RESERVE - 300;
+    assert!(state.finish().is_err());
+}
+
+/// A finish that fails sends none of its events: what they would have shown
+/// stays held, so the failure shows all of the answer's text (none of which
+/// runs), and their charges and recovered calls are taken back.
+#[test]
+fn a_finish_that_fails_leaves_its_text_for_the_failure() {
+    let mut state =
+        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    // As if no record had shown any of it yet.
+    state.content = TEXT_CALL.into();
+    state.terminal = Some(FinishReason::Stop);
+    state.thinking = "x".repeat(62 * 1024);
+    assert!(state.finish().is_err());
+    assert_eq!((state.emitted, state.calls.len()), (0, 0));
+    assert!(matches!(
+        state.release_held(),
+        Some(StreamEvent::TextDelta { delta }) if delta == TEXT_CALL
+    ));
+}
+
+/// Streamed: the replay metadata of a recovered call overflows the response,
+/// so the call never runs and the failure shows the whole answer, the prose
+/// and the markup.
+#[tokio::test]
+async fn a_recovered_call_whose_finish_overflows_never_runs() {
+    let mut thinking = record("", false);
+    thinking["message"]["thinking"] = json!("x".repeat(40 * 1024));
+    let events = stream_events(
+        &[
+            thinking,
+            record(TEXT_CALL, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+        workbench_request(),
+    )
+    .await;
+    assert_eq!(shown_text(&events), TEXT_CALL);
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { .. }))));
+    assert!(
+        matches!(events.last(), Some(Err(ProviderError::Stream(_)))),
+        "{:?}",
+        events.last()
     );
-    let schema_json = json!({"type":"object","properties":{
-        "paths":{"type":"array"}, "env":{"type":"object"}, "count":{"type":["integer","null"]},
-        "name":{"type":"string"}}});
-    let mut json_values = json!({"paths":"[\"a\",\"b\"]", "env":"{\"K\":\"v\"}",
-        "count":"null", "name":"null"});
-    coerce_text_arguments(&mut json_values, &schema_json);
-    assert_eq!(
-        json_values,
-        json!({"paths":["a","b"], "env":{"K":"v"}, "count":null, "name":"null"})
+}
+
+/// Ollama streams one record per token, the newline after a `<tool_call>`
+/// that ends the prose at the start of the next one: the opener never shows.
+#[tokio::test]
+async fn an_opener_streamed_token_by_token_never_shows() {
+    let tokens = [
+        "Prose",
+        ".",
+        " <",
+        "tool",
+        "_call",
+        ">",
+        "\n\n<function",
+        "=glob",
+        ">\n",
+        "<parameter=pattern>\n",
+        "src/*.js\n",
+        "</parameter>\n",
+        "</function>\n",
+        "</tool_call>",
+    ];
+    let mut records: Vec<Value> = tokens.iter().map(|token| record(token, false)).collect();
+    records.push(counted(record("", true), json!(2054), json!(55)));
+    let events = stream_events(&records, workbench_request()).await;
+    assert_eq!(shown_text(&events), "Prose. ");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::ToolCallDelta { name: Some(name), .. }) if name == "glob"
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish_reason: FinishReason::ToolUse
+        }))
+    ));
+}
+
+/// A call block written after other text on its line is refused, with the
+/// one tool offered named in the singular.
+#[tokio::test]
+async fn a_call_glued_to_the_prose_is_refused() {
+    let mut one_tool = workbench_request();
+    one_tool.tools.retain(|tool| tool.name == "glob");
+    let content = "Looking.<function=glob>\n<parameter=pattern>\nsrc/*.js\n</parameter>\n\
+                   </function>";
+    let events = stream_events(
+        &[
+            record(content, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+        one_tool,
+    )
+    .await;
+    assert_eq!(shown_text(&events), content);
+    assert!(
+        matches!(
+            events.last(),
+            Some(Err(ProviderError::RefusedResponse { message, .. }))
+                if message.contains("does not begin a line")
+                    && message.ends_with("done_reason \"stop\" and 1 tool offered")
+        ),
+        "{:?}",
+        events.last()
     );
-    let mut unparsed = json!({"limit":"lots", "ratio":"NaN", "all":"yes"});
-    coerce_text_arguments(&mut unparsed, &schema);
-    assert_eq!(
-        unparsed,
-        json!({"limit":"lots", "ratio":"NaN", "all":"yes"})
-    );
+}
+
+#[tokio::test]
+async fn a_tool_call_opener_ending_the_prose_is_not_left_in_the_answer() {
+    let content =
+        "Prose. <tool_call>\n<function=glob>\n<parameter=pattern>\nsrc/a.js\n</parameter>\n\
+                   </function>\n</tool_call>";
+    let events = stream_events(
+        &[
+            record(content, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+        workbench_request(),
+    )
+    .await;
+    assert_eq!(shown_text(&events), "Prose. ");
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish_reason: FinishReason::ToolUse
+        }))
+    ));
+}
+
+#[tokio::test]
+async fn markup_in_an_open_html_block_or_after_a_stop_sequence_stays_text() {
+    let pre = "Example:\n<pre>\n<function=bash>\n<parameter=command>\nrm -rf build\n</parameter>\n\
+               </function>";
+    let mut stopped = workbench_request();
+    stopped.stop_sequences = vec!["END".into()];
+    for (content, request) in [(pre, workbench_request()), (TEXT_CALL, stopped)] {
+        let events = stream_events(
+            &[
+                record(content, false),
+                counted(record("", true), json!(2054), json!(55)),
+            ],
+            request,
+        )
+        .await;
+        assert_eq!(shown_text(&events), content);
+        assert!(matches!(
+            events.last(),
+            Some(Ok(StreamEvent::Done {
+                finish_reason: FinishReason::Stop
+            }))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn an_empty_stop_list_leaves_the_modelfiles_stops_in_place() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let body = provider.wire_request(&workbench_request()).unwrap();
+    assert!(body["options"].get("stop").is_none(), "{body}");
+    let mut stopped = workbench_request();
+    stopped.stop_sequences = vec!["END".into()];
+    let body = provider.wire_request(&stopped).unwrap();
+    assert_eq!(body["options"]["stop"], json!(["END"]));
+}
+
+/// Two recoveries in one Session take different ids even when the history
+/// the second is sent with no longer holds the first call (the actor dropped
+/// that round to fit the request), so the Session's own history never holds
+/// one id twice.
+#[tokio::test]
+async fn recoveries_across_a_dropped_round_take_different_ids() {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(
+        &server,
+        &[
+            record(TEXT_CALL, false),
+            counted(record("", true), json!(2054), json!(55)),
+        ],
+    )
+    .await;
+    let provider = NativeOllamaProvider::connect(workbench_config(&server))
+        .await
+        .unwrap();
+    let first = provider.chat(workbench_request()).await.unwrap();
+    let second = provider.chat(workbench_request()).await.unwrap();
+    let (first, second) = (&first.tool_calls[0], &second.tool_calls[0]);
+    assert_ne!(first.id, second.id);
+    let mut history = workbench_request();
+    for call in [first, second] {
+        let mut assistant = ChatMessage::assistant("");
+        assistant.tool_calls = vec![call.clone()];
+        history.messages.push(assistant);
+        history
+            .messages
+            .push(ChatMessage::tool_result("[]", "glob", call.id.as_str()));
+    }
+    provider.validate_request(&history).unwrap();
 }

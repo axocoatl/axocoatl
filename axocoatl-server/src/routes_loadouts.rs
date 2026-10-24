@@ -66,13 +66,29 @@ pub async fn validate_loadout(
 }
 
 /// End a run whose driver could not record its Outcome: the run fails with
-/// the reason, never left unfinished.
+/// the reason, never left unfinished, and its Session's runtime stops.
 async fn fail_run(host: &DaemonRunHost, context: &RunContext, reason: String) {
     let mut outcome = axocoatl_daemon::loadout::driver::empty_outcome(
         context,
         axocoatl_daemon::loadout::driver::now_ms(),
     );
     outcome.error = Some(reason);
+    if let Err(reason) = host.stop_session_runtime(&context.session_id).await {
+        let warning = axocoatl_daemon::loadout::driver::session_runtime_not_stopped(
+            &context.session_id,
+            &reason,
+        );
+        outcome.warnings.push(warning.clone());
+        let _ = host
+            .record(
+                &context.run_id,
+                RunEvent::Warning {
+                    at_ms: axocoatl_daemon::loadout::driver::now_ms(),
+                    warning,
+                },
+            )
+            .await;
+    }
     outcome.finished_at_ms = axocoatl_daemon::loadout::driver::now_ms();
     outcome.decide(Default::default());
     if let Err(reason) = host.seal(&context.run_id, &outcome).await {
@@ -131,6 +147,11 @@ pub struct StartRunQuery {
 /// every problem admission found, usage problems (`422`) before
 /// infrastructure ones (`400`). A `dry_run` query is refused (`400`): a dry
 /// run is [`preflight_loadout_run`].
+///
+/// Admission runs in a task of its own ([`admit_run`]): it can take
+/// minutes (the toolchain setup, the check probe), and a client that goes
+/// away meanwhile (Ctrl-C) drops this handler, never the admission, so the
+/// Session it made is never left open with its containers running.
 pub async fn start_loadout_run(
     State(state): State<AppState>,
     Query(query): Query<StartRunQuery>,
@@ -148,14 +169,57 @@ pub async fn start_loadout_run(
             }),
         ));
     }
-    let (accepted, context) = state
-        .read()
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    tokio::spawn(admit_run(state, request, answer));
+    let accepted = answered
         .await
-        .admit_loadout_run(request)
-        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(CodedErrorResponse {
+                    error: "the run's admission ended without an answer; GET /api/runs lists \
+                            the run if it was admitted"
+                        .into(),
+                    code: None,
+                }),
+            )
+        })?
         .map_err(coded_err)?;
-    spawn_run_driver(state.clone(), context);
     Ok((StatusCode::ACCEPTED, Json(accepted)).into_response())
+}
+
+/// Admit `request` to its end, answer through `answer`, and start the
+/// admitted run's driver. A refusal cleans up what admission made, as
+/// always. A run admitted after its client went away (nobody receives the
+/// answer) is stopped before its first turn, as Ctrl-C after admission
+/// stops it: its driver ends it as interrupted and stops its Session's
+/// runtime.
+async fn admit_run(
+    state: AppState,
+    request: RunRequest,
+    answer: tokio::sync::oneshot::Sender<
+        Result<axocoatl_daemon::loadout::api::RunAccepted, axocoatl_daemon::DaemonError>,
+    >,
+) {
+    let admitted = state.read().await.admit_loadout_run(request).await;
+    let (accepted, context) = match admitted {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            let _ = answer.send(Err(error));
+            return;
+        }
+    };
+    if answer.send(Ok(accepted)).is_err() {
+        let stopped = state
+            .read()
+            .await
+            .stop_unanswered_loadout_run(&context.run_id)
+            .await;
+        if let Err(error) = stopped {
+            tracing::warn!(run = %context.run_id, %error, "a run admitted after its client went away was not stopped");
+        }
+    }
+    spawn_run_driver(state, context);
 }
 
 /// `POST /api/runs/preflight` (`axocoatl run --dry-run`): what admission
@@ -687,6 +751,17 @@ impl RunHost for DaemonRunHost {
         self.state.read().await.loadout_ollama_versions(session_id)
     }
 
+    async fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>>
+    {
+        self.state
+            .read()
+            .await
+            .loadout_openrouter_endpoints(session_id)
+    }
+
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.state.read().await.loadout_run_stop_requested(run_id)
     }
@@ -701,6 +776,15 @@ impl RunHost for DaemonRunHost {
             .await
             .seal_loadout_run(run_id, outcome)
             .await
+    }
+
+    async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+        self.state
+            .read()
+            .await
+            .stop_loadout_run_runtime(session_id)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {

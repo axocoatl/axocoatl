@@ -163,8 +163,8 @@ contracts = {
   ],
   ".github/workflows/marketing-deploy.yml" => [
     "./scripts/verify-public-release.sh",
-    "./scripts/verify-marketing-gate.sh source-bound",
-    "./scripts/verify-marketing-gate.sh portable",
+    "./scripts/verify-marketing-gate.sh source-bound /tmp/axocoatl-marketing --installer-from-release",
+    "./scripts/verify-marketing-gate.sh portable /tmp/axocoatl-marketing --installer-from-release",
     "if: inputs.release_tag != ''",
     "if: inputs.release_tag == ''",
   ],

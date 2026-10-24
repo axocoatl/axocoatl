@@ -52,7 +52,32 @@ and older, pre-releases, development builds and a new major release are refused,
 `curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.40.6 sh`), a restart when
 the `ollama` on PATH is newer than the server that answers, or 0.40.6 in place of a
 version that is too new. A Team reviewed on Ollama 0.20.6 asks to be reviewed again
-("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again").
+("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again"), in its
+turns and in each helper its lead delegates to: in Team & budget, select Edit, then
+Preview and Apply with nothing changed. Its Ollama Agents and their Ollama helpers are
+observed again, and the Agents start new conversations. With the Ollama app on macOS,
+download it again from https://ollama.com/download, then quit and reopen it so that the
+new version answers.
+
+**A daemon older than this CLI**
+After an upgrade, a daemon started before it (the Always-On Service or an
+`axocoatl dev` terminal) runs the old binary until it restarts. `axocoatl doctor`
+names its version, or says it is older than Axocoatl 1.5.0 when it does not answer
+the version request. Restart it: `axocoatl service restart`,
+or stop `axocoatl dev` and start it again.
+
+**Axocoatl 1.4.0 does not start after 1.5 used its data**
+"could not recover canonical history for Session …" with "unknown variant
+`provider_response`" or "invalid checked repository identity": Axocoatl 1.5 ran a
+workbench turn or an `axocoatl run` in this data root (it records how each model
+response ended) or recorded a change larger than 512 KiB, which 1.4 cannot read, and no
+command converts it. Go back to 1.4 with the cold backup made
+before the upgrade: restore it, start Axocoatl 1.5 on it once and stop it (1.4.0 refuses
+a restored copy until then), then start 1.4.0, which runs native Ollama Sessions only on
+Ollama 0.20.6. Work done with 1.5 is not in that backup. A large file a 1.5 run left
+uncommitted in a repository (1 MiB, measured) makes 1.4.0's runs there end needing
+attention ("repository command output is incomplete or exceeds its capture bound"):
+commit or move it first. The Upgrade page's "Data written by 1.5" has the steps.
 
 **A model loaded with a 4096-token context**
 Ollama gives models 4096 tokens on computers with less than about 23 GiB of graphics
@@ -64,14 +89,18 @@ Linux) and restart it.
 **Model refused as not GGUF, or run with MLX**
 Native Sessions run only GGUF models, which Ollama runs in llama.cpp's `llama-server`.
 On Apple silicon Ollama pulls the MLX variant of some models, and MLX does not hold
-`num_ctx` as a hard limit. `ollama pull --runner llamacpp <model>` (an undocumented
-Ollama flag) pulls the GGUF variant; `qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
+`num_ctx` as a hard limit. `ollama rm MODEL && ollama pull --runner llamacpp MODEL`
+replaces it with the GGUF variant (`--runner` is an undocumented Ollama flag, and a pull
+with it leaves a variant already installed in place, hence the `ollama rm`);
+`qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
 
 **Model refused by a contract probe**
 When a Team is reviewed, Axocoatl checks on your server that a prompt longer than the
-model's context is refused before generation and that a call stops at its output limit.
-The error names the check that failed; Axocoatl cannot bound calls to that model on that
-Ollama, so use another model or Ollama release.
+model's context is refused before generation, that a call stops at its output limit and
+reports the tokens it generated, and, for a model with tool calling, that a request to
+call the one tool it is offered comes back as a call of that tool. The error names the
+check that failed; native Sessions and runs refuse that model on that Ollama for every
+Agent, so use another model or Ollama release.
 
 ## Config
 
@@ -136,7 +165,7 @@ may start a VM that already exists but is stopped.
 A service starts with the service manager's minimal `PATH`. `axocoatl service
 install` records the directory of the `podman` your shell finds, plus
 `CONTAINER_CONNECTION` and `CONTAINER_HOST` when set. Reinstall from a shell
-where `podman` works, then run `axocoatl service stop && axocoatl service start`.
+where `podman` works, then run `axocoatl service restart`.
 On macOS the service log is `~/Library/Logs/Axocoatl/daemon.log`.
 
 **A `network: none` Session cannot become Ready**

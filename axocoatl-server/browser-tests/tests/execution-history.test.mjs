@@ -64,6 +64,20 @@ test('a provider retry validates and drops only the abandoned round of observed 
   assert.throws(()=>executionHistorySummary(view),/provider retry is invalid/);
 });
 
+test('how each model response ended is validated and leaves the observed text alone',()=>{
+  const view=fixture(); const exact=view.activations[2].activation.activation;
+  const event=(sequence,payload)=>({reference:`response-${sequence}`,content:{schema_version:1,activation:exact,sequence,payload}});
+  view.activations[2].stream=[event(0,{kind:'text',delta:'ANSWER'}),
+    event(1,{kind:'provider_response',finish_reason:'stop',offered_tools:7,tool_calls:0})];
+  assert.match(executionHistorySummary(view).output,/observed output\nANSWER$/m);
+  for(const payload of [{kind:'provider_response',finish_reason:'done',offered_tools:7,tool_calls:0},
+    {kind:'provider_response',finish_reason:'stop',offered_tools:-1,tool_calls:0},
+    {kind:'provider_response',finish_reason:'stop',offered_tools:7}]){
+    view.activations[2].stream[1].content.payload=payload;
+    assert.throws(()=>executionHistorySummary(view),/provider response is invalid/);
+  }
+});
+
 test('retained native context reopens its exact prior generation and Ways decision after reload',async()=>{
  const context=await newAuthorizedContext(browser),page=await context.newPage();try{
   const reference={kind:'coordination_reference',reference_id:'context:native-turn:0',display_name:'Reviewer output · generation 2',metadata:{history_version:'execution_v2',source_session_id:'history-session',source_turn_id:'prior-turn',execution_epoch_id:'prior-epoch',node_id:'prior-reviewer',activation_id:'prior-activation',generation:2,reference_id:'prior-output',type:'output'}};
@@ -177,6 +191,23 @@ test('Stopped-before-start transcript never gains a generation or action row',as
     assert.equal(await evidence.getAttribute('data-generation'),null);
     assert.equal(await evidence.locator('button').count(),0);
     assert.equal(await page.locator('[data-activation-id="activation-2"] .smsg-body').textContent(),'Recorded empty output');
+  } finally {await context.close();}
+});
+
+test('the observed route says how each model response ended',async()=>{
+  const context=await newAuthorizedContext(browser);const page=await context.newPage();
+  try {
+    await page.route('**/response-history-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><main></main>'}));
+    await page.goto(`${runtime.baseUrl}/response-history-fixture`);
+    const view=fixture();const exact=view.activations[2].activation.activation;
+    view.activations[2].stream.push({reference:'stream-2',content:{schema_version:1,activation:exact,sequence:2,
+      payload:{kind:'provider_response',finish_reason:'max_tokens',offered_tools:7,tool_calls:0}}},
+    {reference:'stream-3',content:{schema_version:1,activation:exact,sequence:3,
+      payload:{kind:'provider_response',finish_reason:'tool_use',offered_tools:1,tool_calls:1}}});
+    await page.evaluate(async view=>{const {renderExecutionHistoryTurn}=await import('/ui/execution-history.js');document.querySelector('main').append(renderExecutionHistoryTurn(view,{renderMarkdown:text=>text,onGraph:()=>{}}));},view);
+    const route=page.locator('details.chat-reasoning[data-activation-id="activation-3"]');
+    assert.equal(await route.locator('pre[data-evidence-ref="stream-2"]').textContent(),'Model response ended: max tokens · 7 tools offered · 0 calls');
+    assert.equal(await route.locator('pre[data-evidence-ref="stream-3"]').textContent(),'Model response ended: tool use · 1 tool offered · 1 call');
   } finally {await context.close();}
 });
 

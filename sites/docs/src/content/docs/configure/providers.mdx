@@ -101,8 +101,15 @@ and they are checked before you sign in. The models above are examples. The comm
    carries this sign-in's state (any other request there is ignored, and the sign-in
    goes on waiting), then exchanges its code, with a verifier that never left your
    computer, for a new key labeled `Axocoatl <date>`. The sign-in may take 10
-   minutes (`--sign-in-timeout MINUTES`, 1 to 60). Cancelling it in the browser,
-   running out of time or pressing Ctrl-C stores nothing.
+   minutes (`--sign-in-timeout MINUTES`, 1 to 60); at a terminal, when that time
+   ends, it asks whether to keep waiting (Enter waits as long again). Each
+   connection to that address is written to a log, `connect-openrouter-<time>.log`
+   beside onboarding's (`~/Library/Logs/Axocoatl` on macOS, `~/.local/state/axocoatl`
+   on Linux), its method, path and `Host` only, never the code; the first connection
+   makes the log. A sign-in that fails names the log, or says that no browser came
+   back. In WSL the page opens with `wslview`, in Windows' browser.
+   Cancelling it in the browser, running out of time or pressing Ctrl-C stores
+   nothing.
 4. Checks the key with OpenRouter (`GET /api/v1/key`) and shows its label, credit
    limit, usage and whether the account is on the free tier (it has not bought
    credits), never the key.
@@ -160,11 +167,18 @@ Axocoatl cannot prevent changes made in your OpenRouter account.
 Before Send, review **Team & budget**. Axocoatl reads the model's entry in OpenRouter's
 catalog and its endpoints, selects the cheapest qualifying endpoint that accepts the
 Agent's sampling settings and fits its budget, and retains its capabilities, context
-and output limits, prices and, for a reasoning model, its reasoning contract. Every
-request pins that endpoint, disables automatic retries and fallbacks, and carries its
-prompt, completion and per-request price ceilings as `max_price`. The retained contract
-is checked again before each request; a changed or unsupported profile is refused
-before inference.
+and output limits, prices and, for a reasoning model, its reasoning contract. It also
+retains, cheapest first, up to three more of the model's healthy endpoints that can
+take over each of its calls: at least the selected endpoint's context and prompt limit,
+the same output limit and reasoning setting, and the smallest call within the approved
+budget. Each activation adds, as it opens, every other endpoint of the model that
+OpenRouter lists healthy then and that passes the same checks
+([When an endpoint is rate-limited or down](#when-an-endpoint-is-rate-limited-or-down)).
+Every request pins one of them, disables OpenRouter's automatic retries and fallbacks,
+and carries that endpoint's prompt, completion and per-request price ceilings as
+`max_price`. The contract of the endpoint a request goes to is checked against the
+catalog again before each request; a changed or unsupported profile is refused before
+inference.
 
 ### What each request reserves
 
@@ -269,6 +283,69 @@ anything else is refused, and the error names the component; a sampling setting 
 endpoint accepts is named too. Dynamic router aliases and custom OpenRouter endpoints
 are unsupported. A model Axocoatl cannot run says why when Team & budget is applied.
 
+An eligible endpoint is used only while OpenRouter reports it healthy (its `status` is
+0). A degraded or unavailable one is never used, even when no healthy endpoint is
+left: it fails part of its calls, some part way through an answer and after they cost
+credits, which no move to another endpoint can undo. When OpenRouter reports every
+eligible endpoint of a model unavailable or degraded, the Session or run stops before
+any model call and says so: each endpoint's status and its share of requests that
+succeeded over the last 30 minutes, that this is OpenRouter's provider status and not
+your setup, and to try again later or choose another model. An endpoint that has
+become degraded since is not sent to; the call moves to the next endpoint, and when
+none is left the Session is told the same. Onboarding reads the endpoints of the models
+you choose before it writes the setup.
+
+### When an endpoint is rate-limited or down
+
+A call that an endpoint fails before it produced anything moves at once to the next
+endpoint of the same model that can carry it: the endpoint's upstream rate-limited it
+(HTTP 429), it was unavailable (408 or 5xx), it timed out or closed the connection
+before its answer started, it reported a 429, 408 or 5xx inside an answer that had
+produced nothing yet, OpenRouter reports it degraded now, or its contract changed since
+Team & budget reviewed it. The endpoints are the one Team & budget selected, those it
+retained, and every other one the catalog listed healthy as the activation opened and
+that passes the same checks. The call is sent again as a new call, reserved at that
+endpoint's own prices against the same approved budget (budgets are never raised), and
+that endpoint's contract is checked against the catalog before it is sent. The move
+happens only when the grant can pay for the call there; otherwise the next endpoint is
+tried, and then the wait below. Later calls of the same activation stay on the endpoint
+the call moved to, unless the grant can no longer pay for a call there: then that call
+goes to the endpoint that reserves least of those that can carry it. Each activation
+starts again on the selected endpoint.
+
+- OpenRouter's own limit on the account (a 429 that names no upstream provider) applies
+  to every endpoint: the call is not moved, but waits its `Retry-After` and is sent
+  again to the same endpoint.
+- When no endpoint is left to move to, the Session waits once, as long as the longest
+  `Retry-After` the endpoints that failed the call stated (2 seconds without one), and
+  tries them again, starting on the one that failed it last, or on the next one when
+  that one asked to wait longer than 30 seconds: an endpoint that did is not sent to
+  again for that call. If every endpoint fails again, the call ends. Its error says that OpenRouter reports every endpoint of the model that the
+  Agent may use as rate-limited or unavailable right now, with each endpoint and its
+  failure, that this is a provider outage and not your setup, and to try again later or
+  choose another model. It never quotes OpenRouter's raw error, which can carry a hint
+  to add your own provider key (BYOK, which native Sessions refuse), or an error page
+  that is not OpenRouter's JSON.
+- An answer that names another provider than the endpoint its request pinned is refused
+  on every endpoint, and the call is not moved again.
+- A request OpenRouter refused with an HTTP status before generating anything, or one
+  never sent, is counted as costing nothing: it settles at zero tokens and $0 and gives
+  its reservation back, so the run's usage stays exact. OpenRouter bills the tokens a
+  provider processed, and such a request processed none. A call whose answer had
+  started (an error inside it included, whatever its message says), or that timed out
+  after it was sent, keeps its reservation, and the run's usage line names the Agent
+  and how many of its calls did not report.
+- The run record shows each move as a provider retry (`from endpoint A to endpoint B`),
+  the run's notes name the endpoints that answered each model to the end and how many
+  calls each answered, and the receipt names them in the Agent's or reviewer's
+  `program_version` (`openrouter endpoint deepinfra/fp8 (DeepInfra)`).
+- A tool-calling turn's reasoning goes back unchanged to the endpoint the next call goes
+  to, as OpenRouter documents for tool use, whichever endpoint produced it.
+
+A Session whose Team was applied by Axocoatl 1.4 or by a 1.5.0 build before this
+failover retained one endpoint. Its profile still loads unchanged, and its activations
+add the other endpoints as every activation does.
+
 ## Configure Ollama
 
 Native execution requires a loopback Ollama **0.40.6 or later** that reports
@@ -286,29 +363,53 @@ holds the context Axocoatl sends as a hard limit. On Apple silicon it runs some 
 with its MLX runner instead, and MLX's limit is the model's own maximum context, not
 `num_ctx`: Axocoatl refuses a model Ollama shows as non-GGUF or MLX, or loads with any
 runner but `llama-server`. When a tag on your Mac pulled its MLX variant,
-`ollama pull --runner llamacpp <model>` pulls the GGUF one; Ollama does not document
-that flag. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; they are the
+`ollama rm MODEL && ollama pull --runner llamacpp MODEL` replaces it with the GGUF one.
+Ollama does not document that flag, and a pull with it leaves a variant already installed
+in place (with the MLX `qwen3.5:0.8b` installed, Ollama 0.40.8 pulled nothing), hence the
+`ollama rm` first. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; they are the
 Lead and Reviewer pair onboarding offers with 48 to 95 GB of memory when no installed
-pair fits. Axocoatl sets nothing that keeps both loaded or unloads either (no
+pair fits (how well `gpt-oss:20b` reviews has not been measured). Axocoatl sets nothing that keeps both loaded or unloads either (no
 `keep_alive`): whether both stay in memory is up to Ollama.
 
-**Contract probes.** When Team & budget observes a model's context, Axocoatl sends two
+**Contract probes.** When Team & budget observes a model's context, Axocoatl sends a few
 small requests to your server with that context and the settings every call uses
-(`truncate: false`, `shift: false`): a prompt about four times longer than the context,
-which Ollama must refuse before generating anything, and a one-token request, which
-must stop after one token. A model that fails either is refused, and the error names
-the guarantee that failed. The result is kept per Ollama version, model digest and
-context; after an upgrade to another accepted Ollama version, the probes run again on
-it before it serves an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be
-reviewed again. Axocoatl's own scheduled check runs the same two probes against each
-new Ollama release and release candidate, with a small model, as they are published.
+(`truncate: false`, `shift: false`):
+
+- a prompt about four times longer than the context, which Ollama must refuse before
+  generating anything;
+- a one-token request, which must stop after one token;
+- a request for hundreds of lines with an output limit of 64 tokens, which must stop by
+  64 generated tokens, report exactly 64 when the limit ended it, and stream no more
+  pieces of text than the tokens it reports (a model Ollama runs with speculative
+  decoding, such as the `-mtp` tags, accepts several drafted tokens at a time);
+- for a model that reports tool calling, a request to call the one tool it is offered,
+  within 1,024 tokens (room for a thinking model's reasoning: on Ollama 0.40.8,
+  `qwen3:4b` called it after 195 to 309 tokens), which must come back as a call of that
+  tool with a call id and a string argument, read the way Axocoatl reads every answer.
+  A call to a tool it was not offered beside that one is no failure: a Session answers
+  such a call with a tool error and the model goes on.
+
+Each probe samples with the same fixed seed at the model's own settings, so it gives the
+same answer every time it runs on your server. A model that fails one is refused on that
+server for every Agent and every run, with or without tools, and the error names the
+guarantee that failed. A probe Ollama does not answer (an error status, or an answer that
+ends before its final record, as when the model's runner stopped) refuses nothing: the
+error says the check did not run, and the next try probes again. Images are not probed: every call reserves the model's whole
+context plus its output limit, whatever the prompt holds, and Ollama counts an image's
+tokens in the prompt it checks against the context, so an image that does not fit is
+refused rather than cut. The
+result is kept per Ollama version, model digest, context and tool calling; after an
+upgrade to another accepted Ollama version, the probes run again on it before it serves
+an existing Team, and a Team reviewed on Ollama 0.20.6 asks to be reviewed again.
+Axocoatl's own scheduled check runs the same probes against each new Ollama release and
+release candidate, with a small model, as they are published.
 
 ```yaml
 agents:
   - id: local-coder
     name: Local coder
     provider: ollama
-    model: qwen2.5-coder:14b
+    model: qwen3-coder:30b
 
 providers:
   ollama:
@@ -327,12 +428,59 @@ runs Ollama (the Homebrew service or an `ollama serve` you run), the app's Setti
 as the user `ollama`; then it restarts the server. See
 [Set up Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
-Some Ollama-served models return a requested tool call as response text instead
-of the structured field. Axocoatl recovers only complete, bounded calls whose
-names were actually offered in that Ollama request. The selected effective
-route must still be Ollama; response text from other providers remains text
-because Axocoatl cannot safely invent their native call ids, signatures, or
-content-block sequence.
+### Tool calls written as text
+
+Qwen3-Coder on Ollama sometimes writes a tool call as answer text instead of
+Ollama's structured `tool_calls` (it leaves out the opening `<tool_call>`).
+Both Ollama providers, native and OpenAI-compatible, run such calls only when
+they end the answer in Qwen3-Coder's own `<function=NAME>` format: the first
+line that starts with a call tag starts a run of complete call blocks that goes
+to the end of the answer; every call names a tool the request offered; and its
+values fit that tool's parameters (types, required parameters, `enum`). A
+`<tool_call>` that ends the line before the run is left out of the answer. A
+recovered call gets an id unique in the Session. When the answer also holds a
+call Ollama returned structured, only the structured calls run and the markup
+stays text. Nothing is read from text when the request set stop sequences or
+asked for JSON output.
+
+Markup in a code fence, an indented code block or an HTML block such as `<pre>`
+or `<!--` is quoted text, and so is a call tag after other text on its line in
+inline code (a code span may run over the lines of its paragraph), markup that
+names only tools the request did not offer, and a call tag mentioned in a
+sentence (`the <function=glob> tag`). An unfenced example in that format that
+ends an answer runs.
+
+Otherwise, an answer that calls an offered tool in a way that cannot run is
+refused instead of ending the turn having run nothing:
+
+- a line that starts with a call tag but no runnable run: prose after the
+  calls, a malformed block, a call to a tool the request did not offer next to
+  one it did, values that do not fit, or a response cut at its output limit
+  inside a call;
+- a call block (`<function=NAME>` with a `<parameter=…>` or `</function>` after
+  it) written after other text on its line, anywhere in the answer, even before
+  a run that begins a line;
+- a call written as JSON (`{"name": …, "arguments": …}`, the arguments as an
+  object or as a string holding one, or `{"NAME": {…}}`) that ends the answer:
+  the whole answer, the lines from its last line that starts with `{`, or a
+  `<tool_call>` block.
+
+The activation fails with the reason, the done reason and the number of tools
+offered; the workbench says "The model wrote a tool call as answer text that
+Axocoatl cannot run", the turn needs attention, and a run's Outcome lists it as
+`unrunnable_tool_call`, not as a provider failure. Nothing from that response
+ran; **Continue** asks the model again. JSON never runs as a call: JSON in a
+code fence, or followed by more text, stays the answer. Text from a line that
+starts a call is shown only when the response ends, and a `<tool_call>` that
+ends a line is shown only once the next line shows it opens no call.
+
+Qwen2.5-Coder (`qwen2.5-coder:14b` in Axocoatl's tests) returns its tool calls
+as JSON text rather than as calls Ollama lifts, so they never run. Onboarding
+offers it but never suggests it, nor a model whose `capabilities` lack `tools`,
+and `axocoatl doctor` warns about it for an Agent that lists tools.
+
+Response text from other providers stays text, because Axocoatl cannot safely
+invent their native call ids, signatures or content-block sequence.
 
 ## Use a compatibility endpoint
 

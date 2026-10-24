@@ -34,12 +34,25 @@ pub fn credential_words(name: &str) -> &'static str {
     }
 }
 
+/// When `auto` chose the OpenAI API key while a ChatGPT sign-in is stored
+/// too, how the run is billed and how to use the plan instead: storing a key
+/// moves `auto`'s runs from the plan to API rates, which this note says at
+/// every run's start.
+fn billing_switch(chosen: &str, stored: impl Fn(&str) -> bool) -> &'static str {
+    if chosen == "codex-openai" && stored("codex-chatgpt") {
+        " It is billed at OpenAI API rates to the key's OpenAI Platform organization, not to \
+         your ChatGPT plan, whose sign-in (codex-chatgpt) is stored too: `--param \
+         credential=codex-chatgpt` uses the plan."
+    } else {
+        ""
+    }
+}
+
 /// How to store one of `runtime`'s credentials, for a refused `auto`.
 fn how_to_connect(runtime: AgentRuntime) -> String {
     match runtime {
         AgentRuntime::Codex => "run `axocoatl connect codex` to sign in with your ChatGPT plan \
-             (stored as codex-chatgpt), or `axocoatl connect codex --api-key` to also store the \
-             OpenAI API key OpenAI issues with that sign-in (as codex-openai), then run again"
+             (stored as codex-chatgpt), then run again"
             .into(),
         _ => runtime
             .credentials()
@@ -113,9 +126,10 @@ pub fn choose_for(
             agent_credentials.insert(id.clone(), name.to_string());
             format!(
                 "Agent {id} ({}) sends the stored credential {name} ({}); credential \
-                 {AUTO_CREDENTIAL} chose it, {why}.",
+                 {AUTO_CREDENTIAL} chose it, {why}.{}",
                 runtime.id(),
-                credential_words(name)
+                credential_words(name),
+                billing_switch(name, &stored)
             )
         } else {
             // A named credential must be stored now, not found missing
@@ -192,12 +206,20 @@ mod tests {
                     let chosen = result.unwrap();
                     assert_eq!(chosen["writer"], name, "{stored:?}");
                     assert_eq!(run.agent_credentials["writer"], name, "{stored:?}");
+                    // With both stored, the API key's billing is said.
+                    let billing = if stored.len() == 2 {
+                        " It is billed at OpenAI API rates to the key's OpenAI Platform \
+                         organization, not to your ChatGPT plan, whose sign-in (codex-chatgpt) \
+                         is stored too: `--param credential=codex-chatgpt` uses the plan."
+                    } else {
+                        ""
+                    };
                     assert_eq!(
                         run.notes,
                         [format!(
                             "Agent writer (codex) sends the stored credential {name} ({}); \
                              credential auto chose it, the first of codex-openai and \
-                             codex-chatgpt that is stored.",
+                             codex-chatgpt that is stored.{billing}",
                             credential_words(name)
                         )]
                     );
@@ -209,9 +231,7 @@ mod tests {
                         error.to_string(),
                         "Agent writer (codex) has credential auto, and neither codex-openai nor \
                          codex-chatgpt is stored: run `axocoatl connect codex` to sign in with \
-                         your ChatGPT plan (stored as codex-chatgpt), or `axocoatl connect codex \
-                         --api-key` to also store the OpenAI API key OpenAI issues with that \
-                         sign-in (as codex-openai), then run again"
+                         your ChatGPT plan (stored as codex-chatgpt), then run again"
                     );
                     assert_eq!(run.agent_credentials["writer"], AUTO_CREDENTIAL);
                 }
@@ -228,10 +248,15 @@ mod tests {
             let mut run = resolved("fix-codex", &[("credential", name)]);
             let error = choose(&mut run.clone(), |_| false).unwrap_err();
             assert!(matches!(error, RunError::Usage(_)), "{error}");
+            let how = if name == "codex-openai" {
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`"
+            } else {
+                "run `axocoatl connect codex"
+            };
             assert!(
                 error.to_string().starts_with(&format!(
                     "Agent writer (codex) needs the credential {name} ({}), and it is not \
-                     stored yet: run `axocoatl connect codex",
+                     stored yet: {how}",
                     credential_words(name)
                 )),
                 "{error}"

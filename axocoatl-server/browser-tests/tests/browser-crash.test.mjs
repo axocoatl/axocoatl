@@ -192,7 +192,7 @@ test('a lost sign-in and a browser that died are printed under their tests, and 
         browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
       });
       after(async () => { await browser?.close(); await runtime?.stop(); });
-      const origin = () => runtime.baseUrl.replace('127.0.0.1', 'localhost');
+      const origin = () => runtime.baseUrl;
       const read = (page) => page.evaluate(async () => (await fetch('/api/workspaces')).status);
       test('a context that loses its sign-in cookie', async () => {
         const context = await newAuthorizedContext(browser);
@@ -251,7 +251,7 @@ test('a lost sign-in and a browser that died are printed under their tests, and 
   assert.equal(signIn.failures[0].crash.length, 1, output);
   assert.match(signIn.failures[0].crash[0],
     new RegExp(`^browser crash: \\S+ GET /api/workspaces answered 401, a ${ENGINE} context no longer held `
-      + 'the sign-in cookie axocoatl-token-\\d+ for localhost'));
+      + 'the sign-in cookie axocoatl-token-\\d+ for 127\\.0\\.0\\.1'));
   assert.equal(signIn.crashLinesOnPassedTests, 0, output);
 
   const killed = files['killed.test.mjs'];

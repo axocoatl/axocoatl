@@ -156,6 +156,17 @@ pub trait RunHost: Send + Sync {
         BTreeMap::new()
     }
 
+    /// The OpenRouter endpoints that answered the Session's native
+    /// OpenRouter calls, by model, each with the calls it answered. Daemon:
+    /// what each native provider recorded as each answer started. A host
+    /// without native OpenRouter has none.
+    async fn openrouter_endpoints(
+        &self,
+        _session_id: &str,
+    ) -> BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>> {
+        BTreeMap::new()
+    }
+
     /// Whether a person asked to stop the run (`POST /api/runs/{id}/stop`,
     /// Ctrl-C in `axocoatl run`). Daemon: the server's run registry (core).
     async fn stop_requested(&self, _run_id: &str) -> bool {
@@ -177,6 +188,18 @@ pub trait RunHost: Send + Sync {
         _outcome: &RunOutcome,
     ) -> Result<Option<RunWarning>, String> {
         Ok(None)
+    }
+
+    /// Stop the runtime of the run's Session once nothing more runs in it:
+    /// its containers and egress sidecar stop, as when the daemon stops,
+    /// and the Session stays open with its record, History, team and
+    /// network record for Keep, the record bundle and the workbench, which
+    /// starts its container again when it needs one. `Err` says why the
+    /// runtime still runs, which the driver records as the warning
+    /// `session_runtime_not_stopped`. Daemon: `stop_loadout_run_runtime`
+    /// (core). A host without Sessions stops nothing.
+    async fn stop_session_runtime(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
     }
 
     /// Write the run's Outcome once. Daemon: `RunRecordStore::finish`

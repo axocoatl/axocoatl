@@ -18,6 +18,7 @@ use super::detect::{Facts, OllamaServer, OllamaService, Os, OsRelease};
 use super::host::testing::Shims;
 use super::ui::{Answer, Mode, Ui};
 use super::*;
+use crate::connect_cmd::openrouter_tests::{catalog_row, mount_endpoints};
 
 const GIB: u64 = 1 << 30;
 
@@ -204,25 +205,15 @@ impl FakeOllama {
             })
             .mount(&server)
             .await;
+        // The contract probes, as Ollama 0.40 answers them.
         Mock::given(method("POST"))
             .and(path("/api/chat"))
             .respond_with(|request: &wiremock::Request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
-                let content = body["messages"][0]["content"].as_str().unwrap_or_default();
-                if content.starts_with("x x ") {
-                    ResponseTemplate::new(400).set_body_json(json!({"error":
-                        "the prompt is longer than the context length"}))
-                } else {
-                    ResponseTemplate::new(200).set_body_raw(
-                        format!(
-                            "{}\n",
-                            json!({"model": body["model"], "message": {"role": "assistant",
-                                "content": "ready"}, "done": true, "done_reason": "length",
-                                "prompt_eval_count": 14, "eval_count": 1})
-                        ),
-                        "application/x-ndjson",
-                    )
-                }
+                let probe = axocoatl_llm_ollama::ContractProbe::of(&body)
+                    .expect("onboarding sends only the contract probes");
+                let (status, kind, answer) = probe.answer(&body);
+                ResponseTemplate::new(status).set_body_raw(answer, kind)
             })
             .mount(&server)
             .await;
@@ -331,6 +322,9 @@ async fn facts(
         service_program: None,
         xdg_config_home: None,
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        proxy_variables: Vec::new(),
     }
 }
 
@@ -1581,6 +1575,41 @@ esac"#
     );
 }
 
+fn arch() -> Os {
+    Os::Linux {
+        release: OsRelease::parse("NAME=\"Arch Linux ARM\"\nID=archarm\nID_LIKE=arch\n"),
+        wsl: None,
+        systemd: true,
+    }
+}
+
+/// `pacman` as Arch Linux ARM answers for its installed shadow 4.20.0
+/// (`pacman -Q`, `pacman -Qqo`, `pacman -Ql`, in docker.io/menci/archlinuxarm).
+fn pacman_shim(shims: &Shims) {
+    shims.add(
+        "pacman",
+        r#"case "$*" in
+  "-Q shadow") echo 'shadow 4.20.0.arch1-1' ;;
+  "-Qqo "*) echo shadow ;;
+  "-Ql shadow") printf 'shadow /usr/\nshadow /usr/bin/\nshadow /usr/bin/newgidmap\nshadow /usr/bin/newuidmap\nshadow /usr/share/man/man1/newuidmap.1.gz\n' ;;
+  *) exit 1 ;;
+esac"#,
+    );
+}
+
+/// `pacman.conf` under the root with these `[options]` lines.
+fn pacman_conf(shims: &Shims, options: &str) {
+    let etc = shims.root.path().join("etc");
+    std::fs::create_dir_all(&etc).unwrap();
+    std::fs::write(
+        etc.join("pacman.conf"),
+        format!(
+            "[options]\nHoldPkg = pacman glibc\n{options}\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
+        ),
+    )
+    .unwrap();
+}
+
 /// `dpkg-query` as ubuntu:24.04 answers for an installed uidmap, with a
 /// local diversion of /usr/bin/newuidmap when `diverted`.
 fn dpkg_shim(shims: &Shims, diverted: bool) {
@@ -1615,6 +1644,7 @@ esac"#
 async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() {
     let dnf = "sudo dnf reinstall -y shadow-utils";
     let apt = "sudo apt-get install --reinstall -y uidmap";
+    let pacman = "sudo pacman -S --noconfirm shadow";
     struct Case {
         name: &'static str,
         os: Os,
@@ -1741,12 +1771,97 @@ async fn a_reinstall_the_package_records_say_changes_nothing_is_never_offered() 
             reinstall: apt,
         },
         Case {
+            name: "dpkg path-exclude of both helpers in one line, said once",
+            os: ubuntu(),
+            helpers: None,
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                let d = shims.root.path().join("etc/dpkg/dpkg.cfg.d");
+                std::fs::create_dir_all(&d).unwrap();
+                std::fs::write(d.join("90-local"), "path-exclude=/usr/bin/new*map\n").unwrap();
+            },
+            why: Some(
+                "uidmap's /usr/bin/newuidmap and /usr/bin/newgidmap were removed, and dpkg is \
+                 set to leave them out (path-exclude=/usr/bin/new*map in \
+                 /etc/dpkg/dpkg.cfg.d/90-local), so reinstalling uidmap does not write them: \
+                 remove that line",
+            ),
+            reinstall: apt,
+        },
+        Case {
             name: "dpkg, helpers deleted, nothing keeps them off",
             os: ubuntu(),
             helpers: None,
             setup: |shims| dpkg_shim(shims, false),
             why: None,
             reinstall: apt,
+        },
+        Case {
+            name: "dpkg stat overrides of both helpers, said once",
+            os: ubuntu(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                dpkg_shim(shims, false);
+                shims.add("dpkg-statoverride", r#"echo "root root 755 $2"; exit 0"#);
+            },
+            why: Some(
+                "uidmap installs /usr/bin/newuidmap and /usr/bin/newgidmap setuid root, but dpkg \
+                 stat overrides give /usr/bin/newuidmap mode 755 and /usr/bin/newgidmap mode 755 \
+                 (`dpkg-statoverride --list /usr/bin/newuidmap`, `dpkg-statoverride --list \
+                 /usr/bin/newgidmap`), and reinstalling uidmap applies those modes: remove the \
+                 overrides (`sudo dpkg-statoverride --remove /usr/bin/newuidmap && sudo \
+                 dpkg-statoverride --remove /usr/bin/newgidmap`)",
+            ),
+            reinstall: apt,
+        },
+        Case {
+            name: "pacman NoExtract, helpers deleted",
+            os: arch(),
+            helpers: None,
+            setup: |shims| {
+                pacman_shim(shims);
+                pacman_conf(
+                    shims,
+                    "NoExtract = usr/share/doc/*\nNoExtract = usr/bin/new*map",
+                );
+            },
+            why: Some(
+                "pacman is set not to extract /usr/bin/newuidmap and /usr/bin/newgidmap \
+                 (NoExtract = usr/bin/new*map in /etc/pacman.conf), so reinstalling shadow does \
+                 not write them (it removes any copy there): take that pattern out of NoExtract",
+            ),
+            reinstall: pacman,
+        },
+        Case {
+            name: "pacman NoUpgrade, capabilities removed",
+            os: arch(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                pacman_shim(shims);
+                let conf = shims.root.path().join("etc/pacman.d");
+                std::fs::create_dir_all(&conf).unwrap();
+                std::fs::write(conf.join("local.conf"), "NoUpgrade = usr/bin/newuidmap\n").unwrap();
+                pacman_conf(shims, "Include = /etc/pacman.d/*.conf");
+            },
+            why: Some(
+                "pacman is set to keep /usr/bin/newuidmap as it is (NoUpgrade = usr/bin/newuidmap \
+                 in /etc/pacman.d/local.conf), so reinstalling shadow writes its files as \
+                 /usr/bin/newuidmap.pacnew and leaves it unable to map: take that pattern out of \
+                 NoUpgrade",
+            ),
+            reinstall: pacman,
+        },
+        Case {
+            name: "pacman, capabilities removed, a negated NoExtract",
+            os: arch(),
+            helpers: Some(0o755),
+            setup: |shims| {
+                pacman_shim(shims);
+                // The last pattern that matches wins.
+                pacman_conf(shims, "NoExtract = usr/bin/*\nNoExtract = !usr/bin/new*map");
+            },
+            why: None,
+            reinstall: pacman,
         },
     ];
     for case in cases {
@@ -1782,11 +1897,7 @@ esac"#,
                 fix,
                 format!(
                     "{why}, then reinstall {} (`{}`), then: podman system migrate",
-                    if case.reinstall == dnf {
-                        "shadow-utils"
-                    } else {
-                        "uidmap"
-                    },
+                    case.reinstall.rsplit(' ').next().unwrap_or_default(),
                     case.reinstall
                 ),
                 "{}: {podman:?}",
@@ -1846,6 +1957,286 @@ esac"#,
             }
         }
     }
+}
+
+/// A reinstall that ran and left the helpers unable to map (something on
+/// the computer changes them afterwards, which no package record shows) is
+/// kept in the data directory: the next onboarding runs no sudo and says
+/// so, and doctor offers no reinstall, while the helpers are the same
+/// files. Once they are written again (an upgrade), the reinstall is
+/// offered again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_did_not_help_is_not_run_again_in_a_later_run() {
+    let reinstall = "sudo dnf reinstall -y shadow-utils";
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    // The reinstall "succeeds" and changes nothing, as with a hook that
+    // takes the capabilities away again.
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'Complete!' ;;
+  *) exit 1 ;;
+esac"#;
+    let run = || async {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        let ready = sandbox::run(&mut o).await;
+        (ready, o.steps.clone())
+    };
+    let (ready, steps) = run().await;
+    assert!(!ready);
+    let sudo_calls = |shims: &Shims| {
+        shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count()
+    };
+    assert_eq!(sudo_calls(&shims), 1);
+    assert!(
+        steps[0].starts_with(&format!("`{reinstall}` ran, but did not fix this")),
+        "{steps:?}"
+    );
+    // The next run reads what the first one kept.
+    let (ready, steps) = run().await;
+    assert!(!ready);
+    assert_eq!(sudo_calls(&shims), 1, "{:?}", shims.calls());
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert!(
+        steps[0].contains(&format!("`{reinstall}` ran on 20"))
+            && steps[0].contains("the helpers still could not map")
+            && steps[0].contains("`sudo chmod u+s"),
+        "{steps:?}"
+    );
+    // So does doctor.
+    let doctor = |shims: &Shims| {
+        let env = crate::doctor::Environment {
+            os: fedora(),
+            host: shims.host(false),
+            ..doctor_env(shims)
+        };
+        let config_path = shims.home.path().join("config.yaml");
+        async move {
+            crate::doctor::collect(&config_path, &env)
+                .await
+                .sections
+                .sandbox[0]
+                .fix
+                .clone()
+                .unwrap_or_default()
+        }
+    };
+    let fix = doctor(&shims).await;
+    assert!(
+        fix.starts_with(&format!("`{reinstall}` ran on 20")),
+        "{fix}"
+    );
+    assert!(!fix.contains(&format!("{reinstall} &&")), "{fix}");
+    crate::paste_safe::assert_paste_safe(&fix);
+    // An upgrade writes the helpers again: the reinstall is offered again.
+    shims.id_map_tools(Some(0o755));
+    assert_eq!(
+        doctor(&shims).await,
+        format!("{reinstall} && podman system migrate")
+    );
+}
+
+/// A reinstall that failed is kept too: dnf cannot reinstall a build no
+/// enabled repository has (`No match for argument` and `No packages marked
+/// for reinstall`, dnf 4 in registry.access.redhat.com/ubi9/ubi when its
+/// repositories lack the build), and a later run says what failed and what
+/// to do instead rather than run it again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_failed_is_not_run_again_in_a_later_run() {
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'No match for argument: shadow-utils' >&2; echo 'Error: No packages marked for reinstall.' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac"#;
+    let mut first = None;
+    for run in 0..2 {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert!(!sandbox::run(&mut o).await);
+        let sudo_calls = shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count();
+        assert_eq!(sudo_calls, 1, "run {run}: {:?}", shims.calls());
+        assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+        match run {
+            0 => first = Some(o.steps[0].clone()),
+            _ => {
+                let step = &o.steps[0];
+                assert!(
+                    step.starts_with("On 20") || step.contains(" on 20"),
+                    "{step}"
+                );
+                assert!(
+                    step.contains(
+                        "`sudo dnf reinstall -y shadow-utils` failed: dnf says \"Error: No \
+                         packages marked for reinstall.\""
+                    ) && step.contains("`sudo dnf upgrade -y shadow-utils`"),
+                    "{step}"
+                );
+                assert_ne!(Some(step), first.as_ref());
+                crate::paste_safe::assert_paste_safe(step);
+            }
+        }
+    }
+}
+
+/// A reinstall that failed in a way the network or a repository may have
+/// caused is not kept: its step says to fix that and then run the command,
+/// in backticks, and the next run offers it and runs it again, as doctor
+/// offers it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reinstall_that_failed_for_the_network_is_offered_again() {
+    let fix = "sudo dnf reinstall -y shadow-utils && podman system migrate";
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    stale_podman(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    rpm_shim(&shims, true);
+    let sudo = r#"case "$*" in
+  "dnf reinstall -y shadow-utils") echo 'Curl error (6): Could not resolve host: mirrors.fedoraproject.org' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac"#;
+    for run in 1..=2 {
+        let mut o = linux_sandbox_on(
+            &shims,
+            fedora(),
+            sudo,
+            OnboardArgs {
+                allow_sudo: true,
+                ..yes(WriterChoice::Ollama)
+            },
+        )
+        .await;
+        assert!(!sandbox::run(&mut o).await);
+        let sudo_calls = shims
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("sudo"))
+            .count();
+        assert_eq!(sudo_calls, run, "{:?}", shims.calls());
+        assert_eq!(
+            o.steps,
+            [format!(
+                "`sudo dnf reinstall -y shadow-utils` failed (exit 1): Curl error (6): Could not \
+                 resolve host: mirrors.fedoraproject.org; fix that (often the network or the \
+                 package manager's repositories), then run `{fix}`"
+            )]
+        );
+        crate::paste_safe::assert_paste_safe(&o.steps[0]);
+    }
+    assert!(!shims
+        .home
+        .path()
+        .join(".local/share/axocoatl/onboarding/id-map-attempt.json")
+        .exists());
+    let env = crate::doctor::Environment {
+        os: fedora(),
+        host: shims.host(false),
+        ..doctor_env(&shims)
+    };
+    let config_path = shims.home.path().join("config.yaml");
+    let report = crate::doctor::collect(&config_path, &env).await;
+    assert_eq!(report.sections.sandbox[0].fix.as_deref(), Some(fix));
+}
+
+/// Onboarding loads a model (and runs the contract probes) with the
+/// configuration's `providers.ollama.first_token_timeout_secs`, as doctor
+/// and the daemon do, so raising it, as a load that took too long says,
+/// helps the next onboarding run; without one, or with one out of range,
+/// 600 seconds.
+#[tokio::test]
+async fn onboarding_loads_a_model_with_the_configured_first_token_timeout() {
+    let shims = Shims::new();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        "http://127.0.0.1:9",
+        OllamaService::Brew,
+    )
+    .await;
+    let o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        yes(WriterChoice::Ollama),
+    );
+    assert_eq!(
+        o.ollama_load_timeout(),
+        axocoatl_llm_ollama::LOCAL_FIRST_TOKEN_TIMEOUT
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    for (secs, expected) in [("1800", 1800), ("0", 600), ("3601", 600)] {
+        std::fs::write(
+            &o.paths.config_path,
+            format!(
+                "providers:\n  ollama:\n    base_url: \"http://localhost:11434\"\n    \
+                 first_token_timeout_secs: {secs}\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            o.ollama_load_timeout(),
+            std::time::Duration::from_secs(expected),
+            "{secs}"
+        );
+    }
+}
+
+/// A HOME of `/` (a service account's) is no home directory: a helper
+/// under it is not taken for a copy no package installed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_home_of_root_does_not_make_every_helper_foreign() {
+    let shims = Shims::new();
+    shims.id_map_tools(Some(0o755));
+    let mut host = shims.host(false);
+    host.home = PathBuf::from("/");
+    let os = Os::Linux {
+        release: OsRelease::parse("ID=unknown-distribution\n"),
+        wsl: None,
+        systemd: true,
+    };
+    let tools = crate::doctor::id_map_tools(&host, shims.root.path(), &os).await;
+    assert_eq!(tools.unprivileged.len(), 2, "{tools:?}");
+    assert!(tools.foreign.is_empty(), "{tools:?}");
+    // A helper in the person's real home directory still is one.
+    host.home = std::fs::canonicalize(shims.dir.path()).unwrap();
+    let tools = crate::doctor::id_map_tools(&host, shims.root.path(), &os).await;
+    assert_eq!(tools.foreign.len(), 2, "{tools:?}");
 }
 
 /// A reinstall that fails, or that apt skips, is not offered again as it
@@ -2093,6 +2484,7 @@ async fn doctor_looks_for_the_id_map_tools_on_path_only() {
             || call
                 == "rpm -q --qf [%{FILENAMES}\\t%{FILEMODES:octal}\\t%{FILECAPS}\\n] shadow-utils"
             || call == "pacman -Q shadow"
+            || call == "pacman -Ql shadow"
         }),
         "{calls:?}"
     );
@@ -2102,9 +2494,9 @@ async fn doctor_looks_for_the_id_map_tools_on_path_only() {
 /// Step 3's steps left for a model too large for this computer, or whose
 /// context Ollama keeps too small, name `axocoatl onboard` with the writer
 /// (so Step 1 is not asked again, nor the writer switched), and
-/// `--replace` when the configuration this run writes has an Agent on the
-/// model: `--update` keeps a configuration's Agents and changes only
-/// `run.models`.
+/// `--replace` only when an Agent `--update` keeps as it is (the person's
+/// own, or one of onboarding's edited by hand) runs the model: `--update`
+/// moves onboarding's team and `run.models` to the new models.
 #[cfg(unix)]
 #[tokio::test]
 async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents() {
@@ -2124,38 +2516,76 @@ async fn step_three_names_a_command_that_keeps_the_writer_and_moves_the_agents()
         found,
         OnboardArgs::default(),
     );
-    let because = " (--replace backs up the configuration and writes the team for the new \
-                   models; --update would keep the Agents that run gpt-oss:20b)";
-    // No configuration yet: this run writes the team, which runs it.
+    // No configuration yet: this run writes the team, which `--update`
+    // moves.
     assert_eq!(o.kept.agent_models, None);
     assert_eq!(
         ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::ClaudeCode),
-        format!(
-            "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not \
-             pulled: choose a smaller reviewer with `axocoatl onboard --replace --writer \
-             claude-code`, or OpenRouter for the reviewer with `axocoatl onboard --replace \
-             --writer claude-code --reviewer openrouter:openai/gpt-oss-120b`{because}"
-        )
+        "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not pulled: \
+         choose a smaller reviewer with `axocoatl onboard --update --writer claude-code`, or \
+         OpenRouter for the reviewer with `axocoatl onboard --update --writer claude-code \
+         --reviewer openrouter:openai/gpt-oss-120b`"
     );
     assert_eq!(
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Ollama
+            WriterChoice::Ollama,
+            Some("gpt-oss:20b")
         ),
-        format!("for these models (`axocoatl onboard --replace --writer openrouter`){because}")
+        "for these models (`axocoatl onboard --update --writer openrouter`)"
+    );
+    // Only the reviewer's context is too small: the local writer stays.
+    assert_eq!(
+        ollama::hosted_instead(
+            &o,
+            &[("gpt-oss:20b".to_string(), 4096)],
+            WriterChoice::Ollama,
+            Some("qwen3-coder:30b")
+        ),
+        "for the reviewer (`axocoatl onboard --update --writer ollama --writer-model \
+         ollama:qwen3-coder:30b --reviewer openrouter:openai/gpt-oss-120b`)"
     );
     assert_eq!(
         ollama::hosted_instead(
             &o,
             &[("gpt-oss:20b".to_string(), 4096)],
-            WriterChoice::Codex
+            WriterChoice::Codex,
+            None
         ),
-        format!(
-            "for the reviewer (`axocoatl onboard --replace --writer codex --reviewer \
-             openrouter:openai/gpt-oss-120b`){because}"
-        )
+        "for the reviewer (`axocoatl onboard --update --writer codex --reviewer \
+         openrouter:openai/gpt-oss-120b`)"
     );
+    // A Reviewer of onboarding's team edited by hand stays as it is with
+    // --update: --replace, which writes the team again.
+    let written = config::render(&config::ConfigPlan {
+        ollama_base_url: Some("http://localhost:11434".into()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: None,
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: 8080,
+        note: "Claude Code writes".into(),
+        writer: "claude-code",
+        codex_credential: None,
+    })
+    .replace("Report each defect", "List each defect");
+    o.kept = Kept::from_config(&written);
+    assert_eq!(o.kept.agent_models, Some(vec!["gpt-oss:20b".to_string()]));
+    assert_eq!(
+        ollama::pull_step(&o, "gpt-oss:20b", "", WriterChoice::ClaudeCode),
+        "gpt-oss:20b (13.8 GB) is too large for this computer's 12 GB, so it was not pulled: \
+         choose a smaller reviewer with `axocoatl onboard --replace --writer claude-code`, or \
+         OpenRouter for the reviewer with `axocoatl onboard --replace --writer claude-code \
+         --reviewer openrouter:openai/gpt-oss-120b` (--replace backs up the configuration and \
+         writes the team for the new models; --update would keep the Agents that differ from \
+         what onboarding writes, which run gpt-oss:20b)"
+    );
+    o.kept = Kept::default();
     // A model that fits is only pulled.
     assert_eq!(
         ollama::pull_step(
@@ -2693,6 +3123,158 @@ async fn yes_never_starts_a_pull_that_does_not_fit_the_disk() {
     ));
 }
 
+/// A pull that brings the MLX variant of a model (gpt-oss:20b here) is
+/// replaced with its GGUF variant: removed first, since Ollama 0.40.8's
+/// `ollama pull --runner llamacpp` leaves a variant already installed in
+/// place (the shim does the same), then pulled again with the flag.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_mlx_variant_onboarding_pulled_is_replaced_with_its_gguf_variant() {
+    let shims = Shims::new();
+    let dir = shims.dir.path().display().to_string();
+    shims.add(
+        "ollama",
+        &format!(
+            r#"D="{dir}"
+case "$1" in
+  --version) echo "ollama version is 0.40.6" ;;
+  pull) shift; runner=; if [ "$1" = "--runner" ]; then runner="$2"; shift 2; fi
+    echo "$1" >> "$D/pulled"
+    if [ ! -f "$D/variant-$1" ]; then
+      if [ "$1" = "gpt-oss:20b" ] && [ "$runner" != llamacpp ]; then echo mlx > "$D/variant-$1"; else echo gguf > "$D/variant-$1"; fi
+    fi ;;
+  rm) rm -f "$D/variant-$2"; grep -vxF "$2" "$D/pulled" > "$D/pulled.new"; mv "$D/pulled.new" "$D/pulled" ;;
+esac"#
+        ),
+    );
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    let state = shims.dir.path().to_path_buf();
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let model = body["model"].as_str().unwrap_or_default().to_string();
+            let variant =
+                std::fs::read_to_string(state.join(format!("variant-{model}"))).unwrap_or_default();
+            let details = if variant.trim() == "mlx" {
+                json!({"format": "safetensors", "runner": "mlx"})
+            } else {
+                json!({"format": "gguf"})
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "details": details, "capabilities": ["completion", "tools", "thinking"]
+            }))
+        })
+        .with_priority(1)
+        .mount(&ollama.server)
+        .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    ollama::writer_and_reviewer(&mut o, &mut choice).await;
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Ollama pulled a variant native Sessions refuse. Remove it and pull its GGUF variant \
+             with `ollama rm gpt-oss:20b && ollama pull --runner llamacpp gpt-oss:20b` (an \
+             undocumented Ollama flag)? yes (--yes)"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("gpt-oss:20b is now the GGUF variant"),
+        "{output}"
+    );
+    let calls = shims.calls();
+    let at = |call: &str| {
+        calls
+            .iter()
+            .position(|made| made == call)
+            .unwrap_or_else(|| panic!("{call}: {calls:?}"))
+    };
+    assert!(at("ollama pull gpt-oss:20b") < at("ollama rm gpt-oss:20b"));
+    assert!(at("ollama rm gpt-oss:20b") < at("ollama pull --runner llamacpp gpt-oss:20b"));
+    // The GGUF writer model is not touched.
+    assert!(!calls.iter().any(|call| call == "ollama rm qwen3-coder:30b"));
+    assert!(
+        o.steps.iter().all(|step| !step.contains("GGUF")),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// An installed Qwen2.5-Coder returns its tool calls as JSON text, which
+/// never runs: it is not suggested for the default team, and onboarding
+/// says why and suggests the pair for this computer instead.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_model_whose_tool_calls_never_run_is_not_suggested() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen2.5-coder:14b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let mut facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    facts.disk_free_bytes = Some(12_500_000_000);
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    ollama::writer_and_reviewer(&mut o, &mut choice).await;
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Not suggested: qwen2.5-coder:14b: it returns its tool calls as JSON text instead of \
+             Ollama tool calls"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b"),
+        "{output}"
+    );
+    assert_eq!(
+        choice.writer_model.map(|model| model.model).as_deref(),
+        Some("qwen3-coder:30b")
+    );
+}
+
 /// A failed pull shows Ollama's own error and leaves the pull as a step.
 #[cfg(unix)]
 #[tokio::test]
@@ -2760,10 +3342,11 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder-30b-a3b-instruct"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-test-onboard");
     podman_shim(&shims);
@@ -2813,7 +3396,7 @@ async fn openrouter_writes_a_separate_reviewer_after_checking_key_and_models() {
             .model
             .clone()
     };
-    assert_eq!(model("lead"), "qwen/qwen3-coder");
+    assert_eq!(model("lead"), "qwen/qwen3-coder-30b-a3b-instruct");
     assert_eq!(model("reviewer"), "openai/gpt-oss-120b");
     assert_ne!(model("lead"), model("reviewer"));
     assert!(text.contains(&format!("api_key: \"${{{variable}}}\"")));
@@ -3033,6 +3616,224 @@ fn codex_names_its_credential_in_the_next_command() {
     assert!(next.contains("reviewer ollama:gpt-oss:20b comes from your setup"));
 }
 
+/// Codex bills to the ChatGPT plan, and onboarding asks nothing about it:
+/// this version stores no OpenAI API key for Codex (`connect codex
+/// --api-key` is refused). A setup that names codex-openai keeps it only
+/// while that key is stored; otherwise it moves to codex-chatgpt and says
+/// why. Nothing onboarding runs or suggests is `connect codex --api-key`.
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_bills_to_the_chatgpt_plan_unless_a_stored_api_key_is_kept() {
+    let cases: [(Option<&str>, bool, &str, &str); 4] = [
+        (
+            None,
+            false,
+            "codex-chatgpt",
+            "  Codex runs bill to your ChatGPT plan (codex-chatgpt).",
+        ),
+        (
+            Some("codex-chatgpt"),
+            false,
+            "codex-chatgpt",
+            "  Codex runs bill to your ChatGPT plan (kept from your configuration: \
+             codex-chatgpt)",
+        ),
+        (
+            Some("codex-openai"),
+            false,
+            "codex-chatgpt",
+            "  Your configuration names codex-openai, an OpenAI API key, and none is stored. \
+             This version does not store one (`axocoatl connect codex --api-key` is not \
+             available), so Codex runs bill to your ChatGPT plan (codex-chatgpt).",
+        ),
+        (
+            Some("codex-openai"),
+            true,
+            "codex-openai",
+            "  Codex runs bill to an OpenAI API key (kept from your configuration: \
+             codex-openai)",
+        ),
+    ];
+    for (named, stored, credential, said) in cases {
+        let shims = Shims::new();
+        shims.add("axocoatl", "exit 0");
+        podman_shim(&shims);
+        podman_state(&shims, &["machine", "running"]);
+        ollama_shim(&shims);
+        let ollama = FakeOllama::start(
+            "0.40.6",
+            shims.home.path(),
+            shims.dir.path(),
+            &["gpt-oss:20b"],
+        )
+        .await;
+        std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+        std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+        let report = podman_report(&shims).await;
+        let facts = facts(
+            mac("26.6"),
+            48,
+            report,
+            &shims,
+            &ollama.url(),
+            OllamaService::Brew,
+        )
+        .await;
+        let args = match named {
+            None => OnboardArgs {
+                ollama_url: Some(ollama.url()),
+                reviewer: Some("ollama:gpt-oss:20b".into()),
+                ..yes(WriterChoice::Codex)
+            },
+            Some(_) => OnboardArgs {
+                ollama_url: Some(ollama.url()),
+                update: true,
+                writer: None,
+                ..yes(WriterChoice::Codex)
+            },
+        };
+        let mut o = onboarding(&shims, Ui::new(Mode::Yes, false, None), facts, args);
+        if let Some(named) = named {
+            let reviewer = config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b");
+            let old = config::render(&config::ConfigPlan {
+                ollama_base_url: Some(ollama.url()),
+                openrouter_key: None,
+                lead: reviewer.clone(),
+                reviewer: reviewer.clone(),
+                run_writer: None,
+                run_reviewer: Some(reviewer),
+                port: free_port(),
+                note: "Codex writes".into(),
+                writer: "codex",
+                codex_credential: Some(if named == "codex-openai" {
+                    "codex-openai"
+                } else {
+                    "codex-chatgpt"
+                }),
+            });
+            std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+            std::fs::write(&o.paths.config_path, &old).unwrap();
+        }
+        if stored {
+            use std::os::unix::fs::PermissionsExt;
+            let data_dir = o.data_dir();
+            std::fs::create_dir_all(&data_dir).unwrap();
+            std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            axocoatl_daemon::secret_store::set_secret(&data_dir, credential, b"sk-proj-test-key")
+                .unwrap();
+        }
+        run(&mut o).await;
+        let output = o.ui.output();
+        let case = format!("{named:?}, stored: {stored}");
+        assert!(output.contains(said), "{case}\n{output}");
+        assert!(!output.contains("Bill Codex runs to"), "{case}\n{output}");
+        // Only to say it is not available.
+        assert!(
+            !output
+                .replace("(`axocoatl connect codex --api-key` is not available)", "")
+                .contains("--api-key"),
+            "{case}\n{output}"
+        );
+        let written = Kept::from_config(&config_text(&o));
+        assert_eq!(written.writer, Some(WriterChoice::Codex), "{case}");
+        assert_eq!(
+            written.codex_credential.as_deref(),
+            Some(credential),
+            "{case}"
+        );
+        let calls = shims.calls();
+        assert!(
+            !calls.iter().any(|call| call.contains("--api-key")),
+            "{case}: {calls:?}"
+        );
+        if stored {
+            assert!(
+                output.contains(&format!("Signed in: {credential} is stored")),
+                "{case}\n{output}"
+            );
+        } else {
+            // Under --yes the sign-in is left to a terminal.
+            assert!(
+                o.steps
+                    .contains(&"Sign in to Codex: axocoatl connect codex".to_string()),
+                "{case}: {:?}",
+                o.steps
+            );
+        }
+    }
+}
+
+/// Doctor's fix for a Codex setup whose credential is not stored: the
+/// ChatGPT sign-in for codex-chatgpt, and for codex-openai, which this
+/// version cannot store, `onboard --update --writer codex`, which moves the
+/// setup to the ChatGPT plan and signs in.
+#[cfg(unix)]
+#[tokio::test]
+async fn doctor_sends_a_codex_api_key_setup_to_onboarding_not_to_connect() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let config_path = shims.home.path().join("config.yaml");
+    let env = doctor_env(&shims);
+    for (credential, fix) in [
+        ("codex-openai", "axocoatl onboard --update --writer codex"),
+        ("codex-chatgpt", "axocoatl connect codex"),
+    ] {
+        let reviewer = config::ModelRef::new(config::Provider::OpenRouter, "openai/gpt-oss-120b");
+        std::fs::write(
+            &config_path,
+            config::render(&config::ConfigPlan {
+                ollama_base_url: None,
+                openrouter_key: Some(config::KeyRef::Value(zeroize::Zeroizing::new(
+                    "sk-or-test".to_string(),
+                ))),
+                lead: reviewer.clone(),
+                reviewer: reviewer.clone(),
+                run_writer: None,
+                run_reviewer: Some(reviewer),
+                port: free_port(),
+                note: "Codex writes".into(),
+                writer: "codex",
+                codex_credential: Some(credential),
+            }),
+        )
+        .unwrap();
+        let report = crate::doctor::collect(&config_path, &env).await;
+        let signed_in = report
+            .sections
+            .writers
+            .iter()
+            .find(|item| item.name == "Codex" && item.detail.starts_with("not connected"))
+            .unwrap_or_else(|| panic!("{credential}: {:?}", report.sections.writers));
+        assert_eq!(
+            signed_in.status,
+            crate::doctor::Status::Fail,
+            "{credential}"
+        );
+        assert_eq!(
+            signed_in.detail,
+            format!("not connected ({credential} is not stored)")
+        );
+        assert_eq!(signed_in.fix.as_deref(), Some(fix), "{credential}");
+        crate::paste_safe::assert_paste_safe(fix);
+        let codex_path = report
+            .ready_for
+            .iter()
+            .find(|path| path.command.starts_with("axocoatl run fix-codex"))
+            .unwrap_or_else(|| panic!("{credential}: {:?}", report.ready_for));
+        assert!(!codex_path.ok, "{credential}");
+        assert!(
+            codex_path
+                .detail
+                .contains(&format!("not connected: run `{fix}`")),
+            "{credential}: {}",
+            codex_path.detail
+        );
+        let shown = format!("{:?}", report.sections.writers);
+        assert!(!shown.contains("--api-key"), "{credential}: {shown}");
+    }
+}
+
 /// Step 1's default follows what is installed and the memory.
 #[tokio::test]
 async fn the_default_writer_follows_what_is_installed() {
@@ -3140,10 +3941,11 @@ async fn an_interactive_reviewer_equal_to_the_writer_is_asked_again() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "z-ai/glm-4.6"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("z-ai/glm-4.6")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_I_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-interactive");
     let facts = facts(
@@ -3561,8 +4363,12 @@ async fn plan_shows_the_rootful_switch_the_service_and_the_first_run() {
         "Switch it to rootless? This runs podman machine stop && podman machine set \
          --rootful=false && podman machine start",
         "would ask: Install the Always-On Service",
-        "would run: axocoatl service install && axocoatl service start",
-        "would copy the sample repository to a temporary directory and run: axocoatl run fix",
+        "would run: axocoatl service install && axocoatl service restart",
+        "would copy the sample repository to a temporary directory, SAMPLE, and run: axocoatl \
+         run fix --task",
+        "--repo SAMPLE/repo --receipt SAMPLE/receipt.json --record SAMPLE/record.jsonl",
+        "would then run: axocoatl receipt verify SAMPLE/receipt.json --key \"$(axocoatl receipt \
+         key)\" --repo SAMPLE/repo",
         "Plan only: nothing was changed.",
     ] {
         assert!(output.contains(expected), "{expected}\n{output}");
@@ -3658,6 +4464,199 @@ async fn update_keeps_the_writer_and_the_models_the_setup_has() {
     );
 }
 
+/// `--update --writer-model` moves the team onboarding wrote to the new
+/// writer model, shown in Step 4's changes, and keeps an Agent edited by
+/// hand on its model, saying so; nothing is left on the old model but it.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_moves_the_team_to_the_new_models_and_keeps_edited_agents() {
+    let shims = Shims::new();
+    shims.add("axocoatl", "exit 0");
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b", "qwen3:8b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            update: true,
+            writer_model: Some("ollama:qwen3:8b".into()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let old = config::render(&config::ConfigPlan {
+        ollama_base_url: Some(ollama.url()),
+        openrouter_key: None,
+        lead: config::ModelRef::new(config::Provider::Ollama, "qwen3-coder:30b"),
+        reviewer: config::ModelRef::new(config::Provider::Ollama, "gpt-oss:20b"),
+        run_writer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        run_reviewer: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        port: o.args.port.unwrap(),
+        note: "local Ollama setup".into(),
+        writer: "ollama",
+        codex_credential: None,
+    })
+    // Scout's tools edited by hand.
+    .replace(
+        "    tools: [read_file, list_dir, grep, glob, bash]\n    writes: []\n    system_prompt: \
+         \"Answer",
+        "    tools: [read_file, grep]\n    writes: []\n    system_prompt: \"Answer",
+    );
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    let new = config_text(&o);
+    let config = axocoatl_config::parse_config(&new, &o.paths.config_path).unwrap();
+    let model = |id: &str| {
+        config
+            .agents
+            .iter()
+            .find(|agent| agent.id == id)
+            .unwrap()
+            .model
+            .clone()
+    };
+    assert_eq!(model("lead"), "qwen3:8b");
+    assert_eq!(model("assistant"), "qwen3:8b");
+    assert_eq!(model("reviewer"), "gpt-oss:20b");
+    assert_eq!(model("scout"), "qwen3-coder:30b");
+    assert_eq!(new.matches("qwen3-coder:30b").count(), 1, "{new}");
+    assert!(
+        output.contains("+     model: \"qwen3:8b\"")
+            && output.contains("-     model: \"qwen3-coder:30b\""),
+        "{output}"
+    );
+    assert!(
+        output.contains(
+            "Kept as it is, since it differs from what onboarding writes: scout on \
+             ollama:qwen3-coder:30b (the rest of onboarding's team moves to the models chosen; \
+             `axocoatl onboard --replace` writes onboarding's whole team for the models chosen)"
+        ),
+        "{output}"
+    );
+}
+
+/// `--update` over the team 1.4.0 wrote (no `# Writer:` line, no run
+/// defaults, that release's prompts) reads it as onboarding's: each prompt
+/// that differs from this release's is replaced, shown in Step 4's
+/// changes, and no Agent is said to be kept.
+#[cfg(unix)]
+#[tokio::test]
+async fn update_over_the_team_1_4_wrote_shows_todays_prompts_in_the_changes() {
+    let shims = Shims::new();
+    shims.add("axocoatl", "exit 0");
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    std::fs::write(shims.dir.path().join("big-context"), "").unwrap();
+    let report = podman_report(&shims).await;
+    let facts = facts(
+        mac("26.6"),
+        48,
+        report,
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let port = free_port();
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            update: true,
+            port: Some(port),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let old = include_str!("../../tests/fixtures/onboard/config-1.4.0-ollama.yaml")
+        .replace(
+            "base_url: \"http://localhost:11434\"",
+            &format!("base_url: \"{}\"", ollama.url()),
+        )
+        .replace("  port: 8080\n", &format!("  port: {port}\n"));
+    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    std::fs::write(&o.paths.config_path, &old).unwrap();
+    let code = run(&mut o).await;
+    let output = o.ui.output();
+    assert_eq!(code, exit::READY, "{output}\n{:?}", o.steps);
+    let prompts = |text: &str| -> Vec<(String, String)> {
+        config::read_existing(text)
+            .unwrap()
+            .agents
+            .iter()
+            .map(|agent| {
+                let field = |name: &str| agent[name].as_str().unwrap().to_string();
+                (field("id"), field("system_prompt"))
+            })
+            .collect()
+    };
+    let new = config_text(&o);
+    let (before, after) = (prompts(&old), prompts(&new));
+    assert_eq!(
+        after[0],
+        ("lead".to_string(), config::LEAD_PROMPT.to_string())
+    );
+    let mut replaced = 0;
+    for ((id, earlier), (_, today)) in before.iter().zip(&after) {
+        if earlier != today {
+            replaced += 1;
+            for line in [
+                format!("-     system_prompt: {}", config::yaml_string(earlier)),
+                format!("+     system_prompt: {}", config::yaml_string(today)),
+            ] {
+                assert!(output.contains(&line), "{id}: {line}\n{output}");
+            }
+        }
+    }
+    // The Assistant's "… powered by Axocoatl." at least.
+    assert!(replaced >= 1, "{output}");
+    assert!(!output.contains("Kept as"), "{output}");
+    assert!(
+        output.contains("+ run:") && output.contains("+     writer: \"ollama:qwen3-coder:30b\""),
+        "{output}"
+    );
+}
+
 /// Updating an OpenRouter setup uses the key it has: under --yes the
 /// `${VARIABLE}` it names, with nothing to change; at the terminal, "no"
 /// to keeping it asks how to give a key, and one entered at the hidden
@@ -3674,10 +4673,11 @@ async fn an_openrouter_setup_keeps_its_key_or_replaces_it_in_place() {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-            {"id": "qwen/qwen3-coder"}, {"id": "openai/gpt-oss-120b"}
+            catalog_row("qwen/qwen3-coder"), catalog_row("openai/gpt-oss-120b")
         ]})))
         .mount(&openrouter)
         .await;
+    mount_endpoints(&openrouter, "", &[]).await;
     let variable = format!("AXOCOATL_ONBOARD_TEST_KEY_U_{}", std::process::id());
     std::env::set_var(&variable, "sk-or-from-env");
     let old_port = free_port();
@@ -3794,7 +4794,7 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
         .and(path("/health"))
         .respond_with(
             ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
+                .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": later})),
         )
         .mount(&health)
         .await;
@@ -3870,6 +4870,66 @@ async fn the_first_run_uses_the_running_daemon_and_never_starts_another() {
     );
 }
 
+/// This `axocoatl`'s version, which its daemon reports on `/health`.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Unix milliseconds an hour from now: a daemon that started after any
+/// configuration a test writes.
+fn an_hour_from_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 3_600_000
+}
+
+/// `/health` answers `old` for its first two requests (the first run's
+/// look and its staleness check), then `new`.
+async fn health_changing(health: &MockServer, old: Value, new: Value) {
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(old))
+        .up_to_n_times(2)
+        .with_priority(1)
+        .mount(health)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(new))
+        .with_priority(2)
+        .mount(health)
+        .await;
+}
+
+/// The Always-On Service is installed and runs `program`.
+fn installed_service(o: &Onboarding, program: &Path) {
+    let agents = o.host.home.join("Library/LaunchAgents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("ai.axocoatl.daemon.plist"),
+        format!(
+            "<key>ProgramArguments</key><array><string>{}</string></array>",
+            program.display()
+        ),
+    )
+    .unwrap();
+}
+
+fn first_run_choice() -> Choice {
+    Choice {
+        writer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "qwen3-coder:30b",
+        )),
+        reviewer_model: Some(config::ModelRef::new(
+            config::Provider::Ollama,
+            "gpt-oss:20b",
+        )),
+        ..Choice::default()
+    }
+}
+
 /// A daemon that started before the configuration changed runs the old
 /// one (`onboard --update` adding OpenRouter, say): the first run restarts
 /// the Always-On Service and uses it once it answers with the new start, or
@@ -3882,32 +4942,14 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         "axocoatl",
         "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
     );
-    let later = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        + 3_600_000;
+    let later = an_hour_from_now();
     let health = MockServer::start().await;
-    // `healthy` and the start check before the restart; the new start after.
-    Mock::given(method("GET"))
-        .and(path("/health"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": 1})),
-        )
-        .up_to_n_times(2)
-        .with_priority(1)
-        .mount(&health)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/health"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"status": "ok", "version": "1.5.0", "started_at_ms": later})),
-        )
-        .with_priority(2)
-        .mount(&health)
-        .await;
+    health_changing(
+        &health,
+        json!({"status": "ok", "version": VERSION, "started_at_ms": 1}),
+        json!({"status": "ok", "version": VERSION, "started_at_ms": later}),
+    )
+    .await;
     let facts = facts(
         mac("26.6"),
         48,
@@ -3932,24 +4974,9 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         ),
     )
     .unwrap();
-    let agents = o.host.home.join("Library/LaunchAgents");
-    std::fs::create_dir_all(&agents).unwrap();
-    std::fs::write(
-        agents.join("ai.axocoatl.daemon.plist"),
-        "<key>ProgramArguments</key><array><string>/usr/local/bin/axocoatl</string></array>",
-    )
-    .unwrap();
-    let choice = Choice {
-        writer_model: Some(config::ModelRef::new(
-            config::Provider::Ollama,
-            "qwen3-coder:30b",
-        )),
-        reviewer_model: Some(config::ModelRef::new(
-            config::Provider::Ollama,
-            "gpt-oss:20b",
-        )),
-        ..Choice::default()
-    };
+    // The service runs this axocoatl: restarting it is enough.
+    installed_service(&o, &o.host.exe.clone());
+    let choice = first_run_choice();
     assert!(
         smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
         "{}\n{:?}",
@@ -3957,20 +4984,86 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         o.steps
     );
     let calls = shims.calls();
-    let stop = calls
+    let restart = calls
         .iter()
-        .position(|call| call == "axocoatl service stop");
-    let start = calls
-        .iter()
-        .position(|call| call == "axocoatl service start");
+        .position(|call| call == "axocoatl service restart");
     let run = calls
         .iter()
         .position(|call| call.starts_with("axocoatl run fix --task"));
-    assert!(stop.is_some() && stop < start && start < run, "{calls:?}");
+    assert!(restart.is_some() && restart < run, "{calls:?}");
+    assert!(
+        !calls.iter().any(|call| call == "axocoatl service stop"
+            || call == "axocoatl service start"
+            || call.starts_with("axocoatl service install")),
+        "{calls:?}"
+    );
     assert!(o
         .ui
         .output()
         .contains("Restart it now (this ends any Session turn or run in progress)? yes"));
+
+    // The service runs another axocoatl (an older release at another
+    // path): it is installed again from this one before it is restarted,
+    // since a restart alone would run that one again.
+    installed_service(&o, Path::new("/usr/local/bin/axocoatl"));
+    health_changing(
+        &health,
+        json!({"status": "healthy", "agents": 1}),
+        json!({"status": "ok", "version": VERSION, "started_at_ms": later}),
+    )
+    .await;
+    let before = shims.calls().len();
+    assert!(
+        smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await,
+        "{}\n{:?}",
+        o.ui.output(),
+        o.steps
+    );
+    let after = &shims.calls()[before..];
+    let install = after.iter().position(|call| {
+        call == &format!(
+            "axocoatl service install --config {}",
+            o.paths.config_path.display()
+        )
+    });
+    let restart = after
+        .iter()
+        .position(|call| call == "axocoatl service restart");
+    assert!(install.is_some() && install < restart, "{after:?}");
+    assert!(o.ui.output().contains(&format!(
+        "The Always-On Service runs an Axocoatl release before 1.5.0, not this axocoatl \
+         ({VERSION}), so the first run would not use this version: it runs \
+         /usr/local/bin/axocoatl, not this axocoatl ({})",
+        o.host.exe.display()
+    )));
+
+    // A service that still answers as the older release after the restart
+    // is not taken as this one: nothing runs against it.
+    health_changing(
+        &health,
+        json!({"status": "healthy", "agents": 1}),
+        json!({"status": "healthy", "agents": 1}),
+    )
+    .await;
+    let before = shims.calls().len();
+    o.steps.clear();
+    assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
+    assert!(
+        o.steps.iter().any(|step| step.starts_with(&format!(
+            "The Always-On Service answers at http://127.0.0.1:{}/health but runs an Axocoatl \
+             release before 1.5.0, not this axocoatl",
+            health.address().port()
+        ))),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !shims.calls()[before..]
+            .iter()
+            .any(|call| call.starts_with("axocoatl run")),
+        "{:?}",
+        shims.calls()
+    );
 
     // The service is installed but stopped, and another daemon from before
     // 1.5.0 (its `/health` says no start) answers: that daemon is the one to
@@ -3983,16 +5076,18 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     Mock::given(method("GET"))
         .and(path("/health"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"status": "ok", "version": "1.4.2"})),
+            ResponseTemplate::new(200).set_body_json(json!({"status": "healthy", "agents": 1})),
         )
         .mount(&health)
         .await;
     let before = shims.calls().len();
+    o.steps.clear();
     o.ui = Ui::scripted(vec![Answer::No]);
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
         o.steps.iter().any(|step| step.starts_with(&format!(
-            "The daemon on port {} runs the configuration from before this onboarding",
+            "The daemon on port {} runs an Axocoatl release before 1.5.0, not this axocoatl \
+             ({VERSION})",
             health.address().port()
         ))),
         "{:?}",
@@ -4002,8 +5097,8 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     assert!(
         !after.iter().any(|call| call.starts_with("axocoatl run")
             || call.starts_with("axocoatl serve")
-            || call == "axocoatl service stop"
-            || call == "axocoatl service start"),
+            || call.starts_with("axocoatl service")
+                && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
 
@@ -4012,22 +5107,36 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
         "axocoatl",
         "case \"$1 $2\" in \"receipt key\") echo k-test ;; \"service status\") echo '  running:   yes' ;; esac; exit 0",
     );
+    installed_service(&o, &o.host.exe.clone());
+    health.reset().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": 1})),
+        )
+        .mount(&health)
+        .await;
     let before = shims.calls().len();
     o.steps.clear();
     o.ui = Ui::scripted(vec![Answer::No]);
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     assert!(
-        o.steps.iter().any(
-            |step| step.starts_with("The Always-On Service runs the configuration from before")
-        ),
+        o.steps.iter().any(|step| step
+            == &format!(
+                "The Always-On Service started before {} changed, so the first run would use \
+                 the old configuration: restart it (`axocoatl service restart`), then run \
+                 `axocoatl onboard --update --smoke-test`",
+                o.paths.config_path.display()
+            )),
         "{:?}",
         o.steps
     );
     let after = &shims.calls()[before..];
     assert!(
         !after.iter().any(|call| call.starts_with("axocoatl run")
-            || call == "axocoatl service stop"
-            || call == "axocoatl service start"),
+            || call.starts_with("axocoatl service")
+                && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
 
@@ -4049,12 +5158,476 @@ async fn the_first_run_replaces_a_daemon_that_runs_an_older_configuration() {
     );
     let after = &shims.calls()[before..];
     assert!(
-        !after
-            .iter()
-            .any(|call| call == "axocoatl service stop" || call == "axocoatl service start"),
+        !after.iter().any(|call| call.starts_with("axocoatl service")
+            && !call.starts_with("axocoatl service status")),
         "{after:?}"
     );
     assert!(!o.ui.output().contains("Stop it now"));
+}
+
+/// Where [`the_first_run_stops_another_daemon_through_its_ipc_socket`]
+/// tells [`fake_daemon_that_stops_when_asked`] to listen.
+const FAKE_DAEMON_SOCKET: &str = "AXOCOATL_TEST_FAKE_DAEMON_SOCKET";
+
+/// [`the_first_run_stops_another_daemon_through_its_ipc_socket`]'s other
+/// daemon (it does nothing run any other way): it answers on the IPC
+/// socket until it is asked to shut down, acknowledges that, writes
+/// `stopped` beside the socket and exits.
+#[cfg(unix)]
+#[test]
+#[ignore = "run by the_first_run_stops_another_daemon_through_its_ipc_socket"]
+fn fake_daemon_that_stops_when_asked() {
+    use axocoatl_daemon::ipc::{read_message, write_message, IpcRequest, IpcResponse};
+    let Some(socket) = std::env::var_os(FAKE_DAEMON_SOCKET).map(PathBuf::from) else {
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            // The first run also connects only to read the peer's process.
+            match read_message::<IpcRequest>(&mut stream).await {
+                Ok(IpcRequest::Shutdown) => {
+                    write_message(&mut stream, &IpcResponse::ShutdownAck)
+                        .await
+                        .unwrap();
+                    break;
+                }
+                Ok(_) => write_message(&mut stream, &IpcResponse::Pong)
+                    .await
+                    .unwrap(),
+                Err(_) => {}
+            }
+        }
+        drop(listener);
+        std::fs::remove_file(&socket).unwrap();
+        std::fs::write(socket.with_file_name("stopped"), "").unwrap();
+    });
+}
+
+/// `/health` of the other daemon until it has stopped (`stopped` exists),
+/// then of the daemon that took its port: started an hour from now.
+struct HealthUntilStopped {
+    stopped: PathBuf,
+}
+
+impl wiremock::Respond for HealthUntilStopped {
+    fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+        let started = if self.stopped.exists() {
+            an_hour_from_now()
+        } else {
+            1
+        };
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"status": "ok", "version": VERSION, "started_at_ms": started}))
+    }
+}
+
+/// The other-daemon path of the first run's handoff: a daemon (`axocoatl
+/// dev` in another terminal, here a child process) that runs an older
+/// configuration is asked to shut down over its IPC socket once the person
+/// agrees; the first run waits until its process has exited and a daemon
+/// that started since answers, then runs. With the service Step 6 just
+/// started, it waits for that service to answer as this axocoatl.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_first_run_stops_another_daemon_through_its_ipc_socket() {
+    for service_started in [false, true] {
+        let shims = Shims::new();
+        shims.add(
+            "axocoatl",
+            "case \"$1 $2\" in \"receipt key\") echo k-test ;; esac; exit 0",
+        );
+        let facts = facts(
+            mac("26.6"),
+            48,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(Mode::Yes, false, None),
+            facts,
+            OnboardArgs::default(),
+        );
+        let run = tempfile::tempdir().unwrap();
+        o.socket_path = run.path().join("axo.sock");
+        let health = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(HealthUntilStopped {
+                stopped: run.path().join("stopped"),
+            })
+            .mount(&health)
+            .await;
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(
+            &o.paths.config_path,
+            format!(
+                "agents: []\nserver:\n  port: {}\n  host: \"127.0.0.1\"\n",
+                health.address().port()
+            ),
+        )
+        .unwrap();
+        let mut daemon = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "onboard::tests::fake_daemon_that_stops_when_asked",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(FAKE_DAEMON_SOCKET, &o.socket_path)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !o.socket_path.exists() {
+            assert!(std::time::Instant::now() < deadline, "no fake daemon");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Reap it as soon as it exits: an exited child that is not waited
+        // for still exists, and the first run waits for its process to end.
+        let reaper = std::thread::spawn(move || daemon.wait().unwrap());
+
+        assert!(
+            smoke::run(
+                &mut o,
+                WriterChoice::Ollama,
+                &first_run_choice(),
+                service_started,
+                false
+            )
+            .await,
+            "{}\n{:?}",
+            o.ui.output(),
+            o.steps
+        );
+        assert!(reaper.join().unwrap().success());
+        assert!(run.path().join("stopped").exists());
+        let output = o.ui.output();
+        assert!(
+            output.contains(&format!(
+                "The daemon on port {} started before {} changed",
+                health.address().port(),
+                o.paths.config_path.display()
+            )),
+            "{output}"
+        );
+        assert!(output.contains("Stopped the daemon on port"), "{output}");
+        let calls = shims.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.starts_with("axocoatl run fix --task")),
+            "{calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.starts_with("axocoatl serve")
+                    || call.starts_with("axocoatl service")),
+            "{calls:?}"
+        );
+    }
+}
+
+/// When the daemon asked to stop has stopped. Its process, when it can be
+/// seen from here, has exited first; one that cannot (a daemon in another
+/// PID namespace) is waited for at its port: the same daemon still
+/// answering (the same start) has not stopped, and a daemon that says it
+/// started since has taken the port.
+#[test]
+fn a_daemon_asked_to_stop_has_stopped_only_once_it_or_its_port_says_so() {
+    use smoke::other_daemon_stopped as stopped;
+    // Nothing answers: stopped once the IPC socket and the port are free.
+    assert!(stopped(false, false, true, None, Some(1)));
+    assert!(!stopped(false, true, true, None, Some(1)));
+    assert!(!stopped(false, false, false, None, Some(1)));
+    // Without a process to watch: the same start still answers.
+    assert!(!stopped(false, false, false, Some(Some(1)), Some(1)));
+    assert!(!stopped(false, false, false, Some(None), None));
+    assert!(stopped(false, false, false, Some(Some(2)), Some(1)));
+    // Its process has exited: whatever answers now is another daemon.
+    assert!(stopped(true, false, false, Some(None), None));
+    assert!(stopped(true, false, false, Some(Some(1)), Some(1)));
+}
+
+/// Step 6 installs the Always-On Service and restarts it: that starts a
+/// service that does not run, and restarts one that runs with the
+/// definition just written (a bare `service start` failed on a loaded
+/// launchd agent, and would leave a running one on its old definition). It
+/// says so first when one runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn step_six_installs_the_service_and_restarts_one_that_runs() {
+    for running in [false, true] {
+        let shims = Shims::new();
+        shims.add(
+            "axocoatl",
+            &format!(
+                "case \"$1 $2\" in \"service status\") echo '  running:   {}' ;; esac; exit 0",
+                if running { "yes" } else { "no" }
+            ),
+        );
+        let facts = facts(
+            mac("26.6"),
+            48,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let mut o = onboarding(
+            &shims,
+            Ui::new(Mode::Yes, false, None),
+            facts,
+            OnboardArgs::default(),
+        );
+        std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+        std::fs::write(&o.paths.config_path, "agents: []\n").unwrap();
+        if running {
+            installed_service(&o, &o.host.exe.clone());
+        }
+        assert_eq!(start_service(&mut o).await, Some(true), "{:?}", o.steps);
+        let changes: Vec<String> = shims
+            .calls()
+            .into_iter()
+            .filter(|call| call != "axocoatl service status")
+            .collect();
+        assert_eq!(
+            changes,
+            [
+                format!(
+                    "axocoatl service install --config {}",
+                    o.paths.config_path.display()
+                ),
+                "axocoatl service restart".to_string()
+            ]
+        );
+        let output = o.ui.output();
+        assert_eq!(
+            output.contains(
+                "The Always-On Service is running. Install it again with this configuration and \
+                 restart it (this ends any Session turn or run in progress)? yes"
+            ),
+            running,
+            "{output}"
+        );
+        assert_eq!(
+            output.contains("Install the Always-On Service (it starts Axocoatl at login"),
+            !running,
+            "{output}"
+        );
+    }
+}
+
+/// The process group of this process.
+#[cfg(unix)]
+fn own_process_group() -> String {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "pgid=", "-p", &std::process::id().to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A Podman machine whose VM was killed leaves its API socket behind, and
+/// the next `podman machine start` failed on it once ("bind: address
+/// already in use", exit 125). Onboarding removes such a socket before it
+/// starts the machine, and says so; one that answers is left. The start
+/// runs in a session of its own: its process group is its own, not
+/// onboarding's.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_machine_start_clears_a_stale_api_socket_and_runs_in_its_own_session() {
+    let shims = Shims::new();
+    let socket = shims.dir.path().join("api.sock");
+    let started = shims.dir.path().join("started");
+    shims.add(
+        "podman",
+        &format!(
+            r#"case "$*" in
+  "machine inspect podman-machine-default")
+    echo '[{{"Name":"podman-machine-default","ConnectionInfo":{{"PodmanSocket":{{"Path":"{socket}"}}}}}}]' ;;
+  "machine start")
+    if [ -e "{socket}" ]; then
+      echo 'Error: gvproxy exiting: listen unix {socket}: bind: address already in use' >&2
+      exit 125
+    fi
+    echo "$$ $(ps -o pgid= -p $$ | tr -d ' ')" > "{started}" ;;
+  *) exit 125 ;;
+esac"#,
+            socket = socket.display(),
+            started = started.display()
+        ),
+    );
+    // What a killed VM leaves: a socket nothing listens on.
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    let host = shims.host(true);
+    let start = Cmd::machine_start(&["machine", "start"], "podman-machine-default");
+    let ui = Ui::new(Mode::Yes, false, None);
+    ui.execute(&host, &start).await.unwrap();
+    assert!(!socket.exists());
+    assert!(
+        ui.output().contains(&format!(
+            "Removed {}, the API socket podman-machine-default left when it did not stop \
+             cleanly",
+            socket.display()
+        )),
+        "{}",
+        ui.output()
+    );
+    let ids = std::fs::read_to_string(&started).unwrap();
+    let ids: Vec<&str> = ids.split_whitespace().collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    // Its own group (the group id is its process id), not onboarding's.
+    assert_eq!(ids[0], ids[1]);
+    assert_ne!(ids[1], own_process_group());
+
+    // A socket that answers is another machine's: left, and the start
+    // fails as Podman says.
+    let _listening = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let ui = Ui::new(Mode::Yes, false, None);
+    let error = ui.execute(&host, &start).await.unwrap_err();
+    assert!(error.contains("failed (exit 125)"), "{error}");
+    assert!(socket.exists());
+    assert!(!ui.output().contains("Removed"));
+}
+
+/// Where [`a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running`]
+/// tells [`start_a_machine_while_ctrl_c_is_typed`] its shims are.
+const MACHINE_START_SHIMS: &str = "AXOCOATL_TEST_MACHINE_START_SHIMS";
+
+/// The Podman machine onboarding starts outlives onboarding: a Ctrl-C
+/// typed while `podman machine start` runs, and the terminal closing, end
+/// onboarding but neither the start nor the VM it started, which shared
+/// onboarding's process group before (vfkit keeps its starter's group), so
+/// the VM died uncleanly. This runs [`start_a_machine_while_ctrl_c_is_typed`]
+/// as the foreground process group of a terminal of its own, with a
+/// `podman` whose start leaves a stand-in VM running (with the default
+/// action for Ctrl-C, as vfkit has) and takes three seconds.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running() {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+    let shims = Shims::new();
+    let vm = shims.dir.path().join("vm");
+    let done = shims.dir.path().join("done");
+    shims.add(
+        "podman",
+        &format!(
+            r#"case "$*" in
+  "machine start")
+    perl -e '$SIG{{INT}}="DEFAULT"; $SIG{{HUP}}="DEFAULT"; exec @ARGV' sleep 60 &
+    echo $! > "{vm}"
+    sleep 3
+    touch "{done}" ;;
+esac"#,
+            vm = vm.display(),
+            done = done.display()
+        ),
+    );
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = portable_pty::CommandBuilder::new(std::env::current_exe().unwrap());
+    command.args([
+        "onboard::tests::start_a_machine_while_ctrl_c_is_typed",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    command.env(MACHINE_START_SHIMS, shims.dir.path());
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        while reader.read(&mut buffer).is_ok_and(|read| read > 0) {}
+    });
+    let mut writer = pair.master.take_writer().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let pid = loop {
+        if let Some(pid) = std::fs::read_to_string(&vm)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<i32>().ok())
+        {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "the machine did not start");
+        assert!(child.try_wait().unwrap().is_none(), "onboarding ended");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) } == 0;
+    // A Ctrl-C while the machine starts: onboarding ends.
+    writer.write_all(b"\x03").unwrap();
+    writer.flush().unwrap();
+    let ended = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "onboarding did not end");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(!ended.success());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "the VM died with onboarding");
+    // The terminal closes.
+    drop(writer);
+    drop(pair.master);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(alive(pid), "the VM died when the terminal closed");
+    // The start itself ran to its end.
+    while !done.exists() {
+        assert!(Instant::now() < deadline, "the start did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+/// [`a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running`]'s
+/// onboarding (it does nothing run any other way): start the machine as
+/// onboarding does, with the shims it names.
+#[cfg(unix)]
+#[test]
+#[ignore = "run by a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running"]
+fn start_a_machine_while_ctrl_c_is_typed() {
+    let Some(directory) = std::env::var_os(MACHINE_START_SHIMS).map(PathBuf::from) else {
+        return;
+    };
+    let host = Host {
+        path: directory.clone().into_os_string(),
+        extra_dirs: Vec::new(),
+        home: directory.clone(),
+        root: directory.clone(),
+        data_home: directory.join("data"),
+        exe: directory.join("axocoatl"),
+        macos: true,
+        log: None,
+        podman_connection: ConnectionOverride::None,
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime
+        .block_on(host.run(&Cmd::machine_start(
+            &["machine", "start"],
+            "podman-machine-default",
+        )))
+        .unwrap();
 }
 
 /// Replacing a configuration never shows or logs the old file's secrets;
@@ -4260,13 +5833,13 @@ async fn doctor_moves_a_too_large_reviewer_not_the_claude_code_writer() {
         item.detail,
         "gpt-oss:20b is not pulled, and at 13.8 GB it is too large for this computer's 16 GB"
     );
+    // `--update` moves the Agents onboarding wrote with the reviewer.
     assert_eq!(
         item.fix.as_deref(),
         Some(
-            "Use OpenRouter for the reviewer (`axocoatl onboard --replace --writer claude-code \
+            "Use OpenRouter for the reviewer (`axocoatl onboard --update --writer claude-code \
              --reviewer openrouter:openai/gpt-oss-120b`), or choose a smaller reviewer (`axocoatl \
-             onboard --replace --writer claude-code`) (`--update` would keep the Agents that run \
-             gpt-oss:20b; `--replace` backs this configuration up first)"
+             onboard --update --writer claude-code`)"
         )
     );
 }
@@ -4500,6 +6073,11 @@ fn doctor_env(shims: &Shims) -> crate::doctor::Environment {
         id_root: shims.root.path().to_path_buf(),
         data_dir: Some(home.join("data")),
         landlock_abi: Some(6),
+        user_systemd: None,
+        selinux_enforcing: false,
+        git: Some("2.39.5".to_string()),
+        proxy_variables: Vec::new(),
+        on_load: None,
         // Not the configuration a test checks (`home/config.yaml`), which
         // doctor then treats as one given with --config; a test of the
         // default one says so.
@@ -4556,5 +6134,145 @@ async fn a_mac_without_homebrew_is_pointed_to_the_podman_installer() {
     }
 }
 
+/// Below 48 GB, a server that answered at Step 0 with a pair that fits,
+/// and is not ready after setup (its cloud models stay on until it is
+/// restarted by hand): the pair it has is chosen, as at Step 0, never the
+/// built-in pair "not tested at this memory size", and no step says to pull
+/// a model it has.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_server_not_ready_after_setup_keeps_the_pair_it_had() {
+    let shims = Shims::new();
+    ollama_shim(&shims);
+    let ollama = FakeOllama::start(
+        "0.40.6",
+        shims.home.path(),
+        shims.dir.path(),
+        &["qwen3-coder:30b", "gpt-oss:20b"],
+    )
+    .await;
+    let facts = facts(
+        mac("26.6"),
+        32,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Manual,
+    )
+    .await;
+    assert_eq!(facts.ollama_server.models().len(), 2);
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    assert_eq!(ollama::writer_and_reviewer(&mut o, &mut choice).await, None);
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b (from the models on this \
+             server that fit this computer)"
+        ),
+        "{output}"
+    );
+    assert!(
+        !output.contains("not tested at this memory size"),
+        "{output}"
+    );
+    assert_eq!(
+        choice.writer_model,
+        Some(ModelRef::new(Provider::Ollama, "qwen3-coder:30b"))
+    );
+    assert_eq!(
+        choice.reviewer_model,
+        Some(ModelRef::new(Provider::Ollama, "gpt-oss:20b"))
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].starts_with("Restart your Ollama server"),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !o.steps.iter().any(|step| step.contains("Pull")),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// A setup without run defaults: for the default configuration doctor's
+/// fix is onboarding's; for another one (`doctor --config PATH`), which no
+/// onboarding command changes, it is the line to set in that file.
+#[tokio::test]
+async fn the_missing_run_models_fix_follows_the_configuration() {
+    let shims = Shims::new();
+    podman_shim(&shims);
+    podman_state(&shims, &["machine", "running"]);
+    let config_path = shims.home.path().join("config.yaml");
+    std::fs::write(
+        &config_path,
+        "# Writer: ollama (axocoatl run fix)\nagents: []\nproviders:\n  ollama:\n    \
+         base_url: \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+    let detail = |report: &crate::doctor::Report| {
+        report
+            .ready_for
+            .iter()
+            .find(|path| path.command == "axocoatl run fix")
+            .map(|path| path.detail.clone())
+            .unwrap()
+    };
+    let other = crate::doctor::collect(&config_path, &doctor_env(&shims)).await;
+    let in_file = format!(
+        "in {} (`axocoatl onboard` writes only the default configuration, {})",
+        config_path.display(),
+        shims.home.path().join("default/config.yaml").display()
+    );
+    let detail_other = detail(&other);
+    assert!(
+        detail_other.contains(&format!(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or set run.models.writer \
+             {in_file}"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        detail_other.contains(&format!(
+            "no reviewer model: set run.models.reviewer {in_file}, or pass --model \
+             reviewer=PROVIDER:MODEL"
+        )),
+        "{detail_other}"
+    );
+    assert!(
+        !detail_other.contains("axocoatl onboard --update"),
+        "{detail_other}"
+    );
+    let default = crate::doctor::Environment {
+        default_config: config_path.clone(),
+        ..doctor_env(&shims)
+    };
+    let detail_default = detail(&crate::doctor::collect(&config_path, &default).await);
+    assert!(
+        detail_default.contains(
+            "no writer model: pass --model writer=PROVIDER:MODEL, or run `axocoatl onboard \
+             --update --writer ollama`"
+        ),
+        "{detail_default}"
+    );
+    assert!(
+        detail_default.contains(
+            "no reviewer model: run `axocoatl onboard`, or pass --model reviewer=PROVIDER:MODEL"
+        ),
+        "{detail_default}"
+    );
+}
+
 mod interactive;
 mod openrouter_sign_in;
+mod platform;

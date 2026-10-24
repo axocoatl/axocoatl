@@ -240,13 +240,18 @@ reserved in full.
 
 Native provider preparation supports reviewed local Ollama profiles and bounded
 OpenRouter-credit profiles. OpenRouter retains one exact static model and qualified
-endpoint variant, its text/tool capabilities, context/output limits, the catalog's
+endpoint variant (and up to three more healthy endpoints of the model, cheapest first,
+that can take over each of its calls: at least its context and prompt limit, the same
+output limit and reasoning setting, the smallest call within the approved budget; each
+activation adds every other endpoint the catalog lists healthy as it opens that passes
+the same checks), its
+text/tool capabilities, context/output limits, the catalog's
 reasoning contract for a reasoning model, and two decimal price ceilings: the highest
 input rate (prompt, cache read, cache write, every tier) and the highest output rate
 (completion, internal reasoning, every tier), plus any per-request fee. Priced features a
 native request cannot start (web search, image and audio) are retained by name. Those
-metadata are revalidated before each request; the wire request pins the endpoint (never
-a service-tier endpoint), disables fallbacks, the web plugin and context compression,
+metadata are revalidated before each request; the wire request pins one endpoint (never
+a service-tier endpoint), disables OpenRouter's fallbacks, the web plugin and context compression,
 sends the Agent's resolved `reasoning` setting, and supplies `max_tokens` and prompt,
 completion and request price limits. Each call reserves a bound of its own request:
 the body's bytes plus a template allowance and any replayed reasoning tokens for the
@@ -386,12 +391,29 @@ GGUF completion model before inference; a model Ollama shows as non-GGUF or MLX,
 any runner but llama.cpp's `llama-server`, is refused, since MLX does not hold `num_ctx` as a
 hard limit. Native `/api/chat` requests set finite context/prediction limits and disable implicit
 history truncation and shifting; the context observation's load sends `shift:false` too, so the
-first inference does not reload the model. After the context is observed, two contract probes on
+first inference does not reload the model. After the context is observed, contract probes on
 the person's own server and model check the guarantees the bound relies on: a prompt about four
-times the context (`truncate:false`) must be refused before any generation, and a one-token
-request must stop after one token. Passes are cached per server, version, model digest and
-context; a newer accepted version is probed again before it serves a retained profile. The
-scheduled `ollama-watch` workflow runs both probes daily against each new Ollama release and
+times the context (`truncate:false`) must be refused before any generation; a one-token
+request must stop after one token; a request for hundreds of lines with `num_predict` 64 must
+stop by 64 generated tokens, report exactly 64 when the limit ended it, and stream no more
+pieces of text than the tokens it reports (where speculative decoding, which accepts several
+drafted tokens per step, could overshoot or undercount); and, for a model that reports tool
+calling, a request to call the one offered tool within 1,024 tokens must come back as a call
+of that tool with an id and a string argument, read by the same parser as inference (so it
+holds for Ollama's own renderers, Go templates, the model's chat template in `llama-server`
+and Harmony alike; a call to a tool it was not offered beside it is tolerated, as inference
+answers one with a tool error). Every probe samples with one fixed seed at the model's own
+settings, so it gives the same answer each time it runs (Ollama 0.40.8 gave the same tool-call
+answer five times out of five for each model measured). A failed probe refuses the model on that
+server for every Agent and run; a probe Ollama does not answer (a failed request, an error status,
+an answer without its final record) refuses nothing and is reported as not run. Images are not probed: every call reserves the whole context plus
+its output limit whatever its prompt holds, and `llama-server` counts an image's tokens in the
+prompt it checks against the context (Ollama 0.40.8, `qwen3.5:0.8b` at a 4,096-token context: a
+64x64 image counted 11 tokens; 4,090 tokens of text were generated from, and the same text with
+the image, 4,101 tokens, was refused under `truncate:false`). Passes are cached per server,
+version, model digest, context and tool calling; a newer accepted version is probed again before
+it serves a retained profile. The
+scheduled `ollama-watch` workflow runs the probes daily against each new Ollama release and
 release candidate (an ignored test, `native::observed_context::watch`, that bypasses the version
 policy so a release candidate is probed too). Plain
 calls reserve context plus prediction capacity; JSON calls reserve two full passes (Ollama 0.40
@@ -519,12 +541,20 @@ nonempty provider metadata. Any malformed or oversized member omits that whole g
 model-facing checkpoint while leaving its bounded Route evidence visible in canonical History.
 
 A provider response may contain at most 128 actionable tool calls. Incremental streams reject
-the 129th distinct call before growing the actor accumulator, and recovered text candidates are
-bounded before hooks or dispatch. Text-to-tool recovery is an Ollama compatibility path selected
-from the effective provider route and accepts only names offered in that request; other providers
-leave response text non-actionable because their native ids, signatures, and block structure
-cannot be fabricated safely. Concurrent dispatch preserves each original call identity and order
-even when one spawned task panics.
+the 129th distinct call before growing the actor accumulator. Calls written as answer text are
+read only by the two Ollama providers (`axocoatl-llm-ollama/src/text_calls.rs`): a run of
+Qwen3-Coder `<function=…>` blocks that ends the answer, starts at the first call line outside a
+code fence or HTML block, names only offered tools and fits their parameter schemas, at most 128
+calls, each with an id unique in the Session. JSON is never read as a call. An answer that calls an
+offered tool in a way that cannot run (a call line that starts no runnable run, a call block after
+other text on its line, a JSON call that ends the answer) is a refused response
+(`ProviderError::RefusedResponse`), so the activation fails with its reason instead of settling as
+a final answer, classed `unrunnable_tool_call`. The actor has no
+text-to-tool path of its own; other providers leave response text non-actionable because their
+native ids, signatures, and block structure cannot be fabricated safely. Every completed provider
+response is recorded in the activation stream as `provider_response` (finish reason, offered
+tools, returned calls). Concurrent dispatch preserves each original call identity and order even
+when one spawned task panics.
 
 Session history, literal search, and Markdown/JSON export are projections of the canonical
 ledger. Rewind appends a logical boundary that supersedes later turns in normal list, search,
@@ -690,11 +720,31 @@ SHA-256 of its bytes. The lattice in Settings displays a loadout's graph read-on
 no execution path for loadouts.
 
 **Admission.** `POST /api/runs` (from `axocoatl run`) resolves parameters (unknown names
-refused, missing required ones a usage error), canonicalizes the repository and finds or
+refused, missing required ones a usage error), canonicalizes the repository and checks it
+against `WorkspaceScope` as Session creation does (one of Axocoatl's own directories is
+`workspace_protected`; a broad folder is `workspace_too_broad` unless its Workspace
+records the person's confirmation, `Workspace::broad_confirmed_at`, which only Open
+workspace… with `confirm_broad` sets; a broad Workspace registered without asking, as 1.4
+did, is refused until it is confirmed), finds or
 creates its Workspace, creates a native Session with `Session.loadout =
 SessionLoadoutBinding {run_id, loadout, network, workload}`, prepares its environment with
 exactly the loadout's setup or `--setup` approved, and writes the run manifest with the
-repository HEAD and the paths that were dirty. It is idempotent on `request_id`.
+repository HEAD and the paths that were dirty. It is idempotent on `request_id`; a repeat
+while the first is being admitted is a conflict (`LoadoutRuns::admitting`, cleared by a drop
+guard however admission ends). Any failure after the Session exists closes it again
+(`close_refused_run_session`), and a run record made before a later write failed is ended
+with the refusal (`end_refused_run_record`). The server runs admission in a task of its
+own (`admit_run` in `routes_loadouts.rs`) and waits for its answer, so a client that goes
+away (Ctrl-C in `axocoatl run`) drops only the wait: admission and its clean-up run to
+their end, and a run admitted with nobody to answer is stopped before its first turn
+(`stop_unanswered_loadout_run`), which ends it as interrupted and stops its runtime. A run
+stops its Session's runtime when it ends (`RunHost::stop_session_runtime`, before the
+network summary, the receipt and the `Ended` event; `stop_loadout_run_runtime` on the
+daemon, under the Workspace operation and the Session's start lock, refused while a turn
+of it runs), and so do the environment-failure path (`end_run_at_environment`) and a
+driver error (`fail_run`): the containers go as at a daemon stop, the Session stays open,
+and `ensure_sandbox` starts it again on demand. A stop that fails is the warning
+`session_runtime_not_stopped`.
 
 **Per-Session sandbox.** Every place the daemon reads the network mode or the workload plan
 for a Session goes through `session_sandbox_policy`: an unbound Session gets the global
@@ -726,8 +776,8 @@ merged findings lose near duplicates (same file, lines at most 2 apart, similar 
 **Outcome.** `RunOutcome` (`axocoatl.run-outcome/1`) adds to a turn's view: check results
 with parsed reports, the review rounds with findings split by id, adjudications, findings
 with their reproduction classification, not-covered entries with a failure class
-(`provider_refusal`, `provider_failure`, `provider_rejected`, `budget`, `blocked`,
-`not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
+(`provider_refusal`, `provider_failure`, `provider_rejected`, `unrunnable_tool_call`,
+`budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
 network summary and Keep. `RunOutcome::decide` sets the verdict and exit code with the
 precedence error (5) > interrupted (6) > checks failed (1) > needs attention (2) > pass
 (0); anything not covered, a check that did not run on the final result, an unanswered
@@ -867,10 +917,23 @@ adjudications, findings, not-covered entries, warnings and the run id, and ends 
 envelope in an `<!-- axocoatl-receipt:v1 … -->` block that the body's length cut never
 reaches.
 
-**Runtime policy.** Native provider calls that fail with 429, 5xx, a timeout or a reset
-connection before the provider sent anything are retried once (after `Retry-After`, at most 30 s, or 2 s) on the same pinned
+**Runtime policy.** A native OpenRouter call that its endpoint fails before it produced
+anything (an upstream 429, a 408 or 5xx, a timeout or closed connection, an endpoint
+reported degraded now or whose contract changed) moves at once to the next endpoint of
+the same model that can carry it and that the grant can pay for, as a new call reserved
+at that endpoint's prices and checked against the catalog before it is sent; the move
+takes effect only once that call is admitted, and the activation's later calls stay
+there unless the grant cannot pay for one there (`provider_retry.rs`,
+`session_dispatch_provider.rs`, the `EndpointFailover` trait). The provider says what is
+known of each failure where it happens (`FailureFacts`: cost nothing, the endpoint's own),
+never from its words. Native provider calls that fail with 429, 5xx, a timeout or a
+reset connection before the provider sent anything, once no endpoint is left to move to,
+are retried once (after the longest `Retry-After` of the round's endpoints, at most 30 s,
+or 2 s; an endpoint that asked for longer sits the next round out) on the same pinned
 model, as a new call with its own reservation; 400 to 403, refusals and safety stops are
-not retried. A failed helper, slot or area keeps a classifiable failure so the Outcome
+not retried. A request a provider refused with a status before generating, or never
+sent, settles at zero, so the usage stays exact; an error inside an answer never does. A
+failed helper, slot or area keeps a classifiable failure so the Outcome
 lists it as not covered. `check_options[i].timeout_ms` (1 s to 30 min, 180 s by default)
 reaches the admitted check definition and the condition permission's bound; 1.2 graphs
 still verify. `sandbox.egress.host_ollama` is an opt-in route from Session containers to a
@@ -879,7 +942,11 @@ and recorded like any route. It allows only Ollama's inference and model listing
 (`egress_broker::rules::HOST_OLLAMA_RULES`), refusing pulls, pushes, creates, copies,
 deletes, blobs, the account endpoints and web search and fetch, and checks bodies with
 `provider_fetch::check_ollama`, which refuses a cloud model (a tag that is `cloud` or
-ends in `-cloud`) that Ollama would run on `ollama.com`.
+ends in `-cloud`) that Ollama would run on `ollama.com`. The decision point opens with the
+route only when Ollama reports its cloud features disabled
+(`session_egress::host_ollama_cloud_refusal`), and the broker asks `GET /api/status`
+again before each request (`UpstreamConnector::host_ollama_cloud_mode`), refusing with
+`ollama_cloud_not_off` while Ollama does not report them disabled.
 
 ## Automations
 
@@ -1403,9 +1470,24 @@ agent:**
   resolved on dedicated threads (not tokio's blocking pool), for at most 5 s per
   release. An error other than a missing path (a permission, as for the overlay of a
   `--userns=keep-id` container, whose directory in Podman's storage belongs to a
-  subordinate uid), no answer in time, or a `--volumes-from` naming a container Podman no
-  longer lists keeps every candidate, logged at `info` with the container, the mount and
-  the reason.
+  subordinate uid), no answer in time, a `--volumes-from` naming a container Podman no
+  longer lists, a container that has never started (its overlay volumes are reported only
+  once it has) or one that mounts a volume plugin's volume keeps every candidate, logged
+  at `info` once per mount point and reason: with the container and its mount when a
+  container is the reason, and with Podman's error when Podman did not answer. A container
+  run `--privileged` or with `CAP_SYS_ADMIN`, or one whose mounts neither SELinux
+  (`container_t`, enforcing) nor AppArmor (Podman's `containers-default` profile, which
+  rootless Podman does not apply) stops
+  (its processes can then mount in a user namespace of their own), keeps a candidate below
+  any host directory it takes, since its processes can mount on it themselves (logged at
+  `info` once per container and place), and a `--rootfs` is a host directory it takes. A
+  container that has a mount on the candidate is named before one that only could, also
+  when only resolving its host directory shows it. Nothing is removed at all while a container Axocoatl cannot list
+  could hold the directory (`held_elsewhere`): Docker is installed, Podman lists another
+  connection (a Podman machine's rootful one on macOS), rootful Podman is installed on
+  Linux (`/run/podman` exists, which the podman packages of Fedora and Ubuntu make at every
+  boot, whether or not its API is enabled), or Podman lists a container only with
+  `--external`.
   Containers carry the nonce and identity in `io.axocoatl.dependency-mountpoint-identity`
   (`crates/axocoatl-isolation/src/dependency_mountpoint.rs`). If the canonical data root or
   external lease root is below the Workspace, an exact nested `tmpfs` masks that protected
@@ -1446,14 +1528,30 @@ agent:**
   reaches the Session's exposed ports and, through the egress proxy, the hosts under
   `browser.allow`. Configured Preview ports
   remain logical container-port identities; local Podman assigns each Session its
-  own loopback host mapping, and the Session-aware proxy resolves that mapping
+  own loopback host mapping, on `[::1]` on macOS and `127.0.0.2` on Linux, never
+  on `127.0.0.1`, where the workbench keeps its sign-in cookie that every port of
+  the address receives, and the Session-aware proxy resolves that mapping
   without exposing arbitrary host services. Under `egress` the Session container
   publishes nothing: a service forwarder serves each port as a socket and a separate
   Preview container publishes it.
 - **Resources.** Memory, CPU, and PID caps (2 GB / 2 CPUs / 512 pids) bound a
-  runaway loop or fork bomb, where the host's cgroup delegation allows it. With the
-  default `require_resource_limits: false`, a host that cannot apply them starts the
-  container without them and logs a warning; set it to `true` to refuse instead.
+  runaway loop or fork bomb. Each needs its cgroup controller (`memory`, `cpu`,
+  `pids`), and rootless Podman has those the host delegates to the person's user, which
+  `podman info` lists (`crates/axocoatl-isolation/src/container_host.rs`). The container
+  gets each cap whose controller is there. With the default
+  `require_resource_limits: false`, a cap that cannot apply is left out with a warning;
+  the Session's record (`environment.resource_limits`), a run's notes and its receipt
+  (`sandbox.limits`) say which caps it got and which it did not, and `axocoatl doctor`
+  says how to delegate the missing controllers. Set it to `true` to refuse instead.
+- **SELinux.** On a Linux host whose Podman reports SELinux enabled (Fedora, RHEL), a
+  container may read and write only files labelled for containers, so the
+  bind-mounted Workspace and the execution supervisor bound from the data root would
+  be refused. Relabelling them (`:z`) would change the labels of the person's own
+  files, so Session and browser containers run with `--security-opt label=disable`, as
+  Toolbox does: SELinux confines them as it does the person's own processes, and the
+  user namespace, dropped capabilities, seccomp, `no-new-privileges` and the
+  supervisor's Landlock filter stay. A Podman machine on macOS mounts the Mac's
+  folders with a context its containers may use, so nothing changes there.
 
 **Environment readiness and consent.** A Session persists an environment generation and one
 of `unprepared`, `awaiting_approval`, `preparing`, `ready`, or `failed`. Repository detection
@@ -1636,8 +1734,9 @@ restriction below and `write_file` and `edit_file` are withheld.
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD
   file by file. If any non-ignored file outside the scope changed, or the captures cannot
-  establish the change set (an exhausted invocation allowance, a HEAD moved by a commit, a
-  patch over 512 KiB, a submodule or nested checkout), the activation fails and its turn
+  establish the change set (an exhausted invocation allowance, a HEAD moved by a commit,
+  more changed paths than one capture lists in its 512 KiB, a submodule or nested
+  checkout), the activation fails and its turn
   needs attention. The change is not reverted; it stays for the person to keep or undo.
   Ignored files are not judged. This is review evidence, not confinement. A writer
   stopped before its After capture (a Stop skips it) fails as stopped, saying that its

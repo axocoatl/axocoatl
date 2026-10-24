@@ -390,13 +390,13 @@ prompt: "{task}"
                 "",
                 "api.openai.com",
                 "codex-openai",
-                "axocoatl connect codex --api-key",
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`",
             ),
             (
                 "    credential: codex-openai\n",
                 "api.openai.com",
                 "codex-openai",
-                "axocoatl connect codex --api-key",
+                "sign in with your ChatGPT plan instead with `axocoatl connect codex`",
             ),
             (
                 "    credential: codex-chatgpt\n",

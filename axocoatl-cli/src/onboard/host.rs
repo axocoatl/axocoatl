@@ -27,8 +27,13 @@ pub(crate) struct Log {
 impl Log {
     /// Create `onboard-<timestamp>.log` in `directory` (owner-only).
     pub(crate) fn create(directory: &Path, stamp: &str) -> std::io::Result<Self> {
+        Self::create_named(directory, "onboard", stamp)
+    }
+
+    /// Create `<name>-<timestamp>.log` in `directory` (owner-only).
+    pub(crate) fn create_named(directory: &Path, name: &str, stamp: &str) -> std::io::Result<Self> {
         std::fs::create_dir_all(directory)?;
-        let path = directory.join(format!("onboard-{stamp}.log"));
+        let path = directory.join(format!("{name}-{stamp}.log"));
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
@@ -82,6 +87,11 @@ pub(crate) struct Cmd {
     /// Asks for the person's password through `sudo`, itself or in a script
     /// it runs (Ollama's Linux installer).
     pub(crate) asks_for_password: bool,
+    /// `podman machine start` of this machine: it runs in a session of its
+    /// own, so the VM it starts outlives a Ctrl-C at this terminal and the
+    /// terminal closing, and a stale API socket the machine left is removed
+    /// first ([`Host::clear_stale_machine_socket`]).
+    pub(crate) starts_machine: Option<String>,
 }
 
 impl Cmd {
@@ -93,7 +103,15 @@ impl Cmd {
             stdin: None,
             shown: None,
             asks_for_password: program == "sudo",
+            starts_machine: None,
         }
+    }
+
+    /// `podman args…`, which starts the Podman machine `name`.
+    pub(crate) fn machine_start(args: &[&str], name: &str) -> Self {
+        let mut command = Self::new("podman", args);
+        command.starts_machine = Some(name.to_string());
+        command
     }
 
     /// `sudo program args…`.
@@ -190,6 +208,10 @@ pub(crate) struct Host {
     /// selects in this process's environment (a test's, given instead):
     /// what onboarding reads Podman through.
     pub(crate) podman_connection: axocoatl_isolation::podman::ConnectionOverride,
+    /// The person's Axocoatl data directory (`~/.local/share/axocoatl`, the
+    /// default data root), where onboarding keeps what it learned about
+    /// this computer ([`super::id_map_attempt`]).
+    pub(crate) data_home: PathBuf,
 }
 
 impl Host {
@@ -217,13 +239,16 @@ impl Host {
         Ok(Self {
             path: std::env::var_os("PATH").unwrap_or_default(),
             extra_dirs,
-            home,
             root: PathBuf::from("/"),
             exe: std::env::current_exe()
                 .map_err(|error| format!("cannot find this axocoatl executable: {error}"))?,
             macos,
             log,
             podman_connection: axocoatl_isolation::podman::ConnectionOverride::from_env(),
+            data_home: crate::user_paths::UserPaths::discover()
+                .map(|paths| paths.data_dir)
+                .unwrap_or_else(|_| home.join(".local/share/axocoatl")),
+            home,
         })
     }
 
@@ -342,6 +367,9 @@ impl Host {
         for (name, value) in &cmd.env {
             command.env(name, value);
         }
+        if cmd.starts_machine.is_some() {
+            axocoatl_isolation::podman::start_in_own_session(&mut command);
+        }
         if cmd.stdin.is_some() {
             command
                 .stdin(std::process::Stdio::piped())
@@ -371,6 +399,28 @@ impl Host {
                 cmd.display(),
                 exit_text(status.code())
             ))
+        }
+    }
+
+    /// Remove the API socket the Podman machine `name` left behind when its
+    /// VM was killed (nothing listens on it), which would make `podman
+    /// machine start` fail: the socket removed, if one was.
+    pub(crate) async fn clear_stale_machine_socket(&self, name: &str) -> Option<PathBuf> {
+        let inspected = self
+            .probe("podman", &["machine", "inspect", name])
+            .await
+            .filter(|probe| probe.success)?;
+        let socket = axocoatl_isolation::podman::api_socket_from_inspect(&inspected.stdout)?;
+        match axocoatl_isolation::podman::remove_stale_socket(&socket) {
+            Ok(true) => {
+                self.log(&format!("removed the stale socket {}", socket.display()));
+                Some(socket)
+            }
+            Ok(false) => None,
+            Err(error) => {
+                self.log(&format!("could not check {}: {error}", socket.display()));
+                None
+            }
         }
     }
 
@@ -748,6 +798,7 @@ pub(crate) mod testing {
                 macos,
                 log: None,
                 podman_connection: axocoatl_isolation::podman::ConnectionOverride::None,
+                data_home: self.home.path().join(".local/share/axocoatl"),
             }
         }
     }

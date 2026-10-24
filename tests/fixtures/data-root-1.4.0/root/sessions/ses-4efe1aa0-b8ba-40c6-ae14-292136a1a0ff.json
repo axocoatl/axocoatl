@@ -1,0 +1,40 @@
+{
+  "id": "ses-4efe1aa0-b8ba-40c6-ae14-292136a1a0ff",
+  "name": "Helpers",
+  "workspace_id": "wsp-803dbfeb-c72d-4725-ab91-8f8171b6758c",
+  "working_dir": "/private/tmp/axo140/repo",
+  "mode": {
+    "kind": "single_agent",
+    "agent_id": "lead"
+  },
+  "status": "active",
+  "enabled_skills": [],
+  "exposed_ports": [],
+  "image": null,
+  "post_create_commands": [],
+  "check_command": null,
+  "environment": {
+    "generation": 1,
+    "state": "ready",
+    "effective_image": "docker.io/library/alpine:3.20",
+    "runtime": {
+      "backend": "podman",
+      "id": "ses-4efe1aa0-b8ba-40c6-ae14-292136a1a0ff",
+      "remote_root": null,
+      "control_plane": null,
+      "data_plane_domain": null,
+      "authority_fingerprint": null,
+      "ownership_token": null,
+      "cleanup_confirmed": true
+    },
+    "runtime_creation": null,
+    "setup_command": null,
+    "setup_approved": false,
+    "setup_reviewed": true,
+    "setup_results": [],
+    "error": null,
+    "prepared_at": 1792780429
+  },
+  "created_at": 1792780380,
+  "last_active": 1792780454
+}

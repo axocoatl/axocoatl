@@ -599,6 +599,130 @@ test('terminal resync clears stale xterm state and exact identity changes cancel
   }
 });
 
+// xterm.js 5.3.0 queues work it never cancels: its viewport syncs its scroll
+// area on a timer after the terminal opens and on the next frame after
+// reset(), and each sync can queue one more frame. That work reads the
+// renderer, which dispose() removes, so a terminal disposed with it pending
+// threw "undefined is not an object (evaluating
+// 'this._renderer.value.dimensions')" in WebKit (CI's WebKit leg, after a
+// cross-tab Close). Each case here destroys a real xterm at one of those
+// moments, deterministically, and the page must stay free of errors.
+test('a terminal destroyed while xterm.js still has work queued throws no page error', async () => {
+  const { context, page, session, assertNoErrors } = await openControlledSession();
+  try {
+    const result = await page.evaluate(async (sessionId) => {
+      const NativeWebSocket = window.WebSocket;
+      const sockets = [];
+      class FakeTerminalSocket {
+        static CONNECTING = 0;
+        static OPEN = 1;
+        static CLOSING = 2;
+        static CLOSED = 3;
+        constructor(url) {
+          this.url = String(url);
+          this.readyState = FakeTerminalSocket.CONNECTING;
+          this.sent = [];
+          sockets.push(this);
+          queueMicrotask(() => {
+            if (this.readyState !== FakeTerminalSocket.CONNECTING) return;
+            this.readyState = FakeTerminalSocket.OPEN;
+            this.onopen?.({});
+          });
+        }
+        send(value) { this.sent.push(value); }
+        close() {
+          if (this.readyState === FakeTerminalSocket.CLOSED) return;
+          this.readyState = FakeTerminalSocket.CLOSED;
+          this.onclose?.({ code: 1000, reason: '', wasClean: true });
+        }
+        output(text) { this.onmessage?.({ data: new TextEncoder().encode(text).buffer }); }
+        drop() {
+          this.readyState = FakeTerminalSocket.CLOSED;
+          this.onclose?.({ code: 1006, reason: '', wasClean: false });
+        }
+      }
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+      const tick = (milliseconds = 0) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+      // Long enough for every timer and frame xterm queued to have run.
+      const settle = async () => {
+        await tick(50);
+        for (let index = 0; index < 4; index += 1) await frame();
+        await tick(50);
+      };
+      const terminal = (task) => {
+        const element = document.createElement('ax-terminal');
+        element.session = sessionId;
+        element.task = task;
+        element.style.cssText = 'position: fixed; left: 0; top: 0; width: 640px; height: 240px;';
+        // term.open() builds xterm's DOM in one go; this observer's callback
+        // then runs as a microtask, before xterm's viewport timer.
+        const opened = new Promise((resolve) => {
+          const observer = new MutationObserver(() => {
+            if (!element.shadowRoot.querySelector('.xterm')) return;
+            observer.disconnect();
+            resolve();
+          });
+          observer.observe(element.shadowRoot, { childList: true, subtree: true });
+        });
+        document.body.append(element);
+        return { element, opened };
+      };
+      const outcome = {};
+      window.WebSocket = FakeTerminalSocket;
+      try {
+        // In the turn xterm opened, before its viewport's first timer.
+        const fresh = terminal('dispose-just-opened');
+        await fresh.opened;
+        fresh.element.destroy();
+        fresh.element.remove();
+        await settle();
+        outcome.justOpened = fresh.element.shadowRoot.querySelector('.xterm') === null;
+
+        // After the socket dropped: the element resets xterm for the next
+        // attach (its viewport queues a frame), and the shell destroys it
+        // before that frame, as when another tab closes the Session.
+        const dropped = terminal('dispose-after-drop');
+        await dropped.opened;
+        await settle();
+        dropped.element.addEventListener('terminal-closed', () => queueMicrotask(() => {
+          dropped.element.destroy();
+          dropped.element.remove();
+        }), { once: true });
+        sockets.at(-1).output('output before the drop\r\n'.repeat(40));
+        sockets.at(-1).drop();
+        await settle();
+        outcome.socketsAfterDrop = sockets.length;
+
+        // Resized and destroyed in the same turn, with output still queued.
+        const resized = terminal('dispose-mid-resize');
+        await resized.opened;
+        await settle();
+        sockets.at(-1).output('output during the resize\r\n'.repeat(40));
+        resized.element.style.width = '320px';
+        resized.element.style.height = '120px';
+        resized.element.fit();
+        resized.element.destroy();
+        resized.element.remove();
+        await settle();
+        outcome.socketsAfterResize = sockets.length;
+        outcome.closed = sockets.every((socket) => socket.readyState === FakeTerminalSocket.CLOSED);
+        return outcome;
+      } finally {
+        window.WebSocket = NativeWebSocket;
+      }
+    }, session.id);
+
+    assert.equal(result.justOpened, true);
+    // Neither destroyed terminal reconnected.
+    assert.equal(result.socketsAfterDrop, 2);
+    assert.equal(result.socketsAfterResize, 3);
+    assert.equal(result.closed, true);
+    assertNoErrors();
+  } finally {
+    await context.close();
+  }
+});
+
 test('History searches and exports the durable ledger, then Rewind restores transcript and composer without touching the workspace', async () => {
   const { context, page, session, assertNoErrors } = await openControlledSession();
   const errors = [];

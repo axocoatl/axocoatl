@@ -1782,7 +1782,29 @@ fn connect_codex_runs_codex_login_with_file_storage_and_no_other_credentials() {
     assert!(!VALUE_ON_COMMAND_LINE.contains("sk-"));
     let refused = flag_takes_no_value("--api-key");
     assert!(refused.contains("--api-key takes no value"), "{refused}");
-    assert!(refused.contains("signs you in in the browser"), "{refused}");
+    assert!(
+        refused.contains("`axocoatl connect codex` signs you in to your ChatGPT plan"),
+        "{refused}"
+    );
+    assert!(!VALUE_ON_COMMAND_LINE.contains("--api-key"));
+    assert!(!refused.contains("connect codex --api-key"), "{refused}");
+    // This version refuses the API-key route, pointing to the ChatGPT
+    // sign-in, and the device-code refusal of the route's internals stays.
+    for flag in ["--api-key", "--api-key-only"] {
+        let refused = codex::api_key_not_available(flag);
+        assert!(
+            refused.starts_with(&format!(
+                "axocoatl connect codex {flag} is not available in Axocoatl {}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "{refused}"
+        );
+        assert!(refused.contains("nothing was run or stored"), "{refused}");
+        assert!(
+            refused.contains("--param credential=codex-chatgpt"),
+            "{refused}"
+        );
+    }
     assert!(!flag_takes_no_value("--no-browser").contains("signs you in"));
     let parsed = Cli::try_parse_from(["x", "codex", "--api-key"]).unwrap();
     let ConnectCommands::Codex {
@@ -2252,7 +2274,7 @@ const DEVICE_PAGE: &str = "https://auth.openai.com/codex/device";
 /// Write an executable script, and run it with `probe` (which it answers
 /// at once, without doing anything) until it is not "text file busy",
 /// which it is while another test's fork still holds a file it was writing.
-fn install_script(path: &Path, contents: &str) {
+pub(crate) fn install_script(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     for _ in 0..100 {
@@ -2273,7 +2295,7 @@ fn install_script(path: &Path, contents: &str) {
 /// alone in a directory: it appends how many arguments it got and each one
 /// to `opened` beside it, and exits with `status`. Its directory, to use as
 /// `PATH`, and the `opened` file.
-fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
+pub(crate) fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
     let directory = root.join("opener-bin");
     std::fs::create_dir_all(&directory).unwrap();
     let opened = root.join("opened");
@@ -2449,6 +2471,32 @@ fn the_opener_gets_the_address_as_its_one_argument_without_a_shell() {
     let empty = tempfile::tempdir().unwrap();
     assert!(browser::Opener::find(Some(empty.path().as_os_str())).is_none());
     assert!(browser::Opener::find(None).is_none());
+}
+
+/// In WSL the opener is `wslview` (Windows' browser) when it is on PATH,
+/// else the usual one; outside WSL `wslview` is never used.
+#[test]
+fn in_wsl_the_page_opens_in_windows_browser_with_wslview() {
+    let directory = tempfile::tempdir().unwrap();
+    let (bin, log) = fake_opener(directory.path(), 0);
+    let usual = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(usual.open(DEVICE_PAGE)));
+    assert_eq!(opened(&log), format!("argc=1\narg={DEVICE_PAGE}\n"));
+    let wslview_log = directory.path().join("wslview-opened");
+    install_script(
+        &bin.join("wslview"),
+        &format!(
+            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\nprintf 'arg=%s\\n' \"$1\" >> '{}'\n",
+            wslview_log.display()
+        ),
+    );
+    let wsl = browser::Opener::find_for(Some(bin.as_os_str()), true).unwrap();
+    assert!(opener_answer(wsl.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log), format!("arg={DEVICE_PAGE}\n"));
+    let elsewhere = browser::Opener::find_for(Some(bin.as_os_str()), false).unwrap();
+    assert!(opener_answer(elsewhere.open(DEVICE_PAGE)));
+    assert_eq!(opened(&wslview_log).lines().count(), 1);
+    assert_eq!(opened(&log).lines().count(), 4);
 }
 
 /// A private directory for one login-container test: `bin/podman` (the
@@ -2780,19 +2828,55 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     assert!(screen.contains("Error: no exec session with ID 0123abcd found\r\n"));
     assert!(fixture.stored().is_none());
 
-    let fixture = ContainerFixture::new("readfail");
+    // Podman 6.1 at the lifetime: the login is killed, and for a few
+    // seconds the container is still listed while `container inspect` no
+    // longer finds it. The read waits for it to go and says the time ran
+    // out, instead of the read's own error.
+    let fixture = ContainerFixture::new("timeout-settling");
     let login = fixture.login(None, Duration::from_secs(1));
     let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     let failure = result.expect_err("nothing is stored");
-    assert_eq!(failure.code, exit::FAILURE);
-    assert!(
-        failure
-            .message
-            .starts_with("Codex's auth.json could not be read from the login container"),
-        "{}",
-        failure.message
+    assert_eq!(failure.code, exit::NO_TOKEN, "{}", failure.message);
+    assert_eq!(
+        failure.message,
+        codex_container::timed_out(Duration::from_secs(1))
     );
     assert!(fixture.stored().is_none());
+    let calls = fixture.calls();
+    assert_eq!(calls.matches("container exists\n").count(), 3, "{calls}");
+    assert_eq!(calls.matches("container inspect\n").count(), 2, "{calls}");
+
+    // A read that fails while the container still runs says so: within its
+    // lifetime at once, and past it (a lifetime of 1 ms, and here the
+    // container never ends) after the wait.
+    for (lifetime, outlived) in [
+        (codex_container::DEFAULT_LIFETIME, false),
+        (Duration::from_millis(1), true),
+    ] {
+        let fixture = ContainerFixture::new("readfail");
+        let login = fixture.login(None, lifetime);
+        let (result, _) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
+        let failure = result.expect_err("nothing is stored");
+        assert_eq!(failure.code, exit::FAILURE);
+        assert!(
+            failure
+                .message
+                .starts_with("Codex's auth.json could not be read from the login container"),
+            "{}",
+            failure.message
+        );
+        assert!(fixture.stored().is_none());
+        let calls = fixture.calls();
+        let inspected = calls.matches("container inspect\n").count();
+        assert!(
+            if outlived {
+                inspected >= 2
+            } else {
+                inspected == 1
+            },
+            "{lifetime:?}: {calls}"
+        );
+    }
 
     assert_eq!(
         codex_container::exists_args("n"),

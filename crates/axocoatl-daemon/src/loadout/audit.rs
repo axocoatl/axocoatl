@@ -1000,6 +1000,7 @@ pub fn class_name(class: FailureClass) -> &'static str {
         FailureClass::ProviderRefusal => "provider_refusal",
         FailureClass::ProviderFailure => "provider_failure",
         FailureClass::ProviderRejected => "provider_rejected",
+        FailureClass::UnrunnableToolCall => "unrunnable_tool_call",
         FailureClass::Budget => "budget",
         FailureClass::Blocked => "blocked",
         FailureClass::NotReached => "not_reached",
@@ -2850,7 +2851,8 @@ impl Audit<'_> {
         }
         // No readable FINDINGS block: the host merges when the integrator
         // answered but could not be read, or has no result for a provider's
-        // reason; anything else is an integration not covered.
+        // reason or because its answer was a tool call written as text that
+        // cannot run; anything else is an integration not covered.
         let reason = |(class, detail): &(FailureClass, String)| {
             format!(
                 "{}: {}",
@@ -2888,6 +2890,7 @@ impl Audit<'_> {
             FailureClass::ProviderFailure
                 | FailureClass::ProviderRefusal
                 | FailureClass::ProviderRejected
+                | FailureClass::UnrunnableToolCall
         ) {
             let why = format!(
                 "the integrator has no result{} ({})",

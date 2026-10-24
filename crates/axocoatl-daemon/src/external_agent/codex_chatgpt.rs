@@ -10,8 +10,9 @@
 //! refresh token, the ChatGPT account id and when the tokens were last
 //! obtained. Nothing else of `auth.json` is kept here (its id token is
 //! deleted with the temporary home); the OpenAI API key Codex may have
-//! exchanged the browser sign-in for is stored, as the separate secret
-//! `codex-openai`, only by `axocoatl connect codex --api-key`.
+//! exchanged the browser sign-in for would be stored, as the separate secret
+//! `codex-openai`, only by `axocoatl connect codex --api-key`, which this
+//! version refuses.
 //!
 //! The tokens never enter a Session container. A Codex writer with
 //! `credential: codex-chatgpt` runs Codex with its own HTTP provider aimed at

@@ -23,6 +23,7 @@
 // when each of its failures has such a line, and never otherwise.
 
 import { CRASH_ERRORS, CRASH_LINE } from './crash-rerun.mjs';
+import { settleNavigations, settlesNavigations } from './settle-navigation.mjs';
 
 const CHECK_TIMEOUT_MS = 10_000;
 // How long a browser may take to create a context or a page, which runs no
@@ -132,10 +133,13 @@ function watchBrowser(browser, engine) {
 }
 
 // A page that crashes while the journey closes it, its context or its
-// browser is not reported: nothing can fail from it.
+// browser is not reported: nothing can fail from it. In WebKit on Linux a
+// page also settles before it reloads or leaves a daemon's page, which keeps
+// its network process from crashing (support/settle-navigation.mjs).
 function watchPage(page, browserState, contextWatch) {
   if (watchedPages.has(page)) return;
   watchedPages.add(page);
+  if (settlesNavigations(browserState.engine)) settleNavigations(page, { isDaemonUrl: (url) => isDaemonUrl(url) });
   let closing = false;
   const close = page.close.bind(page);
   page.close = (...args) => {

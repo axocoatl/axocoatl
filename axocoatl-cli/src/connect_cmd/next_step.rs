@@ -96,7 +96,7 @@ pub(crate) fn next_step(
              change, on Ollama or OpenRouter: `axocoatl onboard` sets one up and saves it as \
              run.models.reviewer. Then start the daemon (`axocoatl dev`) and run in your \
              repository: `{command}`. Or name the reviewer on the command line instead: \
-             --model reviewer=ollama:<model> or --model reviewer=openrouter:<vendor>/<model>."
+             --model reviewer=ollama:MODEL or --model reviewer=openrouter:VENDOR/MODEL."
         ),
     }
 }
@@ -131,8 +131,8 @@ mod tests {
              or OpenRouter: `axocoatl onboard` sets one up and saves it as run.models.reviewer. \
              Then start the daemon (`axocoatl dev`) and run in your repository: `axocoatl run \
              fix-claude-code --task \"Describe the bug\"`. Or name the reviewer on the command \
-             line instead: --model reviewer=ollama:<model> or --model \
-             reviewer=openrouter:<vendor>/<model>."
+             line instead: --model reviewer=ollama:MODEL or --model \
+             reviewer=openrouter:VENDOR/MODEL."
         );
         assert!(!step.contains("provider:model"), "{step}");
         let step = next_step("fix-codex", "codex", true, &reviewer("ollama:gpt-oss:20b"));

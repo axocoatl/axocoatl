@@ -24,7 +24,7 @@ use axocoatl_session::record_bundle::{BundleHeader, RECORD_BUNDLE_SCHEMA};
 use axocoatl_session::run_outcome::{
     exit_code, CheckResult, CheckState, GenerationObservation, LoadoutRef, ModelIdentity,
     NetworkSummary, NodeFailure, NodeObservation, NodeState, ReviewOutcome, RunOutcome, RunUsage,
-    RunVerdict, RunWarning, TurnObservation, TurnState,
+    RunVerdict, RunWarning, ServedEndpoint, TurnObservation, TurnState,
 };
 use axocoatl_session::run_record::{
     RunEvent, RunManifest, RunRecordError, RunRecordStore, SessionLoadoutBinding,
@@ -70,9 +70,28 @@ pub(crate) struct LoadoutRuns {
     /// Session id → the Ollama versions that served its native calls, for
     /// the run's Outcome and receipt.
     ollama_served: StdMutex<HashMap<String, Arc<crate::session_dispatch::OllamaServedLog>>>,
+    /// Session id → the OpenRouter endpoints that answered its native
+    /// calls, for the run's Outcome, notes and receipt.
+    openrouter_served: StdMutex<HashMap<String, Arc<crate::session_dispatch::OpenRouterServedLog>>>,
     /// Where a test's admission reads OpenRouter's model catalog.
     #[cfg(test)]
     pub(crate) openrouter_catalog: StdMutex<Option<String>>,
+}
+
+/// A request id being admitted, until the admission ends however it ends.
+struct Admitting<'a> {
+    runs: &'a LoadoutRuns,
+    request_id: &'a str,
+}
+
+impl Drop for Admitting<'_> {
+    fn drop(&mut self) {
+        self.runs
+            .admitting
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(self.request_id);
+    }
 }
 
 impl LoadoutRuns {
@@ -85,6 +104,7 @@ impl LoadoutRuns {
             stops: StdMutex::new(HashSet::new()),
             e2e_runs: StdMutex::new(HashSet::new()),
             ollama_served: StdMutex::new(HashMap::new()),
+            openrouter_served: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             openrouter_catalog: StdMutex::new(None),
         }
@@ -115,6 +135,82 @@ impl LoadoutRuns {
             .unwrap_or_else(|poison| poison.into_inner())
             .get(session_id)
             .map(|log| log.versions())
+            .unwrap_or_default()
+    }
+
+    /// Forget what `session_id`'s native providers recorded (the Ollama
+    /// versions and OpenRouter endpoints that served them) once the Session
+    /// is closed or deleted, so the daemon holds them only for Sessions that
+    /// exist. A run reads them when it writes its Outcome, before then; a
+    /// Session opened again records anew.
+    pub(crate) fn forget_served(&self, session_id: &str) {
+        self.ollama_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(session_id);
+    }
+
+    /// The Sessions whose served logs the daemon holds: (Ollama, OpenRouter).
+    #[cfg(test)]
+    pub(crate) fn served_sessions(&self) -> (usize, usize) {
+        (
+            self.ollama_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+            self.openrouter_served
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .len(),
+        )
+    }
+
+    /// Where `session_id`'s native OpenRouter providers record the
+    /// endpoints that answered them.
+    pub(crate) fn openrouter_served(
+        &self,
+        session_id: &str,
+    ) -> Arc<crate::session_dispatch::OpenRouterServedLog> {
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .entry(session_id.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// The OpenRouter endpoints `session_id`'s native calls went to, by
+    /// model, each with the calls it answered and those that moved away from
+    /// it; empty when none did.
+    pub(crate) fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<ServedEndpoint>> {
+        self.openrouter_served
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(session_id)
+            .map(|log| {
+                log.endpoints()
+                    .into_iter()
+                    .map(|(model, endpoints)| {
+                        let endpoints = endpoints
+                            .into_iter()
+                            .map(|served| ServedEndpoint {
+                                endpoint: served.endpoint,
+                                provider: served.provider,
+                                calls: served.calls,
+                                moved: served.moved,
+                            })
+                            .collect();
+                        (model, endpoints)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -468,6 +564,7 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         // Usage not recorded: neither its tokens nor its cost are known.
         return RunUsage {
             cost_known: false,
+            unreported: vec![USAGE_NOT_RECORDED.into()],
             ..RunUsage::default()
         };
     };
@@ -491,8 +588,17 @@ fn usage_of(value: &crate::session_control_plane::EvidenceValue<serde_json::Valu
         cost_known: complete,
         cost_computed: false,
         retries: 0,
+        unreported: if complete {
+            Vec::new()
+        } else {
+            vec![USAGE_NOT_RECORDED.into()]
+        },
     }
 }
+
+/// What the usage line says of an activation whose calls the run cannot
+/// count one by one: its usage as the Session recorded it was not complete.
+const USAGE_NOT_RECORDED: &str = "its usage as recorded";
 
 fn node_state(state: &str) -> NodeState {
     match state {
@@ -519,20 +625,31 @@ fn turn_state(state: &str) -> TurnState {
 
 /// Why a turn that did not complete needs a person, when its record says in
 /// words: the readiness of its required checks that failed, such as a
-/// repository that could not be captured around them, and why. A run ends
-/// its turn, so the workbench's hint to Continue is left out.
+/// repository that could not be captured around them, and why; else its
+/// current review that ended without a verdict, such as a reviewer whose
+/// request did not fit its model's context, and why. A run ends its turn, so
+/// the workbench's hint to Continue is left out.
 fn attention_reason(
     view: &crate::session_control_plane::SessionTurnControlPlane,
 ) -> Option<String> {
     if turn_state(&view.state) == TurnState::Completed {
         return None;
     }
-    let readiness = view
+    let reason = match view
         .required_check_readiness
         .as_ref()
-        .filter(|readiness| readiness.state == "failed")?;
-    let reason: String = readiness
-        .reason
+        .filter(|readiness| readiness.state == "failed")
+    {
+        Some(readiness) => &readiness.reason,
+        None => {
+            &view
+                .required_review
+                .as_ref()
+                .filter(|review| review.state == "failed" && review.current)?
+                .reason
+        }
+    };
+    let reason: String = reason
         .split_inclusive(". ")
         .filter(|sentence| !sentence.contains("Continue"))
         .collect();
@@ -647,6 +764,14 @@ pub fn observation_from_control_plane(
             if !matches!(state, NodeState::NeverStarted | NodeState::Running) {
                 usage.complete &= activation_usage.complete;
                 usage.cost_known &= activation_usage.cost_known;
+                // Which calls did not report, by Agent and generation.
+                if !activation_usage.complete || !activation_usage.cost_known {
+                    usage.unreported.extend(
+                        activation_usage.unreported.iter().map(|what| {
+                            format!("{} (generation {generation}): {what}", node.label)
+                        }),
+                    );
+                }
             }
             if computes_cost
                 && activation_usage.cost_known
@@ -1053,6 +1178,7 @@ fn ended_outcome(manifest: &RunManifest, error: String, warnings: Vec<RunWarning
         usage: RunUsage::default(),
         network: NetworkSummary::default(),
         ollama_versions: Default::default(),
+        openrouter_endpoints: Default::default(),
         keep: None,
         error: Some(error),
     };
@@ -1573,6 +1699,18 @@ impl AxocoatlDaemon {
                 None
             }
         };
+        // The run's Session mounts the repository read-write, so a run
+        // keeps to the Workspace scope rules as Session creation does.
+        let repo = match repo {
+            Some(repo) => match self.run_workspace_scope(&repo).await {
+                Ok(()) => Some(repo),
+                Err((code, message)) => {
+                    problems.usage(code, message);
+                    None
+                }
+            },
+            None => None,
+        };
         let repo_text = repo
             .as_ref()
             .map(|repo| repo.display().to_string())
@@ -1603,8 +1741,7 @@ impl AxocoatlDaemon {
                 format!(
                     "the configuration file {} now sets run.models differently from when this \
                      daemon started, and the daemon uses run.models as it read them then: \
-                     restart it (`axocoatl dev`, or `axocoatl service stop` and `axocoatl \
-                     service start`) to use them",
+                     restart it (`axocoatl dev`, or `axocoatl service restart`) to use them",
                     self.config_path_text()
                 )
             })
@@ -2050,6 +2187,39 @@ impl AxocoatlDaemon {
         report
     }
 
+    /// Whether a run may use `repo` (canonical) as its Workspace, as Session
+    /// creation decides ([`Self::check_workspace_scope`]): one of Axocoatl's
+    /// own directories, or a folder inside one, never; a folder too broad to
+    /// be a Workspace (the file system root, the home folder and the folders
+    /// above it, a folder that contains one of Axocoatl's own directories)
+    /// only once the person confirmed it with Open workspace…, which its
+    /// Workspace records; a broad Workspace registered without asking, as
+    /// 1.4 did, is not enough. A refusal is the problem's code and message.
+    async fn run_workspace_scope(
+        &self,
+        repo: &std::path::Path,
+    ) -> Result<(), (&'static str, String)> {
+        match self.workspace_scope().check(repo) {
+            Ok(()) => Ok(()),
+            Err(WorkspaceScopeRefusal::Protected(message)) => {
+                Err((WORKSPACE_PROTECTED_CODE, message))
+            }
+            Err(WorkspaceScopeRefusal::Broad(message)) => {
+                if self.broad_workspace_confirmed(repo).await {
+                    return Ok(());
+                }
+                Err((
+                    WORKSPACE_TOO_BROAD_CODE,
+                    format!(
+                        "{message} A run's Agents can read and change everything in its \
+                         repository, so a run uses a folder this broad only after you opened \
+                         it with Open workspace… in the workbench and confirmed it."
+                    ),
+                ))
+            }
+        }
+    }
+
     /// `POST /api/runs/preflight`: admission's checks of `request`, with
     /// nothing created, started or recorded, and Podman only asked
     /// ([`RunPreflight`]). Each Ollama model is loaded and probed as a
@@ -2173,7 +2343,7 @@ impl AxocoatlDaemon {
                 .unwrap_or_else(|poison| poison.into_inner())
                 .insert(run_id.clone());
         }
-        let session = self
+        let session = match self
             .create_loadout_session(
                 &workspace.id,
                 &name,
@@ -2183,259 +2353,276 @@ impl AxocoatlDaemon {
                 binding,
                 overlay,
             )
-            .await?;
-        let mut environment_facts =
-            self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
-        resolved.notes.push(plan.summary());
-        let mut toolchain_failure = None;
-        if session.environment.state == SessionEnvironmentState::Ready {
-            if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
-                let setup_run = self
-                    .run_toolchain_setup(
-                        &session.id,
-                        &run_id,
-                        toolchain,
-                        &loadout.file.sandbox.network,
-                        setup,
-                    )
-                    .await;
-                resolved
-                    .notes
-                    .push(loadout_toolchain::setup_note(&setup_run));
-                toolchain_failure = setup_run.failure;
-                environment_facts.setup = Some(setup_run.facts);
+            .await
+        {
+            Ok(session) => session,
+            Err(error) => {
+                self.loadout_runs
+                    .e2e_runs
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .remove(&run_id);
+                return Err(error);
             }
-            if request.environment.no_probe && plan.check.is_some() {
-                resolved.notes.push(
-                    "the check was not probed before the first model call (--no-probe)".into(),
-                );
-            }
-            let probe_check = plan
-                .check
+        };
+        // From here on the Session exists: a run refused after all closes it
+        // (`close_refused_run_session`); a run that ends here stops its
+        // runtime.
+        let (session_id, refused_run) = (session.id.clone(), run_id.clone());
+        let admitted = async move {
+            let mut environment_facts =
+                self.environment_facts(&plan, image_id.as_deref(), &workspace.canonical_path);
+            resolved.notes.push(plan.summary());
+            if let Some(note) = session
+                .environment
+                .resource_limits
                 .as_ref()
-                .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
-            if let Some((check, _)) = probe_check {
-                let timeout = resolved
-                    .checks
-                    .iter()
-                    .filter(|check| check.argv.is_some())
-                    .map(|check| check.timeout_secs)
-                    .max()
-                    .unwrap_or(180);
-                let setup_note = environment_facts.setup.as_ref().map(|facts| {
-                    format!(
-                        "`{}`: {}",
-                        facts.command,
-                        loadout_toolchain::setup_outcome(facts)
-                    )
-                });
-                match self
-                    .probe_loadout_check(
-                        &session.id,
-                        &run_id,
-                        &plan,
-                        check,
-                        timeout,
-                        &request.task,
-                        setup_note.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(loadout_toolchain::ProbeRun::Runs(probe)) => {
-                        environment_facts.probe = Some(probe)
-                    }
-                    // A probe that could not run decides nothing: the run's
-                    // own check still runs and says what happened.
-                    Err(error) => {
-                        tracing::warn!(session = %session.id, %error, "the check probe could not run")
-                    }
-                    Ok(loadout_toolchain::ProbeRun::Refused {
-                        message,
-                        environment,
-                    }) => {
-                        // Not admitted: the run's Session goes with it.
-                        if let Err(error) = self.close_session(&session.id).await {
-                            tracing::warn!(session = %session.id, %error, "closing the refused run's Session failed");
+                .and_then(resource_caps_note)
+            {
+                resolved.notes.push(note);
+            }
+            let mut toolchain_failure = None;
+            if session.environment.state == SessionEnvironmentState::Ready {
+                if let (Some(setup), Some(toolchain)) = (&plan.setup, plan.toolchain) {
+                    let setup_run = self
+                        .run_toolchain_setup(
+                            &session.id,
+                            &run_id,
+                            toolchain,
+                            &loadout.file.sandbox.network,
+                            setup,
+                        )
+                        .await;
+                    resolved
+                        .notes
+                        .push(loadout_toolchain::setup_note(&setup_run));
+                    toolchain_failure = setup_run.failure;
+                    environment_facts.setup = Some(setup_run.facts);
+                }
+                if request.environment.no_probe && plan.check.is_some() {
+                    resolved.notes.push(
+                        "the check was not probed before the first model call (--no-probe)".into(),
+                    );
+                }
+                let probe_check = plan
+                    .check
+                    .as_ref()
+                    .filter(|_| toolchain_failure.is_none() && !request.environment.no_probe);
+                if let Some((check, _)) = probe_check {
+                    let timeout = resolved
+                        .checks
+                        .iter()
+                        .filter(|check| check.argv.is_some())
+                        .map(|check| check.timeout_secs)
+                        .max()
+                        .unwrap_or(180);
+                    let setup_note = environment_facts.setup.as_ref().map(|facts| {
+                        format!(
+                            "`{}`: {}",
+                            facts.command,
+                            loadout_toolchain::setup_outcome(facts)
+                        )
+                    });
+                    match self
+                        .probe_loadout_check(
+                            &session.id,
+                            &run_id,
+                            &plan,
+                            check,
+                            timeout,
+                            &request.task,
+                            setup_note.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(loadout_toolchain::ProbeRun::Runs(probe)) => {
+                            environment_facts.probe = Some(probe)
                         }
-                        self.loadout_runs
-                            .e2e_runs
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .remove(&run_id);
-                        return Err(if environment {
-                            DaemonError::Session(message)
-                        } else {
-                            DaemonError::InvalidRequest(message)
-                        });
+                        // A probe that could not run decides nothing: the run's
+                        // own check still runs and says what happened.
+                        Err(error) => {
+                            tracing::warn!(
+                                session = %session.id,
+                                %error,
+                                "the check probe could not run"
+                            )
+                        }
+                        Ok(loadout_toolchain::ProbeRun::Refused {
+                            message,
+                            environment,
+                        }) => {
+                            // Not admitted: the run's Session goes with it.
+                            return Err(if environment {
+                                DaemonError::Session(message)
+                            } else {
+                                DaemonError::InvalidRequest(message)
+                            });
+                        }
                     }
                 }
             }
-        }
-        let (repo_head, dirty_paths) = repository_state(&repo).await;
-        let options = RunOptions {
-            task: request.task.clone(),
-            repo: repo.clone(),
-            params: request.params.clone(),
-            keep: request.keep,
-            check_command: request.check_command.clone(),
-            setup_command: request.setup_command.clone(),
-        };
-        let manifest = RunManifest {
-            schema: RUN_MANIFEST_SCHEMA.into(),
-            run_id: run_id.clone(),
-            session_id: session.id.clone(),
-            workspace_id: workspace.id.clone(),
-            loadout: loadout_ref,
-            loadout_text: loadout.text.clone(),
-            params: resolved.params.clone(),
-            credentials,
-            task: request.task.clone(),
-            repo: repo_text,
-            repo_head,
-            dirty_paths,
-            started_at_ms,
-            options: serde_json::json!({
-                "request_id": request.request_id,
-                "keep": request.keep,
-                "check_command": request.check_command,
-                "setup_command": request.setup_command,
-                "axocoatl_version": env!("CARGO_PKG_VERSION"),
-                "environment": environment_facts,
-            }),
-        };
-        let store = self.loadout_runs.store()?;
-        store.create(&manifest).map_err(record_error)?;
-        let warnings: Vec<RunWarning> = resolved
-            .warnings
-            .iter()
-            .map(|warning| RunWarning {
-                code: warning.code.clone(),
-                message: warning.message.clone(),
-            })
-            .collect();
-        for warning in &warnings {
-            store
-                .append(
-                    &run_id,
-                    &RunEvent::Warning {
-                        at_ms: now_ms(),
-                        warning: warning.clone(),
-                    },
-                )
-                .map_err(record_error)?;
-        }
-        // What admission notes, such as the credential each external
-        // writer's route sends: a `note` event, which `axocoatl run` prints
-        // as the run starts, and a line of the Outcome's notes.
-        for note in &resolved.notes {
+            let (repo_head, dirty_paths) = repository_state(&repo).await;
+            let options = RunOptions {
+                task: request.task.clone(),
+                repo: repo.clone(),
+                params: request.params.clone(),
+                keep: request.keep,
+                check_command: request.check_command.clone(),
+                setup_command: request.setup_command.clone(),
+            };
+            let manifest = RunManifest {
+                schema: RUN_MANIFEST_SCHEMA.into(),
+                run_id: run_id.clone(),
+                session_id: session.id.clone(),
+                workspace_id: workspace.id.clone(),
+                loadout: loadout_ref,
+                loadout_text: loadout.text.clone(),
+                params: resolved.params.clone(),
+                credentials,
+                task: request.task.clone(),
+                repo: repo_text,
+                repo_head,
+                dirty_paths,
+                started_at_ms,
+                options: serde_json::json!({
+                    "request_id": request.request_id,
+                    "keep": request.keep,
+                    "check_command": request.check_command,
+                    "setup_command": request.setup_command,
+                    "axocoatl_version": env!("CARGO_PKG_VERSION"),
+                    "environment": environment_facts,
+                }),
+            };
+            let store = self.loadout_runs.store()?;
+            store.create(&manifest).map_err(record_error)?;
+            let warnings: Vec<RunWarning> = resolved
+                .warnings
+                .iter()
+                .map(|warning| RunWarning {
+                    code: warning.code.clone(),
+                    message: warning.message.clone(),
+                })
+                .collect();
+            for warning in &warnings {
+                store
+                    .append(
+                        &run_id,
+                        &RunEvent::Warning {
+                            at_ms: now_ms(),
+                            warning: warning.clone(),
+                        },
+                    )
+                    .map_err(record_error)?;
+            }
+            // What admission notes, such as the credential each external
+            // writer's route sends: a `note` event, which `axocoatl run` prints
+            // as the run starts, and a line of the Outcome's notes.
+            for note in &resolved.notes {
+                store
+                    .append(
+                        &run_id,
+                        &RunEvent::Phase {
+                            at_ms: now_ms(),
+                            phase: "note".into(),
+                            detail: note.clone(),
+                        },
+                    )
+                    .map_err(record_error)?;
+            }
+            let ready = session.environment.state == SessionEnvironmentState::Ready;
             store
                 .append(
                     &run_id,
                     &RunEvent::Phase {
                         at_ms: now_ms(),
-                        phase: "note".into(),
-                        detail: note.clone(),
+                        phase: "preparing".into(),
+                        detail: if ready {
+                            "the Session's environment is ready".into()
+                        } else {
+                            format!(
+                                "the Session's environment is {:?}",
+                                session.environment.state
+                            )
+                        },
                     },
                 )
                 .map_err(record_error)?;
-        }
-        let ready = session.environment.state == SessionEnvironmentState::Ready;
-        store
-            .append(
-                &run_id,
-                &RunEvent::Phase {
-                    at_ms: now_ms(),
-                    phase: "preparing".into(),
-                    detail: if ready {
-                        "the Session's environment is ready".into()
-                    } else {
-                        format!(
-                            "the Session's environment is {:?}",
-                            session.environment.state
-                        )
-                    },
-                },
-            )
-            .map_err(record_error)?;
-        // A read-only Agent that cannot read the repository would only
-        // report that it examined nothing, so such a run does not start.
-        let unreadable = if ready && toolchain_failure.is_none() {
-            self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
-                .await
-        } else {
-            None
-        };
-        if !ready || unreadable.is_some() || toolchain_failure.is_some() {
-            // The environment failed (or still needs a person), or the
-            // run's read-only Agents cannot read the repository: the run
-            // ends here with what the setup printed, or why.
-            let detail = match (unreadable, toolchain_failure) {
-                (Some(refusal), _) => refusal,
-                (None, Some(failure)) => failure,
-                (None, None) => {
-                    let mut detail = session
-                        .environment
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "the Session's environment is not ready".into());
-                    for result in &session.environment.setup_results {
-                        detail.push_str(&format!(
-                            "\n$ {} (exit {})\n{}{}",
-                            result.command, result.exit_code, result.stdout, result.stderr
-                        ));
-                    }
-                    detail
-                }
+            // A read-only Agent that cannot read the repository would only
+            // report that it examined nothing, so such a run does not start.
+            let unreadable = if ready && toolchain_failure.is_none() {
+                self.loadout_helper_refusal(&session.id, &loadout.file, &repo)
+                    .await
+            } else {
+                None
             };
-            let mut outcome = ended_outcome(&manifest, head(&detail, 16 * 1024), warnings.clone());
-            outcome.notes = resolved.notes.clone();
-            // What the Session's record holds so far, setup included.
-            outcome.network = self.loadout_network_summary(&session.id).await;
-            if let Some(warning) = self.seal_or_warn(&run_id, &outcome).await {
-                let _ = store.append(
-                    &run_id,
-                    &RunEvent::Warning {
-                        at_ms: now_ms(),
-                        warning: warning.clone(),
-                    },
-                );
-                outcome.warnings.push(warning);
+            if !ready || unreadable.is_some() || toolchain_failure.is_some() {
+                // The environment failed (or still needs a person), or the
+                // run's read-only Agents cannot read the repository: the run
+                // ends here with what the setup printed, or why.
+                let detail = match (unreadable, toolchain_failure) {
+                    (Some(refusal), _) => refusal,
+                    (None, Some(failure)) => failure,
+                    (None, None) => {
+                        let mut detail = session
+                            .environment
+                            .error
+                            .clone()
+                            .unwrap_or_else(|| "the Session's environment is not ready".into());
+                        for result in &session.environment.setup_results {
+                            detail.push_str(&format!(
+                                "\n$ {} (exit {})\n{}{}",
+                                result.command, result.exit_code, result.stdout, result.stderr
+                            ));
+                        }
+                        detail
+                    }
+                };
+                self.end_run_at_environment(
+                    &manifest,
+                    &detail,
+                    warnings.clone(),
+                    resolved.notes.clone(),
+                )
+                .await?;
             }
-            let _ = store.append(
-                &run_id,
-                &RunEvent::Ended {
-                    at_ms: now_ms(),
-                    outcome: Box::new(outcome.clone()),
+            let wall_clock =
+                crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
+            let context = RunContext {
+                run_id: run_id.clone(),
+                session_id: session.id.clone(),
+                workspace_id: workspace.id.clone(),
+                resolved,
+                options,
+                deadline: std::time::Instant::now() + std::time::Duration::from_millis(wall_clock),
+                agent_contexts,
+            };
+            Ok((
+                RunAccepted {
+                    run_id,
+                    session_id: session.id,
+                    workspace_id: workspace.id,
+                    warnings,
                 },
-            );
-            store.finish(&run_id, &outcome).map_err(record_error)?;
+                context,
+            ))
         }
-        let wall_clock = crate::loadout::team_plan::wall_clock_ms(&resolved).map_err(run_error)?;
-        let context = RunContext {
-            run_id: run_id.clone(),
-            session_id: session.id.clone(),
-            workspace_id: workspace.id.clone(),
-            resolved,
-            options,
-            deadline: std::time::Instant::now() + std::time::Duration::from_millis(wall_clock),
-            agent_contexts,
-        };
-        Ok((
-            RunAccepted {
-                run_id,
-                session_id: session.id,
-                workspace_id: workspace.id,
-                warnings,
-            },
-            context,
-        ))
+        .await;
+        if let Err(error) = &admitted {
+            self.end_refused_run_record(&refused_run, error);
+            self.close_refused_run_session(&session_id, &refused_run)
+                .await;
+        }
+        admitted
     }
 
     /// `POST /api/runs`: resolve the loadout, authorize the repository as a
     /// Workspace, create the Session bound to the loadout, approve exactly
     /// the loadout's environment, write the run manifest. The server then
     /// starts the driver task. A repeat of the same `request_id` returns the
-    /// same run; the same id with another request is refused.
+    /// same run; the same id with another request is refused, and so is a
+    /// repeat while the first is being admitted. Admission cleans up what it
+    /// made only when it runs to its end, so the server runs it in a task of
+    /// its own that a client going away does not drop.
     pub async fn admit_loadout_run(
         &self,
         request: RunRequest,
@@ -2479,13 +2666,13 @@ impl AxocoatlDaemon {
                 )));
             }
         }
-        let result = self.admit_loadout_run_inner(&request).await;
-        self.loadout_runs
-            .admitting
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .remove(&request.request_id);
-        let (accepted, context) = result?;
+        // The request id is no longer being admitted once this ends, however
+        // it ends; an admitted one is recorded as admitted first.
+        let _admitting = Admitting {
+            runs: &self.loadout_runs,
+            request_id: &request.request_id,
+        };
+        let (accepted, context) = self.admit_loadout_run_inner(&request).await?;
         self.loadout_runs
             .admitted
             .lock()
@@ -2548,7 +2735,8 @@ impl AxocoatlDaemon {
     /// to the run before its environment is prepared, and prepare that
     /// environment with exactly `setup` approved (no detected command is
     /// ever approved by a run). Returns the Session as prepared: Ready, or
-    /// Failed with the setup's output.
+    /// Failed with the setup's output. A Session it made and could not
+    /// bind or prepare is closed again.
     #[allow(clippy::too_many_arguments)]
     async fn create_loadout_session(
         &self,
@@ -2599,7 +2787,8 @@ impl AxocoatlDaemon {
         // loadout's own team before the first turn.
         let mode = SessionMode::Custom { agents: Vec::new() };
         let setup_approved = setup.is_some();
-        let session = {
+        let run_id = binding.run_id.clone();
+        let (session_id, bound) = {
             let mut sessions = self.session_store.lock().await;
             let (session, receipt) = sessions
                 .create_native_with_environment(
@@ -2616,29 +2805,43 @@ impl AxocoatlDaemon {
                     true,
                 )
                 .map_err(|error| DaemonError::Session(error.to_string()))?;
-            self.session_dispatch_lifecycles
-                .retain_native_session(ownership.clone(), receipt)?;
-            sessions
-                .bind_loadout(&session.id, binding)
-                .map_err(|error| DaemonError::Session(error.to_string()))?
+            let bound = (|| {
+                self.session_dispatch_lifecycles
+                    .retain_native_session(ownership.clone(), receipt)?;
+                sessions
+                    .bind_loadout(&session.id, binding)
+                    .map_err(|error| DaemonError::Session(error.to_string()))
+            })();
+            (session.id, bound)
         };
-        self.egress_points.set_loadout_overlay(&session.id, overlay);
-        match self.prepare_new_session_environment(session.clone()).await {
-            Ok(session) => Ok(session),
-            Err(error) => {
-                // A failed preparation is recorded on the Session; return it
-                // as it stands so the run reports the setup's output.
-                let current = self.get_session(&session.id).await;
-                match current {
-                    Some(current)
-                        if current.environment.state == SessionEnvironmentState::Failed =>
-                    {
-                        Ok(current)
+        let error = match bound {
+            Ok(session) => {
+                self.egress_points.set_loadout_overlay(&session.id, overlay);
+                match self.prepare_new_session_environment(session.clone()).await {
+                    Ok(session) => return Ok(session),
+                    Err(error) => {
+                        // A failed preparation is recorded on the Session;
+                        // return it as it stands so the run reports the
+                        // setup's output.
+                        match self.get_session(&session.id).await {
+                            Some(current)
+                                if current.environment.state == SessionEnvironmentState::Failed =>
+                            {
+                                return Ok(current)
+                            }
+                            _ => error,
+                        }
                     }
-                    _ => Err(error),
                 }
             }
-        }
+            Err(error) => error,
+        };
+        // Not admitted: the Session goes with the run, once this admission
+        // no longer holds the Workspace that closing it takes.
+        drop(_named);
+        drop(_operation);
+        self.close_refused_run_session(&session_id, &run_id).await;
+        Err(error)
     }
 
     /// The refusal a run gets when another operation holds its Workspace
@@ -2713,6 +2916,26 @@ impl AxocoatlDaemon {
     /// Record that a person asked to stop `run_id`, and stop its Session's
     /// active turn.
     pub async fn request_loadout_run_stop(&self, run_id: &str) -> Result<(), DaemonError> {
+        self.stop_loadout_run_because(run_id, "a person asked to stop the run")
+            .await
+    }
+
+    /// Stop `run_id`, which admission accepted after the client that asked
+    /// for it went away (Ctrl-C while `axocoatl run` waited for admission):
+    /// nobody follows the run, so it stops before its first turn, as Ctrl-C
+    /// after admission stops it, and its Session's runtime stops with it.
+    pub async fn stop_unanswered_loadout_run(&self, run_id: &str) -> Result<(), DaemonError> {
+        self.stop_loadout_run_because(
+            run_id,
+            "the client that asked for the run went away before admission answered, so \
+             the run stops before its first turn",
+        )
+        .await
+    }
+
+    /// Record that `run_id` is to stop, and why, and stop its Session's
+    /// active turn.
+    async fn stop_loadout_run_because(&self, run_id: &str, why: &str) -> Result<(), DaemonError> {
         let store = self.loadout_runs.store()?;
         let manifest = store.manifest(run_id).map_err(record_error)?;
         if store.is_finished(run_id).map_err(record_error)? {
@@ -2728,7 +2951,7 @@ impl AxocoatlDaemon {
             &RunEvent::Phase {
                 at_ms: now_ms(),
                 phase: "stopping".into(),
-                detail: "a person asked to stop the run".into(),
+                detail: why.into(),
             },
         );
         if let Some(active) = self.active_session_turn(&manifest.session_id).await? {
@@ -2769,6 +2992,151 @@ impl AxocoatlDaemon {
             .into_iter()
             .map(|(_, event)| event)
             .collect())
+    }
+
+    /// Stop the runtime of the Session of a run that has ended: its
+    /// containers, egress sidecar and browser stop, as when the daemon
+    /// stops, and the Session stays open with its record, History, team and
+    /// network record, so Keep, the record bundle and the workbench work as
+    /// before; what needs its container again (Files, Terminal, a turn)
+    /// starts it again, as after a restart. A Session whose own turn runs,
+    /// or whose Workspace another operation holds, keeps its runtime, and
+    /// the refusal says why. A Session closed, gone or never prepared has
+    /// none to stop.
+    pub async fn stop_loadout_run_runtime(&self, session_id: &str) -> Result<(), DaemonError> {
+        match self.get_session(session_id).await {
+            Some(session) if session.status != axocoatl_session::SessionStatus::Closed => {}
+            _ => return Ok(()),
+        }
+        let refused = format!("The runtime of Session {session_id} was not stopped");
+        let _operation = self
+            .take_session_workspace_operation(
+                session_id,
+                workspace_operation::WorkspaceRequest {
+                    doing: format!("the end of a loadout run in Session {session_id}"),
+                    refused: refused.clone(),
+                },
+            )
+            .await?;
+        let _start = self
+            .lock_session_start_for_lifecycle(session_id, &refused)
+            .await?;
+        if let Some(active) = self.active_session_turn(session_id).await? {
+            return Err(DaemonError::SessionConflict(format!(
+                "{refused}: its turn {} is running",
+                active.turn_id
+            )));
+        }
+        self.stop_session_actors_checked(session_id).await?;
+        self.stop_session_sandbox_checked(session_id).await
+    }
+
+    /// End `manifest`'s run at its environment, before any turn, with
+    /// `detail` (what the setup printed, or why the environment cannot run
+    /// it): the Session's runtime stops, as at the end of every run, since
+    /// a toolchain setup or a helper check may have left its container and
+    /// egress sidecar running; then what the Session's record holds, setup
+    /// included, is summed up and the Outcome sealed and written. A stop
+    /// that fails is the warning `session_runtime_not_stopped`.
+    async fn end_run_at_environment(
+        &self,
+        manifest: &RunManifest,
+        detail: &str,
+        warnings: Vec<RunWarning>,
+        notes: Vec<String>,
+    ) -> Result<RunOutcome, DaemonError> {
+        let store = self.loadout_runs.store()?;
+        let (run_id, session_id) = (&manifest.run_id, &manifest.session_id);
+        let mut outcome = ended_outcome(manifest, head(detail, 16 * 1024), warnings);
+        outcome.notes = notes;
+        if let Err(error) = self.stop_loadout_run_runtime(session_id).await {
+            let warning =
+                crate::loadout::driver::session_runtime_not_stopped(session_id, &error.to_string());
+            let _ = store.append(
+                run_id,
+                &RunEvent::Warning {
+                    at_ms: now_ms(),
+                    warning: warning.clone(),
+                },
+            );
+            outcome.warnings.push(warning);
+        }
+        outcome.network = self.loadout_network_summary(session_id).await;
+        if let Some(warning) = self.seal_or_warn(run_id, &outcome).await {
+            let _ = store.append(
+                run_id,
+                &RunEvent::Warning {
+                    at_ms: now_ms(),
+                    warning: warning.clone(),
+                },
+            );
+            outcome.warnings.push(warning);
+        }
+        let _ = store.append(
+            run_id,
+            &RunEvent::Ended {
+                at_ms: now_ms(),
+                outcome: Box::new(outcome.clone()),
+            },
+        );
+        store.finish(run_id, &outcome).map_err(record_error)?;
+        Ok(outcome)
+    }
+
+    /// End the record of `run_id`, which admission refused with `error`
+    /// after the record was made (a later write failed), so the run is
+    /// listed as failed with that reason instead of preparing until the
+    /// daemon restarts. A run with no record, or one that already ended, is
+    /// left; a record that cannot be written now is logged.
+    fn end_refused_run_record(&self, run_id: &str, error: &DaemonError) {
+        let Ok(store) = self.loadout_runs.store() else {
+            return;
+        };
+        let Ok(manifest) = store.manifest(run_id) else {
+            return;
+        };
+        if !matches!(store.outcome(run_id), Ok(None)) {
+            return;
+        }
+        let outcome = ended_outcome(
+            &manifest,
+            format!("the run was refused after its record was made: {error}"),
+            Vec::new(),
+        );
+        let _ = store.append(
+            run_id,
+            &RunEvent::Ended {
+                at_ms: now_ms(),
+                outcome: Box::new(outcome.clone()),
+            },
+        );
+        if let Err(error) = store.finish(run_id, &outcome) {
+            tracing::warn!(run = %run_id, %error, "ending a refused run's record failed");
+        }
+    }
+
+    /// Close the Session of a run that admission refused after creating it
+    /// (the check probe, or a record that could not be written): the
+    /// Session goes with the run. Why it could not be closed is logged.
+    async fn close_refused_run_session(&self, session_id: &str, run_id: &str) {
+        self.loadout_runs
+            .e2e_runs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(run_id);
+        let open = self
+            .get_session(session_id)
+            .await
+            .is_some_and(|session| session.status != axocoatl_session::SessionStatus::Closed);
+        if open {
+            if let Err(error) = self.close_session(session_id).await {
+                tracing::warn!(
+                    session = %session_id,
+                    %error,
+                    "closing the refused run's Session failed"
+                );
+            }
+        }
     }
 
     /// Write `run_id`'s Outcome once.
@@ -3106,6 +3474,15 @@ impl AxocoatlDaemon {
         self.loadout_runs.ollama_versions(session_id)
     }
 
+    /// The OpenRouter endpoints that answered the Session's native calls,
+    /// by model (the run's Outcome, notes and receipt name them).
+    pub fn loadout_openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<ServedEndpoint>> {
+        self.loadout_runs.openrouter_endpoints(session_id)
+    }
+
     pub async fn loadout_network_summary(&self, session_id: &str) -> NetworkSummary {
         use axocoatl_session::network_record::{Decision, NetworkEvent};
         let mut summary = NetworkSummary::default();
@@ -3293,6 +3670,15 @@ impl AxocoatlDaemon {
                             cost_known: usage.cost_known,
                             cost_computed: false,
                             retries: 0,
+                            unreported: (usage.unreported_calls > 0)
+                                .then(|| {
+                                    format!(
+                                        "{} of {} model calls",
+                                        usage.unreported_calls, usage.calls
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
                         },
                     );
                 }
@@ -3424,8 +3810,9 @@ impl AxocoatlDaemon {
     }
 
     /// At startup: a run left without an Outcome was cut off by a restart;
-    /// it ends failed, never resumed silently. Loadout Sessions get their
-    /// loadout's network additions back.
+    /// it ends failed, never resumed silently (the restart already stopped
+    /// its Session's runtime). Loadout Sessions get their loadout's network
+    /// additions back.
     pub(crate) async fn recover_loadout_runs(&self) {
         let Ok(store) = self.loadout_runs.store() else {
             return;
@@ -3543,6 +3930,21 @@ pub fn validate_text(text: &str) -> ValidateLoadoutResponse {
             summary: None,
         },
     }
+}
+
+/// The run's note when its Session's container did not get every resource
+/// cap, naming those it runs without; `None` when it got them all.
+pub(crate) fn resource_caps_note(
+    limits: &axocoatl_session::SessionResourceLimits,
+) -> Option<String> {
+    (!limits.not_applied.is_empty()).then(|| {
+        format!(
+            "The Session's container runs without its {} cap: this computer does not delegate \
+             that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With \
+             sandbox.require_resource_limits: true the Session refuses to start instead.",
+            limits.not_applied.join(", ")
+        )
+    })
 }
 
 #[cfg(test)]
@@ -3930,6 +4332,67 @@ mod tests {
         assert_eq!(observed.attention_reason, None);
     }
 
+    /// A turn that needs attention because its current review ended without
+    /// a verdict carries why, such as a reviewer whose request did not fit
+    /// its model's context, without the hint to Continue; a review that asked
+    /// for changes, or one about an earlier result, carries none: its
+    /// verdict and findings say it.
+    #[test]
+    fn a_turn_needing_attention_carries_why_its_review_did_not_finish() {
+        use crate::session_control_plane::EvidenceValue;
+        let mut view = projection(
+            "needs_attention",
+            "accepted",
+            EvidenceValue::NotRecorded,
+            EvidenceValue::NotRecorded,
+        );
+        let reason = "The reviewer did not finish, so nothing approved this result: its request \
+                      needed 34,440 tokens of its model's context, more than the 27,852 one \
+                      request may take with its output allowance, so the change, the Agents' \
+                      answers and its instructions did not fit. Select the reviewer and \
+                      Continue to run it again, or Finish.";
+        view.required_review = Some(axocoatl_session::turn_review::TurnReviewView {
+            reviewer: "reviewer".into(),
+            state: "failed".into(),
+            reason: reason.into(),
+            verdict: Some(axocoatl_session::turn_review::ReviewVerdict::Unreadable),
+            findings: String::new(),
+            round: Some(1),
+            max_rounds: 3,
+            current: true,
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some(
+                "The reviewer did not finish, so nothing approved this result: its request \
+                 needed 34,440 tokens of its model's context, more than the 27,852 one request \
+                 may take with its output allowance, so the change, the Agents' answers and its \
+                 instructions did not fit."
+            )
+        );
+        // Failed readiness says why first: the review never ran.
+        view.required_check_readiness = Some(axocoatl_session::turn_checks::TurnCheckReadiness {
+            state: "failed".into(),
+            reason: "A check failed. Fix the cause, then Continue to run the checks again.".into(),
+            candidate_sha256: None,
+        });
+        let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+        assert_eq!(
+            observed.attention_reason.as_deref(),
+            Some("A check failed.")
+        );
+        view.required_check_readiness = None;
+        for (state, current) in [("changes", true), ("failed", false)] {
+            let review = view.required_review.as_mut().unwrap();
+            review.state = state.into();
+            review.current = current;
+            let observed = observation_from_control_plane(&view, &[], None, &HashMap::new());
+            assert_eq!(observed.attention_reason, None, "{state} {current}");
+        }
+    }
+
     /// An activation that failed with an empty recorded reason ends with
     /// "<node> ended without a result", never an empty reason: as stopped
     /// when its turn was stopped, as other otherwise.
@@ -4091,6 +4554,7 @@ mod tests {
                 cost_known: true,
                 cost_computed: false,
                 retries: 0,
+                unreported: Vec::new(),
             },
         )]
         .into_iter()
@@ -4206,6 +4670,7 @@ mod tests {
                     cost_known,
                     cost_computed: false,
                     retries: 0,
+                    unreported: Vec::new(),
                 },
             )]
             .into_iter()
@@ -4241,6 +4706,33 @@ mod tests {
         // call whose usage is not known has no known cost either.
         let unknown = observation_from_control_plane(&view, &[], None, &HashMap::new());
         assert!(!unknown.usage.complete && !unknown.usage.cost_known);
+    }
+
+    /// A container without every resource cap is said in the run's notes,
+    /// naming each cap it runs without; one with every cap says nothing.
+    #[test]
+    fn a_run_notes_the_resource_caps_its_container_did_not_get() {
+        use axocoatl_isolation::container_host::ResourceCaps;
+        let all = crate::bootstrap::recorded_resource_limits(ResourceCaps::ALL);
+        assert_eq!(all.memory.as_deref(), Some("2g"));
+        assert_eq!(all.cpus.as_deref(), Some("2"));
+        assert_eq!(all.pids, Some(512));
+        assert_eq!(resource_caps_note(&all), None);
+        let without_cpu = crate::bootstrap::recorded_resource_limits(ResourceCaps {
+            memory: true,
+            cpus: false,
+            pids: true,
+        });
+        assert_eq!(without_cpu.cpus, None);
+        let note = resource_caps_note(&without_cpu).unwrap();
+        assert!(
+            note.contains("runs without its CPU (2 CPUs, cgroup controller cpu) cap"),
+            "{note}"
+        );
+        assert!(
+            note.contains("sandbox.require_resource_limits: true"),
+            "{note}"
+        );
     }
 
     #[test]

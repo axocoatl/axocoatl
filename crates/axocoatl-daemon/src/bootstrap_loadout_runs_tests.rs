@@ -908,9 +908,7 @@ async fn external_fix_admission_child_body() {
     // nothing else stops it); with --no-build it is one more: both at once.
     let no_credential = "Agent writer (codex) has credential auto, and neither codex-openai \
                          nor codex-chatgpt is stored: run `axocoatl connect codex` to sign in \
-                         with your ChatGPT plan (stored as codex-chatgpt), or `axocoatl \
-                         connect codex --api-key` to also store the OpenAI API key OpenAI \
-                         issues with that sign-in (as codex-openai), then run again";
+                         with your ChatGPT plan (stored as codex-chatgpt), then run again";
     let message = usage(admit(request("fix-codex", &[], "codex-none")).await);
     assert_eq!(message, no_credential);
     let no_build = |params: &[(&str, &str)], id: &str| {
@@ -952,7 +950,9 @@ async fn external_fix_admission_child_body() {
     );
     assert!(
         message.contains("needs the credential codex-openai (")
-            && message.contains("axocoatl connect codex --api-key"),
+            && message
+                .contains("sign in with your ChatGPT plan instead with `axocoatl connect codex`")
+            && message.contains("--param credential=codex-chatgpt"),
         "{message}"
     );
 
@@ -1030,11 +1030,21 @@ async fn external_fix_admission_child_body() {
     );
     let review = edit.required_review.as_ref().unwrap();
     assert_eq!(review.max_rounds, 3);
-    // Both stored: auto takes the API key; --param chooses either.
+    // Both stored: auto takes the API key, and says that the run is billed
+    // at API rates rather than to the plan; --param chooses either.
     crate::secret_store::set_secret(&data, "codex-openai", b"test-api-key").unwrap();
     let (codex, chosen) = resolved("fix-codex", &[]);
     assert_eq!(chosen["writer"], "codex-openai");
     assert_eq!(hosts(&codex), ["api.openai.com"]);
+    assert!(
+        codex.notes[0].ends_with(
+            "It is billed at OpenAI API rates to the key's OpenAI Platform organization, not \
+             to your ChatGPT plan, whose sign-in (codex-chatgpt) is stored too: `--param \
+             credential=codex-chatgpt` uses the plan."
+        ),
+        "{:?}",
+        codex.notes
+    );
     let (codex, chosen) = resolved("fix-codex", &[("credential", "codex-chatgpt")]);
     assert_eq!(chosen["writer"], "codex-chatgpt");
     assert_eq!(hosts(&codex), ["chatgpt.com"]);
@@ -1050,6 +1060,7 @@ async fn external_fix_admission_child_body() {
     let (codex, chosen) = resolved("fix-codex", &[]);
     assert_eq!(chosen["writer"], "codex-openai");
     assert_eq!(hosts(&codex), ["api.openai.com"]);
+    assert!(!codex.notes[0].contains("billed"), "{:?}", codex.notes);
     let message = busy(admit(request("fix-codex", &[], "codex-openai-auto")).await);
     assert!(message.contains(&holder.id), "{message}");
 
@@ -1248,6 +1259,10 @@ async fn external_fix_admission_child_body() {
 
 /// Run `name` in a child process with its own data root and a fake Podman
 /// that reports `rootless`.
+/// Where the fake Podman of [`run_child`] appends each command it is run
+/// with.
+const PODMAN_LOG: &str = "AXO_LOADOUT_PODMAN_LOG";
+
 async fn run_child(name: &str, rootless: bool) {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
@@ -1257,6 +1272,7 @@ async fn run_child(name: &str, rootless: bool) {
         &podman,
         format!(
             r#"#!/bin/sh
+printf '%s\n' "$*" >> "${PODMAN_LOG}"
 case "$*" in
   --version) printf 'podman version 5.0.0\n' ;;
   'machine list --format json') printf '[{{"Running":true}}]\n' ;;
@@ -1276,6 +1292,7 @@ esac
         tokio::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name, "--nocapture"])
             .env(CHILD, "1")
+            .env(PODMAN_LOG, root.path().join("podman.log"))
             .env("AXOCOATL_DATA_DIR", root.path().join("data"))
             .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
@@ -1415,6 +1432,8 @@ async fn receipts_child_body() {
     assert!(!String::from_utf8_lossy(&opened.payload).contains("not-a-real-token"));
     assert_eq!(predicate.sandbox.network, "egress");
     assert_eq!(predicate.sandbox.backend, "podman");
+    // The Session's container never started, so no caps are recorded.
+    assert_eq!(predicate.sandbox.limits, None);
     assert_eq!(
         predicate.run.task_sha256,
         axocoatl_session::receipt::sha256_hex(manifest.task.as_bytes())
@@ -1444,6 +1463,25 @@ async fn receipts_child_body() {
     );
     // The same key signs the next run; the receipt is written once.
     assert!(store.write_receipt(&run_id, b"{}\n").is_err());
+
+    // The caps the Session's container got, as its record keeps them once
+    // it is Ready (here without the CPU cap), are the next receipt's
+    // sandbox.limits. The Session's environment is put back afterwards: no
+    // container ever ran it.
+    let environment = session.environment.clone();
+    let limits = crate::bootstrap::recorded_resource_limits(
+        axocoatl_isolation::container_host::ResourceCaps {
+            memory: true,
+            cpus: false,
+            pids: true,
+        },
+    );
+    daemon
+        .session_store
+        .lock()
+        .await
+        .set_environment_ready(&session.id, None, None, Vec::new(), Some(limits.clone()))
+        .unwrap();
 
     // A run whose model Ollama served: the Outcome records the version
     // and the receipt names it in the Agent's program version, a field the
@@ -1484,6 +1522,25 @@ async fn receipts_child_body() {
         .unwrap();
     daemon.finish_loadout_run(&served.run_id, &outcome).unwrap();
     let opened = open_receipt(&daemon.loadout_run_receipt(&served.run_id).unwrap()).unwrap();
+    assert_eq!(opened.statement.predicate.sandbox.limits, Some(limits));
+    assert!(axocoatl_session::receipt::describe(&opened.statement)
+        .iter()
+        .any(|line| line
+            == "Resource caps: memory 2g, 512 processes; not applied, this host does not \
+                delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)"));
+    daemon
+        .session_store
+        .lock()
+        .await
+        .set_environment(
+            &session.id,
+            environment.state,
+            environment.effective_image,
+            environment.runtime,
+            environment.setup_results,
+            environment.error,
+        )
+        .unwrap();
     assert_eq!(
         opened.statement.predicate.agents[0].program_version,
         Some(format!(
@@ -1528,6 +1585,79 @@ async fn receipts_child_body() {
     assert_eq!(
         recorded["ollama_versions"][MODEL],
         serde_json::json!([axocoatl_llm_ollama::AUDITED_OLLAMA_VERSION])
+    );
+
+    // A run whose reviewer OpenRouter served, its call moved from one
+    // endpoint to another: the Outcome records both, and the receipt names
+    // them, in the order they first answered, in the review's program
+    // version.
+    let routed = receipt_manifest(&session, &repo, &head);
+    store.create(&routed).unwrap();
+    let mut outcome = ended_outcome(&routed, "the environment failed".into(), Vec::new());
+    let served =
+        |endpoint: &str, provider: &str, calls| axocoatl_session::run_outcome::ServedEndpoint {
+            endpoint: endpoint.into(),
+            provider: provider.into(),
+            calls,
+            moved: 0,
+        };
+    outcome.openrouter_endpoints = [(
+        "openai/gpt-oss-120b".to_string(),
+        vec![
+            served("near-ai/fp4", "Near AI", 1),
+            served("deepinfra/bf16", "DeepInfra", 2),
+        ],
+    )]
+    .into_iter()
+    .collect();
+    outcome.review = Some(axocoatl_session::run_outcome::ReviewOutcome {
+        reviewer: axocoatl_session::run_outcome::ModelIdentity {
+            provider: "openrouter".into(),
+            model: "openai/gpt-oss-120b".into(),
+            runtime: "native".into(),
+        },
+        max_rounds: 3,
+        rounds: Vec::new(),
+        passed: false,
+        state: "not_run".into(),
+        reason: "the environment failed".into(),
+    });
+    daemon
+        .seal_loadout_run(&routed.run_id, &outcome)
+        .await
+        .unwrap();
+    daemon.finish_loadout_run(&routed.run_id, &outcome).unwrap();
+    let opened = open_receipt(&daemon.loadout_run_receipt(&routed.run_id).unwrap()).unwrap();
+    let endpoints = "openrouter endpoints near-ai/fp4 (Near AI), deepinfra/bf16 (DeepInfra)";
+    assert_eq!(
+        opened
+            .statement
+            .predicate
+            .review
+            .as_ref()
+            .and_then(|review| review.program_version.as_deref()),
+        Some(endpoints)
+    );
+    assert!(axocoatl_session::receipt::describe(&opened.statement)
+        .iter()
+        .any(|line| line.starts_with(&format!(
+            "Review by openrouter:openai/gpt-oss-120b ({endpoints}):"
+        ))));
+    let recorded: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            daemon
+                .data_root
+                .path()
+                .join(axocoatl_session::run_record::RUN_RECORD_DIR)
+                .join(&routed.run_id)
+                .join("outcome.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded["openrouter_endpoints"]["openai/gpt-oss-120b"][1],
+        serde_json::json!({"endpoint": "deepinfra/bf16", "provider": "DeepInfra", "calls": 2})
     );
 
     // A run the daemon restarted during: a receipt its interrupted finish
@@ -1743,7 +1873,7 @@ async fn toolchain_admission_child_body() {
             .await,
     );
     assert!(
-        message.contains("Pass --toolchain <language>, where <language> is node or go"),
+        message.contains("Pass --toolchain LANGUAGE, where LANGUAGE is node or go"),
         "{message}"
     );
     assert!(daemon.list_loadout_runs().await.unwrap().is_empty());
@@ -1825,6 +1955,22 @@ async fn toolchain_admission_child_body() {
         .outcome
         .unwrap();
     assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+    // The run ended at its environment: its Session stays open, its
+    // runtime stopped.
+    assert_ne!(
+        daemon
+            .get_session(&accepted.session_id)
+            .await
+            .unwrap()
+            .status,
+        axocoatl_session::SessionStatus::Closed
+    );
+    assert!(!daemon
+        .session_sandboxes
+        .lock()
+        .await
+        .contains_key(&accepted.session_id));
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
     assert!(
         outcome.notes.iter().any(|note| note.contains(
             "· toolchain python (pyproject.toml at the repository root) · check python3 -m \
@@ -1834,6 +1980,36 @@ async fn toolchain_admission_child_body() {
         "{:?}",
         outcome.notes
     );
+
+    // A run whose record cannot be written after its Session was made is
+    // refused, and its Session closed: nothing of it stays open. (Root
+    // writes through the permissions this takes away.)
+    if crate::bootstrap::effective_uid() != 0 {
+        let runs = daemon
+            .data_root
+            .path()
+            .join(axocoatl_session::run_record::RUN_RECORD_DIR);
+        let before: Vec<String> = daemon
+            .list_sessions()
+            .await
+            .into_iter()
+            .map(|session| session.id)
+            .collect();
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let unrecorded = daemon
+            .admit_loadout_run(request(python.path(), "python-unrecorded", None))
+            .await;
+        std::fs::set_permissions(&runs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unrecorded.is_err(), "{unrecorded:?}");
+        let made: Vec<Session> = daemon
+            .list_sessions()
+            .await
+            .into_iter()
+            .filter(|session| !before.contains(&session.id))
+            .collect();
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(made[0].status, axocoatl_session::SessionStatus::Closed);
+    }
 
     // --toolchain none: the loadout's image as it is, nothing detected.
     let mut none = request(python.path(), "python-none", Some("python3 -m pytest"));
@@ -1865,6 +2041,206 @@ async fn the_repository_toolchain_is_chosen_at_admission() {
     }
     run_child(
         "bootstrap::loadout_runs::daemon_tests::the_repository_toolchain_is_chosen_at_admission",
+        true,
+    )
+    .await;
+}
+
+/// A Session runtime that is running and runs nothing: what a toolchain
+/// setup that failed, or a helper check, leaves at the end of admission.
+struct RunningSandbox(std::path::PathBuf);
+
+#[async_trait::async_trait]
+impl Sandbox for RunningSandbox {
+    fn root(&self) -> &std::path::Path {
+        &self.0
+    }
+    async fn exec(
+        &self,
+        _argv: &[&str],
+        _timeout: Duration,
+    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
+        Err(axocoatl_isolation::IsolationError::Io(
+            std::io::Error::other("the test runtime runs no command"),
+        ))
+    }
+    async fn exec_stdin(
+        &self,
+        _argv: &[&str],
+        _stdin: &str,
+        _timeout: Duration,
+    ) -> Result<ExecResult, axocoatl_isolation::IsolationError> {
+        Err(axocoatl_isolation::IsolationError::Io(
+            std::io::Error::other("the test runtime runs no command"),
+        ))
+    }
+    fn spawn_background(&self, _command: &str) -> String {
+        unreachable!("the test runtime runs no background task")
+    }
+    fn spawn_pty(
+        &self,
+        _command: &str,
+        _rows: u16,
+        _cols: u16,
+    ) -> Result<Arc<axocoatl_isolation::pty::PtyTerminal>, String> {
+        Err("the test runtime has no terminal".into())
+    }
+    fn get_terminal(&self, _id: &str) -> Option<Arc<axocoatl_isolation::pty::PtyTerminal>> {
+        None
+    }
+    fn kill_terminal(&self, _id: &str) -> bool {
+        false
+    }
+    fn list_terminals(&self) -> Vec<(String, String, bool)> {
+        Vec::new()
+    }
+    fn list_tasks(&self) -> Vec<axocoatl_isolation::session_sandbox::BgTask> {
+        Vec::new()
+    }
+    fn with_root(&self, root: &std::path::Path) -> Arc<dyn Sandbox> {
+        Arc::new(Self(root.to_path_buf()))
+    }
+    async fn stop(&self) {}
+}
+
+async fn environment_end_child_body() {
+    let server = model_server().await;
+    let daemon = AxocoatlDaemon::bootstrap_headless(config(&server.uri(), "podman"))
+        .await
+        .unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(repo.path().join("README.md"), "# repo\n").unwrap();
+    let mut request = RunRequest {
+        loadout: "fix".into(),
+        task: "Paging skips the last item".into(),
+        repo: repo.path().display().to_string(),
+        params: [
+            ("writer_model".to_string(), format!("ollama:{MODEL}")),
+            ("reviewer_model".to_string(), format!("ollama:{OTHER}")),
+        ]
+        .into_iter()
+        .collect(),
+        keep: Default::default(),
+        check_command: Some("true".into()),
+        setup_command: None,
+        environment: Default::default(),
+        request_id: "environment-end".into(),
+    };
+    request.environment.toolchain = Some("none".into());
+    // The fake Podman starts no container: this run ends at its environment
+    // before anything ran in its Session.
+    let (accepted, _) = daemon.admit_loadout_run(request).await.unwrap();
+    let session_id = accepted.session_id.clone();
+    let store = daemon.loadout_runs.store().unwrap();
+    let mut manifest = store.manifest(&accepted.run_id).unwrap();
+
+    // A run of the same Session whose toolchain setup failed in its Ready
+    // container: the container and its egress sidecar are running when the
+    // run ends at its environment.
+    manifest.run_id = format!("run-{}", uuid::Uuid::new_v4());
+    store.create(&manifest).unwrap();
+    daemon
+        .session_store
+        .lock()
+        .await
+        .set_environment(
+            &session_id,
+            SessionEnvironmentState::Ready,
+            Some("docker.io/library/alpine:3.20".into()),
+            Some(SessionRuntimeIdentity {
+                backend: "podman".into(),
+                id: session_id.clone(),
+                remote_root: None,
+                control_plane: None,
+                data_plane_domain: None,
+                authority_fingerprint: None,
+                ownership_token: None,
+                cleanup_confirmed: false,
+            }),
+            vec![],
+            None,
+        )
+        .unwrap();
+    daemon.session_sandboxes.lock().await.insert(
+        session_id.clone(),
+        Arc::new(RunningSandbox(repo.path().to_path_buf())),
+    );
+    let log = std::path::PathBuf::from(std::env::var_os(PODMAN_LOG).unwrap());
+    std::fs::write(&log, "").unwrap();
+    let outcome = daemon
+        .end_run_at_environment(
+            &manifest,
+            "the toolchain setup `exit 3` failed (exit 3)",
+            Vec::new(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+    // The runtime stopped: the Session's container and egress sidecar were
+    // removed, and the Session has no runtime left, but stays open.
+    assert!(!daemon
+        .session_sandboxes
+        .lock()
+        .await
+        .contains_key(&session_id));
+    let removed = std::fs::read_to_string(&log).unwrap();
+    for container in [
+        format!("axo-ses-{session_id}"),
+        format!("axo-egr-{session_id}"),
+    ] {
+        assert!(
+            removed
+                .lines()
+                .any(|line| line.starts_with("rm --force ") && line.contains(&container)),
+            "{container} was not removed:\n{removed}"
+        );
+    }
+    assert_ne!(
+        daemon.get_session(&session_id).await.unwrap().status,
+        axocoatl_session::SessionStatus::Closed
+    );
+    let ended = daemon.loadout_run(&manifest.run_id).await.unwrap();
+    assert_eq!(ended.outcome.as_ref(), Some(&outcome));
+
+    // A run refused after its record was made (a later write failed) ends
+    // in its record as failed, with the refusal, instead of preparing until
+    // the daemon restarts; an ended run is left as it is.
+    manifest.run_id = format!("run-{}", uuid::Uuid::new_v4());
+    store.create(&manifest).unwrap();
+    assert_eq!(
+        daemon.loadout_run(&manifest.run_id).await.unwrap().state,
+        "preparing"
+    );
+    let refusal = DaemonError::Session("writing the run's notes failed".into());
+    daemon.end_refused_run_record(&manifest.run_id, &refusal);
+    let refused = daemon.loadout_run(&manifest.run_id).await.unwrap();
+    assert_eq!(refused.state, "failed", "{refused:?}");
+    let refused_outcome = refused.outcome.unwrap();
+    assert_eq!(
+        refused_outcome.error.as_deref(),
+        Some(
+            "the run was refused after its record was made: Session error: writing the run's \
+             notes failed"
+        )
+    );
+    daemon.end_refused_run_record(&manifest.run_id, &DaemonError::Session("again".into()));
+    assert_eq!(
+        daemon.loadout_run(&manifest.run_id).await.unwrap().outcome,
+        Some(refused_outcome)
+    );
+    daemon.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_run_that_ends_at_its_environment_stops_its_running_container() {
+    if std::env::var_os(CHILD).is_some() {
+        environment_end_child_body().await;
+        return;
+    }
+    run_child(
+        "bootstrap::loadout_runs::daemon_tests::a_run_that_ends_at_its_environment_stops_its_running_container",
         true,
     )
     .await;
@@ -2095,6 +2471,11 @@ const SLOW_TASK: &str = "Wait for the person to stop this run.";
 /// What the writer of the stopped run has written when it is stopped: part
 /// of an answer, as the fix re-smoke's writer had.
 const STREAMED_TEXT: &str = "I can see the issue now. Let me also look at the tests to better";
+/// The part of [`STREAMED_TEXT`] the turn's record holds while the stream
+/// stalls: a native Ollama answer offered tools keeps its last 16 bytes
+/// back until more arrives, so a tool call written as text is never shown
+/// half.
+const STREAMED_SHOWN: &str = "I can see the issue now.";
 
 /// A model server in front of `upstream` (the wiremock model server): a
 /// `/api/chat` call for [`SLOW_TASK`] streams one line of the writer's
@@ -2370,6 +2751,14 @@ impl crate::loadout::RunHost for LiveHost {
         self.daemon.loadout_ollama_versions(session_id)
     }
 
+    async fn openrouter_endpoints(
+        &self,
+        session_id: &str,
+    ) -> std::collections::BTreeMap<String, Vec<axocoatl_session::run_outcome::ServedEndpoint>>
+    {
+        self.daemon.loadout_openrouter_endpoints(session_id)
+    }
+
     async fn stop_requested(&self, run_id: &str) -> bool {
         self.daemon.loadout_run_stop_requested(run_id)
     }
@@ -2380,6 +2769,13 @@ impl crate::loadout::RunHost for LiveHost {
         outcome: &RunOutcome,
     ) -> Result<Option<axocoatl_session::run_outcome::RunWarning>, String> {
         self.daemon.seal_loadout_run(run_id, outcome).await
+    }
+
+    async fn stop_session_runtime(&self, session_id: &str) -> Result<(), String> {
+        self.daemon
+            .stop_loadout_run_runtime(session_id)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn finish(&self, run_id: &str, outcome: &RunOutcome) -> Result<(), RunError> {
@@ -2621,6 +3017,45 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
         assert!(events.iter().any(
             |event| matches!(event, RunEvent::Phase { phase, .. } if phase == "closing_turn")
         ));
+        // Its Session's runtime stopped: neither its container nor its
+        // egress sidecar runs on, and the Session stays open.
+        assert_ne!(
+            daemon
+                .get_session(&accepted.session_id)
+                .await
+                .unwrap()
+                .status,
+            axocoatl_session::SessionStatus::Closed
+        );
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.code == crate::loadout::driver::SESSION_RUNTIME_NOT_STOPPED),
+            "{:?}",
+            outcome.warnings
+        );
+        let container_exists = |prefix: &str| {
+            std::process::Command::new("podman")
+                .args([
+                    "container",
+                    "exists",
+                    &format!("{prefix}{}", accepted.session_id),
+                ])
+                .status()
+                .unwrap()
+                .success()
+        };
+        assert!(!container_exists("axo-ses-") && !container_exists("axo-egr-"));
+        // What needs the container again (the workbench's Terminal, a
+        // turn) starts it, as after a daemon restart.
+        let session = daemon.get_session(&accepted.session_id).await.unwrap();
+        daemon.ensure_sandbox(&session).await?;
+        assert!(container_exists("axo-ses-"));
+        daemon
+            .stop_loadout_run_runtime(&accepted.session_id)
+            .await?;
+        assert!(!container_exists("axo-ses-"));
 
         // The record bundle carries the versioned history and the team as
         // applied.
@@ -2736,7 +3171,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
                                             &evidence.summary,
                                             crate::session_control_plane::EvidenceValue::Available {
                                                 value
-                                            } if value.contains(STREAMED_TEXT)
+                                            } if value.contains(STREAMED_SHOWN)
                                         )
                                 })
                             })
@@ -2765,7 +3200,7 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             assert!(
                 !entry.detail.trim().is_empty()
                     && entry.detail != "other: "
-                    && !entry.detail.contains(STREAMED_TEXT)
+                    && !entry.detail.contains(STREAMED_SHOWN)
                     && entry.class != axocoatl_session::run_outcome::FailureClass::Other,
                 "{entry:?}"
             );
@@ -2783,11 +3218,210 @@ async fn a_needs_attention_run_on_podman_releases_its_workspace_and_records_what
             operation.try_lock().is_ok(),
             "the stopped run's Session still holds the Workspace"
         );
+        assert!(!daemon
+            .session_sandboxes
+            .lock()
+            .await
+            .contains_key(&stopped.session_id));
         Ok::<(), DaemonError>(())
     }
     .await;
     let shutdown = daemon.shutdown_session_runtimes_checked().await;
     drop(cleanup);
+    result.unwrap();
+    shutdown.unwrap();
+}
+
+/// A run whose toolchain setup fails in its Ready container, on real
+/// Podman: the run ends at its environment (exit code 5), and neither its
+/// container nor its egress sidecar runs on; its Session stays open.
+/// alpine:3.20 is recorded as the python toolchain's image, so no image is
+/// built, and the setup `exit 3` fails in it.
+///
+/// ```text
+/// CONTAINER_CONNECTION=<machine> cargo test -p axocoatl-daemon --lib \
+///   a_failed_toolchain_setup_on_podman_stops_the_runs_containers -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "requires rootless Podman, docker.io/library/alpine:3.20 and the egress sidecar image"]
+async fn a_failed_toolchain_setup_on_podman_stops_the_runs_containers() {
+    const NAME: &str =
+        "bootstrap::loadout_runs::daemon_tests::a_failed_toolchain_setup_on_podman_stops_the_runs_containers";
+    if std::env::var_os(CHILD).is_none() {
+        let root = tempfile::tempdir().unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(900),
+            tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture", "--ignored"])
+                .env(CHILD, "1")
+                .env("AXOCOATL_DATA_DIR", root.path().join("data"))
+                .env("AXOCOATL_SOCKET_PATH", "ipc/daemon.sock")
+                .current_dir(root.path())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    let server = model_server().await;
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("axocoatl.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "agents: []\nproviders:\n  ollama:\n    base_url: {}\nsandbox:\n  backend: podman\n  network: bridge\nconsolidation:\n  enabled: false\n",
+            server.uri()
+        ),
+    )
+    .unwrap();
+    let config = axocoatl_config::load_config(&config_path).await.unwrap();
+    let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    daemon.set_config_path(&config_path);
+    let alpine = std::process::Command::new("podman")
+        .args([
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            "docker.io/library/alpine:3.20",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        alpine.status.success(),
+        "docker.io/library/alpine:3.20 is not pulled"
+    );
+    let alpine = String::from_utf8_lossy(&alpine.stdout).trim().to_string();
+    crate::external_agent::recipe_images::record_image(
+        &daemon.data_root,
+        crate::external_agent::recipe_images::record_for(&["python".to_string()], &alpine, 1)
+            .unwrap(),
+    )
+    .unwrap();
+    // A Python repository outside the data root.
+    let outside = tempfile::Builder::new()
+        .prefix("axocoatl-loadout-run-")
+        .tempdir_in(std::env::temp_dir())
+        .unwrap();
+    let repo = outside.path().join("repo");
+    std::fs::create_dir_all(repo.join("tests")).unwrap();
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = 'pages'\n").unwrap();
+    std::fs::write(repo.join("tests/conftest.py"), "").unwrap();
+    std::fs::write(repo.join("pages.py"), "").unwrap();
+
+    let admitted = daemon
+        .admit_loadout_run(RunRequest {
+            loadout: "fix".into(),
+            task: "Paging skips the last item".into(),
+            repo: repo.display().to_string(),
+            params: [
+                ("writer_model".to_string(), format!("ollama:{MODEL}")),
+                ("reviewer_model".to_string(), format!("ollama:{OTHER}")),
+            ]
+            .into_iter()
+            .collect(),
+            keep: Default::default(),
+            check_command: None,
+            setup_command: Some("exit 3".into()),
+            environment: Default::default(),
+            request_id: "failed-setup".into(),
+        })
+        .await;
+    let container_exists = |name: &str| {
+        std::process::Command::new("podman")
+            .args(["container", "exists", name])
+            .status()
+            .unwrap()
+            .success()
+    };
+    // Whatever an assertion does, every container and volume of this data
+    // root (the Session's, and the Workspace's toolchain cache) is removed.
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let label = format!("label=io.axocoatl.runtime-authority={}", self.0);
+            for (list, remove) in [
+                (
+                    &["ps", "--all", "--format", "{{.Names}}"][..],
+                    &["rm", "-f", "--ignore"][..],
+                ),
+                (
+                    &["volume", "ls", "--format", "{{.Name}}"][..],
+                    &["volume", "rm", "-f"][..],
+                ),
+            ] {
+                let Ok(listed) = std::process::Command::new("podman")
+                    .args(list)
+                    .args(["--filter", &label])
+                    .output()
+                else {
+                    continue;
+                };
+                for name in String::from_utf8_lossy(&listed.stdout).lines() {
+                    let _ = std::process::Command::new("podman")
+                        .args(remove)
+                        .arg(name.trim())
+                        .output();
+                }
+            }
+        }
+    }
+    let _cleanup = Cleanup(daemon.local_runtime_authority.clone());
+    let result = async {
+        let (accepted, _) = admitted?;
+        let id = accepted.session_id.clone();
+        let manifest = daemon
+            .loadout_runs
+            .store()?
+            .manifest(&accepted.run_id)
+            .map_err(record_error)?;
+        let environment: axocoatl_session::receipt::EnvironmentFacts =
+            serde_json::from_value(manifest.options["environment"].clone()).unwrap();
+        // The setup ran in the Session's Ready container, and failed.
+        let setup = environment.setup.expect("the toolchain setup ran");
+        assert_eq!(setup.command, "exit 3");
+        assert!(
+            setup.exit_code.is_some_and(|code| code != 0),
+            "{:?}",
+            setup.exit_code
+        );
+        let outcome = daemon
+            .loadout_run(&accepted.run_id)
+            .await?
+            .outcome
+            .expect("the run ended at its environment");
+        assert_eq!(outcome.exit_code, exit_code::INFRASTRUCTURE, "{outcome:?}");
+        assert!(outcome.turns.is_empty(), "{outcome:?}");
+        assert!(
+            !outcome
+                .warnings
+                .iter()
+                .any(|warning| warning.code == crate::loadout::driver::SESSION_RUNTIME_NOT_STOPPED),
+            "{:?}",
+            outcome.warnings
+        );
+        assert!(
+            !container_exists(&format!("axo-ses-{id}"))
+                && !container_exists(&format!("axo-egr-{id}")),
+            "the run's containers are still there"
+        );
+        assert!(!daemon.session_sandboxes.lock().await.contains_key(&id));
+        assert_ne!(
+            daemon.get_session(&id).await.unwrap().status,
+            axocoatl_session::SessionStatus::Closed
+        );
+        Ok::<(), DaemonError>(())
+    }
+    .await;
+    let shutdown = daemon.shutdown_session_runtimes_checked().await;
     result.unwrap();
     shutdown.unwrap();
 }

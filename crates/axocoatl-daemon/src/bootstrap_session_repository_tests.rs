@@ -2682,6 +2682,104 @@ async fn recovered_repository_reattachment(copied_folder: bool) {
     assert_eq!(sandbox.stop_calls.load(Ordering::SeqCst), 0);
 }
 
+/// After a restart, a Session whose last turn had ended is attached when its
+/// next request arrives, and attached it holds its Workspace. Released as a
+/// turn that ends in this process is, it is between turns: the Workspace is
+/// free, so a next request that cannot start (a provider that refuses) leaves
+/// nothing held, and the next turn reacquires it. A turn that has not ended
+/// is never released.
+#[tokio::test]
+async fn a_recovered_ended_turn_frees_the_workspace_until_the_next_turn() {
+    use crate::bootstrap::session_dispatch::SessionDispatchRegistry;
+    use axocoatl_session::execution_ownership::UpgradedFormatOwnership;
+    let mut f = fixture_with_origin(None, false, true).await;
+    let session_id = f.owner.metadata().session_id.clone();
+    let registry = SessionDispatchRegistry::default();
+    let (controller, _) = begin_registered(&registry, &mut f);
+    let turn_id = controller.snapshot().unwrap().turn_id().clone();
+    assert!(!registry
+        .release_recovered_turn_if_ended(&session_id, &turn_id)
+        .unwrap());
+    assert!(f.operation.try_lock().is_err(), "a running turn holds it");
+    let next = closed_successor(&controller);
+    drop(controller);
+    registry.release_after_turn(&session_id, &turn_id).unwrap();
+    // The daemon stops; the restarted one acquires the Workspace and a
+    // fresh runtime owner when the Session's next request arrives.
+    drop(registry);
+    let sandbox = Arc::new(ControlledSandbox::new(
+        f.owner.root(),
+        "container-after-restart",
+    ));
+    let mut metadata = f.owner.metadata().clone();
+    metadata.execution_identity.clone_from(&sandbox.incarnation);
+    let registered: Arc<dyn Sandbox> = sandbox.clone();
+    f.owner
+        .inner
+        .sandboxes
+        .lock()
+        .await
+        .insert(metadata.session_id.clone(), registered.clone());
+    let fresh = SessionRepositoryOwner {
+        inner: Arc::new(RepositoryOwnerInner {
+            attempt: None,
+            identity: f.owner.identity().clone(),
+            metadata,
+            runtime: f.owner.inner.runtime.clone(),
+            sandbox: registered,
+            data_root: f.owner.inner.data_root.clone(),
+            workspace_root: f.owner.inner.workspace_root.clone(),
+            sessions: f.owner.inner.sessions.clone(),
+            workspaces: f.owner.inner.workspaces.clone(),
+            sandboxes: f.owner.inner.sandboxes.clone(),
+            start: f.owner.inner.start.clone(),
+            shutdown: f.owner.inner.shutdown.clone(),
+            workspace_operation: Mutex::new(Some(f.operation.clone().lock_owned().await)),
+            workspace_gate: f.operation.clone(),
+            execution: Arc::new(AsyncMutex::new(())),
+            state: Mutex::new(ExecutionState::default()),
+            changed: Notify::new(),
+        }),
+    };
+    fresh.validate_current().await.unwrap();
+    let session = fresh
+        .inner
+        .sessions
+        .lock()
+        .await
+        .get(&session_id)
+        .unwrap()
+        .clone();
+    let format = Arc::new(UpgradedFormatOwnership::open(f._data.path()).unwrap());
+    let stores =
+        crate::bootstrap::session_recovery::recover_session_stores(format, &session).unwrap();
+    let registry = SessionDispatchRegistry::default();
+    let token = registry.retain_existing_session(&mut Some(stores)).unwrap();
+    registry
+        .attach_existing_turn(&token, turn_id.clone(), fresh.clone())
+        .unwrap();
+    assert!(f.operation.try_lock().is_err(), "attached, it holds it");
+    assert!(registry
+        .release_recovered_turn_if_ended(&session_id, &turn_id)
+        .unwrap());
+    assert!(
+        f.operation.try_lock().is_ok(),
+        "between turns, the Workspace is free"
+    );
+    assert!(fresh.execution_lease().await.is_err(), "retired");
+    assert!(registry.native_reacquisition_needed(&session_id).unwrap());
+    let reacquisition = registry.prepare_reacquisition(&session_id).unwrap();
+    let next_owner = fresh.reacquire_between_turns().await.unwrap();
+    registry
+        .complete_reacquisition(reacquisition, next_owner)
+        .unwrap();
+    assert!(f.operation.try_lock().is_err(), "the next turn holds it");
+    registry
+        .begin_native_successor_checked(&session_id, next, |_, _, _| Ok(()))
+        .unwrap();
+    assert_eq!(sandbox.stop_calls.load(Ordering::SeqCst), 0);
+}
+
 #[tokio::test]
 async fn recovered_closed_registry_joins_exact_receipts_and_disabled_controls_without_writes() {
     use crate::bootstrap::session_dispatch::SessionDispatchRegistry;

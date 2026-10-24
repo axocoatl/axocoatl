@@ -10,6 +10,7 @@ mod ollama_setup;
 mod onboard;
 #[cfg(test)]
 mod paste_safe;
+mod proxy_env;
 mod receipt_cmd;
 mod recipe_cmd;
 mod run_cmd;
@@ -253,8 +254,10 @@ enum ServiceCommands {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
         config: PathBuf,
     },
-    /// Start the Always-On Service now (and enable it at login)
+    /// Start the Always-On Service now (and enable it at login); one that runs is left running
     Start,
+    /// Restart the Always-On Service with its installed definition (or start it)
+    Restart,
     /// Stop the Always-On Service
     Stop,
     /// Show whether the Always-On Service is installed and running
@@ -265,6 +268,16 @@ enum ServiceCommands {
 
 #[derive(Subcommand)]
 enum SessionCommands {
+    /// Record a copied or moved data directory's new location and change nothing else, while Axocoatl is stopped (a release from 1.1.0 to 1.4.0 then starts on a restored backup)
+    RecordLocation {
+        #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
+        config: PathBuf,
+        /// Also record that the data directory this one was copied from was
+        /// deleted (it was moved by copying, as to another volume), so the
+        /// next start removes the Podman volumes its Sessions left as its own
+        #[arg(long)]
+        original_deleted: bool,
+    },
     /// Upgrade existing Session storage while the daemon is stopped
     Upgrade {
         #[arg(short, long, default_value_os_t = default_config_path_for_clap())]
@@ -520,8 +533,70 @@ fn connect_parse_error(error: &clap::Error, argv: &[std::ffi::OsString]) -> Opti
     }
 }
 
-#[tokio::main]
-async fn main() {
+/// What `session record-location` says it recorded in `data_dir`.
+fn record_location_lines(
+    data_dir: &std::path::Path,
+    recorded: &axocoatl_daemon::bootstrap::RecordedLocation,
+) -> Vec<String> {
+    let mut lines = vec![match &recorded.location {
+        Some(location) => format!(
+            "✓ Recorded {location} for the data directory {}.",
+            data_dir.display()
+        ),
+        None => format!(
+            "✓ The data directory {} is already recorded where it is.",
+            data_dir.display()
+        ),
+    }];
+    match recorded.adopted {
+        Some(0) => lines.push(
+            "  It is not recorded as a copy of another data directory whose Podman volumes are \
+             left, so nothing more was recorded."
+                .to_string(),
+        ),
+        Some(_) => lines.push(
+            "✓ Recorded that the data directory it was copied from was deleted: its next start \
+             treats the Podman volumes its Sessions left there as its own, and removes those no \
+             Session needs any more."
+                .to_string(),
+        ),
+        None => {}
+    }
+    let changed = recorded.location.is_some() || recorded.adopted.is_some_and(|n| n > 0);
+    lines.push(if changed {
+        "Nothing else changed.".to_string()
+    } else {
+        "Nothing changed.".to_string()
+    });
+    lines
+}
+
+/// The log level a command shows unless RUST_LOG asks for another.
+/// `onboard` and `doctor` say everything they do themselves, so they show
+/// only warnings. `session record-location` says what it recorded, which
+/// the daemon's admission also logs as a warning, so it shows only errors.
+fn log_filter(command: &Commands) -> &'static str {
+    match command {
+        Commands::Onboard(_) | Commands::Doctor { .. } => "warn",
+        Commands::Session {
+            command: SessionCommands::RecordLocation { .. },
+        } => "error",
+        _ => "info",
+    }
+}
+
+fn main() {
+    // Before the runtime starts any thread: every HTTP client reads the
+    // proxy variables when it is built.
+    proxy_env::keep_this_computer_off_proxies();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("the async runtime starts")
+        .block_on(run_cli())
+}
+
+async fn run_cli() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => exit_for_parse_error(error, &std::env::args_os().collect::<Vec<_>>()),
@@ -529,17 +604,12 @@ async fn main() {
 
     // Initialize tracing. Logs go to stderr so they never collide with a
     // command's stdout output — in particular `mcp serve`, whose stdout is the
-    // MCP JSON-RPC channel. `onboard` and `doctor` say everything they do
-    // themselves, so they show only warnings unless RUST_LOG asks for more.
-    let default_filter = match cli.command {
-        Commands::Onboard(_) | Commands::Doctor { .. } => "warn",
-        _ => "info",
-    };
+    // MCP JSON-RPC channel.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_filter(&cli.command))),
         )
         .init();
 
@@ -559,6 +629,30 @@ async fn main() {
             session,
         } => cmd_chat(&config, &agent, session).await,
         Commands::Session { command } => match command {
+            SessionCommands::RecordLocation {
+                config,
+                original_deleted,
+            } => {
+                let recorded = configure_data_dir(&config).and_then(|data_dir| {
+                    axocoatl_daemon::AxocoatlDaemon::record_data_root_location(
+                        &data_dir,
+                        original_deleted,
+                    )
+                    .map(|recorded| (data_dir, recorded))
+                    .map_err(|error| error.to_string())
+                });
+                match recorded {
+                    Ok((data_dir, recorded)) => {
+                        for line in record_location_lines(&data_dir, &recorded) {
+                            println!("{line}");
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("✗ {error}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             SessionCommands::Upgrade { config, confirm } => {
                 if !confirm {
                     eprintln!("Stop Axocoatl and make a cold backup first. This upgrades Session storage, preserves history and usage, and archives historical agent state whose role cannot be proved. Future work requires a reviewed Team & budget. Older binaries cannot use the upgraded data. Run again with --confirm to proceed.");
@@ -620,6 +714,7 @@ async fn main() {
         Commands::Service { command } => match command {
             ServiceCommands::Install { config } => cmd_service_install(&config),
             ServiceCommands::Start => cmd_service_start(),
+            ServiceCommands::Restart => cmd_service_restart(),
             ServiceCommands::Stop => cmd_service_stop(),
             ServiceCommands::Status => cmd_service_status(),
             ServiceCommands::Uninstall => cmd_service_uninstall(),
@@ -818,7 +913,7 @@ fn cmd_service_install(config: &std::path::Path) {
                 println!("\n{hint}");
             }
             println!("\nStart it with:  axocoatl service start");
-            println!("If it was already running, load the new definition with:  axocoatl service stop && axocoatl service start");
+            println!("If it was already running, load the new definition with:  axocoatl service restart");
             // `serve` writes only an `axocoatl url` hint to the service log,
             // never the link with its token, so give it here.
             println!(
@@ -853,22 +948,111 @@ fn service_install_summary(
 
 /// The service writes only an `axocoatl url` hint to its log, never the
 /// token, so service commands point at `axocoatl url` for the sign-in link.
-const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config <config>`, using the config the service was installed with.";
+const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.";
 
 fn cmd_service_start() {
-    with_manager(
-        |m| m.start(),
-        "Always-On Service started — the daemon now runs 24/7",
-    );
-    println!("{SERVICE_SIGN_IN_HINT}");
+    service_start_command(|m| m.start());
+}
+
+fn cmd_service_restart() {
+    service_start_command(|m| m.restart());
+}
+
+/// How long `service start` and `service restart` wait for the daemon to
+/// say it started (bootstrap opens the data root, and may upgrade it).
+const SERVICE_DAEMON_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Start or restart the service (`action`), then wait until the daemon says
+/// it started or failed: launchd and systemd start a daemon whose start
+/// fails again and again, so the start itself succeeds either way.
+fn service_start_command(
+    action: impl FnOnce(
+        &dyn axocoatl_service::ServiceManager,
+    ) -> Result<axocoatl_service::ServiceStart, axocoatl_service::ServiceError>,
+) {
+    use axocoatl_service::{DaemonStart, ServiceStart};
+    let mgr = match axocoatl_service::manager() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            std::process::exit(1);
+        }
+    };
+    let mark = mgr.log_mark();
+    let started = match action(mgr.as_ref()) {
+        Ok(started) => started,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            std::process::exit(1);
+        }
+    };
+    let daemon = match started {
+        // It was left as it ran: what its last start said.
+        ServiceStart::AlreadyRunning => mgr
+            .last_start_failure()
+            .map_or(DaemonStart::Started, DaemonStart::Failed),
+        ServiceStart::Started | ServiceStart::Restarted => axocoatl_service::wait_for_daemon(
+            mgr.as_ref(),
+            &mark,
+            SERVICE_DAEMON_WAIT,
+            std::time::Duration::from_millis(250),
+        ),
+    };
+    match service_started_report(started, &daemon, &mgr.logs()) {
+        Ok(line) => {
+            println!("{line}");
+            println!("{SERVICE_SIGN_IN_HINT}");
+        }
+        Err(line) => {
+            eprintln!("{line}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// What `service start` or `service restart` says it did (`started`) and
+/// what the daemon then did; `Err` when the daemon did not start.
+fn service_started_report(
+    started: axocoatl_service::ServiceStart,
+    daemon: &axocoatl_service::DaemonStart,
+    logs: &str,
+) -> Result<String, String> {
+    use axocoatl_service::{DaemonStart, ServiceStart};
+    let did = match started {
+        ServiceStart::Started => "started",
+        ServiceStart::Restarted => "restarted with its installed definition",
+        ServiceStart::AlreadyRunning => "is already running",
+    };
+    match daemon {
+        DaemonStart::Started => Ok(match started {
+            ServiceStart::AlreadyRunning => "✓ Always-On Service is already running. To load a \
+                 definition `axocoatl service install` rewrote since it started, run `axocoatl \
+                 service restart`"
+                .to_string(),
+            _ => format!("✓ Always-On Service {did} — the daemon now runs 24/7"),
+        }),
+        DaemonStart::Failed(line) => Err(format!(
+            "✗ Always-On Service {did}, but the daemon did not start:\n    {line}\n  The \
+             service manager starts it again and again. Fix the cause, then run `axocoatl \
+             service restart`. `axocoatl service status` shows its state; its log: {logs}"
+        )),
+        DaemonStart::StillStarting => Ok(format!(
+            "⚠ Always-On Service {did}, but the daemon has not said it started within {} \
+             seconds. `axocoatl service status` shows whether it runs; its log: {logs}",
+            SERVICE_DAEMON_WAIT.as_secs()
+        )),
+    }
 }
 
 fn cmd_service_stop() {
-    with_manager(|m| m.stop(), "Always-On Service stopped");
+    with_manager(|m| m.stop().map(|()| "Always-On Service stopped".to_string()));
 }
 
 fn cmd_service_uninstall() {
-    with_manager(|m| m.uninstall(), "Always-On Service uninstalled");
+    with_manager(|m| {
+        m.uninstall()
+            .map(|()| "Always-On Service uninstalled".to_string())
+    });
 }
 
 fn cmd_service_status() {
@@ -881,18 +1065,9 @@ fn cmd_service_status() {
     };
     match mgr.status() {
         Ok(s) => {
-            println!("Always-On Service ({} backend)", mgr.backend());
-            println!("  installed: {}", if s.installed { "yes" } else { "no" });
-            println!("  running:   {}", if s.running { "yes" } else { "no" });
-            println!("  at login:  {}", if s.enabled { "yes" } else { "no" });
-            println!("  detail:    {}", s.detail);
-            println!("  logs:      {}", mgr.logs());
-            // A service that keeps restarting and failing is "not running"
-            // most of the time; say why it last failed.
-            if s.installed && !s.running {
-                if let Some(failure) = mgr.last_start_failure() {
-                    println!("  last start failed:\n    {failure}");
-                }
+            let failure = s.installed.then(|| mgr.last_start_failure()).flatten();
+            for line in service_status_lines(mgr.backend(), &s, &mgr.logs(), failure) {
+                println!("{line}");
             }
             if s.installed {
                 println!("\n{SERVICE_SIGN_IN_HINT}");
@@ -910,12 +1085,42 @@ fn cmd_service_status() {
     }
 }
 
-/// Run a service action and report success/failure uniformly.
+/// What `service status` says of `status`, before its hints. `failure`: the
+/// line the last start logged, when it failed. A service whose start keeps
+/// failing is started again by its manager, so it may be running (starting
+/// again) when this looks: the failure is shown whenever the last start
+/// failed, and a running one is said to be starting again.
+fn service_status_lines(
+    backend: &str,
+    status: &axocoatl_service::ServiceStatus,
+    logs: &str,
+    failure: Option<String>,
+) -> Vec<String> {
+    let yes = |value: bool| if value { "yes" } else { "no" };
+    let running = match (&failure, status.running) {
+        (Some(_), true) => "yes, starting again after its last start failed",
+        (_, running) => yes(running),
+    };
+    let mut lines = vec![
+        format!("Always-On Service ({backend} backend)"),
+        format!("  installed: {}", yes(status.installed)),
+        format!("  running:   {running}"),
+        format!("  at login:  {}", yes(status.enabled)),
+        format!("  detail:    {}", status.detail),
+        format!("  logs:      {logs}"),
+    ];
+    if let Some(failure) = failure {
+        lines.push(format!("  last start failed:\n    {failure}"));
+    }
+    lines
+}
+
+/// Run a service action and report success (the line it returns) or
+/// failure uniformly.
 fn with_manager(
     action: impl FnOnce(
         &dyn axocoatl_service::ServiceManager,
-    ) -> Result<(), axocoatl_service::ServiceError>,
-    ok_msg: &str,
+    ) -> Result<String, axocoatl_service::ServiceError>,
 ) {
     let mgr = match axocoatl_service::manager() {
         Ok(m) => m,
@@ -925,7 +1130,7 @@ fn with_manager(
         }
     };
     match action(mgr.as_ref()) {
-        Ok(()) => println!("✓ {ok_msg}"),
+        Ok(line) => println!("✓ {line}"),
         Err(e) => {
             eprintln!("✗ {e}");
             std::process::exit(1);
@@ -1237,9 +1442,11 @@ fn format_ownership_doctor_line(
 
 /// The `doctor` line for what the running daemon did about leaked Session
 /// volumes when it started (`None`: it did not say, as a daemon older than
-/// 1.3.0 does not). `Err` is a warning with its hint.
+/// 1.3.0 does not). `Err` is a warning with its hint. `config_flag`: the
+/// ` --config PATH` a command in the hint needs, if any.
 fn runtime_volume_doctor_line(
     check: Option<&axocoatl_daemon::RuntimeVolumeCheck>,
+    config_flag: &str,
 ) -> Result<String, (String, String)> {
     use axocoatl_daemon::RuntimeVolumeCheck;
     let plural = |count: usize| if count == 1 { "" } else { "s" };
@@ -1281,9 +1488,24 @@ fn runtime_volume_doctor_line(
                     format!(" and {} without an owner label", report.unlabelled_kept)
                 },
             );
-            if report.failed.is_empty() {
-                Ok(summary)
-            } else {
+            let mut line = summary;
+            let mut hints = Vec::new();
+            if report.copied_from > 0 {
+                line.push_str(&format!(
+                    "; {} of them carry the runtime authority of the data directory this one \
+                     was copied from",
+                    report.copied_from
+                ));
+                hints.push(format!(
+                    "If you deleted that data directory (this one was moved by copying it, as to \
+                     another volume), stop Axocoatl and run `axocoatl session record-location \
+                     --original-deleted{config_flag}`: its next start removes those its \
+                     Sessions left as its own. If that data directory is still in use, they are \
+                     its own: leave them."
+                ));
+            }
+            if !report.failed.is_empty() {
+                line.push_str(&format!("; {} could not be removed", report.failed.len()));
                 let shown = report
                     .failed
                     .iter()
@@ -1292,18 +1514,20 @@ fn runtime_volume_doctor_line(
                     .collect::<Vec<_>>()
                     .join("\n           ");
                 let more = report.failed.len().saturating_sub(5);
-                Err((
-                    format!("{summary}; {} could not be removed", report.failed.len()),
-                    format!(
-                        "{shown}{}\n           Remove each with `podman volume rm <name>` once no \
-                         container uses it, or restart the daemon to try again.",
-                        if more == 0 {
-                            String::new()
-                        } else {
-                            format!("\n           …and {more} more")
-                        }
-                    ),
-                ))
+                hints.push(format!(
+                    "{shown}{}\n           Remove each with `podman volume rm NAME` once no \
+                     container uses it, or restart the daemon to try again.",
+                    if more == 0 {
+                        String::new()
+                    } else {
+                        format!("\n           …and {more} more")
+                    }
+                ));
+            }
+            if hints.is_empty() {
+                Ok(line)
+            } else {
+                Err((line, hints.join("\n           ")))
             }
         }
     }
@@ -1607,8 +1831,16 @@ fn bind_failure_message(
 async fn bind_or_exit(
     host: &str,
     port: u16,
+    auth: &axocoatl_config::ServerAuthYaml,
     config_path: &std::path::Path,
 ) -> axocoatl_server::BoundListeners {
+    if let Err(error) = axocoatl_server::check_workbench_address(host, auth) {
+        eprintln!(
+            "✗ Axocoatl did not start: {error} ({})",
+            shell_word(config_path)
+        );
+        std::process::exit(1);
+    }
     match axocoatl_server::bind_server(host, port).await {
         Ok(listeners) => listeners,
         Err(error) => {
@@ -1634,7 +1866,7 @@ async fn cmd_dev(config_path: &std::path::Path) {
     let port = config.server.port;
     // The port is held before the banner: a taken port fails here, not
     // after "Axocoatl is running".
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
 
     println!("Axocoatl dev mode");
@@ -1715,7 +1947,7 @@ async fn cmd_serve(config_path: &std::path::Path) {
 
     let host = config.server.host.clone();
     let port = config.server.port;
-    let listeners = bind_or_exit(&host, port, config_path).await;
+    let listeners = bind_or_exit(&host, port, &config.server.auth, config_path).await;
     let ipc_reservation = reserve_cli_ipc().await;
     let ollama_url = config.providers.ollama.as_ref().map(|o| o.base_url.clone());
 
@@ -2473,7 +2705,7 @@ async fn cmd_session_list() {
         Ok(axocoatl_daemon::ipc::IpcResponse::Sessions { sessions }) => {
             if sessions.is_empty() {
                 println!("No directory sessions yet.");
-                println!("Create one:  axocoatl session new <directory>");
+                println!("Create one:  axocoatl session new DIRECTORY");
                 return;
             }
             println!(
@@ -2521,7 +2753,7 @@ fn display_environment_state(state: &str) -> &str {
 fn session_readiness_guidance(session: &axocoatl_daemon::ipc::IpcSessionInfo) -> String {
     match session.environment_state.as_str() {
         "ready" => format!(
-            "Send it work:  axocoatl session exec {} \"<instruction>\"",
+            "Send it work:  axocoatl session exec {} \"INSTRUCTION\"",
             session.id
         ),
         "preparing" => concat!(
@@ -3370,20 +3602,23 @@ mod tests {
                 kept_open: 3,
                 kept_dependencies: 0,
                 other_daemons: 12,
+                copied_from: 0,
                 unlabelled_kept: 0,
                 failed,
             },
         };
         assert_eq!(
-            runtime_volume_doctor_line(Some(&checked(195, Vec::new()))).unwrap(),
+            runtime_volume_doctor_line(Some(&checked(195, Vec::new())), "").unwrap(),
             "Session volumes: the daemon removed 195 leaked runtime volumes of closed, deleted or \
              unknown Sessions and 0 Node dependency volumes of deleted or unknown Sessions when \
              it started; kept 3 runtime volumes of open Sessions and 0 dependency volumes of \
              open or closed Sessions; left 12 of other daemons"
         );
-        assert!(runtime_volume_doctor_line(Some(&checked(1, Vec::new())))
-            .unwrap()
-            .contains("removed 1 leaked runtime volume of"));
+        assert!(
+            runtime_volume_doctor_line(Some(&checked(1, Vec::new())), "")
+                .unwrap()
+                .contains("removed 1 leaked runtime volume of")
+        );
         let dependencies = RuntimeVolumeCheck::Checked {
             report: RuntimeVolumeReap {
                 removed: vec![
@@ -3394,40 +3629,70 @@ mod tests {
                 kept_open: 1,
                 kept_dependencies: 1,
                 other_daemons: 4,
+                copied_from: 0,
                 unlabelled_kept: 2,
                 failed: Vec::new(),
             },
         };
         assert_eq!(
-            runtime_volume_doctor_line(Some(&dependencies)).unwrap(),
+            runtime_volume_doctor_line(Some(&dependencies), "").unwrap(),
             "Session volumes: the daemon removed 1 leaked runtime volume of closed, deleted or \
              unknown Sessions and 2 Node dependency volumes of deleted or unknown Sessions when \
              it started; kept 1 runtime volume of open Sessions and 1 dependency volume of open \
              or closed Sessions; left 4 of other daemons and 2 without an owner label"
         );
-        let (line, hint) = runtime_volume_doctor_line(Some(&checked(
-            0,
-            vec!["axo-egr-ses-9: volume is being used by container x".into()],
-        )))
+        let (line, hint) = runtime_volume_doctor_line(
+            Some(&checked(
+                0,
+                vec!["axo-egr-ses-9: volume is being used by container x".into()],
+            )),
+            "",
+        )
         .unwrap_err();
         assert!(line.ends_with("; 1 could not be removed"), "{line}");
         assert!(
             hint.starts_with("axo-egr-ses-9: volume is being used"),
             "{hint}"
         );
-        assert!(hint.contains("podman volume rm <name>"), "{hint}");
+        assert!(hint.contains("podman volume rm NAME"), "{hint}");
+        // A copy names the volumes of the data root it was copied from, and
+        // how to make them its own once that one is deleted.
+        let mut copied = checked(0, Vec::new());
+        if let RuntimeVolumeCheck::Checked { report } = &mut copied {
+            report.other_daemons = 5;
+            report.copied_from = 3;
+        }
+        let (line, hint) =
+            runtime_volume_doctor_line(Some(&copied), " --config /c/axocoatl.yaml").unwrap_err();
         assert!(
-            runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred))
+            line.ends_with(
+                "left 5 of other daemons; 3 of them carry the runtime authority of the data \
+                 directory this one was copied from"
+            ),
+            "{line}"
+        );
+        assert!(
+            hint.contains(
+                "`axocoatl session record-location --original-deleted --config \
+                 /c/axocoatl.yaml`"
+            ) && hint.contains("If that data directory is still in use, they are its own"),
+            "{hint}"
+        );
+        assert!(
+            runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Deferred), "")
                 .unwrap()
                 .contains("before the first local Session starts")
         );
-        let (line, hint) = runtime_volume_doctor_line(Some(&RuntimeVolumeCheck::Failed {
-            error: "listing Session volumes: no connection".into(),
-        }))
+        let (line, hint) = runtime_volume_doctor_line(
+            Some(&RuntimeVolumeCheck::Failed {
+                error: "listing Session volumes: no connection".into(),
+            }),
+            "",
+        )
         .unwrap_err();
         assert!(line.contains("were not checked"), "{line}");
         assert!(hint.starts_with("listing Session volumes"), "{hint}");
-        let (line, _) = runtime_volume_doctor_line(None).unwrap_err();
+        let (line, _) = runtime_volume_doctor_line(None, "").unwrap_err();
         assert!(line.contains("does not report"), "{line}");
     }
 
@@ -3716,6 +3981,7 @@ mod tests {
         assert!(steps.contains("chat --config axocoatl.yaml"));
         assert!(steps.contains("axocoatl url --config\naxocoatl.yaml"));
         assert!(!steps.contains("http://localhost:8080"));
+        assert!(!steps.contains("http://127.0.0.1:8080"));
         assert!(!steps.contains("cp .env.example .env"));
     }
 
@@ -3787,9 +4053,10 @@ mod tests {
         assert_eq!(lead.writes, None, "the lead may change any file");
         let prompt = lead.system_prompt.as_deref().unwrap();
         assert!(
-            prompt.contains("If you have helpers, ask scout")
+            prompt.starts_with("Answer only with tool calls until the change is made and checked")
+                && prompt.contains("if you have helpers, ask scout")
                 && prompt.contains("AXOCOATL.md")
-                && prompt.contains("If you have helpers, ask reviewer"),
+                && prompt.contains("if you have helpers, ask reviewer"),
             "{prompt}"
         );
         for helper in &config.agents[1..3] {
@@ -4008,6 +4275,168 @@ mod tests {
         }
     }
 
+    /// What `session record-location` says: what it recorded of the
+    /// location, and with `--original-deleted` whether there was a data
+    /// directory this one was copied from to record as deleted.
+    #[test]
+    fn record_location_says_what_it_recorded() {
+        use axocoatl_daemon::bootstrap::RecordedLocation;
+        let data = std::path::Path::new("/d/data");
+        let lines = |location: Option<&str>, adopted| {
+            record_location_lines(
+                data,
+                &RecordedLocation {
+                    location: location.map(str::to_string),
+                    adopted,
+                },
+            )
+        };
+        assert_eq!(
+            lines(
+                Some("its new location (it is a copy at another path)"),
+                None
+            ),
+            [
+                "✓ Recorded its new location (it is a copy at another path) for the data \
+                 directory /d/data.",
+                "Nothing else changed."
+            ]
+        );
+        assert_eq!(
+            lines(None, None),
+            [
+                "✓ The data directory /d/data is already recorded where it is.",
+                "Nothing changed."
+            ]
+        );
+        let adopted = lines(None, Some(1));
+        assert!(
+            adopted[1].starts_with(
+                "✓ Recorded that the data directory it was copied from was \
+                 deleted"
+            ) && adopted[2] == "Nothing else changed.",
+            "{adopted:?}"
+        );
+        let nothing = lines(None, Some(0));
+        assert!(
+            nothing[1].contains("is not recorded as a copy") && nothing[2] == "Nothing changed.",
+            "{nothing:?}"
+        );
+    }
+
+    /// `session record-location` prints what it recorded once: the
+    /// daemon's admission logs the same as a warning, which it does not show.
+    #[test]
+    fn record_location_shows_only_its_own_lines() {
+        let filter = |args: &[&str]| {
+            log_filter(
+                &Cli::try_parse_from(std::iter::once("axocoatl").chain(args.iter().copied()))
+                    .unwrap()
+                    .command,
+            )
+        };
+        assert_eq!(filter(&["session", "record-location"]), "error");
+        assert_eq!(filter(&["doctor"]), "warn");
+        assert_eq!(filter(&["session", "list"]), "info");
+        assert_eq!(filter(&["serve"]), "info");
+    }
+
+    /// `service start` and `service restart` say the daemon runs only once
+    /// it said it started. One whose start failed fails the command with
+    /// the line it printed (launchd and systemd start it again, so the
+    /// start itself succeeded and said "started" while the daemon failed);
+    /// one still starting at the end of the wait is said to be.
+    #[test]
+    fn service_start_says_whether_the_daemon_started() {
+        use axocoatl_service::{DaemonStart, ServiceStart};
+        let logs = "/l/daemon.log";
+        assert_eq!(
+            service_started_report(ServiceStart::Started, &DaemonStart::Started, logs).unwrap(),
+            "✓ Always-On Service started — the daemon now runs 24/7"
+        );
+        assert_eq!(
+            service_started_report(ServiceStart::Restarted, &DaemonStart::Started, logs).unwrap(),
+            "✓ Always-On Service restarted with its installed definition — the daemon now runs \
+             24/7"
+        );
+        assert!(
+            service_started_report(ServiceStart::AlreadyRunning, &DaemonStart::Started, logs)
+                .unwrap()
+                .contains("run `axocoatl service restart`")
+        );
+        let failed = DaemonStart::Failed(
+            "Failed to bootstrap daemon: Session error: the data directory is group-writable"
+                .into(),
+        );
+        for started in [
+            ServiceStart::Started,
+            ServiceStart::Restarted,
+            ServiceStart::AlreadyRunning,
+        ] {
+            let error = service_started_report(started, &failed, logs).unwrap_err();
+            assert!(
+                error.starts_with("✗ Always-On Service ")
+                    && error.contains(
+                        "but the daemon did not start:\n    Failed to bootstrap daemon: Session \
+                         error: the data directory is group-writable\n"
+                    )
+                    && error.contains("then run `axocoatl service restart`")
+                    && error.ends_with("its log: /l/daemon.log"),
+                "{error}"
+            );
+        }
+        let waiting =
+            service_started_report(ServiceStart::Started, &DaemonStart::StillStarting, logs)
+                .unwrap();
+        assert!(
+            waiting.starts_with(
+                "⚠ Always-On Service started, but the daemon has not said it \
+                 started within 60 seconds"
+            ) && waiting.contains("`axocoatl service status`"),
+            "{waiting}"
+        );
+    }
+
+    /// A service whose start keeps failing is started again by launchd or
+    /// systemd, so `status` may find it running: the last failure is shown
+    /// whenever the last start failed (it was shown only while the service
+    /// did not run, so a live crash loop showed "running: yes" and nothing
+    /// else), and none when the last start succeeded.
+    #[test]
+    fn service_status_shows_the_last_failed_start_whether_or_not_it_runs() {
+        let status = |running| axocoatl_service::ServiceStatus {
+            installed: true,
+            running,
+            enabled: true,
+            detail: "loaded".into(),
+        };
+        let failure = || Some("Failed to bootstrap daemon: Session error: no".to_string());
+        let lines = service_status_lines("launchd", &status(true), "/l/daemon.log", failure());
+        assert_eq!(
+            lines[2],
+            "  running:   yes, starting again after its last start failed"
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "  last start failed:\n    Failed to bootstrap daemon: Session error: no"
+        );
+        let lines = service_status_lines("launchd", &status(false), "/l/daemon.log", failure());
+        assert_eq!(lines[2], "  running:   no");
+        assert!(lines.last().unwrap().starts_with("  last start failed:"));
+        let lines = service_status_lines("systemd", &status(true), "journalctl", None);
+        assert_eq!(
+            lines,
+            [
+                "Always-On Service (systemd backend)",
+                "  installed: yes",
+                "  running:   yes",
+                "  at login:  yes",
+                "  detail:    loaded",
+                "  logs:      journalctl",
+            ]
+        );
+    }
+
     #[test]
     fn service_install_reports_the_recorded_environment_and_log() {
         let environment = axocoatl_service::ServiceEnvironment::from_lookup(
@@ -4157,7 +4586,7 @@ mod tests {
     #[test]
     fn sign_in_link_is_printed_only_to_a_terminal() {
         let config = std::path::Path::new("/tmp/project/axocoatl.yaml");
-        let link = "http://localhost:8080/?token=secret-token";
+        let link = "http://127.0.0.1:8080/?token=secret-token";
         assert_eq!(
             sign_in_lines(Some(link), true, config),
             vec![format!("  Sign in: {link}")]
@@ -4173,7 +4602,7 @@ mod tests {
     fn sign_in_hint_quotes_a_config_path_with_spaces() {
         let config =
             std::path::Path::new("/Users/alex/Library/Application Support/Axocoatl/config.yaml");
-        let captured = sign_in_lines(Some("http://localhost:8080/?token=t"), false, config);
+        let captured = sign_in_lines(Some("http://127.0.0.1:8080/?token=t"), false, config);
         assert!(captured[0].contains(
             "axocoatl url --config '/Users/alex/Library/Application Support/Axocoatl/config.yaml'"
         ));

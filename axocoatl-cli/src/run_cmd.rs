@@ -221,7 +221,7 @@ pub fn plan(args: &RunArgs, task_from_file: Option<String>) -> Result<RunPlan, F
         (None, None) if args.dry_run => String::new(),
         (None, None) => {
             return Err(Failure::usage(
-                "say what to do: --task \"...\" or --task-file <file> (- reads the task from \
+                "say what to do: --task \"...\" or --task-file FILE (- reads the task from \
                  standard input)",
             ))
         }
@@ -376,8 +376,12 @@ impl Daemon {
                 }
             }
         };
+        // The daemon is on this computer (or named by --url): never through
+        // a proxy, which would see each request, and the API token, in plain
+        // text (reqwest otherwise sends even 127.0.0.1 through HTTP_PROXY).
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
+            .no_proxy()
             .build()
             .map_err(|error| Failure::infrastructure(error.to_string()))?;
         Ok(Self {
@@ -937,23 +941,13 @@ async fn run(
     };
     let plan = plan(args, task_from_file)?;
     let daemon = Daemon::locate(args.url.as_deref(), &args.config).await?;
-    // A missing toolchain image is built here, its progress on stderr.
-    toolchain::prepare_image(&daemon, &plan, &args.config, console).await?;
-    let mut request = serde_json::json!({
-        "loadout": plan.loadout,
-        "task": plan.task,
-        "repo": plan.repo.display().to_string(),
-        "params": plan.params,
-        "keep": match plan.keep { Keep::None => "none", Keep::Branch => "branch", Keep::Pr => "pr" },
-        "check_command": plan.check_command,
-        "setup_command": plan.setup_command,
-        "request_id": format!("cli-{}", uuid::Uuid::new_v4()),
-    });
-    if !plan.environment.is_default() {
-        request["environment"] = serde_json::to_value(&plan.environment)
-            .map_err(|error| Failure::infrastructure(error.to_string()))?;
-    }
-    let accepted = admit(&daemon, &request, console, note_after).await?;
+    let mut request = run_request(&plan)?;
+    request["task"] = serde_json::Value::String(plan.task.clone());
+    request["request_id"] = serde_json::Value::String(format!("cli-{}", uuid::Uuid::new_v4()));
+    // A missing toolchain image is built here, its progress on stderr, once
+    // the daemon found nothing else that stops the run.
+    toolchain::prepare_image(&daemon, &plan, &request, &args.config, console).await?;
+    let accepted = admit(&daemon, &request, console, note_after, ctrl_c_pressed()).await?;
     *admitted = true;
     // Only an admitted run starts: a refused one prints its reason and
     // nothing that says otherwise.
@@ -1077,21 +1071,50 @@ async fn run(
 /// `POST /api/runs`. The daemon prepares the Session's environment before
 /// it answers, which can take minutes (an image pull, the setup command);
 /// when it takes longer than `note_after`, say that the command is waiting,
-/// without saying that the run started.
+/// without saying that the run started. `interrupt` (Ctrl-C) ends the wait
+/// at once as an interrupted run: the request goes, and the daemon, which
+/// finishes the admission on its own, stops a run it admits that way
+/// before its first turn.
 async fn admit(
     daemon: &Daemon,
     request: &serde_json::Value,
     console: &mut Console,
     note_after: Duration,
+    interrupt: impl std::future::Future<Output = ()>,
 ) -> Result<RunAccepted, Failure> {
     let admission = daemon.post_json::<RunAccepted>("/api/runs", request);
     tokio::pin!(admission);
+    tokio::pin!(interrupt);
     tokio::select! {
         accepted = &mut admission => return accepted.map_err(plain_refusal),
+        () = &mut interrupt => return Err(interrupted_admission()),
         () = tokio::time::sleep(note_after) => {}
     }
     console.note(ADMISSION_NOTE);
-    admission.await.map_err(plain_refusal)
+    tokio::select! {
+        accepted = admission => accepted.map_err(plain_refusal),
+        () = interrupt => Err(interrupted_admission()),
+    }
+}
+
+/// Ctrl-C, once it is pressed. Never, when its handler cannot be installed:
+/// Ctrl-C then ends the process as it would without one.
+async fn ctrl_c_pressed() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Ctrl-C while the daemon was still admitting the run (exit code 6).
+fn interrupted_admission() -> Failure {
+    Failure {
+        code: exit_code::INTERRUPTED,
+        message: "interrupted (Ctrl-C) while the daemon was admitting the run. The daemon \
+                  finishes the admission on its own: a run it admits stops before its first \
+                  turn, as interrupted, and its Session's containers stop with it; `GET \
+                  /api/runs` lists it"
+            .into(),
+    }
 }
 
 /// An admission refusal in the daemon's own words: an infrastructure
@@ -1123,6 +1146,24 @@ const DRY_RUN_NOTE: &str = "· checking the run as admission would: each Ollama 
                             once without a prompt and probed, and Podman is asked (a stopped \
                             machine stays stopped)";
 
+/// The body of `POST /api/runs` for `plan`, without its task and request
+/// id; the dry run's too.
+fn run_request(plan: &RunPlan) -> Result<serde_json::Value, Failure> {
+    let mut request = serde_json::json!({
+        "loadout": plan.loadout,
+        "repo": plan.repo.display().to_string(),
+        "params": plan.params,
+        "keep": match plan.keep { Keep::None => "none", Keep::Branch => "branch", Keep::Pr => "pr" },
+        "check_command": plan.check_command,
+        "setup_command": plan.setup_command,
+    });
+    if !plan.environment.is_default() {
+        request["environment"] = serde_json::to_value(&plan.environment)
+            .map_err(|error| Failure::infrastructure(error.to_string()))?;
+    }
+    Ok(request)
+}
+
 /// The dry run's route. It is not a flag on `POST /api/runs`: a daemon
 /// too old to know it answers 404 or 405, never starts a run.
 const PREFLIGHT_PATH: &str = "/api/runs/preflight";
@@ -1136,6 +1177,27 @@ async fn ask_preflight(
     daemon: &Daemon,
     request: &serde_json::Value,
 ) -> Result<RunPreflight, Failure> {
+    match try_preflight(daemon, request).await? {
+        Preflight::Checked(preflight) => Ok(preflight),
+        Preflight::Missing(status) => Err(Failure::unreachable(format!(
+            "the daemon at {} has no dry run (POST {PREFLIGHT_PATH} answered {status}), so it is \
+             older than this axocoatl {}; nothing was started. Restart it with this version \
+             (`axocoatl dev`, or `axocoatl service restart`), then run again",
+            daemon.base(),
+            env!("CARGO_PKG_VERSION")
+        ))),
+    }
+}
+
+/// What `POST /api/runs/preflight` answered.
+enum Preflight {
+    Checked(RunPreflight),
+    /// A daemon older than the dry run: its 404 or 405.
+    Missing(reqwest::StatusCode),
+}
+
+/// [`ask_preflight`], saying when the daemon has no dry run.
+async fn try_preflight(daemon: &Daemon, request: &serde_json::Value) -> Result<Preflight, Failure> {
     let response = daemon
         .transport(
             daemon
@@ -1145,14 +1207,7 @@ async fn ask_preflight(
         .await?;
     let status = response.status();
     if matches!(status.as_u16(), 404 | 405) {
-        return Err(Failure::unreachable(format!(
-            "the daemon at {} has no dry run (POST {PREFLIGHT_PATH} answered {status}), so it is \
-             older than this axocoatl {}; nothing was started. Restart it with this version \
-             (`axocoatl dev`, or `axocoatl service stop` and `axocoatl service start`), then run \
-             again",
-            daemon.base(),
-            env!("CARGO_PKG_VERSION")
-        )));
+        return Ok(Preflight::Missing(status));
     }
     let text = daemon
         .checked(response)
@@ -1160,26 +1215,29 @@ async fn ask_preflight(
         .text()
         .await
         .map_err(|error| Failure::infrastructure(format!("reading {PREFLIGHT_PATH}: {error}")))?;
-    serde_json::from_str::<RunPreflight>(&text).map_err(|error| {
-        let run_id = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|value| value.get("run_id")?.as_str().map(str::to_string));
-        match run_id {
-            Some(run_id) => Failure::infrastructure(format!(
-                "the daemon at {} answered the dry run with run {run_id}, which it may have \
-                 started: it does not support --dry-run. Stop that run (in the workbench, or \
-                 POST /api/runs/{run_id}/stop), then restart the daemon with this axocoatl {}",
-                daemon.base(),
-                env!("CARGO_PKG_VERSION")
-            )),
-            None => Failure::infrastructure(format!(
-                "the daemon at {} answered the dry run with something that is not one \
-                 ({error}); restart it with this axocoatl {}",
-                daemon.base(),
-                env!("CARGO_PKG_VERSION")
-            )),
-        }
-    })
+    serde_json::from_str::<RunPreflight>(&text)
+        .map(Preflight::Checked)
+        .map_err(|error| {
+            let run_id = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|value| value.get("run_id")?.as_str().map(str::to_string));
+            match run_id {
+                Some(run_id) => Failure::infrastructure(format!(
+                    "the daemon at {} answered the dry run with run {run_id}, which it may have \
+                     started: it does not support --dry-run. Stop that run (in the workbench, \
+                     or POST /api/runs/{run_id}/stop), then restart the daemon with this \
+                     axocoatl {}",
+                    daemon.base(),
+                    env!("CARGO_PKG_VERSION")
+                )),
+                None => Failure::infrastructure(format!(
+                    "the daemon at {} answered the dry run with something that is not one \
+                     ({error}); restart it with this axocoatl {}",
+                    daemon.base(),
+                    env!("CARGO_PKG_VERSION")
+                )),
+            }
+        })
 }
 
 /// `axocoatl run --dry-run`: `POST /api/runs/preflight`, then what
@@ -1198,14 +1256,7 @@ async fn dry_run(
     };
     let plan = plan(args, task_from_file)?;
     let daemon = Daemon::locate(args.url.as_deref(), &args.config).await?;
-    let mut request = serde_json::json!({
-        "loadout": plan.loadout,
-        "repo": plan.repo.display().to_string(),
-        "params": plan.params,
-        "keep": match plan.keep { Keep::None => "none", Keep::Branch => "branch", Keep::Pr => "pr" },
-        "check_command": plan.check_command,
-        "setup_command": plan.setup_command,
-    });
+    let mut request = run_request(&plan)?;
     if !plan.task.is_empty() {
         request["task"] = serde_json::Value::String(plan.task.clone());
     }
@@ -2553,6 +2604,67 @@ mod tests {
         assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
     }
 
+    /// Ctrl-C while the daemon admits the run ends the command at once with
+    /// exit code 6 and says what the daemon does with the run; the request
+    /// was sent, and its answer is not waited for.
+    #[tokio::test]
+    async fn ctrl_c_during_admission_ends_the_command_as_interrupted() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(
+                ResponseTemplate::new(202)
+                    .set_body_json(serde_json::json!({"run_id": "run-1", "session_id": "ses-1",
+                        "workspace_id": "wsp-1", "warnings": []}))
+                    .set_delay(Duration::from_secs(60)),
+            )
+            .mount(&server)
+            .await;
+        let daemon = Daemon {
+            base: server.uri(),
+            token: None,
+            client: reqwest::Client::new(),
+        };
+        let started = std::time::Instant::now();
+        let (mut console, out, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_millis(20),
+            tokio::time::sleep(Duration::from_millis(300)),
+        )
+        .await
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert_eq!(failure.code, exit_code::INTERRUPTED, "{}", failure.message);
+        assert!(
+            failure
+                .message
+                .contains("a run it admits stops before its first turn, as interrupted"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(out.text(), "");
+        assert_eq!(err.text(), format!("{ADMISSION_NOTE}\n"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        // Pressed before the waiting note is due, the note is never printed.
+        let (mut console, _, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_secs(60),
+            std::future::ready(()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, exit_code::INTERRUPTED);
+        assert_eq!(err.text(), "");
+    }
+
     /// A run the daemon refused at admission (or could not admit) has no
     /// run id: `--junit` still gets a valid file whose verdict is the
     /// refusal (`busy`, `usage` or `error`) with the command's exit code,
@@ -2699,7 +2811,23 @@ mod tests {
                 "cost_microunits": 310, "complete": true, "cost_known": true, "retries": 1}}),
         );
         assert!(summary(&known)
-            .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retries\n"));
+            .contains("\nUsage: 240 input + 14 output tokens, $0.0003, 1 provider retry\n"));
+        // Calls that reported no usage are named.
+        let unreported = outcome(
+            "needs_attention",
+            serde_json::json!({"usage": {"input_tokens": 240, "output_tokens": 14,
+                "cost_microunits": 15_100, "complete": false, "cost_known": false, "retries": 2,
+                "unreported": ["required-review (generation 1): 1 of 4 model calls"]}}),
+        );
+        assert!(
+            summary(&unreported).contains(
+                "\nUsage: 240 input + 14 output tokens, cost unknown (reserved up to $0.0151), 2 \
+                 provider retries (known subtotal: usage or cost not reported for required-review \
+                 (generation 1): 1 of 4 model calls)\n"
+            ),
+            "{}",
+            summary(&unreported)
+        );
         // A Codex writer's cost computed from its reported tokens says so.
         let computed = outcome(
             "pass",
@@ -2740,9 +2868,9 @@ mod tests {
     }
 
     /// `--dry-run` asks `POST /api/runs/preflight`, needs no task (and sends
-    /// none), prints every problem with its class and the Ollama models it
-    /// loaded, and exits with the first problem's code; nothing is
-    /// admitted, so no file is written.
+    /// none) and sends the toolchain flags, prints every problem with its
+    /// class and the Ollama models it loaded, and exits with the first
+    /// problem's code; nothing is admitted, so no file is written.
     #[tokio::test]
     async fn a_dry_run_lists_every_problem_and_exits_with_the_first_ones_code() {
         use wiremock::matchers::{method, path};
@@ -2767,7 +2895,7 @@ mod tests {
                 "sandbox": "the Podman machine is stopped; a run starts it first",
                 "ollama_models": [{"model": "ollama:gpt-oss:20b", "loaded": true, "context_tokens": 32768}]
             })))
-            .expect(2)
+            .expect(3)
             .mount(&server)
             .await;
         let dir = tempfile::tempdir().unwrap();
@@ -2812,10 +2940,188 @@ mod tests {
         assert_eq!(body["loadout"], "fix-claude-code");
         let body: serde_json::Value = requests[1].body_json().unwrap();
         assert_eq!(body["task"], "fix the pagination bug");
+        assert!(body.get("environment").is_none(), "{body}");
         assert!(requests.iter().all(|request| request.url.query().is_none()));
+        // The toolchain flags reach the dry run, as they reach a run.
+        let (mut console, _, _) = captured_console();
+        run_on(
+            run_args(
+                &server.uri(),
+                dir.path(),
+                &["--dry-run", "--toolchain", "go", "--no-build", "--no-probe"],
+            ),
+            &mut console,
+            ADMISSION_NOTE_AFTER,
+        )
+        .await;
+        let requests = server.received_requests().await.unwrap();
+        let body: serde_json::Value = requests[2].body_json().unwrap();
+        assert_eq!(
+            body["environment"],
+            serde_json::json!({"toolchain": "go", "no_probe": true, "build_images": false}),
+            "{body}"
+        );
         // The run's files have nothing to hold.
         let parsed = Cli::try_parse_from(["axocoatl", "fix", "--dry-run", "--junit", "x.xml"]);
         assert!(parsed.is_err());
+    }
+
+    /// Set in the child process of
+    /// [`a_run_that_cannot_start_is_refused_before_its_image_is_built`]: the
+    /// file its stub `podman` appends each call to.
+    const STUB_PODMAN_LOG: &str = "AXOCOATL_RUN_CMD_STUB_PODMAN_LOG";
+
+    /// A run whose toolchain image is not built asks the daemon's dry run
+    /// first, loading no model: a run that cannot start (here a credential
+    /// that is not stored) is refused in admission's words and with its
+    /// exit code, before anything is built or admitted. The body runs in a
+    /// child process whose only `podman` is a stub that fails and logs its
+    /// call, so a regression can never build an image on this computer.
+    #[tokio::test]
+    async fn a_run_that_cannot_start_is_refused_before_its_image_is_built() {
+        if std::env::var_os(STUB_PODMAN_LOG).is_some() {
+            cannot_start_child_body().await;
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${STUB_PODMAN_LOG}\"\n\
+                 echo 'this test runs no Podman' >&2\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = root.path().join("podman.log");
+        let result = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "run_cmd::tests::a_run_that_cannot_start_is_refused_before_its_image_is_built",
+                "--nocapture",
+            ])
+            .env(STUB_PODMAN_LOG, &log)
+            .env_remove("AXOCOATL_DATA_DIR")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // The child ran its body, and asked Podman nothing.
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap_or_default(), "");
+    }
+
+    async fn cannot_start_child_body() {
+        use axocoatl_daemon::loadout::api::{LoadoutGraph, LoadoutSummary};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let fix = axocoatl_config::loadout::builtin_loadouts()
+            .into_iter()
+            .map(Result::unwrap)
+            .find(|loadout| loadout.file.id == "fix")
+            .unwrap();
+        let view = LoadoutView {
+            summary: LoadoutSummary {
+                id: "fix".into(),
+                version: fix.file.version,
+                name: fix.file.name.clone(),
+                description: String::new(),
+                kind: "fix".into(),
+                builtin: true,
+                opt_in: false,
+                digest: fix.digest.clone(),
+                params: Vec::new(),
+                warnings: Vec::new(),
+                error: None,
+                path: None,
+            },
+            file: fix.file.clone(),
+            text: fix.text.clone(),
+            graph: LoadoutGraph {
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/loadouts/fix"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&view))
+            .mount(&server)
+            .await;
+        let problems = [
+            "Agent writer (claude-code) needs the credential claude-code-oauth, and it is not \
+             stored yet: run `axocoatl connect claude-code`, then run again",
+            "the reviewer runs anthropic:opus, on the provider anthropic, and a native Agent or \
+             reviewer runs only on Ollama or OpenRouter",
+        ];
+        Mock::given(method("POST"))
+            .and(path("/api/runs/preflight"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "loadout": "fix",
+                "ready": false,
+                "exit_code": 3,
+                "problems": problems.iter().map(|message| serde_json::json!({
+                    "code": "credential", "exit_code": 3, "message": message
+                })).collect::<Vec<_>>(),
+                "params": {},
+                "notes": ["the run's image localhost/axocoatl-recipe-python:x is not built on \
+                           this computer; a run builds it first"]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let argv = run_args(&server.uri(), dir.path(), &[]);
+        for (name, contents) in [
+            ("pyproject.toml", "[project]\nname = 'pages'\n"),
+            ("tests/conftest.py", ""),
+            ("pages.py", ""),
+        ] {
+            let file = dir.path().join("repo").join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, contents).unwrap();
+        }
+        let (mut console, out, err) = captured_console();
+        let code = run_on(argv, &mut console, ADMISSION_NOTE_AFTER).await;
+        assert_eq!(code, exit_code::USAGE, "{}", err.text());
+        assert_eq!(out.text(), "");
+        assert_eq!(
+            err.text(),
+            format!(
+                "axocoatl run: 2 problems stop this run, and nothing was started:\n  1. {}\n  \
+                 2. {}\n",
+                problems[0], problems[1]
+            )
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            paths_requested(&requests),
+            ["GET /api/loadouts/fix", "POST /api/runs/preflight"]
+        );
+        let body: serde_json::Value = requests[1].body_json().unwrap();
+        assert_eq!(body["load_models"], false, "{body}");
+        assert_eq!(body["task"], "fix the pagination bug");
+        assert!(
+            body["request_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("cli-")),
+            "{body}"
+        );
     }
 
     /// A daemon older than this command has no dry run: its 405 (or 404)

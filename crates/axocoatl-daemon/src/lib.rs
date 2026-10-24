@@ -5,6 +5,8 @@ pub mod automation_runtime;
 pub mod automation_store;
 pub mod bootstrap;
 pub mod browser_install;
+#[cfg(all(test, unix))]
+pub(crate) mod child_daemon_test_support;
 pub mod consolidation;
 pub mod egress_broker;
 pub mod error;
