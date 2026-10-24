@@ -258,7 +258,7 @@ impl Fixture {
             "network", "create", "--label", &label, "--subnet", &subnet, &network,
         ])
         .await;
-        podman_ok(&[
+        let started = podman(&[
             "run",
             "-d",
             "--name",
@@ -279,6 +279,16 @@ impl Fixture {
             UPSTREAM_SERVER,
         ])
         .await;
+        if !started.status.success() {
+            // The case's cleanup never runs: leave neither the created
+            // upstream nor its network behind.
+            let _ = podman(&["rm", "--force", "--time", "0", "--ignore", &upstream]).await;
+            let _ = podman(&["network", "rm", "--force", &network]).await;
+            panic!(
+                "podman run {upstream}: {}",
+                String::from_utf8_lossy(&started.stderr)
+            );
+        }
         Self {
             label,
             network,
