@@ -26,6 +26,17 @@ pub fn default_socket_path() -> PathBuf {
     )
 }
 
+/// The socket path a daemon started without `AXOCOATL_SOCKET_PATH` uses in
+/// this environment: the Always-On Service's when install did not record
+/// the variable.
+pub fn default_socket_path_without_override() -> PathBuf {
+    resolve_socket_path(
+        None,
+        std::env::var_os("XDG_RUNTIME_DIR"),
+        std::env::var_os("HOME"),
+    )
+}
+
 fn resolve_socket_path(
     explicit: Option<std::ffi::OsString>,
     runtime_dir: Option<std::ffi::OsString>,

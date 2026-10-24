@@ -814,10 +814,8 @@ fn cmd_service_install(config: &std::path::Path) {
             for warning in environment.warnings() {
                 println!("⚠ {warning}");
             }
-            if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(
-                &axocoatl_daemon::ipc::default_socket_path(),
-            ) {
-                println!("⚠ The service's daemon cannot start: {error}");
+            if let Some(warning) = service_socket_warning(&environment) {
+                println!("⚠ {warning}");
             }
             if let Some(hint) = mgr.post_install_hint() {
                 println!("\n{hint}");
@@ -1562,6 +1560,21 @@ async fn reserve_cli_ipc() -> CliIpcReservation {
         socket_path,
         listener,
     }
+}
+
+/// What `service install` says when the service's daemon could not listen
+/// on its IPC socket: the `AXOCOATL_SOCKET_PATH` install recorded, or else
+/// the default path, is too long for a Unix socket.
+fn service_socket_warning(environment: &axocoatl_service::ServiceEnvironment) -> Option<String> {
+    let recorded = environment
+        .variables()
+        .iter()
+        .find(|(name, _)| name == axocoatl_service::SOCKET_PATH_VARIABLE)
+        .map(|(_, value)| std::path::PathBuf::from(value));
+    let socket =
+        recorded.unwrap_or_else(axocoatl_daemon::ipc::default_socket_path_without_override);
+    axocoatl_daemon::ipc::socket_path_too_long(&socket)
+        .map(|error| format!("The service's daemon cannot start: {error}"))
 }
 
 /// What `dev` and `serve` print when they cannot reserve the IPC socket: the
@@ -3251,6 +3264,35 @@ async fn cmd_benchmark(name: &str) {
 mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
+
+    /// Install says the service's daemon cannot start when the socket path
+    /// it recorded is too long, and nothing when it fits.
+    #[test]
+    fn service_install_warns_of_a_recorded_socket_path_too_long() {
+        let environment = |socket: &str| {
+            let socket = std::ffi::OsString::from(socket);
+            axocoatl_service::ServiceEnvironment::from_lookup(
+                |name| match name {
+                    "PATH" => Some("/usr/bin".into()),
+                    "AXOCOATL_SOCKET_PATH" => Some(socket.clone()),
+                    _ => None,
+                },
+                |path| path == std::path::Path::new("/usr/bin/podman"),
+            )
+        };
+        let long = format!(
+            "/{}",
+            "s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes())
+        );
+        let warning = service_socket_warning(&environment(&long)).unwrap();
+        assert!(
+            warning.starts_with(&format!(
+                "The service's daemon cannot start: the IPC socket path {long} is too long"
+            )),
+            "{warning}"
+        );
+        assert_eq!(service_socket_warning(&environment("/tmp/axo.sock")), None);
+    }
 
     /// Only a daemon that answers on the socket is said to run already; a
     /// path too long for a socket says only that, and the line starts with
