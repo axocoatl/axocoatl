@@ -281,10 +281,28 @@ run() {
   [[ $expected -gt 0 && $passed -eq $expected && $failed -eq 0 ]]
 }
 
-# Add one cargo test log's passed and failed tests to the run's.
+# Add one cargo test log's passed and failed tests to the run's: each test
+# binary's own result line, the last before the next binary runs. A failed
+# test that ran itself in a child process prints the child's result lines
+# above it.
 tally() {
-  passed=$((passed + $(sed -n 's/^test result: [a-zA-Z]*\. \([0-9]*\) passed.*/\1/p' "$1" | awk '{ s += $1 } END { print s + 0 }')))
-  failed=$((failed + $(sed -n 's/^test result: .* \([0-9]*\) failed;.*/\1/p' "$1" | awk '{ s += $1 } END { print s + 0 }')))
+  local counts
+  counts=$(awk '
+    function flush(  rest, field) {
+      if (last != "") {
+        rest = last
+        sub(/^test result: [a-zA-Z]*\. /, "", rest)
+        split(rest, field, /[ ;]+/)
+        passed += field[1]
+        failed += field[3]
+      }
+      last = ""
+    }
+    /^ *Running / { flush() }
+    /^test result: / { last = $0 }
+    END { flush(); print passed + 0, failed + 0 }' "$1")
+  passed=$((passed + ${counts% *}))
+  failed=$((failed + ${counts#* }))
 }
 
 # Every #[ignore]d test in the tree, as "crate file name" lines.
