@@ -54,12 +54,28 @@ payload and a JSON manifest recording its SHA-256, ELF properties, compiler and
 linker identity, package and protocol versions, and source provenance.
 
 The checked-in payloads are built in a container of the Rust 1.95.0 Debian bookworm
-image for linux/arm64 (`docker.io/library/rust:1.95.0-bookworm`) with the two musl
-standard-library targets added (`rustup target add --toolchain 1.95.0
-aarch64-unknown-linux-musl x86_64-unknown-linux-musl`), without network, linking
-with that toolchain's bundled `rust-lld`. The locked crates come from a Cargo registry
-mounted as an overlay, so the build cannot change it. With that image tagged
-`localhost/axocoatl-supervisor-build:20260914`, from the repository root:
+image for linux/arm64 with the two musl standard-library targets added, without
+network, linking with that toolchain's bundled `rust-lld`. The image is pinned by
+digest: `docker.io/library/rust:1.95.0-bookworm` was the index
+`sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1`, whose
+linux/arm64 image is the one named below. Build it from an empty directory and tag it
+`localhost/axocoatl-supervisor-build:20260914` (this step downloads the image and the two
+standard libraries; the payload build below runs without network):
+
+```sh
+mkdir empty
+printf '%s\n' \
+  'FROM docker.io/library/rust@sha256:8e45ae5b178fa788bbbd818b42a1f93a6e2c03e7144badd5e0a37087537177e1' \
+  'RUN rustup target add --toolchain 1.95.0 aarch64-unknown-linux-musl x86_64-unknown-linux-musl' \
+  | podman build --platform linux/arm64 -t localhost/axocoatl-supervisor-build:20260914 -f - empty
+rmdir empty
+```
+
+In that image `rustc -vV` reports commit `59807616e1fa2540724bfbac14d7976d7e4a3860`, and
+the bundled `rust-lld` has SHA-256
+`bffd8fec823b2fbf3e91ce38d3dbaf0ffb75694cd3495224eca0da5342577b18`; each manifest
+records both. The locked crates come from a Cargo registry mounted as an overlay, so
+the build cannot change it. From the repository root:
 
 ```sh
 mkdir out
@@ -83,6 +99,13 @@ byte-identical payloads and manifests. The 1.3.2 payloads, whose source differs 
 once with `CARGO_HOME=/cargo-home`, the checkout at `/work/checkout/axocoatl` and another
 target directory, with byte-identical payloads and manifests. The 1.4.0 payloads, again
 differing only in the package version, were built the same two ways, also byte-identical.
+The 1.5.0 payloads differ from 1.4.0's in the package version, in letting hardened
+commands rename files into other directories, and in serde_json's `float_roundtrip`
+parsing. On 2026-10-23 they were built the same two ways, and a third way with the
+checkout at `/opt/vfy/axo`, `CARGO_HOME=/var/cargo-v`, `TMPDIR=/var/tmp`, another target
+directory and aarch64 built first; all three gave byte-identical payloads and manifests.
+In the image above, the 1.5.0 source from before the serde_json change still builds to
+exactly the payloads checked in for it then.
 
 Before replacing the checked-in assets, run the real protocol and process-lifecycle
 tests for both architectures in Alpine and Debian containers. ELF inspection alone
@@ -127,7 +150,10 @@ same way: the aarch64 one 32 of 32 on a Linux 7.1 aarch64 kernel with rootless P
 (older than the Podman 6.1 tested on macOS for 1.5.0),
 the x86_64 one 64 of 64 in that x86_64 Alpine virtual machine (Linux 6.12, Podman 5.6).
 On 2026-10-13 the 1.4.0 payloads passed the same suites: 32 of 32 on aarch64 and 64 of 64
-on x86_64.
+on x86_64. On 2026-10-23 the 1.5.0 aarch64 payload passed 32 of 32 on a Linux 7.2 aarch64
+kernel with rootless Podman 6.1, in a Podman machine on Apple silicon. There the x86_64
+one could run only under qemu-user: in each of the four x86_64 images it passed the six
+tests that need no Landlock and refused the two restricted commands, as described above.
 
 The test's temporary directory (`TMPDIR`, where each test's Workspace is created) may be
 anywhere, `/tmp` included. The test mounts the Workspace in the container at its own path,
