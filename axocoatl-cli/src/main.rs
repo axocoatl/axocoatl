@@ -940,30 +940,96 @@ fn service_install_summary(
 const SERVICE_SIGN_IN_HINT: &str = "Open the workbench with the link from `axocoatl url --config <config>`, using the config the service was installed with.";
 
 fn cmd_service_start() {
-    with_manager(|m| m.start().map(service_started_line));
-    println!("{SERVICE_SIGN_IN_HINT}");
+    service_start_command(|m| m.start());
 }
 
 fn cmd_service_restart() {
-    with_manager(|m| m.restart().map(service_started_line));
-    println!("{SERVICE_SIGN_IN_HINT}");
+    service_start_command(|m| m.restart());
 }
 
-/// What `service start` or `service restart` says it did.
-fn service_started_line(started: axocoatl_service::ServiceStart) -> String {
-    match started {
-        axocoatl_service::ServiceStart::Started => {
-            "Always-On Service started — the daemon now runs 24/7".to_string()
+/// How long `service start` and `service restart` wait for the daemon to
+/// say it started (bootstrap opens the data root, and may upgrade it).
+const SERVICE_DAEMON_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Start or restart the service (`action`), then wait until the daemon says
+/// it started or failed: launchd and systemd start a daemon whose start
+/// fails again and again, so the start itself succeeds either way.
+fn service_start_command(
+    action: impl FnOnce(
+        &dyn axocoatl_service::ServiceManager,
+    ) -> Result<axocoatl_service::ServiceStart, axocoatl_service::ServiceError>,
+) {
+    use axocoatl_service::{DaemonStart, ServiceStart};
+    let mgr = match axocoatl_service::manager() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            std::process::exit(1);
         }
-        axocoatl_service::ServiceStart::Restarted => {
-            "Always-On Service restarted with its installed definition — the daemon now runs 24/7"
-                .to_string()
+    };
+    let mark = mgr.log_mark();
+    let started = match action(mgr.as_ref()) {
+        Ok(started) => started,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            std::process::exit(1);
         }
-        axocoatl_service::ServiceStart::AlreadyRunning => {
-            "Always-On Service is already running. To load a definition `axocoatl service \
-             install` rewrote since it started, run `axocoatl service restart`"
-                .to_string()
+    };
+    let daemon = match started {
+        // It was left as it ran: what its last start said.
+        ServiceStart::AlreadyRunning => mgr
+            .last_start_failure()
+            .map_or(DaemonStart::Started, DaemonStart::Failed),
+        ServiceStart::Started | ServiceStart::Restarted => axocoatl_service::wait_for_daemon(
+            mgr.as_ref(),
+            &mark,
+            SERVICE_DAEMON_WAIT,
+            std::time::Duration::from_millis(250),
+        ),
+    };
+    match service_started_report(started, &daemon, &mgr.logs()) {
+        Ok(line) => {
+            println!("{line}");
+            println!("{SERVICE_SIGN_IN_HINT}");
         }
+        Err(line) => {
+            eprintln!("{line}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// What `service start` or `service restart` says it did (`started`) and
+/// what the daemon then did; `Err` when the daemon did not start.
+fn service_started_report(
+    started: axocoatl_service::ServiceStart,
+    daemon: &axocoatl_service::DaemonStart,
+    logs: &str,
+) -> Result<String, String> {
+    use axocoatl_service::{DaemonStart, ServiceStart};
+    let did = match started {
+        ServiceStart::Started => "started",
+        ServiceStart::Restarted => "restarted with its installed definition",
+        ServiceStart::AlreadyRunning => "is already running",
+    };
+    match daemon {
+        DaemonStart::Started => Ok(match started {
+            ServiceStart::AlreadyRunning => "✓ Always-On Service is already running. To load a \
+                 definition `axocoatl service install` rewrote since it started, run `axocoatl \
+                 service restart`"
+                .to_string(),
+            _ => format!("✓ Always-On Service {did} — the daemon now runs 24/7"),
+        }),
+        DaemonStart::Failed(line) => Err(format!(
+            "✗ Always-On Service {did}, but the daemon did not start:\n    {line}\n  The \
+             service manager starts it again and again. Fix the cause, then run `axocoatl \
+             service restart`. `axocoatl service status` shows its state; its log: {logs}"
+        )),
+        DaemonStart::StillStarting => Ok(format!(
+            "⚠ Always-On Service {did}, but the daemon has not said it started within {} \
+             seconds. `axocoatl service status` shows whether it runs; its log: {logs}",
+            SERVICE_DAEMON_WAIT.as_secs()
+        )),
     }
 }
 
@@ -4252,6 +4318,62 @@ mod tests {
         assert_eq!(filter(&["doctor"]), "warn");
         assert_eq!(filter(&["session", "list"]), "info");
         assert_eq!(filter(&["serve"]), "info");
+    }
+
+    /// `service start` and `service restart` say the daemon runs only once
+    /// it said it started. One whose start failed fails the command with
+    /// the line it printed (launchd and systemd start it again, so the
+    /// start itself succeeded and said "started" while the daemon failed);
+    /// one still starting at the end of the wait is said to be.
+    #[test]
+    fn service_start_says_whether_the_daemon_started() {
+        use axocoatl_service::{DaemonStart, ServiceStart};
+        let logs = "/l/daemon.log";
+        assert_eq!(
+            service_started_report(ServiceStart::Started, &DaemonStart::Started, logs).unwrap(),
+            "✓ Always-On Service started — the daemon now runs 24/7"
+        );
+        assert_eq!(
+            service_started_report(ServiceStart::Restarted, &DaemonStart::Started, logs).unwrap(),
+            "✓ Always-On Service restarted with its installed definition — the daemon now runs \
+             24/7"
+        );
+        assert!(
+            service_started_report(ServiceStart::AlreadyRunning, &DaemonStart::Started, logs)
+                .unwrap()
+                .contains("run `axocoatl service restart`")
+        );
+        let failed = DaemonStart::Failed(
+            "Failed to bootstrap daemon: Session error: the data directory is group-writable"
+                .into(),
+        );
+        for started in [
+            ServiceStart::Started,
+            ServiceStart::Restarted,
+            ServiceStart::AlreadyRunning,
+        ] {
+            let error = service_started_report(started, &failed, logs).unwrap_err();
+            assert!(
+                error.starts_with("✗ Always-On Service ")
+                    && error.contains(
+                        "but the daemon did not start:\n    Failed to bootstrap daemon: Session \
+                         error: the data directory is group-writable\n"
+                    )
+                    && error.contains("then run `axocoatl service restart`")
+                    && error.ends_with("its log: /l/daemon.log"),
+                "{error}"
+            );
+        }
+        let waiting =
+            service_started_report(ServiceStart::Started, &DaemonStart::StillStarting, logs)
+                .unwrap();
+        assert!(
+            waiting.starts_with(
+                "⚠ Always-On Service started, but the daemon has not said it \
+                 started within 60 seconds"
+            ) && waiting.contains("`axocoatl service status`"),
+            "{waiting}"
+        );
     }
 
     /// A service whose start keeps failing is started again by launchd or

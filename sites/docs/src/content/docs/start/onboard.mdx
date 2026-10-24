@@ -435,7 +435,9 @@ How should Axocoatl run?
 The service is installed only after this question (or `--start service`): onboarding
 runs `axocoatl service install` and then `axocoatl service restart`, which starts the
 service, or, when one already runs (it asks first, since that ends its Session turns
-and runs in progress), restarts it with the new definition and configuration. A service
+and runs in progress), restarts it with the new definition and configuration. When the
+daemon does not start, onboarding shows the line it logged and lists the step as left
+to do. A service
 cannot read keys from your shell's environment, so onboarding refuses to install one
 while the configuration names an environment variable for a key. The terminal choice
 starts `axocoatl dev` as its own process; Ctrl+C stops it.

@@ -9,9 +9,12 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(test)]
+use std::time::Duration;
 
 use crate::{
-    ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus, SERVICE_NAME,
+    LogMark, ServiceEnvironment, ServiceError, ServiceManager, ServiceStart, ServiceStatus,
+    SERVICE_NAME,
 };
 
 /// Manages the daemon as a systemd user service.
@@ -20,6 +23,8 @@ pub struct SystemdManager {
     unit_path: PathBuf,
     /// The `systemctl` program (a test's stand-in).
     systemctl: PathBuf,
+    /// The `journalctl` program (a test's stand-in).
+    journalctl: PathBuf,
 }
 
 impl SystemdManager {
@@ -36,6 +41,7 @@ impl SystemdManager {
         Ok(Self {
             unit_path,
             systemctl: PathBuf::from("systemctl"),
+            journalctl: PathBuf::from("journalctl"),
         })
     }
 
@@ -82,6 +88,27 @@ impl SystemdManager {
     fn active_state(&self) -> String {
         self.printed(&["is-active", SERVICE_NAME])
     }
+
+    /// Forget the unit's failed state and its recent starts. systemd refuses
+    /// a sixth start within 10 seconds ("the control process exited with
+    /// error code"), counting the restarts of a start that keeps failing, so
+    /// a `restart` right after fixing the cause would not start it. Best
+    /// effort: a unit systemd did not load has nothing to forget.
+    fn reset_start_limit(&self) {
+        let _ = self.systemctl(&["reset-failed", SERVICE_NAME]);
+    }
+
+    /// The unit's journal with `args` (`-o cat`, the daemon's lines as it
+    /// printed them), or `None` when it cannot be read.
+    fn journal(&self, args: &[&str]) -> Option<String> {
+        Command::new(&self.journalctl)
+            .args(["--user", "-u", SERVICE_NAME, "--no-pager", "-o", "cat"])
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+    }
 }
 
 /// One double-quoted systemd word. Quoting handles spaces, the backslash
@@ -104,11 +131,12 @@ fn systemd_path(path: &Path) -> String {
 /// with `%%` keeping specifier expansion from rewriting it. systemd keeps
 /// quotes as part of the path, and then refuses the unit ("WorkingDirectory=
 /// path is not absolute"), so a quoted one never started. `None` when the
-/// line cannot hold the path: not absolute, or ending with whitespace,
-/// which systemd strips.
+/// line cannot hold the path: not absolute, ending with whitespace, which
+/// systemd strips, or with a backslash, which joins the next line to it.
 fn systemd_working_directory(path: &Path) -> Option<String> {
     let text = path.to_string_lossy();
-    (text.starts_with('/') && !text.ends_with(char::is_whitespace)).then(|| text.replace('%', "%%"))
+    (text.starts_with('/') && !text.ends_with(char::is_whitespace) && !text.ends_with('\\'))
+        .then(|| text.replace('%', "%%"))
 }
 
 fn render_unit(
@@ -130,7 +158,7 @@ fn render_unit(
     let working_dir_line = systemd_working_directory(working_dir).ok_or_else(|| {
         ServiceError::Control(format!(
             "systemd cannot run the service in {working_dir:?}: the path ends with whitespace \
-             or is not absolute; move the configuration to another directory"
+             or a backslash, or is not absolute; move the configuration to another directory"
         ))
     })?;
     let environment: String = environment
@@ -188,21 +216,56 @@ impl ServiceManager for SystemdManager {
     }
 
     fn last_start_failure(&self) -> Option<String> {
-        let output = Command::new("journalctl")
-            .args([
-                "--user",
-                "-u",
-                SERVICE_NAME,
-                "-n",
-                "500",
-                "--no-pager",
-                "-o",
-                "cat",
-            ])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())?;
-        crate::last_start_failure(&String::from_utf8_lossy(&output.stdout))
+        crate::last_start_failure(&self.journal(&["-n", "500"])?)
+    }
+
+    fn log_mark(&self) -> LogMark {
+        // The unit's last entry; with none, all its entries come after.
+        let cursor = self
+            .journal(&["-n", "1", "--show-cursor"])
+            .and_then(|printed| {
+                printed
+                    .lines()
+                    .rev()
+                    .find_map(|line| line.trim().strip_prefix("-- cursor: "))
+                    .map(str::to_string)
+            });
+        LogMark { offset: 0, cursor }
+    }
+
+    fn log_since(&self, mark: &LogMark) -> Option<String> {
+        let mut log = match &mark.cursor {
+            Some(cursor) => self.journal(&[&format!("--after-cursor={cursor}")])?,
+            None => self.journal(&[])?,
+        };
+        if log.len() as u64 > crate::LOG_TAIL_BYTES {
+            let mut end = crate::LOG_TAIL_BYTES as usize;
+            while !log.is_char_boundary(end) {
+                end -= 1;
+            }
+            log.truncate(end);
+        }
+        Some(log)
+    }
+
+    fn exited_since_start(&self) -> bool {
+        // `start` and `restart` reset `NRestarts`; a start that failed is
+        // `auto-restart` until systemd starts it again, and `failed` once
+        // it gives up.
+        let shown = self.printed(&[
+            "show",
+            SERVICE_NAME,
+            "--property=ActiveState,SubState,NRestarts",
+        ]);
+        let value = |key: &str| {
+            shown
+                .lines()
+                .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+                .unwrap_or_default()
+        };
+        matches!(value("ActiveState"), "failed" | "inactive")
+            || value("SubState") == "auto-restart"
+            || !matches!(value("NRestarts"), "" | "0")
     }
 
     fn uninstall(&self) -> Result<(), ServiceError> {
@@ -221,6 +284,7 @@ impl ServiceManager for SystemdManager {
         if running {
             return Ok(ServiceStart::AlreadyRunning);
         }
+        self.reset_start_limit();
         // `start`, not `enable --now`, which exits 0 when systemd cannot
         // start the unit.
         self.systemctl(&["start", SERVICE_NAME])?;
@@ -230,6 +294,7 @@ impl ServiceManager for SystemdManager {
     fn restart(&self) -> Result<ServiceStart, ServiceError> {
         let running = self.says("is-active", "active");
         self.systemctl(&["enable", SERVICE_NAME])?;
+        self.reset_start_limit();
         // `restart` waits for the old process to stop, then starts the unit
         // `install` wrote and reloaded; it starts a stopped unit.
         self.systemctl(&["restart", SERVICE_NAME])?;
@@ -311,7 +376,9 @@ mod tests {
 
     /// `start` starts and enables a stopped unit and only enables a running
     /// one; `restart` restarts a running unit (systemd waits for the old
-    /// process) and starts a stopped one, enabling it either way.
+    /// process) and starts a stopped one, enabling it either way. Both first
+    /// make systemd forget the unit's recent failed starts, which would
+    /// otherwise refuse a start after five within 10 seconds.
     #[cfg(unix)]
     #[test]
     fn start_leaves_a_running_unit_running_and_restart_restarts_it() {
@@ -341,6 +408,7 @@ exit 0
         let manager = SystemdManager {
             unit_path: dir.path().join("axocoatl.service"),
             systemctl: program,
+            journalctl: PathBuf::from("journalctl"),
         };
         let calls = || {
             std::fs::read_to_string(dir.path().join("calls"))
@@ -351,16 +419,31 @@ exit 0
                 .collect::<Vec<_>>()
         };
         assert_eq!(manager.start().unwrap(), ServiceStart::Started);
-        assert_eq!(calls(), ["enable axocoatl", "start axocoatl"]);
+        assert_eq!(
+            calls(),
+            ["enable axocoatl", "reset-failed axocoatl", "start axocoatl"]
+        );
         assert_eq!(manager.start().unwrap(), ServiceStart::AlreadyRunning);
-        assert_eq!(calls()[2..], ["enable axocoatl"]);
+        assert_eq!(calls()[3..], ["enable axocoatl"]);
         assert_eq!(manager.restart().unwrap(), ServiceStart::Restarted);
-        assert_eq!(calls()[3..], ["enable axocoatl", "restart axocoatl"]);
+        assert_eq!(
+            calls()[4..],
+            [
+                "enable axocoatl",
+                "reset-failed axocoatl",
+                "restart axocoatl"
+            ]
+        );
         manager.stop().unwrap();
         assert_eq!(manager.restart().unwrap(), ServiceStart::Started);
         assert_eq!(
-            calls()[5..],
-            ["stop axocoatl", "enable axocoatl", "restart axocoatl"]
+            calls()[7..],
+            [
+                "stop axocoatl",
+                "enable axocoatl",
+                "reset-failed axocoatl",
+                "restart axocoatl"
+            ]
         );
         std::fs::write(dir.path().join("axocoatl.service"), "").unwrap();
         assert!(manager.status().unwrap().running);
@@ -391,6 +474,84 @@ exit 0
         );
     }
 
+    /// What a start waits on: the journal entries after the cursor taken
+    /// before it (all of them when the unit had none), and whether systemd
+    /// says the daemon exited since it was started.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_reads_the_journal_after_it_and_sees_the_daemon_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::test_support::write_program(
+            &dir.path().join("journalctl"),
+            r#"#!/bin/sh
+J="$(dirname "$0")/journal"
+touch "$J"
+ARGS="$*"
+case "$ARGS" in
+*--show-cursor*) tail -n 1 "$J"; if [ -s "$J" ]; then echo "-- cursor: s=$(wc -l < "$J" | tr -d ' ')"; fi ;;
+*--after-cursor=s=*) tail -n +"$((${ARGS##*--after-cursor=s=} + 1))" "$J" ;;
+*) cat "$J" ;;
+esac
+"#,
+        );
+        crate::test_support::write_program(
+            &dir.path().join("systemctl"),
+            r#"#!/bin/sh
+cat "$(dirname "$0")/shown"
+"#,
+        );
+        let manager = SystemdManager {
+            unit_path: dir.path().join("axocoatl.service"),
+            systemctl: dir.path().join("systemctl"),
+            journalctl: dir.path().join("journalctl"),
+        };
+        let journal = dir.path().join("journal");
+        let shown = |text: &str| std::fs::write(dir.path().join("shown"), text).unwrap();
+
+        // No entries yet: what the start logs is everything.
+        let mark = manager.log_mark();
+        assert_eq!(mark.cursor, None);
+        std::fs::write(&journal, "Axocoatl server starting on 127.0.0.1:8080\n").unwrap();
+        assert_eq!(
+            manager.log_since(&mark).as_deref(),
+            Some("Axocoatl server starting on 127.0.0.1:8080\n")
+        );
+
+        let mark = manager.log_mark();
+        assert_eq!(mark.cursor.as_deref(), Some("s=1"));
+        assert_eq!(manager.log_since(&mark).as_deref(), Some(""));
+        std::fs::write(
+            &journal,
+            "Axocoatl server starting on 127.0.0.1:8080\nFailed to bootstrap daemon: no\n",
+        )
+        .unwrap();
+        assert_eq!(
+            manager.log_since(&mark).as_deref(),
+            Some("Failed to bootstrap daemon: no\n")
+        );
+        assert_eq!(
+            crate::wait_for_daemon(
+                &manager,
+                &mark,
+                Duration::from_secs(5),
+                Duration::from_millis(10)
+            ),
+            crate::DaemonStart::Failed("Failed to bootstrap daemon: no".into())
+        );
+
+        shown("ActiveState=active\nSubState=running\nNRestarts=0\n");
+        assert!(!manager.exited_since_start());
+        for exited in [
+            "ActiveState=activating\nSubState=auto-restart\nNRestarts=0\n",
+            "ActiveState=active\nSubState=running\nNRestarts=2\n",
+            "ActiveState=failed\nSubState=failed\nNRestarts=5\n",
+            "ActiveState=inactive\nSubState=dead\nNRestarts=0\n",
+        ] {
+            shown(exited);
+            assert!(manager.exited_since_start(), "{exited}");
+        }
+    }
+
     /// `WorkingDirectory=` takes the rest of its line as the path, so it is
     /// written unquoted (systemd refused the quoted one as "not absolute",
     /// and the service never started); `ExecStart=` quotes its words. A
@@ -407,6 +568,7 @@ exit 0
         assert!(unit.contains("ExecStart=\"/opt/Axo tools/axocoatl\" serve --config \"/home/test/My %% project/axocoatl.yaml\""));
         for config in [
             "/home/test/trailing /axocoatl.yaml",
+            "/home/test/joins\\/axocoatl.yaml",
             "/home/test/line\nExecStartPre=/bin/true/axocoatl.yaml",
         ] {
             assert!(render_unit(

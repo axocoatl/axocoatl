@@ -156,13 +156,19 @@ axocoatl service uninstall
 ```
 
 `status` says whether the daemon runs and, when its last start failed, the line that
-start logged, also while launchd or systemd is starting it again. `stop` returns once
-the daemon has exited (it ends its Sessions first) and leaves the definition
-installed. `start` starts a service that does not run and leaves one that runs as it
-is. `restart` stops a running service and starts it again with the installed
-definition, which is how a definition `install` rewrote, or a new `axocoatl` binary
-at the same path, takes effect; it starts a service that does not run. `uninstall`
-stops the service, as `stop` does, and removes the definition.
+start logged, also while launchd or systemd is starting it again. `start` starts a
+service that does not run and leaves one that runs as it is. `restart` stops a
+running service and starts it again with the installed definition, which is how a
+definition `install` rewrote, or a new `axocoatl` binary at the same path, takes
+effect; it starts a service that does not run. Both wait until the daemon says it
+started (up to 60 seconds). When its start fails (an invalid configuration, a port
+in use, a data directory it refuses), they exit with status 1 and print the line the
+daemon logged; launchd and systemd keep starting it again until you fix the cause and
+run `axocoatl service restart`. `stop` returns once the daemon has exited and leaves
+the definition installed. The daemon ends its turns and Sessions first: launchd gives
+it 60 seconds, the most it allows, and systemd 90 seconds, its default, before they
+kill it. A daemon that was killed leaves Session containers, which the next start
+removes. `uninstall` stops the service, as `stop` does, and removes the definition.
 
 Stopping or restarting the service leaves a Podman machine the daemon started
 running: Axocoatl starts `podman machine start` in a session of its own, outside
