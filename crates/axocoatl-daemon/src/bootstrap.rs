@@ -8590,21 +8590,22 @@ impl AxocoatlDaemon {
     }
 
     /// Resolve one logical Session container port to its unique loopback host
-    /// transport. The logical URL stays stable (`localhost:3000`); this mapping
-    /// is process-local to the live isolation instance and never leaks one
-    /// sibling Session into another.
-    pub async fn session_preview_host_port(
+    /// transport, an address and port beside the workbench's. The logical URL
+    /// stays stable (`localhost:3000`); this mapping is process-local to the
+    /// live isolation instance and never leaks one sibling Session into
+    /// another.
+    pub async fn session_preview_address(
         &self,
         session_id: &str,
         container_port: u16,
-    ) -> Result<u16, DaemonError> {
+    ) -> Result<std::net::SocketAddr, DaemonError> {
         let session = self
             .get_session(session_id)
             .await
             .ok_or_else(|| DaemonError::Session(format!("session '{session_id}' not found")))?;
         Self::require_session_preview_port(&session, container_port)?;
         let sandbox = self.ensure_sandbox(&session).await?;
-        sandbox.published_host_port(container_port).ok_or_else(|| {
+        sandbox.published_address(container_port).ok_or_else(|| {
             DaemonError::Session(format!(
                 "port {container_port} is not published for Session '{session_id}'; Preview requires local bridge networking"
             ))

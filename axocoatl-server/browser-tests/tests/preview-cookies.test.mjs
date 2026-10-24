@@ -4,7 +4,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { after, before, test } from 'node:test';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 
 import { launchTestDaemon, resolveChromiumExecutable } from '../support/daemon.mjs';
 import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
@@ -71,7 +71,9 @@ if (imageMissing && process.env.AXOCOATL_E2E_REQUIRE_NODE_IMAGE === '1') {
 // Latin-1, so a byte outside ASCII survives), and each request's User-Agent,
 // and lists them at /__seen.
 // /set-cookies answers with Set-Cookie headers that ask for Domain=localhost,
-// the way an app's server can.
+// the way an app's server can. /embed nests a frame at the address its query
+// names, and a page under /at-published- sets cookies for its own address
+// from script and asks its server for the same path with -fetch appended.
 const APP = String.raw`
 const crypto = require('node:crypto');
 const http = require('node:http');
@@ -104,6 +106,19 @@ for (const port of [3000, 5000]) {
     if (url.pathname === '/redirect-to') {
       response.writeHead(302, { location: url.searchParams.get('to'), 'set-cookie': 'app-redirect=1; Path=/' });
       response.end();
+      return;
+    }
+    if (url.pathname === '/embed') {
+      const src = (url.searchParams.get('src') || '').replace(/[&"<>]/g, (c) => '&#' + c.charCodeAt(0) + ';');
+      response.writeHead(200, headers);
+      response.end('<!doctype html><meta charset="utf-8"><title>embed</title><iframe id="nested" src="' + src + '"></iframe>');
+      return;
+    }
+    if (url.pathname.startsWith('/at-published-') && !url.pathname.endsWith('-fetch')) {
+      response.writeHead(200, headers);
+      response.end('<!doctype html><meta charset="utf-8"><title>at published</title><script>'
+        + 'document.cookie = "published-api=1; Path=/api"; document.cookie = "published-root=1; Path=/";'
+        + 'fetch(location.pathname + "-fetch").then(() => { document.title = "fetched"; });</script>');
       return;
     }
     response.writeHead(200, headers);
@@ -662,6 +677,122 @@ test('the workbench shows the real Preview embedded; in Safari it offers no full
     assert.notEqual(await workbench.title(), 'Sign in to Axocoatl');
   } finally {
     await context.close();
+  }
+});
+
+// Podman publishes a Session's ports on a loopback address other than the
+// workbench's 127.0.0.1 (axocoatl-isolation's session_sandbox.rs): [::1] on
+// macOS, 127.0.0.2 on Linux. Cookies ignore ports, so on 127.0.0.1 a Session's
+// app would receive the workbench's cookies and could set cookies the
+// workbench receives, with no click: its Preview's code could navigate its
+// own frame to that address, which Chromium and WebKit then sent the
+// workbench's SameSite=Strict token cookie, or nest a frame there, which
+// WebKit sent it whatever frames lie between (measured in Playwright's
+// Chromium and WebKit on macOS while Session ports were published on
+// 127.0.0.1; the WebKit run of this journey then fails). Here neither frame
+// gets any of the workbench's cookies, in every engine.
+test('a Session\'s app is never published at the workbench\'s address, and a Preview that loads the app\'s published port in a frame gets none of the workbench\'s cookies', { timeout: 300_000, skip: imageMissing }, async () => {
+  const published = await new Promise((resolve, reject) => {
+    execFile('podman', ['port', `axo-ses-${session.id}`], { timeout: 60_000 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout.trim())));
+  });
+  const expected = process.platform === 'darwin' ? '::1' : '127.0.0.2';
+  const mappings = Object.fromEntries(published.split('\n').map((line) => {
+    const [container, host] = line.split(' -> ');
+    return [container, { address: host.slice(0, host.lastIndexOf(':')), port: Number(host.slice(host.lastIndexOf(':') + 1)) }];
+  }));
+  assert.deepEqual(Object.keys(mappings).sort(), ['3000/tcp', '5000/tcp'], published);
+  for (const mapping of Object.values(mappings)) assert.equal(mapping.address, expected, published);
+  const appPort = mappings['3000/tcp'].port;
+  // Nothing of the Session answers at the workbench's address.
+  await assert.rejects(fetch(`http://127.0.0.1:${appPort}/__seen`, { signal: AbortSignal.timeout(5_000) }));
+  const appAddress = expected.includes(':') ? `[${expected}]:${appPort}` : `${expected}:${appPort}`;
+
+  const context = await browser.newContext();
+  try {
+    const workbench = await context.newPage();
+    assert.equal((await workbench.goto(runtime.signInUrl))?.status(), 200);
+    await workbench.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
+    // What this needs is the Session's readiness below, not every
+    // subresource of the page (its load event took over 30 seconds once on
+    // a loaded Mac).
+    await workbench.goto(`http://127.0.0.1:${listenerPort}/?session=${encodeURIComponent(session.id)}`,
+      { waitUntil: 'domcontentloaded' });
+    await workbench.waitForFunction((sessionId) => typeof S !== 'undefined'
+      && S.session?.id === sessionId && sessionRuntimeSurfaceReady(S.session), session.id,
+    { timeout: 120_000 });
+    await workbench.locator('[data-session-view="browser"]').click();
+    // A frame inside the Preview, at the app's published address.
+    await workbench.evaluate((src) => browserGo(`http://localhost:3000/embed?src=${encodeURIComponent(src)}`),
+      `http://${appAddress}/at-published-nested`);
+    const iframe = (await workbench.locator('#browser')
+      .evaluateHandle((element) => element.frame)).asElement();
+    const preview = await iframe.contentFrame();
+    await preview.waitForFunction(() => document.title === 'embed');
+    const nested = await (await preview.waitForSelector('#nested')).contentFrame();
+    await nested.waitForFunction(() => document.title === 'fetched', null, { timeout: 30_000 });
+    assert.equal(nested.url(), `http://${appAddress}/at-published-nested`);
+    // The Preview's own frame, navigated there by its code.
+    await preview.evaluate((target) => { location.href = target; }, `http://${appAddress}/at-published-self`);
+    await iframe.contentFrame().then((frame) => frame.waitForFunction(() => document.title === 'fetched'
+      && location.pathname === '/at-published-self', null, { timeout: 30_000 }));
+
+    const paths = ['/at-published-nested', '/at-published-nested-fetch',
+      '/at-published-self', '/at-published-self-fetch'];
+    const atApp = (await appSeen()).filter((request) => paths.includes(request.path));
+    assert.deepEqual(atApp.map((request) => request.path).sort(), [...paths].sort());
+    for (const request of atApp) {
+      assert.equal(request.cookie.includes(runtime.token), false, request.path);
+      assert.equal(/axocoatl-token-/i.test(request.cookie), false, `${request.path}: ${cookieNames(request.cookie)}`);
+    }
+    // The cookies its script set stayed off the workbench's address.
+    assert.deepEqual((await context.cookies(`http://127.0.0.1:${listenerPort}/api/agents`))
+      .map((cookie) => cookie.name).sort(), [`axocoatl-token-${listenerPort}`, `axocoatl-token-${listenerPort}-signed-in`]);
+    assert.equal(await workbench.evaluate(async () => (await fetch('/api/agents')).status), 200);
+  } finally {
+    await context.close();
+  }
+});
+
+// Every browser on iPhone and iPad uses Safari's engine, so the daemon takes
+// their user agents for Safari (src/preview_document.rs), and so does the
+// workbench where the engine is WebKit (static/ui/preview-embedding.js).
+// Playwright's iPhone and iPad descriptors, through the real Preview proxy:
+// a typed Preview address gets the refusal page and the app is not asked,
+// while the same address in a frame is served; in WebKit the workbench's own
+// rule keeps Previews embedded. (iPadOS also sends a Mac user agent, which
+// the other journeys cover.)
+test('with iPhone and iPad user agents a typed Preview gets the refusal page, a framed one is served, and WebKit keeps Previews embedded', { timeout: 300_000, skip: imageMissing }, async () => {
+  for (const name of ['iPhone 15', 'iPad Pro 11']) {
+    const { userAgent, viewport } = devices[name];
+    const context = await browser.newContext({ userAgent, viewport });
+    try {
+      const typed = await context.newPage();
+      const typedPath = `/top-typed-${name.split(' ')[0].toLowerCase()}`;
+      const response = await typed.goto(`${previewOrigin(5000)}${typedPath}`);
+      await assertRefusalPage(typed, response);
+      assert.equal((await appSeen()).some((request) => request.path === typedPath), false, name);
+
+      const page = await context.newPage();
+      assert.equal((await page.goto(`http://127.0.0.1:${listenerPort}/health`))?.status(), 200);
+      if (safariKeepsPreviewsEmbedded) {
+        assert.equal(await page.evaluate(async () => (await import('/ui/preview-embedding.js'))
+          .KEEPS_PREVIEWS_EMBEDDED), true, name);
+      }
+      const framedPath = `/framed-${name.split(' ')[0].toLowerCase()}`;
+      await page.evaluate((src) => {
+        const frame = document.createElement('iframe');
+        frame.src = src;
+        document.body.append(frame);
+      }, `${previewOrigin(5000)}${framedPath}`);
+      const frame = await (await page.waitForSelector('iframe')).contentFrame();
+      await frame.waitForFunction((title) => document.title === title, `preview 5000${framedPath}`);
+      const framed = (await appSeen()).find((request) => request.path === framedPath);
+      assert.ok(framed, `${name}: the framed Preview did not reach the app`);
+      assert.equal(framed.userAgent, userAgent);
+    } finally {
+      await context.close();
+    }
   }
 });
 

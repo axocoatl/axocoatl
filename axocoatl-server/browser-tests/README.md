@@ -455,6 +455,18 @@ the Preview and failure paths called out below.
   and the journey asserts that user agent. Playwright's WebKit reports no
   request for a tab opened that way, so the tab's page is asserted. In every
   engine the app received no token cookie and the workbench stays signed in.
+  Its fourth journey reads `podman port` for the Session: both ports are
+  published on `[::1]` on macOS and `127.0.0.2` on Linux, never on
+  `127.0.0.1`, where nothing of the Session answers; then the Preview nests a
+  frame at the app's published address and navigates its own frame there,
+  each page sets cookies and asks its server again, and in every engine no
+  such request carries an `axocoatl-token-*` cookie and none of their cookies
+  lands on `127.0.0.1`. With Session ports on `127.0.0.1` the WebKit run of
+  that journey fails: WebKit sends the nested frame's request the
+  workbench's token cookie. It also opens Playwright's iPhone 15 and iPad Pro
+  11 user agents: a typed Preview address gets the refusal page, the app is
+  not asked, the same address in a frame is served, and in WebKit the
+  workbench's rule keeps Previews embedded.
   Its last journey opens a Preview address typed into a tab and one reached
   by a redirect from another site: in WebKit both get the refusal
   page and the app none of the requests; in Chromium the app. In every engine a

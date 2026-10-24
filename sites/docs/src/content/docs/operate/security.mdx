@@ -153,9 +153,10 @@ The cookie value is the token itself, and browsers do not separate cookies by
 port. Any web server you open on another `127.0.0.1` port in the same browser
 receives the token in its request headers. It can then use the API from
 outside the browser, so the Fetch Metadata rule does not help. This includes
-another user's server and a Session's app opened directly at the loopback
-port it is published on, which the workbench never shows. Treat opening such a
-server like sharing the token, and rotate the token afterwards. Before 1.5.0
+another user's server. Treat opening such a server like sharing the token,
+and rotate the token afterwards. A Session's app is never one: Podman
+publishes Session ports on another loopback address
+([see below](#preview-uses-a-separate-browser-origin)). Before 1.5.0
 the cookie was stored for `localhost`, so servers opened on `localhost` ports
 received it instead; a browser that signed in then keeps that copy until it
 opens the workbench at `localhost` once, which removes it, or its 30 days
@@ -213,6 +214,20 @@ sign-in cookie, and the Preview proxies remove `axocoatl-token-*` cookies from
 forwarded requests and drop upstream `Set-Cookie` headers that would set one.
 From every other upstream `Set-Cookie` they remove the `Domain` attribute, so
 the browser keeps an app's cookies host-only on its own Preview origin.
+
+The Preview proxies reach a Session's app at a port Podman publishes on a
+loopback address other than the workbench's `127.0.0.1`: `[::1]` on macOS, and
+`127.0.0.2` on Linux. Cookies ignore ports, so on `127.0.0.1` a Session's app
+would receive the workbench's sign-in cookie, and could set cookies the
+workbench receives, whenever the browser loaded that address under the
+workbench. That needed no click: a Preview's code could navigate its own
+frame there, or in Safari nest a frame there, and the browser sent that
+frame's requests the workbench's SameSite=Strict token cookie (measured in
+Playwright's Chromium and WebKit on macOS while Session ports were published
+on `127.0.0.1`; WebKit sends it whatever frames lie between). A browser
+journey asserts, in Chromium and WebKit, that such a frame now gets none of
+the workbench's cookies. On a computer that cannot listen on that address,
+Axocoatl publishes Session ports on `127.0.0.1` and logs a warning saying so.
 
 The workbench itself has one address: `127.0.0.1` on the listener port. The
 sign-in link names it, and with the local token the exact root document opened
@@ -316,9 +331,12 @@ its page makes are served as before. Other browsers are unchanged and keep
 This was measured in Playwright's WebKit 27.2 on macOS: a typed Preview
 address, a redirect from another site to one, and a real Command-click on a
 Preview link inside the Preview's frame and inside the Files view's frame each
-got the refusal page, and no cookie was set. It was not measured in Safari
-itself, in Safari before 16.4, or on iPhone or iPad, whose rules are covered
-by unit tests only. Firefox was not measured; it keeps **Open full preview**,
+got the refusal page, and no cookie was set. With Playwright's iPhone and
+iPad user agents, in Chromium and WebKit, a typed Preview address got the
+refusal page and the same address in a frame was served, and in WebKit the
+workbench kept Previews embedded. It was not measured in Safari itself, on an
+iPhone or iPad, or in Safari before 16.4, whose rule is covered by unit tests
+only. Firefox was not measured; it keeps **Open full preview**,
 and the workbench does not depend on its cookie rules, since no
 `Domain=localhost` cookie matches `127.0.0.1`.
 
@@ -329,7 +347,8 @@ them only in a tab of its own, which the daemon refuses in Safari.
 
 - A development server you run yourself on such an address, or a Session's
   app opened directly as `<name>.localhost:<the port it is published on>`
-  (the workbench never shows that port).
+  (the workbench never shows that port; on macOS it is published on `[::1]`,
+  which `*.localhost` names reach).
 - A service worker that a Preview registered while it ran top-level in Safari,
   before 1.5.0. It answers a navigation to that Preview's address in a tab of
   its own without the daemon seeing it. Measured once in Playwright's WebKit
@@ -349,8 +368,8 @@ them only in a tab of its own, which the daemon refuses in Safari.
 
 Cookies ignore ports, so a page on another `127.0.0.1` port sets cookies the
 workbench receives, in any browser: a development server you run at
-`127.0.0.1`, or a Session's app opened directly at the loopback port it is
-published on. Such a page can:
+`127.0.0.1`, for example. A Session's app is never such a page, since its
+ports are published on another loopback address. Such a page can:
 
 - Send the workbench `axocoatl-token-<port>-signed-in=1`. While that browser is
   signed out, a navigation you start then passes through the retry page once,

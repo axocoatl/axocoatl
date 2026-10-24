@@ -869,7 +869,9 @@ directories. Terminal resize is `{"kind":"resize","rows":30,"cols":100}`.
 
 The workbench opens the virtual Preview Host, not the legacy path. The Host
 boundary validates the exact Session and logical port, resolves that pair to
-the sandbox's dynamically assigned loopback transport, and forwards normal app
+the sandbox's dynamically assigned loopback transport (a port Podman publishes
+on `[::1]` on macOS or `127.0.0.2` on Linux, never on the workbench's
+`127.0.0.1`), and forwards normal app
 HTTP methods, query strings, request bodies, cookies, module/root assets, and
 WebSocket upgrades. HTML receives the source-and-origin-pinned picker bridge;
 non-HTML bodies stream without whole-response buffering. The upstream app sees

@@ -600,16 +600,20 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   redirect, Command-click inside the Preview, the context menu, a typed
   address), and the legacy proxy path refuses every browser page in every
   engine. The macOS WebKit journeys assert the typed, redirected and
-  Command-clicked cases; iPhone and iPad are decided the same way by user
-  agent and are not measured, nor is Safari itself.
+  Command-clicked cases, and with Playwright's iPhone and iPad user agents a
+  typed Preview gets the refusal page and a framed one is served; a real
+  iPhone, iPad and Safari itself are not measured.
 - Remaining: a page Axocoatl does not serve that runs top-level on a
   `*.localhost` address in Safari on macOS can still set such cookies, which
   reach other `localhost` apps but not the workbench: a development server
-  the person runs, a Session's app opened directly at the loopback port it is
-  published on (the workbench never shows that port), or a service worker a
-  Preview registered while it ran top-level before 1.5.0 (measured once in
-  Playwright's WebKit: it answers a later top-level navigation without the
-  server). A page on another `127.0.0.1` port, in any browser, sets cookies
+  the person runs, a Session's app opened directly at its published port
+  through a `*.localhost` name (the workbench never shows that port; on macOS
+  it is published on `[::1]`), or a service worker a Preview registered while
+  it ran top-level before 1.5.0 (measured once in Playwright's WebKit: it
+  answers a later top-level navigation without the server). A page on another
+  `127.0.0.1` port (never a Session's app, whose ports are published on
+  `[::1]` or `127.0.0.2`; a journey asserts that a frame its Preview nests at
+  that port gets none of the workbench's cookies), in any browser, sets cookies
   the workbench receives; in Safari it can sign the workbench out with the
   floods above, and the workbench then says what to do: remove `127.0.0.1`'s
   website data and open the sign-in link again. That `127.0.0.1` is listed in

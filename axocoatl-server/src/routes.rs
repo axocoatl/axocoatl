@@ -7030,14 +7030,24 @@ pub async fn run_automation(
 
 // --- Browser-pane proxy (DOM-picker enabler) ---
 
-fn session_preview_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+/// The Session app's URL at the loopback address and port Podman published
+/// its port on (`[::1]` or `127.0.0.2`, beside the workbench's address).
+fn session_preview_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("http://127.0.0.1:{host_port}/{tail}{query}")
+    format!("http://{published}/{tail}{query}")
 }
 
-fn session_preview_websocket_upstream(host_port: u16, tail: &str, query: Option<&str>) -> String {
+fn session_preview_websocket_upstream(
+    published: std::net::SocketAddr,
+    tail: &str,
+    query: Option<&str>,
+) -> String {
     let query = query.map(|value| format!("?{value}")).unwrap_or_default();
-    format!("ws://127.0.0.1:{host_port}/{tail}{query}")
+    format!("ws://{published}/{tail}{query}")
 }
 
 const LEGACY_PREVIEW_SANDBOX_CSP: &str =
@@ -7407,17 +7417,17 @@ fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
     html
 }
 
-async fn resolve_preview_host_port(
+async fn resolve_preview_address(
     state: &AppState,
     target: &PreviewHostTarget,
-) -> Result<u16, Box<Response>> {
+) -> Result<std::net::SocketAddr, Box<Response>> {
     if let Err(error) = require_ready_session(state, &target.session_id).await {
         return Err(Box::new(error.into_response()));
     }
     state
         .read()
         .await
-        .session_preview_host_port(&target.session_id, target.logical_port)
+        .session_preview_address(&target.session_id, target.logical_port)
         .await
         .map_err(|error| {
             let status = if matches!(
@@ -7449,11 +7459,11 @@ async fn proxy_preview_http(
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    proxy_preview_http_to_port(target, tail, request, mode, host_port).await
+    proxy_preview_http_to_port(target, tail, request, mode, published).await
 }
 
 async fn proxy_preview_http_to_port(
@@ -7461,7 +7471,7 @@ async fn proxy_preview_http_to_port(
     tail: String,
     request: axum::http::Request<axum::body::Body>,
     mode: PreviewProxyMode,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let method = request.method().clone();
     let query = request.uri().query().map(str::to_string);
@@ -7476,7 +7486,7 @@ async fn proxy_preview_http_to_port(
                 .into_response();
         }
     };
-    let upstream = session_preview_upstream(host_port, &tail, query.as_deref());
+    let upstream = session_preview_upstream(published, &tail, query.as_deref());
     let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(5))
@@ -7706,20 +7716,20 @@ async fn preview_websocket_proxy(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
 ) -> Response {
-    let host_port = match resolve_preview_host_port(&state, &target).await {
-        Ok(host_port) => host_port,
+    let published = match resolve_preview_address(&state, &target).await {
+        Ok(published) => published,
         Err(response) => return *response,
     };
-    preview_websocket_proxy_to_port(target, request, host_port).await
+    preview_websocket_proxy_to_port(target, request, published).await
 }
 
 async fn preview_websocket_proxy_to_port(
     target: PreviewHostTarget,
     request: axum::http::Request<axum::body::Body>,
-    host_port: u16,
+    published: std::net::SocketAddr,
 ) -> Response {
     let tail = request.uri().path().trim_start_matches('/');
-    let upstream = session_preview_websocket_upstream(host_port, tail, request.uri().query());
+    let upstream = session_preview_websocket_upstream(published, tail, request.uri().query());
     let (mut parts, _) = request.into_parts();
     let requested_protocol = parts
         .headers
@@ -9136,13 +9146,19 @@ mod tests {
         const TERMINAL_JS: &str = include_str!("../static/ui/terminal.js");
         const AXO_TAP_JS: &str = include_str!("../static/axo-tap.js");
 
+        let ipv4: std::net::SocketAddr = "127.0.0.2:43117".parse().unwrap();
+        let ipv6: std::net::SocketAddr = "[::1]:43117".parse().unwrap();
         assert_eq!(
-            session_preview_upstream(43117, "assets/app.js", Some("v=2")),
-            "http://127.0.0.1:43117/assets/app.js?v=2"
+            session_preview_upstream(ipv4, "assets/app.js", Some("v=2")),
+            "http://127.0.0.2:43117/assets/app.js?v=2"
         );
         assert_eq!(
-            session_preview_websocket_upstream(43117, "@vite/client", Some("token=2")),
-            "ws://127.0.0.1:43117/@vite/client?token=2"
+            session_preview_upstream(ipv6, "assets/app.js", None),
+            "http://[::1]:43117/assets/app.js"
+        );
+        assert_eq!(
+            session_preview_websocket_upstream(ipv6, "@vite/client", Some("token=2")),
+            "ws://[::1]:43117/@vite/client?token=2"
         );
 
         let mut headers = HeaderMap::new();
@@ -9551,13 +9567,14 @@ mod tests {
             received
         }
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview upstream");
-        let host_port = listener
+        // Where Podman publishes Session ports on this platform.
+        let listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview upstream");
+        let published = listener
             .local_addr()
-            .expect("real Preview upstream address")
-            .port();
+            .expect("real Preview upstream address");
         let upstream = tokio::spawn(async move {
             let (mut html_socket, _) = listener.accept().await.expect("accept HTML request");
             let html_request = read_request(&mut html_socket).await;
@@ -9612,7 +9629,7 @@ mod tests {
             "forms/save".to_string(),
             request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(html_response.status(), StatusCode::CREATED);
@@ -9676,7 +9693,7 @@ mod tests {
             "assets/blob.bin".to_string(),
             binary_request,
             PreviewProxyMode::VirtualHost,
-            host_port,
+            published,
         )
         .await;
         assert_eq!(binary_response.status(), StatusCode::OK);
@@ -9740,7 +9757,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real legacy Preview upstream");
-        let host_port = listener.local_addr().expect("upstream address").port();
+        let published = listener.local_addr().expect("upstream address");
         let upstream = tokio::spawn(async move {
             let mut answered = Vec::new();
             for (location, body) in [
@@ -9807,7 +9824,7 @@ mod tests {
                 path.to_string(),
                 request(path),
                 legacy.clone(),
-                host_port,
+                published,
             )
             .await;
             assert_eq!(response.status(), status, "{path}");
@@ -9857,13 +9874,14 @@ mod tests {
     // response; this test needs that callback to inspect and select protocols.
     #[allow(clippy::result_large_err)]
     async fn preview_websocket_proxy_bridges_real_clients_and_upstream() {
-        let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        // Where Podman publishes Session ports on this platform.
+        let upstream_listener =
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+                .await
+                .expect("bind real Preview WebSocket upstream");
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -9957,7 +9975,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -10056,10 +10074,9 @@ mod tests {
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind real Preview WebSocket upstream");
-        let upstream_port = upstream_listener
+        let upstream_address = upstream_listener
             .local_addr()
-            .expect("real WebSocket upstream address")
-            .port();
+            .expect("real WebSocket upstream address");
         let (cookie_tx, cookie_rx) = tokio::sync::oneshot::channel::<Option<Vec<u8>>>();
         let upstream = tokio::spawn(async move {
             let (socket, _) = upstream_listener
@@ -10114,7 +10131,7 @@ mod tests {
                 {
                     return StatusCode::FORBIDDEN.into_response();
                 }
-                preview_websocket_proxy_to_port(target, request, upstream_port).await
+                preview_websocket_proxy_to_port(target, request, upstream_address).await
             },
         );
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();

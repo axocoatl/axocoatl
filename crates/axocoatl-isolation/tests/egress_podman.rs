@@ -766,9 +766,12 @@ async fn non_root_users_reach_the_proxy_and_the_forwarder_serves_their_ports() {
         .expect("the forwarder serves port 3000");
         assert_eq!(kept.as_deref(), Some(forwarder_id.trim()));
 
-        // The egress Preview container publishes the port on host loopback;
-        // the Session container itself still has no network.
-        let host_port = sandbox.published_host_port(3000).expect("port 3000 is published");
+        // The egress Preview container publishes the port on host loopback,
+        // beside the workbench's address; the Session container itself still
+        // has no network.
+        let address = sandbox.published_address(3000).expect("port 3000 is published");
+        assert_eq!(address.ip(), axocoatl_isolation::session_port_address());
+        assert_ne!(address.ip().to_string(), "127.0.0.1");
         let preview = format!("axo-pvw-{session}");
         let inspect = podman_async_ok(&[
             "inspect",
@@ -781,7 +784,7 @@ async fn non_root_users_reach_the_proxy_and_the_forwarder_serves_their_ports() {
         assert!(!inspect.contains("\"bind\""), "{inspect}");
         let mut body = String::new();
         for _ in 0..20 {
-            if let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", host_port)).await {
+            if let Ok(mut stream) = tokio::net::TcpStream::connect(address).await {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 stream.write_all(b"GET / HTTP/1.0\r\n\r\n").await.unwrap();
                 body.clear();
@@ -792,7 +795,7 @@ async fn non_root_users_reach_the_proxy_and_the_forwarder_serves_their_ports() {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        assert!(body.contains("svc-ok"), "Preview through 127.0.0.1:{host_port}: {body:?}");
+        assert!(body.contains("svc-ok"), "Preview through {address}: {body:?}");
         sandbox.stop_checked().await.unwrap();
         assert!(!podman_async(&["container", "exists", &preview]).await.status.success());
         assert!(!podman_async(&["container", "exists", &forwarder]).await.status.success());
