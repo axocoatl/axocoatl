@@ -6504,10 +6504,27 @@ mod tests {
             .unwrap_or(false)
     }
 
+    /// How long these tests wait for a child to record its pid or to be
+    /// gone: a hang guard (a loaded computer can take seconds to start a
+    /// shell), well within the child's own [`SLEEPING_CHILD_SECS`], so a
+    /// child that is never stopped is still seen alive.
+    #[cfg(unix)]
+    const CHILD_WAIT: Duration = Duration::from_secs(60);
+    /// How long [`sleeping_command`]'s child sleeps when nothing stops it.
+    #[cfg(unix)]
+    const SLEEPING_CHILD_SECS: u64 = 600;
+    /// The bound these tests give a child: long enough for its shell to
+    /// start and record its pid on a loaded computer before the bound kills
+    /// it (250 ms was not).
+    #[cfg(unix)]
+    const SLEEPING_CHILD_BOUND: Duration = Duration::from_secs(5);
+
     #[cfg(unix)]
     async fn wait_for_pid(path: &Path) -> u32 {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + CHILD_WAIT;
         loop {
+            // The child writes its pid to another file and renames it, so a
+            // pid file is never read half written.
             if let Ok(value) = tokio::fs::read_to_string(path).await {
                 return value.trim().parse().expect("child should record its pid");
             }
@@ -6521,7 +6538,7 @@ mod tests {
 
     #[cfg(unix)]
     async fn assert_process_stops(pid: u32) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + CHILD_WAIT;
         while process_is_alive(pid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -6532,8 +6549,13 @@ mod tests {
     fn sleeping_command(pid_file: &Path) -> Command {
         let mut command = Command::new("sh");
         command
-            .args(["-c", "printf %s $$ > \"$1\"; exec sleep 30", "sh"])
-            .arg(pid_file);
+            .args([
+                "-c",
+                "printf %s $$ > \"$1.partial\" && mv \"$1.partial\" \"$1\"; exec sleep \"$2\"",
+                "sh",
+            ])
+            .arg(pid_file)
+            .arg(SLEEPING_CHILD_SECS.to_string());
         command
     }
 
@@ -6827,12 +6849,10 @@ mod tests {
     async fn bounded_command_timeout_kills_and_reaps_child() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
-        let output = SessionSandbox::run_bounded_command(
-            sleeping_command(&pid_file),
-            Duration::from_millis(250),
-        )
-        .await
-        .unwrap();
+        let output =
+            SessionSandbox::run_bounded_command(sleeping_command(&pid_file), SLEEPING_CHILD_BOUND)
+                .await
+                .unwrap();
         let pid = wait_for_pid(&pid_file).await;
         assert!(output.timed_out);
         assert_process_stops(pid).await;
@@ -6843,9 +6863,11 @@ mod tests {
     async fn command_supervisor_reaps_child_after_caller_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
+        // Cancelling the caller only detaches it: the supervisor still kills
+        // and reaps the child at the bound.
         let caller = tokio::spawn(SessionSandbox::run_bounded_command(
             sleeping_command(&pid_file),
-            Duration::from_millis(250),
+            SLEEPING_CHILD_BOUND,
         ));
         let pid = wait_for_pid(&pid_file).await;
         assert!(process_is_alive(pid));
