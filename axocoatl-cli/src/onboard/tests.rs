@@ -205,25 +205,15 @@ impl FakeOllama {
             })
             .mount(&server)
             .await;
+        // The contract probes, as Ollama 0.40 answers them.
         Mock::given(method("POST"))
             .and(path("/api/chat"))
             .respond_with(|request: &wiremock::Request| {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
-                let content = body["messages"][0]["content"].as_str().unwrap_or_default();
-                if content.starts_with("x x ") {
-                    ResponseTemplate::new(400).set_body_json(json!({"error":
-                        "the prompt is longer than the context length"}))
-                } else {
-                    ResponseTemplate::new(200).set_body_raw(
-                        format!(
-                            "{}\n",
-                            json!({"model": body["model"], "message": {"role": "assistant",
-                                "content": "ready"}, "done": true, "done_reason": "length",
-                                "prompt_eval_count": 14, "eval_count": 1})
-                        ),
-                        "application/x-ndjson",
-                    )
-                }
+                let probe = axocoatl_llm_ollama::ContractProbe::of(&body)
+                    .expect("onboarding sends only the contract probes");
+                let (status, kind, answer) = probe.answer(&body);
+                ResponseTemplate::new(status).set_body_raw(answer, kind)
             })
             .mount(&server)
             .await;
@@ -3131,6 +3121,103 @@ async fn yes_never_starts_a_pull_that_does_not_fit_the_disk() {
         &"Free disk space for qwen3-coder:30b, then pull it: ollama pull qwen3-coder:30b"
             .to_string()
     ));
+}
+
+/// A pull that brings the MLX variant of a model (gpt-oss:20b here) is
+/// replaced with its GGUF variant: removed first, since Ollama 0.40.8's
+/// `ollama pull --runner llamacpp` leaves a variant already installed in
+/// place (the shim does the same), then pulled again with the flag.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_mlx_variant_onboarding_pulled_is_replaced_with_its_gguf_variant() {
+    let shims = Shims::new();
+    let dir = shims.dir.path().display().to_string();
+    shims.add(
+        "ollama",
+        &format!(
+            r#"D="{dir}"
+case "$1" in
+  --version) echo "ollama version is 0.40.6" ;;
+  pull) shift; runner=; if [ "$1" = "--runner" ]; then runner="$2"; shift 2; fi
+    echo "$1" >> "$D/pulled"
+    if [ ! -f "$D/variant-$1" ]; then
+      if [ "$1" = "gpt-oss:20b" ] && [ "$runner" != llamacpp ]; then echo mlx > "$D/variant-$1"; else echo gguf > "$D/variant-$1"; fi
+    fi ;;
+  rm) rm -f "$D/variant-$2"; grep -vxF "$2" "$D/pulled" > "$D/pulled.new"; mv "$D/pulled.new" "$D/pulled" ;;
+esac"#
+        ),
+    );
+    let ollama = FakeOllama::start("0.40.6", shims.home.path(), shims.dir.path(), &[]).await;
+    let state = shims.dir.path().to_path_buf();
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let model = body["model"].as_str().unwrap_or_default().to_string();
+            let variant =
+                std::fs::read_to_string(state.join(format!("variant-{model}"))).unwrap_or_default();
+            let details = if variant.trim() == "mlx" {
+                json!({"format": "safetensors", "runner": "mlx"})
+            } else {
+                json!({"format": "gguf"})
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "details": details, "capabilities": ["completion", "tools", "thinking"]
+            }))
+        })
+        .with_priority(1)
+        .mount(&ollama.server)
+        .await;
+    std::fs::write(shims.dir.path().join("no-cloud"), "").unwrap();
+    let facts = facts(
+        mac("26.6"),
+        48,
+        no_podman(),
+        &shims,
+        &ollama.url(),
+        OllamaService::Brew,
+    )
+    .await;
+    let mut o = onboarding(
+        &shims,
+        Ui::new(Mode::Yes, false, None),
+        facts,
+        OnboardArgs {
+            ollama_url: Some(ollama.url()),
+            ..yes(WriterChoice::Ollama)
+        },
+    );
+    let mut choice = Choice::default();
+    ollama::writer_and_reviewer(&mut o, &mut choice).await;
+    let output = o.ui.output();
+    assert!(
+        output.contains(
+            "Ollama pulled a variant native Sessions refuse. Remove it and pull its GGUF variant \
+             with `ollama rm gpt-oss:20b && ollama pull --runner llamacpp gpt-oss:20b` (an \
+             undocumented Ollama flag)? yes (--yes)"
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains("gpt-oss:20b is now the GGUF variant"),
+        "{output}"
+    );
+    let calls = shims.calls();
+    let at = |call: &str| {
+        calls
+            .iter()
+            .position(|made| made == call)
+            .unwrap_or_else(|| panic!("{call}: {calls:?}"))
+    };
+    assert!(at("ollama pull gpt-oss:20b") < at("ollama rm gpt-oss:20b"));
+    assert!(at("ollama rm gpt-oss:20b") < at("ollama pull --runner llamacpp gpt-oss:20b"));
+    // The GGUF writer model is not touched.
+    assert!(!calls.iter().any(|call| call == "ollama rm qwen3-coder:30b"));
+    assert!(
+        o.steps.iter().all(|step| !step.contains("GGUF")),
+        "{:?}",
+        o.steps
+    );
 }
 
 /// An installed Qwen2.5-Coder returns its tool calls as JSON text, which

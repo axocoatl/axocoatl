@@ -89,14 +89,18 @@ Linux) and restart it.
 **Model refused as not GGUF, or run with MLX**
 Native Sessions run only GGUF models, which Ollama runs in llama.cpp's `llama-server`.
 On Apple silicon Ollama pulls the MLX variant of some models, and MLX does not hold
-`num_ctx` as a hard limit. `ollama pull --runner llamacpp <model>` (an undocumented
-Ollama flag) pulls the GGUF variant; `qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
+`num_ctx` as a hard limit. `ollama rm MODEL && ollama pull --runner llamacpp MODEL`
+replaces it with the GGUF variant (`--runner` is an undocumented Ollama flag, and a pull
+with it leaves a variant already installed in place, hence the `ollama rm`);
+`qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
 
 **Model refused by a contract probe**
 When a Team is reviewed, Axocoatl checks on your server that a prompt longer than the
-model's context is refused before generation and that a call stops at its output limit.
-The error names the check that failed; Axocoatl cannot bound calls to that model on that
-Ollama, so use another model or Ollama release.
+model's context is refused before generation, that a call stops at its output limit and
+reports the tokens it generated, and, for a model with tool calling, that a request to
+call the one tool it is offered comes back as a call of that tool. The error names the
+check that failed; native Sessions and runs refuse that model on that Ollama for every
+Agent, so use another model or Ollama release.
 
 ## Config
 

@@ -26,6 +26,12 @@ DIGESTS = {
     "helper-model:latest": "c80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b74",
 }
 DELEGATED_TASK = "Read README.md and say in one sentence what this repository is for."
+# The prompts of 1.5's contract probes other than the over-long one.
+PROBES = {
+    "Reply with the single word: ready": "stop",
+    "Write the numbers from 1 to 300, one per line. Write only the numbers.": "long",
+    "Call the report_ready tool with word set to ready.": "tool",
+}
 loaded = {"model": "writer-model:latest"}
 
 
@@ -102,14 +108,27 @@ class Handler(BaseHTTPRequestHandler):
         messages = body.get("messages", [])
         options = body.get("options", {})
         first = messages[0].get("content", "") if messages else ""
-        # 1.5's contract probes.
-        if options.get("num_predict") == 1 and body.get("truncate") is False:
-            if first.startswith("x x "):
-                return self.send_json(400, {"error": "request exceeds the available context size, try increasing it"})
-            return self.send_ndjson([{"model": body["model"], "created_at": "2026-10-23T00:00:00Z",
-                                      "message": {"role": "assistant", "content": "ready"},
-                                      "done": True, "done_reason": "length",
-                                      "prompt_eval_count": 14, "eval_count": 1}])
+        # 1.5's contract probes, answered as Ollama 0.40 does
+        # (axocoatl_llm_ollama::ContractProbe).
+        if body.get("truncate") is False and first.startswith("x x "):
+            return self.send_json(400, {"error": "request exceeds the available context size, try increasing it"})
+        probe = PROBES.get(first) if body.get("truncate") is False else None
+        if probe is not None:
+            def record(message, **fields):
+                return {"model": body["model"], "created_at": "2026-10-23T00:00:00Z",
+                        "message": {"role": "assistant", **message}, **fields}
+            if probe == "stop":
+                return self.send_ndjson([record({"content": "ready"}, done=True, done_reason="length",
+                                                prompt_eval_count=14, eval_count=1)])
+            if probe == "long":
+                return self.send_ndjson([
+                    record({"content": "1\n2\n3\n"}, done=False),
+                    record({"content": ""}, done=True, done_reason="length",
+                           prompt_eval_count=33, eval_count=options.get("num_predict"))])
+            return self.send_ndjson([record(
+                {"content": "", "tool_calls": [{"id": "call_probe", "function": {
+                    "index": 0, "name": "report_ready", "arguments": {"word": "ready"}}}]},
+                done=True, done_reason="stop", prompt_eval_count=138, eval_count=31)])
         last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
         tool_after = any(m.get("role") == "tool" for m in messages[last_user + 1:])
         created = "2026-10-23T00:00:00Z"

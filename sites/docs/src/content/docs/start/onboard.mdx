@@ -289,8 +289,9 @@ prints a line such as `✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPU
    `--yes` or `--pull`, a pull that does not fit the disk is not started but left as a
    step. A failed pull shows Ollama's own error and offers to retry. After a pull,
    onboarding reads the model again: if Ollama pulled a variant native Sessions refuse
-   (the MLX variant on Apple silicon), it offers `ollama pull --runner llamacpp <model>`
-   (an undocumented Ollama flag) to pull the GGUF one.
+   (the MLX variant on Apple silicon), it offers to remove it and pull the GGUF one with
+   `ollama rm MODEL && ollama pull --runner llamacpp MODEL` (an undocumented Ollama flag,
+   which does not replace a variant already installed).
 6. **Context.** Onboarding loads each model once without generating, reads the context
    Ollama gives it, and runs the contract probes. Ollama picks 4096 tokens below about
    23 GiB of graphics memory, and a fix run's first writer call needs about 9.7k, so a

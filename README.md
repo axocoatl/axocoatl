@@ -420,8 +420,9 @@ installed on it (`qwen3-coder:30b` and `gpt-oss:20b` when none is); `axocoatl do
 reports the same requirements. Native Sessions run only GGUF models, which Ollama runs
 in llama.cpp's `llama-server`: on Apple silicon, a model Ollama runs with MLX is
 refused, because MLX does not hold `num_ctx` as a hard limit. When a Team is reviewed,
-two small contract probes on your server check that an over-long prompt is refused and
-that a call stops at its output limit.
+small contract probes on your server check that an over-long prompt is refused, that a
+call stops at its output limit and reports what it generated, and, for a model with tool
+calling, that a tool call comes back as a call Axocoatl can run.
 Direct OpenAI and Anthropic configurations remain available through manual YAML
 on their supported compatibility paths.
 The other configured provider adapters remain available through their supported legacy

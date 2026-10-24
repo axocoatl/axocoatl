@@ -162,8 +162,9 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
             return Err(invalid(format!(
                 "Ollama loaded {} with its MLX runner, which holds the model's own maximum \
                  context, not num_ctx, as its limit; native execution accepts only GGUF models \
-                 that Ollama runs in llama.cpp's llama-server",
-                shown_name(&expected.name)
+                 that Ollama runs in llama.cpp's llama-server: {}",
+                shown_name(&expected.name),
+                super::gguf_fix(&shown_name(&expected.name))
             )))
         }
         runner => {
@@ -370,6 +371,7 @@ async fn observe(
             server_version: capabilities.version.clone(),
             model_digest: first.digest.clone(),
             context_tokens: context,
+            tools: capabilities.tools,
         },
         model,
         load_timeout,
@@ -465,6 +467,7 @@ fn probe_key(observation: &NativeOllamaContextObservation, server_version: &str)
         server_version: server_version.to_owned(),
         model_digest: observation.model_digest.clone(),
         context_tokens: observation.context_tokens,
+        tools: observation.tools_supported,
     }
 }
 

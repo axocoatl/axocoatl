@@ -2,11 +2,12 @@
 //!
 //! The audited Ollama 0.40.6 runs every GGUF model in llama.cpp's
 //! `llama-server`, which rejects oversized inputs with `truncate:false` and
-//! stops at a positive `num_predict`; the contract probes check both on the
-//! person's own server and model before a Team uses it. Thinking+structured
-//! output runs in one pass on 0.40, but format requests still reserve two full
-//! passes (a valid, loose bound). Reported final metrics cover only the last
-//! pass and are consequently lower bounds for format requests.
+//! stops at a positive `num_predict`; the contract probes check both, and a
+//! long answer's count and a tool call, on the person's own server and model
+//! before a Team uses it. Thinking+structured output runs in one pass on 0.40,
+//! but format requests still reserve two full passes (a valid, loose bound).
+//! Reported final metrics cover only the last pass and are consequently lower
+//! bounds for format requests.
 //! This is an operator-configured server capability, not model-weight attestation.
 //! The existing OpenAI-compatible provider is intentionally unchanged.
 
@@ -40,10 +41,10 @@ use serde_json::{json, Value};
 use tokio_stream::{Stream, StreamExt};
 
 mod contract_probe;
-/// The stop probe's prompt, for test servers that stand in for Ollama and
-/// answer the contract probes. The over-long probe's message is `"x "`
-/// repeated.
-pub use contract_probe::STOP_PROBE_PROMPT as CONTRACT_STOP_PROBE_PROMPT;
+/// Which contract probe a request is and what Ollama answers to it, for test
+/// servers that stand in for Ollama (the `contract-probe-stand-in` feature).
+#[cfg(feature = "contract-probe-stand-in")]
+pub use contract_probe::ContractProbe;
 mod http_error;
 pub use http_error::{describe_native_ollama_error, native_ollama_error_hint};
 mod observed_context;
@@ -143,6 +144,26 @@ fn shown_name(model: &str) -> String {
         .collect()
 }
 
+/// The commands that replace `name`, a model Ollama runs with MLX or that
+/// is not GGUF, with its GGUF variant. `ollama pull --runner llamacpp`, a
+/// flag Ollama does not document, pulls the GGUF variant of a tag that also
+/// has an MLX one, but leaves a variant already installed in place (Ollama
+/// 0.40.8: with the MLX `qwen3.5:0.8b` installed it pulled nothing and the
+/// tag stayed MLX; after `ollama rm` it pulled the GGUF one), so the
+/// installed one is removed first.
+pub fn gguf_variant_commands(name: &str) -> String {
+    format!("ollama rm {name} && ollama pull --runner llamacpp {name}")
+}
+
+/// What to do about a model Ollama runs with MLX or that is not GGUF.
+pub(crate) fn gguf_fix(name: &str) -> String {
+    format!(
+        "remove it and pull its GGUF variant with `{}` (an undocumented Ollama flag, which \
+         does not replace a variant already installed), or choose another model",
+        gguf_variant_commands(name)
+    )
+}
+
 /// Refuse a model native execution cannot bound: a cloud model, a model that
 /// is not GGUF or that Ollama runs with MLX (MLX holds the model's own maximum
 /// context, not `num_ctx`, as its limit), one that does not complete text, and
@@ -157,7 +178,8 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
     });
     if remote {
         return Err(invalid(format!(
-            "{name} is a cloud model that Ollama runs remotely; native execution runs only local models"
+            "The model {name} is a cloud model that Ollama runs remotely; native execution runs \
+             only local models"
         )));
     }
     let format = shown
@@ -170,17 +192,18 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
         .unwrap_or_default();
     if runner.eq_ignore_ascii_case("mlx") || format != "gguf" {
         return Err(invalid(format!(
-            "{name} is {}; native execution accepts only GGUF models, which Ollama runs in \
-             llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum context, \
-             not num_ctx, as its limit, so it cannot bound a call. On Apple silicon, Ollama pulls \
-             the MLX variant of some models by default",
+            "The model {name} is {}; native execution accepts only GGUF models, which Ollama \
+             runs in llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum \
+             context, not num_ctx, as its limit, so it cannot bound a call. On Apple silicon, \
+             Ollama pulls the MLX variant of some models by default: {}",
             if runner.eq_ignore_ascii_case("mlx") {
                 "run by Ollama's MLX runner".to_string()
             } else if format.is_empty() {
                 "of an unreported format".to_string()
             } else {
                 format!("a {} model", shown_name(format))
-            }
+            },
+            gguf_fix(&name)
         )));
     }
     let caps = shown
@@ -190,13 +213,14 @@ pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, Provi
     let has = |capability: &str| caps.iter().any(|v| v.as_str() == Some(capability));
     if !has("completion") {
         return Err(invalid(format!(
-            "{name} does not report text completion; native execution needs a local GGUF \
-             completion model"
+            "The model {name} does not report text completion; native execution needs a local \
+             GGUF completion model"
         )));
     }
     if has("image") {
         return Err(invalid(format!(
-            "{name} is an image-generation model; native execution needs a local GGUF completion model"
+            "The model {name} is an image-generation model; native execution needs a local GGUF \
+             completion model"
         )));
     }
     Ok(ShownModel {
@@ -988,6 +1012,9 @@ fn validate_history(messages: &[ChatMessage]) -> Result<(), ProviderError> {
 // check (llama.cpp b11669, tools/server/server-common.cpp, the multimodal
 // input chunks; Ollama v0.40.6 sends images inline as base64 only).
 // truncate:false rejects the expanded prompt; num_predict bounds generation.
+// Measured on Ollama 0.40.8 with qwen3.5:0.8b at num_ctx 4096: a 64x64 image
+// counted 11 prompt tokens, and 4,090 tokens of text were generated from
+// while the same text with the image (4,101 tokens) was refused.
 // Images therefore consume the existing full context reservation, never an
 // estimated image-token allowance or an additional unbounded provider route.
 fn inline_image<'a>(url: &'a str, detail: &ImageDetail) -> Result<&'a str, ProviderError> {

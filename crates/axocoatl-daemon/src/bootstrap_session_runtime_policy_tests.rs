@@ -299,6 +299,152 @@ async fn actual_egress_reaches_host_ollama_only_through_its_route() {
     );
 }
 
+/// The same route from inside the Session's container to real Ollama
+/// servers on this computer: one that reports its cloud features off
+/// (`AXO_LIVE_OLLAMA_CLOUD_OFF_PORT`) lists its models; one with them on
+/// (`AXO_LIVE_OLLAMA_CLOUD_ON_PORT`, such as `OLLAMA_HOST=127.0.0.1:8390
+/// HOME=$(mktemp -d) ollama serve`) gets nothing (`ollama_cloud_not_off`).
+/// On both, `GET /v1/models/{model}` for a cloud model, which a
+/// cloud-enabled Ollama answers from ollama.com, is refused by its path,
+/// plain and percent-encoded, and never sent. Only these GET requests are
+/// made; no model runs.
+///
+/// ```text
+/// AXO_LIVE_OLLAMA_CLOUD_OFF_PORT=11510 AXO_LIVE_OLLAMA_CLOUD_ON_PORT=11530 \
+///   AXO_SUPERVISOR_TEST_IMAGE=localhost/axocoatl-supervisor-runtime:debian-aarch64-root \
+///   CONTAINER_CONNECTION=podman-machine-default cargo test -p axocoatl-daemon --lib \
+///   actual_egress_to_real_ollama -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "requires Podman (CONTAINER_CONNECTION), AXO_SUPERVISOR_TEST_IMAGE, the egress-capable embedded helper and two Ollama servers on this computer, one with its cloud features on"]
+async fn actual_egress_to_real_ollama_keeps_to_cloud_off_servers_and_local_models() {
+    use crate::session_egress::tests::{FakeRecord, FakeResolver};
+    use crate::session_egress::{EgressPolicyConfig, RouteSettings, SessionEgress};
+    use axocoatl_session::network_record::{Decision as Recorded, NetworkEvent};
+    let upstream_label = EgressUpstream::start();
+    for (variable, cloud_on) in [
+        ("AXO_LIVE_OLLAMA_CLOUD_OFF_PORT", false),
+        ("AXO_LIVE_OLLAMA_CLOUD_ON_PORT", true),
+    ] {
+        let port: u16 = std::env::var(variable)
+            .unwrap_or_else(|_| panic!("set {variable}"))
+            .parse()
+            .unwrap();
+        let mut f = fixture().await;
+        let record = Arc::new(FakeRecord::default());
+        let resolver = FakeResolver::with(&[]);
+        let env_dir = f.owner.inner.data_root.child("egress-env").unwrap();
+        let egress = SessionEgress::open_session(
+            f.owner.metadata().session_id.clone(),
+            EgressPolicyConfig {
+                host_ollama: Some(axocoatl_config::HostOllamaRouteYaml {
+                    port,
+                    bindings: None,
+                }),
+                ..EgressPolicyConfig::default()
+            },
+            record.clone(),
+            resolver.clone(),
+            Some(env_dir),
+            axocoatl_core::netaddr::classify,
+            RouteSettings::default(),
+        )
+        .await
+        .unwrap();
+        // The daemon's check when a Session's network opens says the same:
+        // it does not open the route to a cloud-enabled Ollama. The egress
+        // here is opened without it, as for an Ollama whose cloud features
+        // came on after the network opened, which each request then finds.
+        let at_open = crate::session_egress::host_ollama_cloud_refusal(port).await;
+        println!("{variable}: the check at open says {at_open:?}");
+        assert_eq!(at_open.is_some(), cloud_on, "{variable}: {at_open:?}");
+        let sandbox = actual_egress_sandbox(&mut f, &upstream_label, egress.clone()).await;
+        git_init(f._workspace.path());
+        let r = run(&mut f, &["bash"], true);
+        // git is the image's only HTTP client: its smart-HTTP request for a
+        // repository URL ending in `?` is a GET of that path with git's
+        // suffix as the query.
+        let command = "for path in /api/tags /v1/models/gpt-oss:120b-cloud \
+                 /v1/models/gpt-oss%3A120b-cloud; do \
+             echo \"$path: $(git ls-remote \"https://ollama.host.axocoatl.internal$path?\" 2>&1 \
+                 | tail -1)\"; done; true";
+        let provider = Provider::new(vec![("bash", serde_json::json!({ "command": command }))]);
+        let result = tokio::time::timeout(Duration::from_secs(180), async {
+            r.controller
+                .prepare_repository_activation(
+                    r.activation.clone(),
+                    r.resources(provider.clone()),
+                    r.resource.clone(),
+                )
+                .unwrap()
+                .run()
+                .await
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let idle = f.owner.execution_is_idle();
+        sandbox.stop_checked().await.unwrap();
+        let settled = result.unwrap().unwrap();
+        assert!(idle.unwrap());
+        assert!(settled.accepted, "{:?}", settled.failure);
+        let shown: Vec<String> = provider.requests.lock().unwrap()[1]
+            .iter()
+            .filter_map(ChatMessage::text_content)
+            .map(str::to_string)
+            .collect();
+        println!("{variable} (port {port}), what the container saw:\n{shown:#?}");
+        let events = record.events();
+        for event in &events {
+            event.validate().unwrap();
+        }
+        let requests: Vec<(Recorded, Option<String>, String)> = events
+            .iter()
+            .filter_map(|event| match event {
+                NetworkEvent::Request {
+                    decision,
+                    reason,
+                    path,
+                    ..
+                } => Some((*decision, reason.clone(), path.clone())),
+                _ => None,
+            })
+            .collect();
+        println!("{variable}: recorded requests {requests:?}");
+        assert!(resolver.queries().is_empty(), "{:?}", resolver.queries());
+        // The cloud model is refused by its path, before Ollama is asked
+        // anything, plain and percent-encoded.
+        for path in [
+            "/v1/models/gpt-oss:120b-cloud",
+            "/v1/models/gpt-oss%3A120b-cloud",
+        ] {
+            assert!(
+                requests.iter().any(|(decision, reason, seen)| {
+                    *decision == Recorded::Deny
+                        && reason.as_deref() == Some("provider_fetch_refused")
+                        && seen == path
+                }),
+                "{variable}: {path}: {requests:?}"
+            );
+        }
+        let tags = requests
+            .iter()
+            .find(|(_, _, path)| path == "/api/tags")
+            .unwrap_or_else(|| panic!("{variable}: {requests:?}"));
+        if cloud_on {
+            assert_eq!(tags.0, Recorded::Deny, "{variable}: {requests:?}");
+            assert_eq!(tags.1.as_deref(), Some("ollama_cloud_not_off"));
+        } else {
+            assert_eq!(tags.0, Recorded::Allow, "{variable}: {requests:?}");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, NetworkEvent::Response { status: 200, .. })),
+                "{events:#?}"
+            );
+        }
+    }
+}
+
 /// Under `network: egress` a required check admitted with `egress` (as an
 /// e2e check is) gets an egress credential for its own process and reaches
 /// the Session's route; a check admitted without it, in the same pass, is

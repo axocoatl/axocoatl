@@ -1295,23 +1295,28 @@ async fn pull(o: &mut Onboarding, base_url: &str, models: &[String], writer: Wri
             continue;
         }
         o.ui.fail(&finding.label);
+        // A pull with `--runner llamacpp` leaves the variant just pulled in
+        // place (Ollama 0.40.8), so that one is removed first.
+        let commands = axocoatl_llm_ollama::gguf_variant_commands(model);
+        let remove = Cmd::new("ollama", &["rm", model]).env("OLLAMA_HOST", base_url);
         let gguf = Cmd::new("ollama", &["pull", "--runner", "llamacpp", model])
             .env("OLLAMA_HOST", base_url);
         if o.ui.consent(
             &format!(
-                "Ollama pulled a variant native Sessions refuse. Pull its GGUF variant with \
-                 `ollama pull --runner llamacpp {model}` (an undocumented Ollama flag)?"
+                "Ollama pulled a variant native Sessions refuse. Remove it and pull its GGUF \
+                 variant with `{commands}` (an undocumented Ollama flag)?"
             ),
             true,
             false,
-        ) && o.host.run(&gguf).await.is_ok()
+        ) && o.host.run(&remove).await.is_ok()
+            && o.host.run(&gguf).await.is_ok()
             && ollama_setup::model_finding(base_url, model, false).await.ok
         {
             o.ui.ok(format!("{model} is now the GGUF variant"));
         } else {
             o.step_left(format!(
-                "{model} is not a GGUF model native Sessions can run: ollama pull --runner \
-                 llamacpp {model}, or choose another model"
+                "{model} is not a GGUF model native Sessions can run: {commands}, or choose \
+                 another model"
             ));
             ok = false;
         }
