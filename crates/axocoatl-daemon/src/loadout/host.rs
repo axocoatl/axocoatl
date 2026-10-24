@@ -166,7 +166,8 @@ pub trait RunHost: Send + Sync {
     /// (`receipt.dsse.json`) before the Outcome itself is written, so a run
     /// that has finished has its receipt settled. `Ok(Some(_))` is the
     /// warning `receipt_incomplete` of a receipt that does not cover every
-    /// path the run changed, which the driver records; `Err` says why there
+    /// path the run changed, or `run_changed_nothing` of a run whose writer
+    /// changed no file, which the driver records; `Err` says why there
     /// is no receipt, which the driver records as the warning
     /// `receipt_unavailable`. Neither changes the verdict or the exit code.
     /// Daemon: `seal_loadout_run` (receipts). A host without receipts signs

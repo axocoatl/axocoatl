@@ -194,13 +194,6 @@ pub(crate) fn review_rerun_backoff(earlier: usize) -> std::time::Duration {
     doubled.min(crate::provider_retry::MAX_RETRY_AFTER)
 }
 
-/// How an activation records a native Ollama response that held neither an
-/// answer nor a tool call, as `axocoatl-llm-ollama`'s native stream words
-/// it: gpt-oss:20b reviewing a fix called a `search` tool it was never
-/// offered, which Ollama dropped, and wrote nothing else.
-const NATIVE_NO_ANSWER: &str = "LLM provider error: Streaming error: native Ollama: native \
-     response has no final content or tool call";
-
 /// Why a reviewer that did not finish can in a fresh conversation, read
 /// from the host-written first line of its recorded failure: its model kept
 /// calling tools and gave no answer, even when asked for its final answer
@@ -217,14 +210,17 @@ pub(crate) fn rerun_cause_of_text(text: &str) -> Option<&'static str> {
     if line.starts_with("Tool call failed: agent tool loop - ") {
         return Some("its model kept calling tools and gave no answer");
     }
-    if line == NATIVE_NO_ANSWER {
-        return Some("its model gave no answer and called no tool it was offered");
-    }
     if line.starts_with("This Agent reached its token limit for this activation") {
         return Some("it reached its token limit for the activation");
     }
-    let view = axocoatl_session::execution_content::classify_activation_failure(first)?;
-    (view.class == "round_limit").then_some("it used every tool round of its activation")
+    // A response with no answer and no call that can run, which the
+    // reviewer's own activation already asked for once more (gpt-oss:20b
+    // can end one having written only reasoning).
+    match axocoatl_session::execution_content::classify_activation_failure(first)?.class {
+        "no_answer" => Some("its model gave no answer and called no tool it was offered"),
+        "round_limit" => Some("it used every tool round of its activation"),
+        _ => None,
+    }
 }
 
 /// Most bytes of a reviewer's own failure a review's reason quotes.
@@ -2214,19 +2210,27 @@ mod tests {
             assert_eq!(rerun_cause_of_text(&text), None, "{text}");
         }
         // The native Ollama provider words an empty response as the host
-        // reads it.
-        let (_, message) = NATIVE_NO_ANSWER.split_once("native Ollama: ").unwrap();
+        // reads it, after the reviewer's activation asked once more, and as a
+        // 1.5.0 candidate worded it.
+        for line in [
+            "LLM provider error: ollama returned a response that was refused: the model's \
+             response held no answer and no tool call (it wrote only reasoning). Nothing from \
+             this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered. \
+             This was its answer when asked once more after a response that could not be used \
+             either (the model's response held no answer and no tool call)",
+            "LLM provider error: Streaming error: native Ollama: native response has no final \
+             content or tool call",
+        ] {
+            assert_eq!(
+                rerun_cause_of_text(&failed(line)),
+                Some("its model gave no answer and called no tool it was offered"),
+                "{line}"
+            );
+        }
         assert!(
-            include_str!("../../axocoatl-llm-ollama/src/native.rs")
-                .contains(&format!("\"{message}\"")),
-            "{message}"
-        );
-        assert_eq!(
-            format!(
-                "LLM provider error: {}",
-                axocoatl_llm::ProviderError::Stream(format!("native Ollama: {message}"))
-            ),
-            NATIVE_NO_ANSWER
+            include_str!("../../axocoatl-llm-ollama/src/native.rs").contains(
+                "const NO_ANSWER: &str = \"the model's response held no answer and no tool call\";"
+            )
         );
     }
 

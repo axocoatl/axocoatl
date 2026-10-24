@@ -1,0 +1,4 @@
+{"model":"gpt-oss:20b","created_at":"2026-10-24T00:48:15.544478Z","message":{"role":"assistant","content":"","thinking":"Now"},"done":false}
+{"model":"gpt-oss:20b","created_at":"2026-10-24T00:48:15.56089Z","message":{"role":"assistant","content":"","thinking":" tests"},"done":false}
+{"model":"gpt-oss:20b","created_at":"2026-10-24T00:48:15.577671Z","message":{"role":"assistant","content":"","thinking":"."},"done":false}
+{"model":"gpt-oss:20b","created_at":"2026-10-24T00:48:15.978507Z","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_pm4nfeex","function":{"index":0,"name":"read_file","arguments":{"path":"tests/test_pages.py"}}}]},"done":true,"done_reason":"stop","total_duration":11712782500,"load_duration":10976111000,"prompt_eval_count":372,"prompt_eval_cached_count":0,"prompt_eval_duration":246771000,"eval_count":30,"eval_duration":483048000}

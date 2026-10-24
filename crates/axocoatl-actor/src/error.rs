@@ -8,6 +8,13 @@ pub enum AgentError {
     #[error("LLM provider stream ended early: {0}")]
     IncompleteProviderStream(String),
 
+    /// The provider completed a response whose output the Agent cannot use:
+    /// no answer and no tool call that can run
+    /// ([`axocoatl_llm::ProviderError::UnusableResponse`]). Its usage is
+    /// recorded; worded as any other provider error.
+    #[error("LLM provider error: {0}")]
+    UnusableResponse(String),
+
     /// The Agent's own token guard (`token_budget`) stopped a model call.
     #[error(
         "This Agent reached its token limit for this activation ({} tokens; {} needed). \

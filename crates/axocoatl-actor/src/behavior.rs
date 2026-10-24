@@ -110,8 +110,11 @@ pub enum AgentStreamChunk {
     Text(String),
     /// Reasoning / "thinking" token(s) — extended-thinking models.
     Reasoning(String),
-    /// The provider response ended before completing and one retry starts.
-    /// Earlier text in this round belongs to the abandoned attempt.
+    /// The provider call is made once more: its response ended before
+    /// completing, or the model's completed response could not be used (no
+    /// answer and no tool call that can run) and the model is asked again
+    /// with a note. Earlier text in this round belongs to the abandoned
+    /// attempt.
     ProviderRetry { reason: String },
     /// A provider response completed: how it ended, how many tools its
     /// request offered and how many calls it returned, so a stored turn shows

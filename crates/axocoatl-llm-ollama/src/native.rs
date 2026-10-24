@@ -50,7 +50,7 @@ mod observed_context;
 mod server_check;
 mod version_policy;
 pub use observed_context::{
-    inspect_native_ollama_model, observe_native_ollama_context,
+    inspect_native_ollama_model, native_ollama_model_unloaded, observe_native_ollama_context,
     observe_native_ollama_context_within, NativeOllamaContextObservation,
     OBSERVATION_SCHEMA_VERSION,
 };
@@ -232,6 +232,61 @@ fn invalid(message: impl Into<String>) -> ProviderError {
         message: message.into(),
     }
 }
+/// How the refusal of a completed response with no answer and no tool call
+/// begins; [`no_answer`] words it.
+const NO_ANSWER: &str = "the model's response held no answer and no tool call";
+
+/// The refusal of a completed response with no answer and no tool call:
+/// whether the model wrote reasoning, the output tokens Ollama counted for
+/// it when it did (one is a stop at once: Ollama answers so when its runner
+/// fails, for example when the GPU runs out of memory), how Ollama ended it,
+/// and how many tools were offered.
+fn no_answer(reasoned: bool, output: Option<usize>, done_reason: &str, tools: usize) -> String {
+    let mut said = Vec::new();
+    if reasoned {
+        said.push("it wrote only reasoning".to_owned());
+    }
+    if let Some(output) = output {
+        said.push(text_calls::count_of(output, "output token"));
+    }
+    format!(
+        "{NO_ANSWER}{}. Nothing from this response ran; Ollama ended it with done_reason \
+         \"{done_reason}\" and {} offered",
+        if said.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", said.join("; "))
+        },
+        text_calls::count_of(tools, "tool")
+    )
+}
+
+/// The refusal of a response that calls `name`, a tool `offered` does not
+/// hold, under a name that cannot be answered with a tool error.
+fn unoffered_call(name: &str, offered: &[axocoatl_llm::ToolDefinition]) -> String {
+    let name: String = name
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(64)
+        .collect();
+    let offered = if offered.is_empty() {
+        "it was offered none".to_owned()
+    } else {
+        format!(
+            "it has {}",
+            offered
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    format!(
+        "the model called {name}, a tool it does not have ({offered}). Nothing from this \
+         response ran"
+    )
+}
+
 fn protocol(message: impl Into<String>) -> ProviderError {
     ProviderError::Stream(format!("native Ollama: {}", message.into()))
 }
@@ -1266,6 +1321,20 @@ impl NativeResponse {
             {
                 return Err(protocol("invalid or duplicate native tool id"));
             }
+            // gpt-oss on Ollama can call one of harmony's own tools
+            // (`browser.search`, `browser.open`) that nobody offered. A call
+            // to an unoffered tool is answered with a tool error, but only
+            // under a name every provider takes back in history; this one is
+            // not, so the response is refused, naming the call, and the
+            // Agent asks the model once more.
+            if !self.request.tools.iter().any(|tool| tool.name == name)
+                && !axocoatl_llm::is_portable_tool_name(name)
+            {
+                return Err(ProviderError::UnusableResponse {
+                    provider: PROVIDER.into(),
+                    message: unoffered_call(name, &self.request.tools),
+                });
+            }
             validate_response_tool_call(PROVIDER, name, arguments, &self.request.tools)?;
             accepted.push(ToolCall {
                 id: id.into(),
@@ -1288,7 +1357,8 @@ impl NativeResponse {
         usage.complete =
             self.terminal_counts && self.request.response_format != Some(ResponseFormat::Json);
         let error = match error {
-            refused @ ProviderError::RefusedResponse { .. } => refused,
+            refused @ (ProviderError::RefusedResponse { .. }
+            | ProviderError::UnusableResponse { .. }) => refused,
             other => ProviderError::RefusedResponse {
                 provider: PROVIDER.into(),
                 message: other.to_string(),
@@ -1489,7 +1559,7 @@ impl NativeResponse {
                 } else {
                     "stop"
                 };
-                self.rejected = Some(ProviderError::RefusedResponse {
+                self.rejected = Some(ProviderError::UnusableResponse {
                     provider: PROVIDER.into(),
                     message: format!(
                         "{why}. Nothing from this response ran; Ollama ended it with \
@@ -1521,10 +1591,25 @@ impl NativeResponse {
             &reason,
             self.calls.iter().map(|call| call.id.as_str()),
         )?;
+        // A completed response with neither an answer nor a call (gpt-oss
+        // can end one having written only reasoning) gives the Agent nothing
+        // to act on; its usage stands, and the Agent asks once more.
         if self.content.trim().is_empty() && self.calls.is_empty() {
-            return Err(protocol(
-                "native response has no final content or tool call",
-            ));
+            self.rejected = Some(ProviderError::UnusableResponse {
+                provider: PROVIDER.into(),
+                message: no_answer(
+                    !self.thinking.trim().is_empty(),
+                    self.terminal_counts
+                        .then_some(self.usage.usage.output_tokens),
+                    if reason == FinishReason::MaxTokens {
+                        "length"
+                    } else {
+                        "stop"
+                    },
+                    self.request.tools.len(),
+                ),
+            });
+            return Ok(events);
         }
         if self.request.response_format == Some(ResponseFormat::Json) && self.calls.is_empty() {
             serde_json::from_str::<Value>(&self.content)

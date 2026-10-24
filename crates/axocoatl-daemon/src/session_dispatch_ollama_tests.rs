@@ -334,8 +334,9 @@ async fn two_text_calls_in_one_native_session_keep_their_ids_apart() {
 }
 
 /// A call the model writes as text that cannot run (here a parameter missing
-/// its `</parameter>`) fails the activation with the reason, so the turn
-/// needs attention instead of ending "done" having run nothing.
+/// its `</parameter>`), again when asked once more, fails the activation with
+/// the reason, so the turn needs attention instead of ending "done" having
+/// run nothing. Both responses are charged.
 #[tokio::test]
 async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
     let (fixture, settled, tool, _server) = text_call_turn(TextCallsReply {
@@ -376,9 +377,147 @@ async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
         .controller
         .activation_provider_usage(&fixture.activation)
         .unwrap();
-    assert_eq!(usage.calls, 1);
+    assert_eq!(usage.calls, 2);
     assert_eq!(usage.unsettled_calls, 0);
-    assert_eq!(usage.tokens.usage, TokenUsageStats::new(10, 2));
+    assert_eq!(usage.tokens.usage, TokenUsageStats::new(20, 4));
+    assert!(failure.contains("This was its answer when asked once more"), "{failure}");
+}
+
+/// `unusable` until the request carries the host's note about it, then a
+/// structured `glob` call, then (with its result) the final answer.
+struct AskedAgainReply {
+    unusable: &'static str,
+}
+
+impl Respond for AskedAgainReply {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let noted = messages.last().is_some_and(|message| {
+            message["role"] == "user"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("[Note from the host: your last response"))
+        });
+        let message = if messages.iter().any(|message| message["role"] == "tool") {
+            serde_json::json!({"role":"assistant","content":"done"})
+        } else if noted {
+            serde_json::json!({"role":"assistant","content":"","tool_calls":[{"id":"call_glob",
+                "function":{"index":0,"name":"glob","arguments":{"pattern":"src/*.rs"}}}]})
+        } else {
+            serde_json::json!({"role":"assistant","content":self.unusable,"thinking":"Continue."})
+        };
+        let response = serde_json::json!({
+            "model":"test-local", "message":message,
+            "done":true, "done_reason":"stop", "prompt_eval_count":10, "eval_count":2
+        });
+        ResponseTemplate::new(200).set_body_raw(format!("{response}\n"), "application/x-ndjson")
+    }
+}
+
+/// A native activation whose model gives a response that cannot be used is
+/// asked once more within the activation, with a note that says what the
+/// response held, and goes on when it answers: the m4-rust writer's prose
+/// that ended in `<tool_call>` and nothing after it, a response that held
+/// only reasoning (gpt-oss), and a call written as text that cannot run.
+/// Every response is charged and settled, the re-ask is the activation's one
+/// recorded provider retry, and the note is not kept in its conversation.
+#[tokio::test]
+async fn a_native_activation_asks_once_more_after_an_unusable_response() {
+    for (unusable, says) in [
+        (
+            "This logic seems right, but let me create a test to verify what happens.<tool_call>",
+            "its answer ends with <tool_call> and nothing after it",
+        ),
+        (
+            "",
+            "the model's response held no answer and no tool call (it wrote only reasoning; 2 \
+             output tokens)",
+        ),
+        (
+            "Looking.\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</function>",
+            "call to glob as answer text that Axocoatl cannot run",
+        ),
+    ] {
+        let server = server_replying(AskedAgainReply { unusable }).await;
+        let provider = NativeOllamaProvider::connect(native_config(server.uri(), "test-local"))
+            .await
+            .unwrap();
+        let mut config = agent_config("test-local", false, true, OUTPUT);
+        config.tools = vec!["glob".into()];
+        let fixture = local_fixture(config, 4 * ONE_CALL, "Fix the paging bug in src/lib.rs");
+        let tool = Arc::new(CountingTool::default());
+        let mut executor = axocoatl_tools::ToolExecutor::new();
+        executor.register_builtin("glob", tool.clone());
+        let resources = AutonomousActivationResources {
+            config: fixture.config.clone(),
+            profile: fixture.profile.clone(),
+            provider: Arc::new(provider),
+            counter: Arc::new(Counter),
+            tools: Arc::new(executor),
+        };
+        let settled = fixture
+            .controller
+            .prepare_autonomous_activation(fixture.activation.clone(), resources)
+            .unwrap()
+            .run()
+            .await
+            .unwrap();
+        assert!(settled.accepted, "{unusable:?}: {:?}", settled.failure);
+        assert_eq!(settled.output.content().output.text, "done");
+        assert_eq!(tool.count.load(Ordering::SeqCst), 1, "{unusable:?}");
+        let usage = fixture
+            .controller
+            .activation_provider_usage(&fixture.activation)
+            .unwrap();
+        assert_eq!((usage.calls, usage.unsettled_calls), (3, 0), "{unusable:?}");
+        assert_eq!(usage.tokens.usage, TokenUsageStats::new(30, 6));
+        let requests: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/api/chat")
+            .map(|request| request.body_json().unwrap())
+            .collect();
+        assert_eq!(requests.len(), 3);
+        let note = requests[1]["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(note.contains(says), "{note}");
+        assert!(
+            !requests[2]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Note from the host"))),
+            "the note is not kept"
+        );
+        let retries: Vec<String> = {
+            use axocoatl_session::execution_content::ActivationStreamPayload;
+            let state = fixture.controller.lock().unwrap();
+            let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
+            state
+                .content
+                .activation_stream(&snapshot, &fixture.activation)
+                .unwrap()
+                .into_iter()
+                .filter_map(|view| match view.content.payload {
+                    ActivationStreamPayload::ProviderRetry { reason } => Some(reason),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(retries.len(), 1, "{retries:?}");
+        assert!(
+            retries[0].starts_with("the model's response could not be used (")
+                && retries[0].contains(says),
+            "{retries:?}"
+        );
+    }
 }
 
 #[tokio::test]

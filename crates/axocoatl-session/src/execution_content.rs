@@ -847,6 +847,18 @@ pub struct ExecutionActivationView {
 const TEXT_CALL_REFUSAL: &str = "ollama returned a response that was refused: the model wrote a \
                                  call to ";
 
+/// How an Ollama provider's refusal of a completed response with no answer
+/// and no tool call that can run starts, after `LLM provider error: `
+/// (`ProviderError::UnusableResponse`): an empty response, a call to a tool
+/// the model does not have under a name that cannot be answered, and how a
+/// 1.5.0 candidate worded an empty native response.
+const NO_ANSWER_REFUSALS: [&str; 3] = [
+    "ollama returned a response that was refused: the model's response held no answer and no \
+     tool call",
+    "ollama returned a response that was refused: the model called ",
+    "Streaming error: native Ollama: native response has no final content or tool call",
+];
+
 /// How the host's failure line begins for a writer stopped before its
 /// repository captures could establish what it changed: the stop ended it,
 /// and any change it made is kept for review.
@@ -858,7 +870,7 @@ pub const STOPPED_BEFORE_CAPTURE: &str =
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActivationFailureView {
     /// provider_incomplete | provider_error | provider_refusal |
-    /// unrunnable_tool_call | budget_limited | round_limit | context_limit |
+    /// unrunnable_tool_call | no_answer | budget_limited | round_limit | context_limit |
     /// scope_violation | capture_unavailable | stopped | admission | other
     pub class: &'static str,
     pub explanation: String,
@@ -899,6 +911,24 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
             class: "unrunnable_tool_call",
             explanation: "The model wrote a tool call as answer text that Axocoatl cannot run, \
                           so nothing from that response ran."
+                .into(),
+            next_step: "continue",
+            http_status: None,
+            refusal: false,
+        });
+    }
+    // A completed response with no answer and no tool call that can run,
+    // even when the model was asked once more: the model's own output, not
+    // the provider's failure.
+    if provider.is_some_and(|rest| {
+        NO_ANSWER_REFUSALS
+            .iter()
+            .any(|prefix| rest.starts_with(prefix))
+    }) {
+        return Some(ActivationFailureView {
+            class: "no_answer",
+            explanation: "The model gave no answer and no tool call Axocoatl could run, so \
+                          nothing from that response ran."
                 .into(),
             next_step: "continue",
             http_status: None,
@@ -5442,6 +5472,21 @@ mod tests {
                 view.explanation.starts_with("The model wrote a tool call as answer text"),
                 "{}",
                 view.explanation
+            );
+        }
+        // A response with no answer and no tool call that can run, as the
+        // Ollama providers word it, and as a 1.5.0 candidate worded an empty
+        // native response: the model's output, not a provider failure.
+        for line in [
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model's response held no answer and no tool call (it wrote only reasoning). Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered. This was its answer when asked once more after a response that could not be used either (the model's response held no answer and no tool call (it wrote only reasoning))",
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model called browser.search, a tool it does not have (it has read_file, glob). Nothing from this response ran",
+            "Activation failed: LLM provider error: Streaming error: native Ollama: native response has no final content or tool call",
+        ] {
+            let view = classify_activation_failure(line).unwrap();
+            assert_eq!((view.class, view.next_step), ("no_answer", "continue"));
+            assert_eq!(
+                crate::failure_class::classify_failure_text(line),
+                crate::run_outcome::FailureClass::NoAnswer
             );
         }
         assert_eq!(

@@ -386,7 +386,11 @@ GGUF completion model before inference; a model Ollama shows as non-GGUF or MLX,
 any runner but llama.cpp's `llama-server`, is refused, since MLX does not hold `num_ctx` as a
 hard limit. Native `/api/chat` requests set finite context/prediction limits and disable implicit
 history truncation and shifting; the context observation's load sends `shift:false` too, so the
-first inference does not reload the model. After the context is observed, two contract probes on
+first inference does not reload the model. When `/api/ps` no longer lists the model after its
+load (another client made Ollama unload it), the model is loaded and read again, three loads in
+all; past that the observation is refused with "Ollama unloaded MODEL …", naming what `/api/ps`
+listed instead, and run admission classes it as infrastructure (exit 5). After the context is
+observed, two contract probes on
 the person's own server and model check the guarantees the bound relies on: a prompt about four
 times the context (`truncate:false`) must be refused before any generation, and a one-token
 request must stop after one token. Passes are cached per server, version, model digest and
@@ -525,9 +529,18 @@ Qwen3-Coder `<function=…>` blocks that ends the answer, starts at the first ca
 code fence or HTML block, names only offered tools and fits their parameter schemas, at most 128
 calls, each with an id unique in the Session. JSON is never read as a call. An answer that calls an
 offered tool in a way that cannot run (a call line that starts no runnable run, a call block after
-other text on its line, a JSON call that ends the answer) is a refused response
-(`ProviderError::RefusedResponse`), so the activation fails with its reason instead of settling as
-a final answer, classed `unrunnable_tool_call`. The actor has no
+other text on its line, a JSON call that ends the answer, a call tag that ends the answer with
+nothing after it) is an unusable response (`ProviderError::UnusableResponse`, which settles to its
+reported usage like `RefusedResponse`), and so is a native response with no answer and no tool
+call (gpt-oss can end one with only reasoning) or with a call to an unoffered tool whose name is
+outside the portable contract (`browser.search`); a well-formed call to an unoffered tool with a
+portable name is answered with a tool error instead. The actor asks the model once more after an
+unusable response (`DefaultAgentBehavior::ask_again_after_unusable`): the same request plus a host
+note saying what the response held, preflighted against the budget and the context as a new
+provider call and recorded as a `provider_retry`; the note is not kept in the session. A second
+unusable response, or one the budget cannot ask again, fails the activation with its reason
+instead of settling as a final answer, classed `unrunnable_tool_call` for a call written as text
+and `no_answer` otherwise. The actor has no
 text-to-tool path of its own; other providers leave response text non-actionable because their
 native ids, signatures, and block structure cannot be fabricated safely. Every completed provider
 response is recorded in the activation stream as `provider_response` (finish reason, offered
@@ -755,7 +768,7 @@ merged findings lose near duplicates (same file, lines at most 2 apart, similar 
 with parsed reports, the review rounds with findings split by id, adjudications, findings
 with their reproduction classification, not-covered entries with a failure class
 (`provider_refusal`, `provider_failure`, `provider_rejected`, `unrunnable_tool_call`,
-`budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
+`no_answer`, `budget`, `blocked`, `not_reached`, `runtime_limit`, `stopped`, `other`), notes, warnings, usage with retry counts, a
 network summary and Keep. `RunOutcome::decide` sets the verdict and exit code with the
 precedence error (5) > interrupted (6) > checks failed (1) > needs attention (2) > pass
 (0); anything not covered, a check that did not run on the final result, an unanswered

@@ -92,6 +92,22 @@ On Apple silicon Ollama pulls the MLX variant of some models, and MLX does not h
 `num_ctx` as a hard limit. `ollama pull --runner llamacpp <model>` (an undocumented
 Ollama flag) pulls the GGUF variant; `qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
 
+**"Ollama unloaded MODEL each of the 3 times Axocoatl loaded it to read its context"**
+Another program on the same Ollama loaded a model (named in the message) right after
+Axocoatl loaded this one, and Ollama unloaded this one to make room; Axocoatl loads it
+again twice before it says so. A run is refused as infrastructure (exit 5); Team &
+budget's Apply fails. Run again when that program has finished with Ollama, or give
+Ollama room for both (more memory, or a higher `OLLAMA_MAX_LOADED_MODELS`). With "has no
+model loaded now", something unloaded it (`ollama stop`, a request with `keep_alive` 0)
+or `OLLAMA_KEEP_ALIVE` is 0: set it to a few minutes or more.
+
+**"The model gave no answer and no tool call Axocoatl could run"**
+The model ended a response with neither (gpt-oss:20b can write only reasoning), or
+called one of its own tools nobody offered (`browser.search`), and did so again when
+Axocoatl asked once more with a note. Nothing from those responses ran; a run's Outcome
+lists it as `no_answer`. Choose **Continue** to ask again, or another model for that
+Agent when it happens often.
+
 **Model refused by a contract probe**
 When a Team is reviewed, Axocoatl checks on your server that a prompt longer than the
 model's context is refused before generation and that a call stops at its output limit.

@@ -556,3 +556,50 @@ fn a_tool_call_opener_split_into_tokens_is_held_until_its_line_ends() {
         }
     }
 }
+
+/// What qwen3-coder:30b ended a fix with on Ollama 0.40.8 (the 1.5.0
+/// measurement's m4-rust writer): prose, then `<tool_call>` and nothing
+/// after it. Ollama returns a call tag it is still collecting as content
+/// when the response ends. That answer began a call and wrote none of it,
+/// so it is refused instead of becoming a final answer that changed
+/// nothing; a call tag alone on the last line, `<function=` with nothing
+/// after it, and one cut at the output limit are too. A tag quoted or
+/// mentioned before the end stays the answer.
+#[test]
+fn an_answer_that_ends_with_a_bare_call_tag_is_refused() {
+    let measured = "This logic seems right, but let me create a test to verify what happens when \
+                    we have a case that might be problematic.<tool_call>";
+    assert_eq!(
+        unreadable(measured),
+        "the model wrote a call to a tool as answer text that Axocoatl cannot run: its answer \
+         ends with <tool_call> and nothing after it, so the call was never written"
+    );
+    for content in [
+        "Let me write the test.\n\n<tool_call>\n",
+        "Let me write the test.\n<function=",
+        "Let me write the test. <tool_call>  \n\n",
+    ] {
+        assert!(
+            unreadable(content).ends_with("nothing after it, so the call was never written"),
+            "{content:?}"
+        );
+    }
+    match read_text_calls(measured, &request(), "ollama", false) {
+        TextCalls::Unreadable(why) => assert!(why.ends_with(CUT_CALL), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    for content in [
+        "Wrap each call in `<tool_call>`",
+        "A call opens with <tool_call> and closes with </tool_call>.",
+        "Example:\n```\n<tool_call>\n```",
+    ] {
+        answer(content);
+    }
+    // Without tools offered no text is read as a call.
+    let mut final_answer = request();
+    final_answer.tools.clear();
+    assert!(matches!(
+        read_text_calls(measured, &final_answer, "ollama", true),
+        TextCalls::Answer
+    ));
+}

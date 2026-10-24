@@ -104,6 +104,15 @@ fn model_key(value: &str) -> Result<String, ProviderError> {
 }
 
 fn identity(value: &Value, requested_model: &str) -> Result<ModelIdentity, ProviderError> {
+    listed_identity(value, requested_model)?
+        .ok_or_else(|| invalid("the exact local model was not listed"))
+}
+
+/// [`identity`], or `None` when the list does not name the model at all.
+fn listed_identity(
+    value: &Value,
+    requested_model: &str,
+) -> Result<Option<ModelIdentity>, ProviderError> {
     let expected = model_key(requested_model)?;
     let models = value
         .get("models")
@@ -134,7 +143,7 @@ fn identity(value: &Value, requested_model: &str) -> Result<ModelIdentity, Provi
             digest: digest.to_ascii_lowercase(),
         });
     }
-    selected.ok_or_else(|| invalid("the exact local model was not listed"))
+    Ok(selected)
 }
 
 fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, ProviderError> {
@@ -280,8 +289,11 @@ fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderEr
 /// then observe its actual per-request context, then run the contract probes
 /// with that context. Only `shift:false` is sent with the load (inference sends
 /// it too, and Ollama 0.40 reloads a model whose shift setting differs); no
-/// other option, keep-alive override, model download, automatic retry, or
-/// server-configuration mutation is sent.
+/// other option, keep-alive override, model download, or
+/// server-configuration mutation is sent. When Ollama has unloaded the model
+/// again before its context was read (another program on the same Ollama
+/// loaded a model, or unloaded this one), the model is loaded again, at most
+/// [`OBSERVATION_LOADS`] times in all; nothing else is retried.
 /// Aliases, tags and runner identity must agree across bounded metadata reads.
 /// Concurrent external model changes cannot be made atomic by these APIs; this
 /// is point-in-time evidence and any detected disagreement is refused.
@@ -320,49 +332,33 @@ async fn observe(
         &metadata_request(&client, base_url, "api/tags", None).await?,
         model,
     )?;
-    // GenerateHandler returns done_reason=load before tokenization/completion
-    // for the empty prompt. Omitting options preserves the server/model choice
-    // of context; shift:false starts the runner without context shifting, as
-    // every inference request asks (v0.40.6 server/sched.go needsReload).
-    let loaded = tokio::time::timeout(
-        load_timeout,
-        metadata_request_within(
+    // Another program on the same Ollama can make it unload the model between
+    // the load and the reads below; the model is loaded again then, a few
+    // times at most.
+    let mut unloaded = 0;
+    let (load_acknowledged_at, context) = loop {
+        match load_and_read_context(
             &client,
             base_url,
-            "api/generate",
-            Some(json!({"model": first.name, "stream": false, "shift": false})),
-            // Past the deadline above, so that one names the setting.
-            load_timeout + Duration::from_secs(5),
-        ),
-    )
-    .await
-    .map_err(|_| load_timed_out(&first.name, load_timeout))??;
-    let load_acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
-    let context = loaded_context(
-        &metadata_request(&client, base_url, "api/ps", None).await?,
-        &first,
-    )?;
-    if profile(&client, base_url, model).await? != capabilities {
-        return Err(invalid(
-            "the Ollama version or local model capabilities changed during context observation",
-        ));
-    }
-    let second = identity(
-        &metadata_request(&client, base_url, "api/tags", None).await?,
-        model,
-    )?;
-    if first != second {
-        return Err(invalid(
-            "local model identity changed during context observation",
-        ));
-    }
-    if loaded_context(
-        &metadata_request(&client, base_url, "api/ps", None).await?,
-        &second,
-    )? != context
-    {
-        return Err(invalid("loaded context changed during observation"));
-    }
+            model,
+            &first,
+            &capabilities,
+            load_timeout,
+        )
+        .await?
+        {
+            Load::Read {
+                acknowledged_at,
+                context,
+            } => break (acknowledged_at, context),
+            Load::Unloaded { running } => {
+                unloaded += 1;
+                if unloaded == OBSERVATION_LOADS {
+                    return Err(unloaded_while_observed(&first.name, &running));
+                }
+            }
+        }
+    };
     contract_probe::ensure_contract(
         &client,
         ProbeKey {
@@ -393,6 +389,138 @@ async fn observe(
         tools_supported: capabilities.tools,
         thinking_supported: capabilities.thinking,
     })
+}
+
+/// How many times [`observe`] loads the model when Ollama has unloaded it
+/// again before its context could be read.
+const OBSERVATION_LOADS: usize = 3;
+
+/// How [`observe`]'s refusal begins when Ollama unloaded the model each time
+/// it was loaded ([`native_ollama_model_unloaded`]).
+const UNLOADED: &str = "Ollama unloaded ";
+
+/// What one load of the model showed.
+enum Load {
+    /// Ollama loaded it with `context` tokens, and the server, the model and
+    /// its context did not change while they were read.
+    Read {
+        acknowledged_at: String,
+        context: usize,
+    },
+    /// Ollama no longer had it loaded when its context was read; `running`
+    /// is what `/api/ps` listed instead.
+    Unloaded { running: Value },
+}
+
+/// Load `first` (already listed, with `capabilities`) and read the context
+/// it was loaded with, twice, with the server's profile and the model's
+/// identity read between.
+async fn load_and_read_context(
+    client: &reqwest::Client,
+    base_url: &str,
+    model: &str,
+    first: &ModelIdentity,
+    capabilities: &Profile,
+    load_timeout: Duration,
+) -> Result<Load, ProviderError> {
+    // GenerateHandler returns done_reason=load before tokenization/completion
+    // for the empty prompt. Omitting options preserves the server/model choice
+    // of context; shift:false starts the runner without context shifting, as
+    // every inference request asks (v0.40.6 server/sched.go needsReload).
+    let loaded = tokio::time::timeout(
+        load_timeout,
+        metadata_request_within(
+            client,
+            base_url,
+            "api/generate",
+            Some(json!({"model": first.name, "stream": false, "shift": false})),
+            // Past the deadline above, so that one names the setting.
+            load_timeout + Duration::from_secs(5),
+        ),
+    )
+    .await
+    .map_err(|_| load_timed_out(&first.name, load_timeout))??;
+    let acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
+    let running = metadata_request(client, base_url, "api/ps", None).await?;
+    if listed_identity(&running, &first.name)?.is_none() {
+        return Ok(Load::Unloaded { running });
+    }
+    let context = loaded_context(&running, first)?;
+    if profile(client, base_url, model).await? != *capabilities {
+        return Err(invalid(
+            "the Ollama version or local model capabilities changed during context observation",
+        ));
+    }
+    let second = identity(
+        &metadata_request(client, base_url, "api/tags", None).await?,
+        model,
+    )?;
+    if *first != second {
+        return Err(invalid(
+            "local model identity changed during context observation",
+        ));
+    }
+    let running = metadata_request(client, base_url, "api/ps", None).await?;
+    if listed_identity(&running, &second.name)?.is_none() {
+        return Ok(Load::Unloaded { running });
+    }
+    if loaded_context(&running, &second)? != context {
+        return Err(invalid("loaded context changed during observation"));
+    }
+    Ok(Load::Read {
+        acknowledged_at,
+        context,
+    })
+}
+
+/// The refusal of an observation whose model Ollama unloaded each of the
+/// [`OBSERVATION_LOADS`] times it was loaded, before its context could be
+/// read, with what `/api/ps` listed the last time (`running`): the models
+/// another program loaded instead, or none.
+fn unloaded_while_observed(model: &str, running: &Value) -> ProviderError {
+    let mut others: Vec<String> = running
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|record| record.get("name").and_then(Value::as_str))
+        .map(shown_name)
+        .take(4)
+        .collect();
+    others.dedup();
+    let model = shown_name(model);
+    let message = if others.is_empty() {
+        format!(
+            "{UNLOADED}{model} each of the {OBSERVATION_LOADS} times Axocoatl loaded it to read \
+             its context, and has no model loaded now: another program unloaded it (`ollama \
+             stop`, or a request with keep_alive 0), or Ollama keeps no model loaded \
+             (OLLAMA_KEEP_ALIVE=0). Run again; if this happens every time, set \
+             OLLAMA_KEEP_ALIVE to a few minutes or more"
+        )
+    } else {
+        format!(
+            "{UNLOADED}{model} each of the {OBSERVATION_LOADS} times Axocoatl loaded it to read \
+             its context, because another program loaded {} on the same Ollama, and Ollama \
+             unloads a model to make room for another. Run again when that program has \
+             finished with Ollama, or let Ollama keep both loaded (more memory, or a higher \
+             OLLAMA_MAX_LOADED_MODELS)",
+            others.join(", ")
+        )
+    };
+    invalid(message)
+}
+
+/// Whether `error` is the refusal of an observation whose model Ollama
+/// unloaded each time Axocoatl loaded it, because another program on the
+/// same Ollama loaded a model or unloaded this one: nothing about the model
+/// or the setup is wrong, and the same run may pass when nothing else uses
+/// Ollama.
+pub fn native_ollama_model_unloaded(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::InvalidRequest { provider, message }
+            if provider == super::PROVIDER && message.starts_with(UNLOADED)
+    )
 }
 
 /// The error of a model load that did not finish within `after`, naming

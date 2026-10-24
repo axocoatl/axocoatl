@@ -307,6 +307,14 @@ pub fn ollama_model_problem(
         }
         other => axocoatl_llm_ollama::describe_native_ollama_error(other),
     };
+    // Another program kept the model from staying loaded: the model can
+    // serve, just not while that program holds Ollama's room.
+    if axocoatl_llm_ollama::native_ollama_model_unloaded(error) {
+        return format!(
+            "{} {model}, which the Ollama at {base_url} did not keep loaded: {reason}",
+            run_by(who)
+        );
+    }
     format!(
         "{} {model}, which the Ollama at {base_url} cannot serve: {reason}",
         run_by(who)
@@ -498,9 +506,13 @@ pub fn context_floor_problem(
 }
 
 /// Whether an Ollama error says how the server is doing now (busy, failing
-/// to load, not answering), which is infrastructure (exit code 5), rather
-/// than refusing the model or the server's setup, which is usage (3).
+/// to load, not answering, or unloading the model for another program's),
+/// which is infrastructure (exit code 5), rather than refusing the model or
+/// the server's setup, which is usage (3).
 pub fn ollama_error_is_infrastructure(error: &ProviderError) -> bool {
+    if axocoatl_llm_ollama::native_ollama_model_unloaded(error) {
+        return true;
+    }
     match error {
         ProviderError::ApiError { status, .. } => *status >= 500 || *status == 429,
         ProviderError::RateLimited { .. }
@@ -712,6 +724,18 @@ mod tests {
         assert_eq!(detect(false), OllamaInstall::Systemd);
     }
 
+    /// The refusal of an observation whose model another program kept
+    /// unloading, as the Ollama provider words it.
+    fn unloaded() -> ProviderError {
+        ProviderError::InvalidRequest {
+            provider: "ollama".into(),
+            message: "Ollama unloaded gpt-oss:20b each of the 3 times Axocoatl loaded it to read \
+                      its context, because another program loaded qwen3-coder:30b on the same \
+                      Ollama"
+                .into(),
+        }
+    }
+
     #[test]
     fn a_busy_or_failing_ollama_is_infrastructure_and_a_refused_model_is_usage() {
         let api = |status| ProviderError::ApiError {
@@ -723,6 +747,7 @@ mod tests {
             api(503),
             api(500),
             ProviderError::Network("connection reset".into()),
+            unloaded(),
         ] {
             assert!(ollama_error_is_infrastructure(&error), "{error}");
         }
@@ -766,6 +791,20 @@ mod tests {
         assert!(
             ollama_model_problem(&["Agent writer".to_string()], &spec("ollama:x"), url, &mlx)
                 .contains("ollama pull --runner llamacpp x")
+        );
+        // A model another program kept unloading is said as that, without
+        // calling it an invalid request.
+        assert_eq!(
+            ollama_model_problem(
+                &["the reviewer".to_string()],
+                &spec("ollama:gpt-oss:20b"),
+                url,
+                &unloaded()
+            ),
+            "the reviewer runs ollama:gpt-oss:20b, which the Ollama at http://127.0.0.1:11434 \
+             did not keep loaded: Ollama unloaded gpt-oss:20b each of the 3 times Axocoatl \
+             loaded it to read its context, because another program loaded qwen3-coder:30b on \
+             the same Ollama"
         );
         let down = ProviderError::Network("connection refused".into());
         assert!(ollama_unreachable(url, &down).contains("ollama serve"));

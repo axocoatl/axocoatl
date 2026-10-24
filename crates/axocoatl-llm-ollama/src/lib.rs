@@ -4,13 +4,13 @@ mod native;
 mod text_calls;
 pub use native::{
     check_native_ollama_server, check_shown_model, describe_native_ollama_error,
-    inspect_native_ollama_model, native_ollama_error_hint, observe_native_ollama_context,
-    observe_native_ollama_context_within, ollama_version_accepted, ollama_version_note,
-    ollama_version_refusal, ollama_version_unaudited, show_native_ollama_model,
-    validate_native_ollama_endpoint, NativeOllamaConfig, NativeOllamaContextObservation,
-    NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode, OllamaServedVersions,
-    ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT, DENIED_OLLAMA_VERSIONS,
-    OBSERVATION_SCHEMA_VERSION,
+    inspect_native_ollama_model, native_ollama_error_hint, native_ollama_model_unloaded,
+    observe_native_ollama_context, observe_native_ollama_context_within, ollama_version_accepted,
+    ollama_version_note, ollama_version_refusal, ollama_version_unaudited,
+    show_native_ollama_model, validate_native_ollama_endpoint, NativeOllamaConfig,
+    NativeOllamaContextObservation, NativeOllamaProvider, NativeOllamaServerCheck, OllamaCloudMode,
+    OllamaServedVersions, ShownModel, AUDITED_OLLAMA_VERSION, CONTRACT_STOP_PROBE_PROMPT,
+    DENIED_OLLAMA_VERSIONS, OBSERVATION_SCHEMA_VERSION,
 };
 
 /// How long Ollama may take to start an answer, loading the model first,
@@ -244,7 +244,7 @@ fn compat_text_calls(
 /// The refusal of an answer that calls an offered tool as text that cannot
 /// run: the turn needs attention instead of ending having run nothing.
 fn text_call_refusal(why: String, finish_reason: &str, request: &ChatRequest) -> ProviderError {
-    ProviderError::RefusedResponse {
+    ProviderError::UnusableResponse {
         provider: "ollama".to_string(),
         message: format!(
             "{why}. Nothing from this response ran; Ollama ended it with finish_reason \
@@ -1233,7 +1233,7 @@ mod tests {
         let provider = OllamaProvider::with_base_url(server.uri(), "local-model");
         assert!(matches!(
             provider.chat(lookup_request()).await,
-            Err(ProviderError::RefusedResponse { message, .. })
+            Err(ProviderError::UnusableResponse { message, .. })
                 if message.contains("lookup") && message.contains("JSON")
         ));
     }
@@ -1272,7 +1272,7 @@ mod tests {
             .await;
         assert!(events.iter().any(|event| matches!(
             event,
-            Err(ProviderError::RefusedResponse { message, .. }) if message.contains("JSON")
+            Err(ProviderError::UnusableResponse { message, .. }) if message.contains("JSON")
         )));
         assert!(!events.iter().any(|event| matches!(
             event,
@@ -1636,7 +1636,7 @@ mod tests {
             ),
         ] {
             match compat_answer(content).await {
-                Err(ProviderError::RefusedResponse { message, .. }) => {
+                Err(ProviderError::UnusableResponse { message, .. }) => {
                     assert!(message.contains(says), "{content}: {message}");
                     assert!(message.contains("Nothing from this response ran"), "{message}");
                     assert!(
@@ -1757,7 +1757,7 @@ mod tests {
         assert_eq!(text, content);
         assert!(matches!(
             events.last(),
-            Some(Err(ProviderError::RefusedResponse { message, .. })) if message.contains("bash")
+            Some(Err(ProviderError::UnusableResponse { message, .. })) if message.contains("bash")
         ));
         assert!(!events.iter().any(|event| matches!(
             event,

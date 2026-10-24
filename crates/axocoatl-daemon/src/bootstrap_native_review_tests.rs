@@ -314,9 +314,13 @@ impl ReviewerFailure {
                 provider: "ollama".into(),
                 reason: "safety".into(),
             },
-            Self::NoAnswer => ProviderError::Stream(
-                "native Ollama: native response has no final content or tool call".into(),
-            ),
+            Self::NoAnswer => ProviderError::UnusableResponse {
+                provider: "ollama".into(),
+                message: "the model's response held no answer and no tool call (it wrote only \
+                          reasoning). Nothing from this response ran; Ollama ended it with \
+                          done_reason \"stop\" and 6 tools offered"
+                    .into(),
+            },
         }
     }
 }
@@ -1727,10 +1731,12 @@ async fn a_reviewer_that_gives_no_answer_twice_ends_the_review_saying_why() {
 }
 
 /// A reviewer whose native Ollama model gave no answer and called no tool it
-/// was offered (gpt-oss:20b called a `search` tool, which Ollama dropped,
-/// and the review of a passing fix ended needing attention) runs the same
-/// round again at once, in a fresh conversation, and that run's approval
-/// completes the turn; it is no provider retry.
+/// was offered (gpt-oss:20b ended a review step having written only
+/// reasoning, and the review of a passing fix ended needing attention) is
+/// asked once more within its activation; when that answer is none either,
+/// the same round runs again at once, in a fresh conversation, and that
+/// run's approval completes the turn. The re-ask is the record's one
+/// provider retry.
 #[tokio::test]
 async fn a_reviewer_whose_model_answered_nothing_runs_its_round_again_once() {
     let fixture = review_fixture(3).await;
@@ -1752,10 +1758,29 @@ async fn a_reviewer_whose_model_answered_nothing_runs_its_round_again_once() {
             .collect::<Vec<_>>(),
         vec![1, 2]
     );
+    assert_eq!(
+        scenario
+            .reviewer_started
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(generation, _)| *generation == 1)
+            .count(),
+        2,
+        "asked once more within the first activation"
+    );
     let observations = review_observations(&run);
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].0.outcome, ConditionOutcome::Passed);
-    assert!(review_retries(&run).is_empty());
+    let retries = review_retries(&run);
+    assert_eq!(retries.len(), 1, "{retries:?}");
+    assert!(
+        matches!(&retries[0], axocoatl_session::run_record::RunEvent::ProviderRetry { reason, status: None, .. }
+            if reason.starts_with("the model's response could not be used (the model's response \
+                                   held no answer and no tool call (it wrote only reasoning)); \
+                                   asking it once more with a note")),
+        "{retries:?}"
+    );
     let plane = run.controller.control_plane().unwrap();
     let reruns: Vec<_> = plane
         .nodes
