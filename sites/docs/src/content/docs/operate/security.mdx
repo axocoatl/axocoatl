@@ -614,8 +614,9 @@ What `egress` does not do:
   `/v1/systemone`, …). A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud
   mygpt`) keeps its cloud host under a name the route cannot recognize, so the route is
   opened only to an Ollama that reports its cloud features disabled, and sends each
-  request only after Ollama reports them disabled again (`403 ollama_cloud_not_off`
-  otherwise). A credential is added only as a header: query, path and body
+  request only after Ollama reports them disabled again: otherwise it refuses the request
+  with `ollama_cloud_not_off`, `403` while Ollama reports them on or does not say, and
+  `502` when Ollama does not answer `GET /api/status`. A credential is added only as a header: query, path and body
   credentials, request signing such as AWS SigV4, and OAuth token exchange are not
   supported. A tool that pins certificates or keeps its own trust store cannot use a
   route.

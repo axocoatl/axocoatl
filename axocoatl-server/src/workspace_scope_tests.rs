@@ -243,10 +243,33 @@ async fn workspace_scope_routes_body() {
     assert_eq!(status, StatusCode::OK, "{listing}");
     assert_eq!(listing["git"], true);
 
-    // Confirmed, the home folder opens; removing it leaves the folder.
+    // Confirmed, the home folder opens, and its Workspace records the
+    // confirmation, which Session creation then accepts; removing it leaves
+    // the folder.
     let (status, confirmed) = open(&router, &home, true).await;
     assert_eq!(status, StatusCode::OK, "{confirmed}");
+    assert!(confirmed["broad_confirmed_at"].is_u64(), "{confirmed}");
     let home_id = confirmed["id"].as_str().unwrap().to_string();
+    let (status, session) = call(
+        &router,
+        Method::POST,
+        &format!("/api/workspaces/{home_id}/sessions"),
+        Some(json!({
+            "name": "In home",
+            "mode": {"kind": "single_agent", "agent_id": "lead"},
+            "setup_reviewed": false,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{session}");
+    let (status, _) = call(
+        &router,
+        Method::DELETE,
+        &format!("/api/sessions/{}", session["id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    assert!(status.is_success(), "{status}");
     let (status, removed) = call(
         &router,
         Method::DELETE,

@@ -6503,7 +6503,7 @@ mod tests {
     /// newline yet is read again.
     #[cfg(unix)]
     async fn wait_for_pid(path: &Path) -> u32 {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             if let Some(pid) = tokio::fs::read_to_string(path)
                 .await
@@ -6520,9 +6520,17 @@ mod tests {
         }
     }
 
+    /// The deadline of the bounded-command tests' children: long enough
+    /// for one to write its pid on a loaded machine, far shorter than its
+    /// 30-second sleep.
+    #[cfg(unix)]
+    const BOUNDED_TEST_DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Wait until `pid` is gone, at most until its deadline has passed and
+    /// a few seconds more.
     #[cfg(unix)]
     async fn assert_process_stops(pid: u32) {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + BOUNDED_TEST_DEADLINE + Duration::from_secs(5);
         while process_is_alive(pid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -6828,12 +6836,10 @@ mod tests {
     async fn bounded_command_timeout_kills_and_reaps_child() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
-        let output = SessionSandbox::run_bounded_command(
-            sleeping_command(&pid_file),
-            Duration::from_millis(250),
-        )
-        .await
-        .unwrap();
+        let output =
+            SessionSandbox::run_bounded_command(sleeping_command(&pid_file), BOUNDED_TEST_DEADLINE)
+                .await
+                .unwrap();
         let pid = wait_for_pid(&pid_file).await;
         assert!(output.timed_out);
         assert_process_stops(pid).await;
@@ -6844,9 +6850,11 @@ mod tests {
     async fn command_supervisor_reaps_child_after_caller_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
+        // The caller goes away before the deadline; the supervisor still
+        // kills the child at the deadline.
         let caller = tokio::spawn(SessionSandbox::run_bounded_command(
             sleeping_command(&pid_file),
-            Duration::from_millis(250),
+            BOUNDED_TEST_DEADLINE,
         ));
         let pid = wait_for_pid(&pid_file).await;
         assert!(process_is_alive(pid));

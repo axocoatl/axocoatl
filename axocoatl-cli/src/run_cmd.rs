@@ -947,7 +947,7 @@ async fn run(
     // A missing toolchain image is built here, its progress on stderr, once
     // the daemon found nothing else that stops the run.
     toolchain::prepare_image(&daemon, &plan, &request, &args.config, console).await?;
-    let accepted = admit(&daemon, &request, console, note_after).await?;
+    let accepted = admit(&daemon, &request, console, note_after, ctrl_c_pressed()).await?;
     *admitted = true;
     // Only an admitted run starts: a refused one prints its reason and
     // nothing that says otherwise.
@@ -1071,21 +1071,50 @@ async fn run(
 /// `POST /api/runs`. The daemon prepares the Session's environment before
 /// it answers, which can take minutes (an image pull, the setup command);
 /// when it takes longer than `note_after`, say that the command is waiting,
-/// without saying that the run started.
+/// without saying that the run started. `interrupt` (Ctrl-C) ends the wait
+/// at once as an interrupted run: the request goes, and the daemon, which
+/// finishes the admission on its own, stops a run it admits that way
+/// before its first turn.
 async fn admit(
     daemon: &Daemon,
     request: &serde_json::Value,
     console: &mut Console,
     note_after: Duration,
+    interrupt: impl std::future::Future<Output = ()>,
 ) -> Result<RunAccepted, Failure> {
     let admission = daemon.post_json::<RunAccepted>("/api/runs", request);
     tokio::pin!(admission);
+    tokio::pin!(interrupt);
     tokio::select! {
         accepted = &mut admission => return accepted.map_err(plain_refusal),
+        () = &mut interrupt => return Err(interrupted_admission()),
         () = tokio::time::sleep(note_after) => {}
     }
     console.note(ADMISSION_NOTE);
-    admission.await.map_err(plain_refusal)
+    tokio::select! {
+        accepted = admission => accepted.map_err(plain_refusal),
+        () = interrupt => Err(interrupted_admission()),
+    }
+}
+
+/// Ctrl-C, once it is pressed. Never, when its handler cannot be installed:
+/// Ctrl-C then ends the process as it would without one.
+async fn ctrl_c_pressed() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Ctrl-C while the daemon was still admitting the run (exit code 6).
+fn interrupted_admission() -> Failure {
+    Failure {
+        code: exit_code::INTERRUPTED,
+        message: "interrupted (Ctrl-C) while the daemon was admitting the run. The daemon \
+                  finishes the admission on its own: a run it admits stops before its first \
+                  turn, as interrupted, and its Session's containers stop with it; `GET \
+                  /api/runs` lists it"
+            .into(),
+    }
 }
 
 /// An admission refusal in the daemon's own words: an infrastructure
@@ -2575,6 +2604,67 @@ mod tests {
         assert_eq!(err.text(), "axocoatl run: integrator_model: required\n");
     }
 
+    /// Ctrl-C while the daemon admits the run ends the command at once with
+    /// exit code 6 and says what the daemon does with the run; the request
+    /// was sent, and its answer is not waited for.
+    #[tokio::test]
+    async fn ctrl_c_during_admission_ends_the_command_as_interrupted() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/runs"))
+            .respond_with(
+                ResponseTemplate::new(202)
+                    .set_body_json(serde_json::json!({"run_id": "run-1", "session_id": "ses-1",
+                        "workspace_id": "wsp-1", "warnings": []}))
+                    .set_delay(Duration::from_secs(60)),
+            )
+            .mount(&server)
+            .await;
+        let daemon = Daemon {
+            base: server.uri(),
+            token: None,
+            client: reqwest::Client::new(),
+        };
+        let started = std::time::Instant::now();
+        let (mut console, out, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_millis(20),
+            tokio::time::sleep(Duration::from_millis(300)),
+        )
+        .await
+        .unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(30));
+        assert_eq!(failure.code, exit_code::INTERRUPTED, "{}", failure.message);
+        assert!(
+            failure
+                .message
+                .contains("a run it admits stops before its first turn, as interrupted"),
+            "{}",
+            failure.message
+        );
+        assert_eq!(out.text(), "");
+        assert_eq!(err.text(), format!("{ADMISSION_NOTE}\n"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        // Pressed before the waiting note is due, the note is never printed.
+        let (mut console, _, err) = captured_console();
+        let failure = admit(
+            &daemon,
+            &serde_json::json!({"loadout": "fix"}),
+            &mut console,
+            Duration::from_secs(60),
+            std::future::ready(()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.code, exit_code::INTERRUPTED);
+        assert_eq!(err.text(), "");
+    }
+
     /// A run the daemon refused at admission (or could not admit) has no
     /// run id: `--junit` still gets a valid file whose verdict is the
     /// refusal (`busy`, `usage` or `error`) with the command's exit code,
@@ -2860,12 +2950,67 @@ mod tests {
         assert!(parsed.is_err());
     }
 
+    /// Set in the child process of
+    /// [`a_run_that_cannot_start_is_refused_before_its_image_is_built`]: the
+    /// file its stub `podman` appends each call to.
+    const STUB_PODMAN_LOG: &str = "AXOCOATL_RUN_CMD_STUB_PODMAN_LOG";
+
     /// A run whose toolchain image is not built asks the daemon's dry run
     /// first, loading no model: a run that cannot start (here a credential
     /// that is not stored) is refused in admission's words and with its
-    /// exit code, before anything is built or admitted.
+    /// exit code, before anything is built or admitted. The body runs in a
+    /// child process whose only `podman` is a stub that fails and logs its
+    /// call, so a regression can never build an image on this computer.
     #[tokio::test]
     async fn a_run_that_cannot_start_is_refused_before_its_image_is_built() {
+        if std::env::var_os(STUB_PODMAN_LOG).is_some() {
+            cannot_start_child_body().await;
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let podman = bin.join("podman");
+        std::fs::write(
+            &podman,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${STUB_PODMAN_LOG}\"\n\
+                 echo 'this test runs no Podman' >&2\nexit 1\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = root.path().join("podman.log");
+        let result = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "run_cmd::tests::a_run_that_cannot_start_is_refused_before_its_image_is_built",
+                "--nocapture",
+            ])
+            .env(STUB_PODMAN_LOG, &log)
+            .env_remove("AXOCOATL_DATA_DIR")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // The child ran its body, and asked Podman nothing.
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap_or_default(), "");
+    }
+
+    async fn cannot_start_child_body() {
         use axocoatl_daemon::loadout::api::{LoadoutGraph, LoadoutSummary};
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};

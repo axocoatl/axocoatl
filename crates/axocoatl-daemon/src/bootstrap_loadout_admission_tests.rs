@@ -999,12 +999,66 @@ async fn scope_child_body() {
     }
     nothing_created(&daemon).await;
 
+    // The home folder registered as a Workspace without the person's
+    // confirmation, as 1.4's `axocoatl run --repo ~` or Open workspace…
+    // did: being registered is not a confirmation. Runs and new Sessions
+    // still refuse it, before Podman.
+    let legacy = daemon
+        .create_workspace(&home.display().to_string(), None)
+        .await
+        .unwrap();
+    assert_eq!(legacy.broad_confirmed_at, None);
+    forget_podman_calls();
+    let message = usage(admit(&daemon, request("fix", &home, &params, "legacy")).await);
+    assert!(message.contains("is your home folder"), "{message}");
+    match daemon
+        .create_session_with_environment(
+            "In home",
+            &home.display().to_string(),
+            SessionMode::SingleAgent {
+                agent_id: "conversation".into(),
+            },
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+    {
+        Err(DaemonError::WorkspaceRefused { code, message }) => {
+            assert_eq!(code, WORKSPACE_TOO_BROAD_CODE, "{message}")
+        }
+        Err(other) => panic!("expected workspace_too_broad, got {other}"),
+        Ok(session) => panic!("a Session was made in {}", session.working_dir.display()),
+    }
+    assert_eq!(podman_calls(), Vec::<String>::new());
+    assert!(daemon.list_sessions().await.is_empty());
+    let preflight = daemon
+        .preflight_loadout_run(request("fix", &home, &params, "legacy-dry"))
+        .await;
+    let codes: Vec<&str> = preflight
+        .problems
+        .iter()
+        .map(|problem| problem.code.as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        [WORKSPACE_TOO_BROAD_CODE],
+        "{:?}",
+        preflight.problems
+    );
+
     // The home folder opened with Open workspace… after the person
-    // confirmed it: a run may use it, as a Session may.
-    daemon
+    // confirmed it: its Workspace (the same one) records the confirmation,
+    // and a run may use it, as a Session may.
+    let confirmed = daemon
         .open_workspace(&home.display().to_string(), None, true)
         .await
         .unwrap();
+    assert_eq!(confirmed.id, legacy.id);
+    assert!(confirmed.broad_confirmed_at.is_some());
     let preflight = daemon
         .preflight_loadout_run(request("fix", &home, &params, "confirmed"))
         .await;
