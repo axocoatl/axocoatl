@@ -1185,7 +1185,7 @@ async fn actual_read_only_helper_shell_write_is_denied_by_landlock() {
     let provider = Provider::new(vec![(
         "bash",
         serde_json::json!({"command":"printf changed > existing.txt; printf new > created.txt; \
-            printf scratch > /tmp/scratch.txt && echo scratch-ok"}),
+            printf scratch > \"$TMPDIR/scratch.txt\" && echo scratch-ok"}),
     )]);
     let result = tokio::time::timeout(Duration::from_secs(120), async {
         r.controller
@@ -1207,7 +1207,8 @@ async fn actual_read_only_helper_shell_write_is_denied_by_landlock() {
     assert_eq!(existing.unwrap(), "original\n");
     assert!(!created);
     assert!(idle.unwrap());
-    // The shell ran and could still use its scratch space.
+    // The shell ran and could still use its scratch space, its TMPDIR (with
+    // the repository under /tmp, as on Linux, /tmp itself stays read-only).
     assert!(provider.saw(1, "scratch-ok"));
     // Both host captures ran despite the restriction, so the unchanged tree
     // is established and the helper's answer is accepted.
@@ -1257,8 +1258,9 @@ async fn actual_shell_change_outside_scope_fails_the_activation() {
 }
 
 /// A read-only helper's shell writes configuration only to a scratch home of
-/// its own: the Session's shared home stays unwritable, so nothing the helper
-/// writes there reaches the host's captures or any later process.
+/// its own (`axocoatl-home.*`, beneath the scratch directory the supervisor
+/// gives it as TMPDIR): the Session's shared home stays unwritable, so nothing
+/// the helper writes there reaches the host's captures or any later process.
 #[tokio::test]
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
 async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
@@ -1269,7 +1271,7 @@ async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
     let r = run_scoped(&mut f, &["bash", "read_file"], &[]);
     let provider = Provider::new(vec![(
         "bash",
-        serde_json::json!({"command":"case $HOME in /tmp/axocoatl-home.*) echo scratch-home ;; esac; \
+        serde_json::json!({"command":"case $HOME in */axocoatl-home.*) echo scratch-home ;; esac; \
             printf '[core]\\n\\texcludesFile = /tmp/hide\\n' > \"$HOME/.gitconfig\" \
             && echo scratch-written; \
             for home in /root /home/*; do \
