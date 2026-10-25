@@ -15,16 +15,18 @@
 //! needs attention and the refusal says why. That is a line that begins with
 //! a call tag but does not start a runnable run (a malformed block, prose
 //! after the calls, a tool the request did not offer, values that do not
-//! fit), a call block written after other text on its line, or a call
-//! written as JSON that ends the answer. Code fences, HTML blocks and
-//! indented code quote what they hold, and code spans quote a call tag after
-//! other text on its line.
+//! fit), a call block written after other text on its line, a call written
+//! as JSON that ends the answer, or a call tag that ends the answer with
+//! nothing after it, at the start of its line or right after the text before
+//! it. Code fences, HTML blocks and indented code quote what they hold, and
+//! code spans quote a call tag after other text on its line.
 
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axocoatl_core::ResponseFormat;
+pub(crate) use axocoatl_llm::unusable::count_of;
 use axocoatl_llm::{
     provider_tool_metadata, validate_response_tool_call, ChatRequest, ToolCall, ToolDefinition,
 };
@@ -66,7 +68,16 @@ pub(crate) enum TextCalls {
         calls: Vec<ToolCall>,
     },
     /// A call to an offered tool that cannot be run, and why.
-    Unreadable(String),
+    Unreadable(Refusal),
+}
+
+/// Why an answer's call cannot run: in Axocoatl's words for the record
+/// (`message`, about the model) and in the model's (`note`), which the Agent
+/// sends when it asks the model once more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub(crate) message: String,
+    pub(crate) note: String,
 }
 
 /// Read the calls a finished answer to `request` wrote as text (see the
@@ -150,15 +161,27 @@ pub(crate) fn read_text_calls(
     // A call tag that ends the answer with nothing after it: the model began
     // a call and wrote none of it (qwen3-coder:30b ended a fix so: "…let me
     // create a test to verify what happens.<tool_call>"), and ran nothing.
+    // Ollama's qwen3coder parser returns a call it is still collecting as
+    // text when the response ends, and drops the blank before its tag
+    // (model/parsers/qwen3coder.go), so such a tag begins its line or
+    // follows the text right before it. One after a blank is prose that
+    // names the tag ("…ends with <tool_call>"), and stays the answer.
+    let attached = |at: usize| {
+        content[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|before| matches!(before, '\n' | '\r') || !before.is_whitespace())
+    };
     if let Some(tag) = call_lines
         .iter()
         .chain(&inline)
+        .filter(|&&at| attached(at))
         .map(|&at| content[at..].trim_end())
         .find(|rest| MARKERS.contains(rest))
     {
         let why = if complete {
             format!(
-                "its answer ends with {tag} and nothing after it, so the call was never written"
+                "the answer ends with {tag} and nothing after it, so the call was never written"
             )
         } else {
             CUT_CALL.to_owned()
@@ -175,17 +198,27 @@ pub(crate) fn read_text_calls(
 }
 
 /// The refusal of a call to `name` written as text that cannot run, and why.
-fn cannot_run(name: &str, why: &str) -> String {
-    format!("the model wrote a call to {name} as answer text that Axocoatl cannot run: {why}")
+fn cannot_run(name: &str, why: &str) -> Refusal {
+    Refusal {
+        message: format!(
+            "the model wrote a call to {name} as answer text that Axocoatl cannot run: {why}"
+        ),
+        note: format!("you wrote a call to {name} as answer text, which cannot run: {why}"),
+    }
 }
 
 /// The refusal of a call to `name` written as JSON that ends the answer.
-fn json_refusal(name: &str) -> String {
-    format!(
-        "the model wrote a call to {name} as JSON in its answer, which Axocoatl never runs: \
-         only calls Ollama returns as tool calls, or that begin a line and end the answer in \
-         Qwen3-Coder's <function=…> format, run"
-    )
+fn json_refusal(name: &str) -> Refusal {
+    Refusal {
+        message: format!(
+            "the model wrote a call to {name} as JSON in its answer, which Axocoatl never runs: \
+             only calls Ollama returns as tool calls, or that begin a line and end the answer \
+             in Qwen3-Coder's <function=…> format, run"
+        ),
+        note: format!(
+            "you wrote a call to {name} as JSON in your answer, which never runs as a call"
+        ),
+    }
 }
 
 /// Why `content` cannot run when it holds a call that does not begin its
@@ -202,7 +235,7 @@ fn inline_call(
     tags: &[usize],
     request: &ChatRequest,
     complete: bool,
-) -> Option<String> {
+) -> Option<Refusal> {
     let offered = |name: &str| request.tools.iter().any(|tool| tool.name == name);
     for &at in tags {
         let call = content[at..]
@@ -347,15 +380,6 @@ fn code_spans(text: &str) -> Vec<std::ops::Range<usize>> {
         }
     }
     spans
-}
-
-/// `count` of `noun` in words: `1 tool`, `7 tools`.
-pub(crate) fn count_of(count: usize, noun: &str) -> String {
-    if count == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{count} {noun}s")
-    }
 }
 
 /// The calls of the run that starts `text` (the rest of the answer).

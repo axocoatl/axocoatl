@@ -666,7 +666,16 @@ impl LlmProvider for SessionProvider {
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ProviderStream, ProviderError> {
+        self.chat_stream_with_admission(request, &|| Ok(())).await
+    }
+
+    async fn chat_stream_with_admission(
+        &self,
+        request: ChatRequest,
+        on_admitted: &(dyn Fn() -> Result<(), ProviderError> + Send + Sync),
+    ) -> Result<ProviderStream, ProviderError> {
         let mut pending = self.admit(&request)?;
+        on_admitted()?;
         let mut recovery = self.recovery();
         loop {
             let failed = match self.stream_once(pending, request.clone()).await? {

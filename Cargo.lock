@@ -484,6 +484,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "getrandom 0.4.3",
+ "libc",
  "portable-pty",
  "reqwest 0.12.28",
  "rustix",

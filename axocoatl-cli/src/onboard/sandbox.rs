@@ -90,6 +90,9 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
     // The id fix already ran (or, in --plan, was shown) for a `podman info`
     // that failed for want of the helpers.
     let mut ids_done = false;
+    // The install (or reinstall) of the helpers' package that ran in this
+    // run: never offered again in it.
+    let mut installed = None;
     for _ in 0..6 {
         let readiness = if o.ui.plan() && assumed > 0 {
             match assumed {
@@ -142,7 +145,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
                 if o.facts.podman.runs_here()
                     && podman_report::id_map_tools_failure(&error).is_some() =>
             {
-                if !subordinate_ids(o).await {
+                if !subordinate_ids(o, &mut installed).await {
                     return false;
                 }
                 ids_done = true;
@@ -178,7 +181,7 @@ pub(crate) async fn run(o: &mut Onboarding) -> bool {
     ready &= machine_memory(o).await;
     ready &= version(o);
     if !ids_done {
-        ready &= subordinate_ids(o).await;
+        ready &= subordinate_ids(o, &mut installed).await;
     }
     ready &= landlock(o);
     if ready {
@@ -662,8 +665,10 @@ fn version(o: &mut Onboarding) -> bool {
 /// `podman info` fails for want of the helpers. For a Podman reached through
 /// `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection it runs
 /// nothing: that Podman's range is set where it runs, and Podman refuses
-/// `system migrate` through an override.
-async fn subordinate_ids(o: &mut Onboarding) -> bool {
+/// `system migrate` through an override. `installed`: the install of the
+/// helpers' package that ran earlier in this run, which is never offered
+/// again, in either form.
+async fn subordinate_ids(o: &mut Onboarding, installed: &mut Option<Cmd>) -> bool {
     let Some(problem) = podman_report::id_range_problem(&o.facts.podman) else {
         return true;
     };
@@ -682,6 +687,22 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
         o.step_left(format!("{}: {fix_text}", finding.detail));
         return false;
     };
+    // An install ran earlier in this run and Podman still fails for want of
+    // the helpers, though it answered something else in between (a probe
+    // that failed once, say): the install did not fix them.
+    if let (Some(ran), true) = (installed.as_ref(), install) {
+        let ran = ran.clone();
+        record_attempt(o, &ran, Outcome::DidNotFix, "", "");
+        let keeps = o
+            .facts
+            .podman
+            .id_map_tools
+            .as_ref()
+            .map(|tools| tools.reinstall_keeps.clone())
+            .unwrap_or_default();
+        o.step_left(install_did_not_fix(&ran.display(), &finding.detail, &keeps));
+        return false;
+    }
     // The command reinstalls their package (it is installed, or rpm did
     // not say, where shadow-utils always is).
     let reinstall = commands
@@ -753,6 +774,7 @@ async fn subordinate_ids(o: &mut Onboarding) -> bool {
             o.step_left(install_failed(command, &failed, &said, &fix_text, rest));
             return false;
         }
+        *installed = Some(command.clone());
         if !o.ui.plan() {
             let now = crate::doctor::id_map_tools(&o.host, &o.host.root, &o.facts.os).await;
             if !now.usable() {

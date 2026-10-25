@@ -31,8 +31,10 @@ const LEAD_GRANT: &str = "lead-grant";
 const HANG_GUARD: Duration = Duration::from_secs(600);
 /// How long a helper waits for the other one to arrive when two must run at
 /// the same time: far longer than a loaded computer takes to start the
-/// second, and within [`HANG_GUARD`], so helpers that run one after the
-/// other still fail with what went wrong.
+/// second. A helper that waited in vain marks the meeting missed, and every
+/// later helper then fails at once, so a run whose helpers ran one after the
+/// other waits it only once, well within [`HANG_GUARD`], and fails with "no
+/// other helper ran at the same time".
 const MEETING_WAIT: Duration = Duration::from_secs(300);
 
 fn helper_limits() -> GrantLimits {
@@ -395,6 +397,8 @@ struct Scenario {
     /// Helpers inside their provider call. When set, each helper's provider
     /// waits there for another helper and fails if none arrives in time.
     rendezvous: Option<tokio::sync::watch::Sender<usize>>,
+    /// A helper waited [`MEETING_WAIT`] at the rendezvous and none came.
+    meeting_missed: std::sync::atomic::AtomicBool,
     answer: String,
     helper_fails: bool,
     /// The helper's first response carries its finding as text next to a
@@ -420,6 +424,7 @@ impl Scenario {
             tasks: vec![TASK.into()],
             together: false,
             rendezvous: None,
+            meeting_missed: std::sync::atomic::AtomicBool::new(false),
             answer: answer.into(),
             helper_fails: false,
             helper_calls_undeclared_tool_first: false,
@@ -587,11 +592,15 @@ impl LlmProvider for HelperProvider {
             hold.acquire().await.unwrap().forget();
         }
         if let Some(inside) = &self.scenario.rendezvous {
+            if self.scenario.meeting_missed.load(Ordering::SeqCst) {
+                return Ok(provider_failure("no other helper ran at the same time"));
+            }
             let mut others = inside.subscribe();
             inside.send_modify(|count| *count += 1);
             let met =
                 tokio::time::timeout(MEETING_WAIT, others.wait_for(|count| *count >= 2)).await;
             if !matches!(met, Ok(Ok(_))) {
+                self.scenario.meeting_missed.store(true, Ordering::SeqCst);
                 inside.send_modify(|count| *count -= 1);
                 return Ok(provider_failure("no other helper ran at the same time"));
             }

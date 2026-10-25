@@ -52,10 +52,15 @@ pub enum ProviderError {
     /// completed response holds no answer and no tool call that can run (it
     /// is empty, calls a tool the request did not offer under a name that
     /// cannot be answered, or writes a call as text that cannot run).
-    /// Nothing from it runs and its usage stands; `message` says what the
-    /// model did, so an Agent can ask the model once more with it.
+    /// Nothing from it runs and its usage stands. `message` says what the
+    /// model did; `note` says it to the model (`you called …`), so an Agent
+    /// can ask the model once more with it ([`crate::unusable`]).
     #[error("{provider} returned a response that was refused: {message}")]
-    UnusableResponse { provider: String, message: String },
+    UnusableResponse {
+        provider: String,
+        message: String,
+        note: String,
+    },
 
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),

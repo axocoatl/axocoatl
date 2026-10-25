@@ -32,10 +32,13 @@ export async function startCookieEcho() {
   let next = 0;
   return {
     port,
-    /** The Cookie header a top-level navigation to `host` carries. */
-    async cookieAt(context, host) {
+    /**
+     * The Cookie header a top-level navigation to `host` carries, at a path
+     * under `under` (`/api`, for example) when it is given.
+     */
+    async cookieAt(context, host, under = '') {
       next += 1;
-      const pathname = `/cookie-echo/${next}`;
+      const pathname = `${under}/cookie-echo/${next}`;
       const page = await context.newPage();
       try {
         await page.goto(`http://${host}:${port}${pathname}`);

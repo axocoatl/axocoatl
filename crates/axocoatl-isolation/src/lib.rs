@@ -1,4 +1,5 @@
 pub mod browser_container;
+pub mod child_pipe;
 pub mod container_host;
 mod dependency_mountpoint;
 pub mod e2b;

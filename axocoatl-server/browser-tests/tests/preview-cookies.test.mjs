@@ -22,7 +22,7 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // and no cookie is set. The embedded Preview still works, and Chromium opens
 // a Preview top-level as before.
 //
-// The daemon knows Safari by its user agent alone, and Playwright's WebKit
+// The daemon knows Safari by its user agent, and Playwright's WebKit
 // sends Safari's Mac user agent on Linux too, so there it is refused like
 // Safari (safariRefusesTopLevelPreviews) while its cookie jar still refuses
 // Domain=localhost cookies (safariSharesLocalhostCookies is macOS only).
@@ -33,6 +33,7 @@ import { cookieNames, startCookieEcho } from '../support/cookie-echo.mjs';
 // Open full preview and the Preview frame's popups open the Preview in a tab,
 // and a top-level Preview runs through the proxy with its cookies and its
 // WebSocket upgrade, as in Chromium, on the engine of those browsers.
+// A Chromium user agent without Chromium client hints is refused too.
 //
 // The first journeys set, from a top-level page on a *.localhost address, a
 // cookie that is not ASCII, a forged axocoatl-token-<port> and -signed-in
@@ -370,6 +371,32 @@ async function assertRefusalPage(page, response) {
   assert.equal(await page.locator('script').count(), 0);
   assert.equal(await page.locator('a').getAttribute('href'),
     `http://127.0.0.1:${listenerPort}/?session=${session.id}`);
+}
+
+/**
+ * The refusal page's link, followed from a signed-in browser: it leaves a
+ * *.localhost address, so the browser leaves the workbench's SameSite=Strict
+ * sign-in cookie off, and the workbench shows its sign-in page, as the
+ * refusal page says; its Continue, same-origin, then opens the Session the
+ * link named, signed in.
+ */
+async function followRefusalLink(page) {
+  assert.match(await page.locator('body').innerText(),
+    /The workbench's tab, if it is still open, shows this Preview in its Preview pane\. Or open the workbench: coming from this page, the browser does not send the workbench its sign-in cookie, so the workbench first shows Axocoatl's sign-in page; if this browser is signed in, choose Continue there\./);
+  const sessionUrl = `http://127.0.0.1:${listenerPort}/?session=${session.id}`;
+  const [signInPage] = await Promise.all([
+    page.waitForResponse((response) => response.url() === sessionUrl),
+    page.locator('a').click(),
+  ]);
+  assert.equal(signInPage.status(), 401);
+  assert.equal(await page.title(), 'Sign in to Axocoatl');
+  const [workbenchPage] = await Promise.all([
+    page.waitForResponse((response) => response.url() === sessionUrl),
+    page.getByRole('link', { name: 'Continue' }).click(),
+  ]);
+  assert.equal(workbenchPage.status(), 200);
+  await page.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
+  assert.equal(new URL(page.url()).searchParams.get('session'), session.id);
 }
 
 /** In Safari, `url` (a Preview address) opened top-level gets the refusal page. */
@@ -847,11 +874,16 @@ test('with iPhone and iPad user agents a typed Preview gets the refusal page, a 
     const { userAgent, viewport } = devices[name];
     const context = await browser.newContext({ userAgent, viewport });
     try {
+      const signIn = await context.newPage();
+      assert.equal((await signIn.goto(runtime.signInUrl))?.status(), 200);
+      await signIn.waitForFunction(() => typeof S !== 'undefined' && S.liveConnection === 'connected');
+      await signIn.close();
       const typed = await context.newPage();
       const typedPath = `/top-typed-${name.split(' ')[0].toLowerCase()}`;
       const response = await typed.goto(`${previewOrigin(5000)}${typedPath}`);
       await assertRefusalPage(typed, response);
       assert.equal((await appSeen()).some((request) => request.path === typedPath), false, name);
+      await followRefusalLink(typed);
 
       const page = await context.newPage();
       assert.equal((await page.goto(`http://127.0.0.1:${listenerPort}/health`))?.status(), 200);
@@ -873,6 +905,39 @@ test('with iPhone and iPad user agents a typed Preview gets the refusal page, a 
     } finally {
       await context.close();
     }
+  }
+});
+
+// A Safari told to send Chrome's user agent (Develop > User Agent) sends no
+// client hints, which every Chromium-based browser sends, so the daemon
+// takes it for Safari (src/preview_document.rs): Playwright's WebKit with
+// that user agent gets the refusal page for a typed Preview, and its
+// workbench keeps Previews embedded (navigator.vendor). Playwright's
+// Chromium with the same user agent sends them and is served.
+test('with Chrome\'s user agent, WebKit gets the refusal page for a typed Preview and keeps Previews embedded, and Chromium is served', { timeout: 300_000, skip: imageMissing }, async () => {
+  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  const context = await browser.newContext({ userAgent });
+  try {
+    const typed = await context.newPage();
+    const typedPath = '/top-typed-chrome-user-agent';
+    const response = await typed.goto(`${previewOrigin(5000)}${typedPath}`);
+    const atApp = (await appSeen()).find((request) => request.path === typedPath);
+    if (browser.browserType().name() === 'webkit') {
+      await assertRefusalPage(typed, response);
+      assert.match(await typed.locator('body').innerText(),
+        /This browser's user agent names a Chromium-based browser, such as Chrome or Edge, but its request carried none of the client hints \(Sec-CH-UA\)/);
+      assert.equal(atApp, undefined);
+    } else {
+      assert.equal(response?.status(), 200);
+      assert.equal(await typed.title(), `preview 5000${typedPath}`);
+      assert.equal(atApp?.userAgent, userAgent);
+    }
+    const page = await context.newPage();
+    assert.equal((await page.goto(`http://127.0.0.1:${listenerPort}/health`))?.status(), 200);
+    assert.equal(await page.evaluate(async () => (await import('/ui/preview-embedding.js'))
+      .KEEPS_PREVIEWS_EMBEDDED), browser.browserType().name() === 'webkit');
+  } finally {
+    await context.close();
   }
 });
 
@@ -904,8 +969,8 @@ journey('in Safari no Preview page runs top-level, typed, redirected or through 
     if (safariRefusesTopLevelPreviews) {
       await assertRefusalPage(typed, typedResponse);
       assert.equal(await reached(5000, '/top-typed'), false);
-      // Its one link opens the workbench's own origin.
-      await Promise.all([typed.waitForURL(`http://127.0.0.1:${listenerPort}/**`), typed.locator('a').click()]);
+      // Its one link opens the workbench's own origin, through one Continue.
+      await followRefusalLink(typed);
     } else {
       assert.equal(typedResponse?.status(), 200);
       assert.equal(await typed.title(), 'preview 5000/top-typed');

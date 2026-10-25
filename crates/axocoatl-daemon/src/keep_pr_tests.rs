@@ -2124,7 +2124,10 @@ async fn a_moved_submodule_is_kept_as_its_receipt_covers_it_and_a_nested_checkou
     fixture.head = sh(&fixture.repo, "git rev-parse HEAD");
     std::thread::sleep(std::time::Duration::from_millis(20));
     let manifest = fixture.manifest();
-    sh(&fixture.repo.join("vendor/sub"), &format!("git checkout -q {older}"));
+    sh(
+        &fixture.repo.join("vendor/sub"),
+        &format!("git checkout -q {older}"),
+    );
     write(&fixture.repo.join("a.txt"), "one, fixed\n");
     std::thread::sleep(std::time::Duration::from_millis(20));
     let attribution = RunAttribution {
@@ -2188,7 +2191,10 @@ async fn a_moved_submodule_is_kept_as_its_receipt_covers_it_and_a_nested_checkou
         .unwrap();
     assert_eq!(kept.paths, vec!["a.txt", "vendor/sub"]);
     assert_eq!(
-        sh(&fixture.repo, &format!("git ls-tree {} vendor/sub", kept.commit)),
+        sh(
+            &fixture.repo,
+            &format!("git ls-tree {} vendor/sub", kept.commit)
+        ),
         format!("160000 commit {older}\tvendor/sub")
     );
     // The person's checkout still has the submodule's old commit staged.
@@ -2199,7 +2205,10 @@ async fn a_moved_submodule_is_kept_as_its_receipt_covers_it_and_a_nested_checkou
 
     let nested = RunAttribution {
         paths: ["a.txt"].iter().map(|path| path.to_string()).collect(),
-        unread: ["tools/nested"].iter().map(|path| path.to_string()).collect(),
+        unread: ["tools/nested"]
+            .iter()
+            .map(|path| path.to_string())
+            .collect(),
         ..RunAttribution::default()
     };
     assert_eq!(

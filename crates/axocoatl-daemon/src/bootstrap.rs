@@ -4563,7 +4563,7 @@ impl AxocoatlDaemon {
                         .ask(|| {
                             SessionSandbox::remove_named_many(
                                 &local_container_ids,
-                                Duration::from_secs(30),
+                                axocoatl_isolation::STARTUP_REMOVE_COMMAND_TIMEOUT,
                             )
                         })
                         .await
@@ -31810,11 +31810,12 @@ esac
         );
         assert!(started.elapsed() >= Duration::from_secs(10));
         let calls = std::fs::read_to_string(calls_path).unwrap();
-        // The first root's listing twice, then the two other roots' and the
-        // owned containers' once each.
-        assert_eq!(
-            calls.lines().filter(|line| line.starts_with("ps ")).count(),
-            5,
+        // The first root's listing at least twice, then the two other roots'
+        // and the owned containers' at least once each: on a loaded computer
+        // a later listing or probe of this script can run past its bound too,
+        // and is asked again as well.
+        assert!(
+            calls.lines().filter(|line| line.starts_with("ps ")).count() >= 5,
             "{calls}"
         );
     }

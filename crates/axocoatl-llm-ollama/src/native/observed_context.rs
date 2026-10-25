@@ -228,6 +228,13 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
         .iter()
         .find(|record| record.get("name").and_then(Value::as_str) == Some(&expected.name))
         .ok_or_else(|| invalid("exact loaded model record was not reported"))?;
+    record_context(record, expected)
+}
+
+/// The context of the loaded runner `record` of `/api/ps` serves `expected`
+/// with: a GGUF model in llama.cpp's llama-server, and the context it was
+/// loaded with.
+fn record_context(record: &Value, expected: &ModelIdentity) -> Result<usize, ProviderError> {
     if record.pointer("/details/format").and_then(Value::as_str) != Some("gguf") {
         return Err(invalid("loaded runner is not the verified GGUF model"));
     }
@@ -268,12 +275,32 @@ fn loaded_context(value: &Value, expected: &ModelIdentity) -> Result<usize, Prov
 }
 
 /// What the server and model reported before and after a load: the accepted
-/// Ollama version and the model's tool and thinking capabilities.
+/// Ollama version, the model's tool and thinking capabilities, and its
+/// weights file ([`weights_file`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Profile {
     version: String,
     tools: bool,
     thinking: bool,
+    weights: Option<String>,
+}
+
+/// The weights file `/api/show` names for a GGUF model: the `sha256-…` blob
+/// of the first `FROM` line of the Modelfile it generates (Ollama 0.40
+/// server/images.go `Model.String`). Ollama keeps one loaded runner per
+/// weights file and lists it under the name that loaded it first
+/// (server/sched.go `schedulerModelKey`, server/routes.go `PsHandler`).
+fn weights_file(shown: &Value) -> Option<String> {
+    let path = shown
+        .get("modelfile")?
+        .as_str()?
+        .lines()
+        .find_map(|line| line.strip_prefix("FROM "))?
+        .trim();
+    let blob = path.rsplit(['/', '\\']).next()?;
+    let hex = blob.strip_prefix("sha256-")?;
+    (hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| blob.to_ascii_lowercase())
 }
 
 async fn profile(
@@ -291,12 +318,55 @@ async fn profile(
     }
     let shown =
         metadata_request(client, base_url, "api/show", Some(json!({"model": model}))).await?;
+    let weights = weights_file(&shown);
     let shown = check_shown_model(model, &shown)?;
     Ok(Profile {
         version,
         tools: shown.tools,
         thinking: shown.thinking,
+        weights,
     })
+}
+
+/// The context the runner `/api/ps` lists (`running`) serves `expected`
+/// with, or `None` when no loaded runner serves it. That is the runner
+/// listed under `expected`'s own name, else one listed under another name of
+/// the same manifest (`ollama cp`), or of the same weights file (`weights`,
+/// another model made `FROM` it): Ollama served the load of `expected` from
+/// that runner and lists it under the name that loaded it first.
+async fn served_context(
+    client: &reqwest::Client,
+    base_url: &str,
+    running: &Value,
+    expected: &ModelIdentity,
+    weights: Option<&str>,
+) -> Result<Option<usize>, ProviderError> {
+    if listed_identity(running, &expected.name)?.is_some() {
+        return loaded_context(running, expected).map(Some);
+    }
+    let records = running
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("local model list was not reported"))?;
+    for record in records.iter().take(8) {
+        let digest = record.get("digest").and_then(Value::as_str);
+        let same_manifest =
+            digest.is_some_and(|digest| digest.eq_ignore_ascii_case(&expected.digest));
+        let same_weights = match (weights, record.get("name").and_then(Value::as_str)) {
+            (Some(weights), Some(name)) if !same_manifest => {
+                metadata_request(client, base_url, "api/show", Some(json!({"model": name})))
+                    .await
+                    .ok()
+                    .and_then(|shown| weights_file(&shown))
+                    .is_some_and(|other| other == weights)
+            }
+            _ => false,
+        };
+        if same_manifest || same_weights {
+            return record_context(record, expected).map(Some);
+        }
+    }
+    Ok(None)
 }
 
 fn load_acknowledgement(value: &Value, model: &str) -> Result<String, ProviderError> {
@@ -512,11 +582,11 @@ async fn load_and_read_context(
     .await
     .map_err(|_| load_timed_out(&first.name, load_timeout))??;
     let acknowledged_at = load_acknowledgement(&loaded, &first.name)?;
+    let weights = capabilities.weights.as_deref();
     let running = metadata_request(client, base_url, "api/ps", None).await?;
-    if listed_identity(&running, &first.name)?.is_none() {
+    let Some(context) = served_context(client, base_url, &running, first, weights).await? else {
         return Ok(Load::Unloaded { running });
-    }
-    let context = loaded_context(&running, first)?;
+    };
     if profile(client, base_url, model).await? != *capabilities {
         return Err(invalid(
             "the Ollama version or local model capabilities changed during context observation",
@@ -532,10 +602,10 @@ async fn load_and_read_context(
         ));
     }
     let running = metadata_request(client, base_url, "api/ps", None).await?;
-    if listed_identity(&running, &second.name)?.is_none() {
+    let Some(again) = served_context(client, base_url, &running, &second, weights).await? else {
         return Ok(Load::Unloaded { running });
-    }
-    if loaded_context(&running, &second)? != context {
+    };
+    if again != context {
         return Err(invalid("loaded context changed during observation"));
     }
     Ok(Load::Read {
@@ -619,16 +689,23 @@ pub async fn inspect_native_ollama_model(
 ) -> Result<Option<usize>, ProviderError> {
     model_key(model)?;
     let client = local_client(base_url)?;
-    profile(&client, base_url, model).await?;
+    let capabilities = profile(&client, base_url, model).await?;
     let listed = identity(
         &metadata_request(&client, base_url, "api/tags", None).await?,
         model,
     )?;
     let running = metadata_request(&client, base_url, "api/ps", None).await?;
-    match identity(&running, &listed.name) {
-        Ok(_) => loaded_context(&running, &listed).map(Some),
-        Err(_) => Ok(None),
+    if listed_identity(&running, &listed.name).is_err() {
+        return Ok(None);
     }
+    served_context(
+        &client,
+        base_url,
+        &running,
+        &listed,
+        capabilities.weights.as_deref(),
+    )
+    .await
 }
 
 pub(super) async fn verify_identity(

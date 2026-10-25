@@ -1243,7 +1243,12 @@ mod write_scope_tests {
     #[test]
     fn a_violation_names_changed_paths_and_unowned_nested_checkouts() {
         let lib = scope(Some(&["lib/"]));
-        let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(lib.violation(&[], &[]), None);
         assert_eq!(lib.violation(&[], &names(&["lib/nested"])), None);
         assert_eq!(

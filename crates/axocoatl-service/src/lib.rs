@@ -212,11 +212,12 @@ pub fn wait_for_daemon(
 /// How long [`wait_for_daemon`] still reads the log after the daemon exited.
 const EXITED_LOG_GRACE: Duration = Duration::from_millis(if cfg!(test) { 200 } else { 2000 });
 
+/// What `serve` prints when it cannot reserve the CLI IPC socket.
+pub const IPC_RESERVATION_FAILED: &str = "Failed to reserve the CLI IPC socket: ";
+
 /// What `serve` prints, at the start of a line, when it exits before it
 /// starts: bootstrap failed, the configuration is invalid, another daemon
 /// holds the IPC socket, or the port cannot be listened on.
-pub const IPC_RESERVATION_FAILED: &str = "Failed to reserve the CLI IPC socket: ";
-
 const START_FAILURES: [&str; 5] = [
     "Failed to bootstrap daemon: ",
     "Configuration error:",

@@ -31,7 +31,27 @@ fn unique_digest(seed: u8) -> String {
 enum Probes {
     Pass,
     AcceptOverLong,
+    /// The over-long prompt gets a final record with a generated-token
+    /// count and no text.
+    OverLongCountedWithoutText,
+    /// The over-long prompt gets a final record without any generation.
+    OverLongAcceptedWithoutCount,
+    /// The over-long prompt streams a piece of text, then ends with an error
+    /// record.
+    OverLongStreamedThenFailed,
+    /// The over-long prompt is refused without an error message.
+    OverLongRefusedWithoutMessage,
+    /// The over-long prompt gets the empty record Ollama 0.40.8 answered
+    /// once its runner had stopped, and no final record.
+    OverLongRunnerStopped,
+    /// The over-long prompt gets an answer with only an error record.
+    OverLongErrorRecord,
+    /// The over-long prompt gets a server error, as when the model's runner
+    /// stopped.
+    OverLongServerError,
     IgnoreNumPredict,
+    /// The one-token request generates two tokens.
+    StopTwoTokens,
     /// The long answer runs past its `num_predict`.
     LongOverrun,
     /// The long answer ends at its limit but reports fewer tokens.
@@ -48,6 +68,8 @@ enum Probes {
     StopErrorRecord,
     /// The long answer ends at its limit without a prompt count.
     LongWithoutPromptCount,
+    /// The long answer goes on after its final record.
+    LongAfterFinal,
     /// Asked to call the tool, the model answers in text.
     ToolAnsweredInText,
     /// The tool call comes without an id.
@@ -72,6 +94,9 @@ enum Probes {
     /// Ollama ends the answer with an error record: it could not parse the
     /// model's call.
     ToolCallUnparsed,
+    /// Ollama ends the answer with an error record from a model runner that
+    /// failed.
+    ToolRunnerFailed,
     /// The model writes the call as text without its opening `<tool_call>`
     /// token, as Qwen3-Coder sometimes does: inference reads it as a call.
     ToolCallWrittenAsText,
@@ -120,11 +145,37 @@ async fn probes(server: &MockServer, behavior: Probes) {
                 (ContractProbe::OverLong, Probes::AcceptOverLong) => ndjson(json!({"model":model,
                     "message":{"role":"assistant","content":"x"},"done":true,
                     "done_reason":"length","prompt_eval_count":4095,"eval_count":1})),
+                (ContractProbe::OverLong, Probes::OverLongCountedWithoutText) => {
+                    ndjson(done("length", 1, empty))
+                }
+                (ContractProbe::OverLong, Probes::OverLongAcceptedWithoutCount) => {
+                    ndjson(json!({"model":model,"message":empty,"done":true,"done_reason":"stop",
+                        "prompt_eval_count":4095}))
+                }
+                (ContractProbe::OverLong, Probes::OverLongStreamedThenFailed) => ndjson_records(&[
+                    piece("x"),
+                    json!({"error":"an error was encountered while running the model: unexpected EOF"}),
+                ]),
+                (ContractProbe::OverLong, Probes::OverLongRefusedWithoutMessage) => {
+                    ResponseTemplate::new(400)
+                }
+                (ContractProbe::OverLong, Probes::OverLongRunnerStopped) => ndjson_records(&[
+                    json!({"model":"","created_at":"0001-01-01T00:00:00Z",
+                        "message":{"role":"","content":""},"done":false}),
+                ]),
+                (ContractProbe::OverLong, Probes::OverLongErrorRecord) => ndjson_records(&[json!({
+                    "error": "an error was encountered while running the model: unexpected EOF"
+                })]),
+                (ContractProbe::OverLong, Probes::OverLongServerError) => ResponseTemplate::new(500)
+                    .set_body_json(json!({"error": "llama runner process has terminated"})),
                 (ContractProbe::OverLong, _) => ResponseTemplate::new(400).set_body_json(json!({"error":
                     "the prompt is longer than the context length currently available to the model"})),
                 (ContractProbe::Stop, Probes::IgnoreNumPredict) => ndjson(json!({"model":model,
                     "message":{"role":"assistant","content":"ready, and more"},"done":true,
                     "done_reason":"stop","prompt_eval_count":14,"eval_count":7})),
+                (ContractProbe::Stop, Probes::StopTwoTokens) => ndjson(json!({"model":model,
+                    "message":{"role":"assistant","content":"ready."},"done":true,
+                    "done_reason":"length","prompt_eval_count":14,"eval_count":2})),
                 (ContractProbe::LongOutput, Probes::LongOverrun) => {
                     ndjson_records(&[piece("1\n2\n"), done("length", 80, empty)])
                 }
@@ -147,6 +198,11 @@ async fn probes(server: &MockServer, behavior: Probes) {
                 (ContractProbe::Stop, Probes::StopErrorRecord) => ndjson_records(&[json!({
                     "error": "an error was encountered while running the model: unexpected EOF"
                 })]),
+                (ContractProbe::LongOutput, Probes::LongAfterFinal) => ndjson_records(&[
+                    piece("1\n2\n"),
+                    done("length", LONG_OUTPUT_TOKENS as u64, empty),
+                    piece("3\n"),
+                ]),
                 (ContractProbe::LongOutput, Probes::LongWithoutPromptCount) => ndjson_records(&[
                     piece("1\n2\n"),
                     json!({"model":model,"message":empty,"done":true,"done_reason":"length",
@@ -219,7 +275,12 @@ async fn probes(server: &MockServer, behavior: Probes) {
                 ]),
                 (ContractProbe::ToolCall, Probes::ToolCallUnparsed) => ndjson_records(&[
                     piece("<tool_call>{\"name\": \"report_ready\""),
-                    json!({"error": "error parsing tool call: unexpected end of JSON input"}),
+                    json!({"error": "error parsing tool call: raw='{\"name\": \"report_ready\"', \
+                        err=unexpected end of JSON input"}),
+                ]),
+                (ContractProbe::ToolCall, Probes::ToolRunnerFailed) => ndjson_records(&[
+                    piece("<tool_call>"),
+                    json!({"error": "an error was encountered while running the model: unexpected EOF"}),
                 ]),
                 (ContractProbe::ToolCall, Probes::ToolCallPastTheLimit) => ndjson_records(&[done(
                     "stop",
@@ -696,6 +757,170 @@ async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named(
     assert_eq!(count(&server, "/api/generate").await, 0);
 }
 
+/// `/api/show` of a model whose generated Modelfile is `FROM` the weights
+/// file `blob`.
+fn shown_from(blob: &str) -> Value {
+    let mut value = shown();
+    value["modelfile"] = json!(format!(
+        "# Modelfile generated by \"ollama show\"\n# FROM test-model:latest\n\nFROM \
+         /Users/someone/.ollama/models/blobs/sha256-{blob}\nTEMPLATE \"{{{{ .Prompt }}}}\"\n"
+    ));
+    value
+}
+
+/// An Ollama that answers `/api/show` per model name (`shows`), lists
+/// `test-model` with `digest`, and lists `running` as loaded after every
+/// load: a runner it serves the model from under another name.
+async fn serving_under(
+    server: &MockServer,
+    digest: &str,
+    shows: Vec<(&str, Value)>,
+    running: Value,
+) {
+    fixed(
+        server,
+        "GET",
+        "/api/version",
+        json!({"version":AUDITED_OLLAMA_VERSION}),
+    )
+    .await;
+    fixed(
+        server,
+        "GET",
+        "/api/status",
+        json!({"cloud":{"disabled":true}}),
+    )
+    .await;
+    let shows: Vec<(String, Value)> = shows
+        .into_iter()
+        .map(|(name, value)| (name.to_owned(), value))
+        .collect();
+    Mock::given(method("POST"))
+        .and(path("/api/show"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let name = body["model"].as_str().unwrap_or_default();
+            match shows.iter().find(|(shown, _)| shown == name) {
+                Some((_, value)) => ResponseTemplate::new(200).set_body_json(value),
+                None => ResponseTemplate::new(404).set_body_json(json!({"error":"not found"})),
+            }
+        })
+        .mount(server)
+        .await;
+    fixed(server, "GET", "/api/tags", listed(digest)).await;
+    fixed(server, "POST", "/api/generate", acknowledgement()).await;
+    fixed(server, "GET", "/api/ps", running).await;
+    probes(server, Probes::Pass).await;
+}
+
+/// `/api/ps` listing one loaded runner, under `name`, of `digest`.
+fn loaded_as(name: &str, digest: &str, context: u64) -> Value {
+    let mut value = loaded(json!(context), digest);
+    value["models"][0]["name"] = json!(name);
+    value["models"][0]["model"] = json!(name);
+    value
+}
+
+/// Ollama keeps one runner per weights file and lists it under the name that
+/// loaded it first (0.40 server/sched.go `schedulerModelKey`, routes.go
+/// `PsHandler`). When another name of the same manifest (`ollama cp`), or
+/// another model made `FROM` the same weights, loaded first, Ollama serves
+/// this model's load from that runner and never lists this model's own name:
+/// the context is read from that runner, after one load, and is no eviction.
+/// A runner of other weights under another name is still an eviction.
+#[tokio::test]
+async fn a_model_ollama_serves_under_another_name_is_read_from_that_runner() {
+    const WEIGHTS: &str = "8ecb5d4ad6172c63f9cbf1a07a04e525985a8a11a6e516da02b674c4010de716";
+    const OTHER_WEIGHTS: &str = "9ecb5d4ad6172c63f9cbf1a07a04e525985a8a11a6e516da02b674c4010de716";
+    let digest = unique_digest(30);
+    let server = MockServer::start().await;
+    serving_under(
+        &server,
+        &digest,
+        vec![("test-model", shown_from(WEIGHTS))],
+        loaded_as("test-alias:latest", &digest, 8192),
+    )
+    .await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.context_tokens, 8192);
+    assert_eq!(observation.resolved_model, "test-model:latest");
+    assert_eq!(count(&server, "/api/generate").await, 1);
+    assert_eq!(chats(&server).await.0.len(), 2);
+
+    let digest = unique_digest(31);
+    let server = MockServer::start().await;
+    serving_under(
+        &server,
+        &digest,
+        vec![
+            ("test-model", shown_from(WEIGHTS)),
+            ("reviewer-prompt:latest", shown_from(WEIGHTS)),
+        ],
+        loaded_as("reviewer-prompt:latest", OTHER_DIGEST, 16384),
+    )
+    .await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.context_tokens, 16384);
+    assert_eq!(count(&server, "/api/generate").await, 1);
+    assert_eq!(
+        inspect_native_ollama_model(&server.uri(), "test-model")
+            .await
+            .unwrap(),
+        Some(16384)
+    );
+
+    let server = MockServer::start().await;
+    serving_under(
+        &server,
+        &unique_digest(32),
+        vec![
+            ("test-model", shown_from(WEIGHTS)),
+            ("reviewer-prompt:latest", shown_from(OTHER_WEIGHTS)),
+        ],
+        loaded_as("reviewer-prompt:latest", OTHER_DIGEST, 16384),
+    )
+    .await;
+    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(native_ollama_model_unloaded(&refusal), "{refusal}");
+    assert!(refusal
+        .to_string()
+        .contains("because another program loaded reviewer-prompt:latest"));
+    assert_eq!(count(&server, "/api/generate").await, 3);
+    assert_eq!(count(&server, "/api/chat").await, 0);
+    assert_eq!(
+        inspect_native_ollama_model(&server.uri(), "test-model")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn the_weights_file_is_read_from_the_generated_modelfile() {
+    let blob = "8ecb5d4ad6172c63f9cbf1a07a04e525985a8a11a6e516da02b674c4010de716";
+    assert_eq!(
+        weights_file(&shown_from(&blob.to_uppercase())),
+        Some(format!("sha256-{blob}"))
+    );
+    for modelfile in [
+        json!("# FROM /blobs/sha256-8ecb5d4ad6172c63f9cbf1a07a04e525985a8a11a6e516da02b674c4010de716\n"),
+        json!("FROM gpt-oss:20b\n"),
+        json!("FROM /blobs/sha256-8ecb\n"),
+        json!(7),
+    ] {
+        let mut value = shown();
+        value["modelfile"] = modelfile.clone();
+        assert_eq!(weights_file(&value), None, "{modelfile}");
+    }
+    assert_eq!(weights_file(&shown()), None);
+}
+
 #[tokio::test]
 async fn changed_digest_runner_or_context_never_becomes_an_observation() {
     for (tags, processes) in [
@@ -973,17 +1198,54 @@ async fn a_loaded_mlx_or_unknown_runner_is_refused_before_any_probe() {
     }
 }
 
-/// A server that generates from an over-long prompt, or past num_predict,
-/// never becomes an observation: the refusal names the guarantee.
+/// A server that generates from an over-long prompt (a count, a piece of
+/// text), accepts it with a final record, or refuses it without a message,
+/// or one that generates past num_predict, never becomes an observation: the
+/// refusal names the guarantee and what broke it.
 #[tokio::test]
 async fn a_failed_contract_probe_refuses_the_model_and_names_the_guarantee() {
-    for (seed, behavior, guarantee) in [
+    const OVER_LONG: &str = "over-long prompt refusal (truncate:false)";
+    const GENERATED_FROM: &str = "a prompt of about 8192 tokens, more than the 4096-token \
+                                  context, was generated from instead of refused";
+    for (seed, behavior, guarantee, detail) in [
+        (3, Probes::AcceptOverLong, OVER_LONG, GENERATED_FROM),
         (
-            3,
-            Probes::AcceptOverLong,
-            "over-long prompt refusal (truncate:false)",
+            60,
+            Probes::OverLongCountedWithoutText,
+            OVER_LONG,
+            GENERATED_FROM,
         ),
-        (4, Probes::IgnoreNumPredict, "output limit (num_predict)"),
+        (
+            61,
+            Probes::OverLongStreamedThenFailed,
+            OVER_LONG,
+            GENERATED_FROM,
+        ),
+        (
+            62,
+            Probes::OverLongAcceptedWithoutCount,
+            OVER_LONG,
+            "a prompt longer than the 4096-token context was accepted (status 200) instead of \
+             refused",
+        ),
+        (
+            63,
+            Probes::OverLongRefusedWithoutMessage,
+            OVER_LONG,
+            "Ollama answered 400 without an error message",
+        ),
+        (
+            4,
+            Probes::IgnoreNumPredict,
+            "output limit (num_predict)",
+            "the model generated 7",
+        ),
+        (
+            64,
+            Probes::StopTwoTokens,
+            "output limit (num_predict)",
+            "asked for at most 1 token (num_predict:1), the model generated 2",
+        ),
     ] {
         let server = MockServer::start().await;
         standard_with(
@@ -999,9 +1261,7 @@ async fn a_failed_contract_probe_refuses_the_model_and_names_the_guarantee() {
             .to_string();
         assert!(refusal.contains(guarantee), "{refusal}");
         assert!(refusal.contains("native Sessions refuse"), "{refusal}");
-        if behavior == Probes::IgnoreNumPredict {
-            assert!(refusal.contains("generated 7"), "{refusal}");
-        }
+        assert!(refusal.contains(detail), "{refusal}");
         // No other inference ran.
         assert_eq!(chats(&server).await.1, 0);
     }
@@ -1031,6 +1291,11 @@ async fn a_long_answer_past_its_limit_or_its_count_refuses_the_model() {
             "a long answer reported a prompt count of None, not between 0 and the 4096-token \
              context",
         ),
+        (
+            65,
+            Probes::LongAfterFinal,
+            "a long answer went on after its final record",
+        ),
     ] {
         let server = MockServer::start().await;
         standard_with(
@@ -1059,35 +1324,55 @@ async fn a_long_answer_past_its_limit_or_its_count_refuses_the_model() {
 /// A probe Ollama does not answer (a server error, an answer that ends
 /// before its final record or with an error record, as when the model's
 /// runner stopped) shows nothing about the guarantee: the model is not
-/// refused, the error says what Ollama did, and the next try probes again
-/// and passes on a server that answers.
+/// refused, the error says what Ollama did and that the check did not run,
+/// and nothing is kept: the next try probes again, refuses a server that
+/// breaks the guarantee and passes one that holds it.
 #[tokio::test]
 async fn an_unanswered_probe_does_not_refuse_the_model() {
+    const OVER_LONG: &str = "over-long prompt refusal (truncate:false)";
+    const RUNNER_FAILED: &str = "Ollama ended its answer before its final record (an error was \
+                                 encountered while running the model: unexpected EOF), so the";
     for (seed, behavior, guarantee, detail) in [
+        (
+            66,
+            Probes::OverLongRunnerStopped,
+            OVER_LONG,
+            "ollama stream ended without a complete response: Ollama ended its answer before \
+             its final record, so the over-long prompt refusal (truncate:false) check of \
+             test-model on Ollama 0.40.6 did not run: try again; Ollama's log says why (a model \
+             runner that stopped, for one)",
+        ),
+        (67, Probes::OverLongErrorRecord, OVER_LONG, RUNNER_FAILED),
+        (
+            68,
+            Probes::OverLongServerError,
+            OVER_LONG,
+            "ollama API error: 500 - llama runner process has terminated, which is not a refusal \
+             of the prompt's length, so the over-long prompt refusal (truncate:false) check of \
+             test-model on Ollama 0.40.6 did not run: try again once Ollama answers",
+        ),
         (
             40,
             Probes::LongRunnerStopped,
             "long output limit and count (num_predict, eval_count)",
-            "ollama API error: 500 - llama runner process has terminated; the long output limit \
-             and count (num_predict, eval_count) check of test-model on Ollama 0.40.6 did not \
-             run: try again once Ollama answers",
+            "ollama API error: 500 - llama runner process has terminated, so the long output \
+             limit and count (num_predict, eval_count) check of test-model on Ollama 0.40.6 did \
+             not run: try again once Ollama answers",
         ),
         (
             47,
             Probes::LongUnfinished,
             "long output limit and count (num_predict, eval_count)",
-            "Ollama ended its answer in the long output limit and count (num_predict, \
-             eval_count) check of test-model on Ollama 0.40.6 before its final record, so the \
-             check did not run; Ollama's log says why (a model runner that stopped, for one): \
-             try again",
+            "Ollama ended its answer before its final record, so the long output limit and \
+             count (num_predict, eval_count) check",
         ),
         (
             48,
             Probes::StopErrorRecord,
             "output limit (num_predict)",
-            "before its final record (an error was encountered while running the model: \
-             unexpected EOF), so the check did not run",
+            RUNNER_FAILED,
         ),
+        (69, Probes::ToolRunnerFailed, "tool call", RUNNER_FAILED),
     ] {
         let server = MockServer::start().await;
         let digest = unique_digest(seed);
@@ -1100,10 +1385,30 @@ async fn an_unanswered_probe_does_not_refuse_the_model() {
             "{error:?}"
         );
         let text = error.to_string();
-        assert!(text.contains(guarantee), "{text}");
+        assert!(text.contains(&format!("the {guarantee} check")), "{text}");
         assert!(text.contains(detail), "{text}");
+        // Every case ends the way the troubleshooting page quotes it.
+        assert!(
+            text.contains("check of test-model on Ollama 0.40.6 did not run: try again"),
+            "{text}"
+        );
         assert!(!text.contains("native Sessions refuse"), "{text}");
-        // The next try probes again; on a server that answers, it passes.
+        // Nothing passed is kept: the next try probes again, and a server
+        // that accepts an over-long prompt is refused...
+        server.reset().await;
+        standard_with(
+            &server,
+            AUDITED_OLLAMA_VERSION,
+            &digest,
+            Probes::AcceptOverLong,
+        )
+        .await;
+        let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(OVER_LONG), "{refusal}");
+        // ...and on a server that answers, it passes.
         server.reset().await;
         standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
         observe_native_ollama_context(&server.uri(), "test-model")
@@ -1166,7 +1471,7 @@ async fn a_model_that_cannot_call_the_offered_tool_is_refused() {
             49,
             Probes::ToolCallUnparsed,
             "a request to call the offered tool ended with an error: error parsing tool call: \
-             unexpected end of JSON input",
+             raw='{\"name\": \"report_ready\"', err=unexpected end of JSON input",
         ),
     ] {
         let server = MockServer::start().await;
@@ -1249,36 +1554,40 @@ async fn the_tool_call_probe_runs_for_tool_models_and_reads_calls_as_inference_d
 }
 
 /// An over-long probe that is refused for another reason (the server is
-/// busy) proves nothing: the model is not accepted on it.
+/// busy, the model is gone, too many requests) proves nothing: the model is
+/// not accepted on it, nor refused.
 #[tokio::test]
 async fn a_busy_server_does_not_pass_the_over_long_probe() {
-    let server = MockServer::start().await;
-    let digest = unique_digest(5);
-    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
-    fixed(&server, "GET", "/api/tags", listed(&digest)).await;
-    fixed(&server, "GET", "/api/ps", loaded(json!(4096), &digest)).await;
-    fixed(&server, "POST", "/api/generate", acknowledgement()).await;
-    Mock::given(method("POST"))
-        .and(path("/api/chat"))
-        .respond_with(
-            ResponseTemplate::new(503)
-                .set_body_json(json!({"error":"server busy, please try again"})),
-        )
-        .mount(&server)
-        .await;
-    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(
-        refusal.contains("not a refusal of the prompt's length"),
-        "{refusal}"
-    );
-    assert!(
-        refusal.starts_with("ollama API error: 503 - server busy, please try again"),
-        "{refusal}"
-    );
-    assert!(!refusal.contains("native Sessions refuse"), "{refusal}");
+    for (seed, status, message) in [
+        (5, 503, "server busy, please try again"),
+        (70, 429, "too many requests"),
+        (71, 404, "model 'test-model' not found"),
+    ] {
+        let server = MockServer::start().await;
+        let digest = unique_digest(seed);
+        profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+        fixed(&server, "GET", "/api/tags", listed(&digest)).await;
+        fixed(&server, "GET", "/api/ps", loaded(json!(4096), &digest)).await;
+        fixed(&server, "POST", "/api/generate", acknowledgement()).await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({"error":message})))
+            .mount(&server)
+            .await;
+        let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.starts_with(&format!(
+                "ollama API error: {status} - {message}, which is not a refusal of the prompt's \
+                 length, so the over-long prompt refusal (truncate:false) check of test-model on \
+                 Ollama 0.40.6 did not run: try again once Ollama answers"
+            )),
+            "{refusal}"
+        );
+        assert!(!refusal.contains("native Sessions refuse"), "{refusal}");
+    }
 }
 
 /// A retained profile on an upgraded, accepted Ollama is probed again on the

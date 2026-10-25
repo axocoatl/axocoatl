@@ -784,7 +784,7 @@ async fn non_root_users_reach_the_proxy_and_the_forwarder_serves_their_ports() {
         // beside the workbench's address; the Session container itself still
         // has no network.
         let address = sandbox.published_address(3000).expect("port 3000 is published");
-        assert_eq!(address.ip(), axocoatl_isolation::session_port_address());
+        assert_eq!(Ok(address.ip()), axocoatl_isolation::session_port_address());
         assert_ne!(address.ip().to_string(), "127.0.0.1");
         let preview = format!("axo-pvw-{session}");
         let inspect = podman_async_ok(&[

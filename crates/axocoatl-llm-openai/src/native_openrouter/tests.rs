@@ -236,6 +236,196 @@ async fn native_tool_output_retains_route_and_complete_arguments() {
     assert!(outcome.usage.complete);
 }
 
+/// The events of one call to the finite fixture endpoint that streams
+/// `deltas` (each with its finish reason), then terminal usage of 4 in and
+/// `completion` out, of which `reasoning` are reasoning tokens.
+async fn finite_events(
+    deltas: &[(Value, Option<&str>)],
+    completion: u64,
+    reasoning: u64,
+    request: ChatRequest,
+) -> Vec<Result<StreamEvent, ProviderError>> {
+    let server = MockServer::start().await;
+    metadata(&server).await;
+    let chunk = |delta: &Value, finish: Option<&str>| {
+        json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+            "choices":[{"index":0,"delta":delta,"finish_reason":finish}]})
+    };
+    let mut body: String = deltas
+        .iter()
+        .map(|(delta, finish)| format!("data: {}\n\n", chunk(delta, *finish)))
+        .collect();
+    let usage = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider","choices":[],
+        "usage":{"prompt_tokens":4,"completion_tokens":completion,"total_tokens":4 + completion,
+        "cost":0.000008,"is_byok":false,"completion_tokens_details":{"reasoning_tokens":reasoning}}});
+    body.push_str(&format!("data: {usage}\n\ndata: [DONE]\n\n"));
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    provider(&server)
+        .await
+        .chat_stream(request)
+        .await
+        .unwrap()
+        .collect()
+        .await
+}
+
+/// A request that offers `read_file`.
+fn read_file_request() -> ChatRequest {
+    let mut request = ChatRequest::simple("Review the change");
+    request.tools.push(axocoatl_llm::ToolDefinition {
+        name: "read_file".into(),
+        description: "Read a file".into(),
+        parameters: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+        concurrency: Default::default(),
+    });
+    request
+}
+
+/// gpt-oss (the default OpenRouter reviewer is gpt-oss-120b) can end a
+/// response having written only reasoning, or nothing: no answer and no
+/// tool call. That is an unusable response, as on Ollama, never an empty
+/// final answer: its usage and cost are observed and stand, the refusal
+/// says what it held and how OpenRouter ended it (with the output limit when
+/// it stopped there), and the note tells the model, so the Agent asks once
+/// more. A call to a tool nobody offered under a name no provider takes
+/// back in history is unusable too; an answer stays an answer.
+#[tokio::test]
+async fn a_response_with_no_answer_and_no_call_is_unusable_and_keeps_its_spend() {
+    let refusal = |events: &[Result<StreamEvent, ProviderError>]| {
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::UsageObservation(usage)) if usage.complete
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(StreamEvent::CostObservation { cost_microunits: 8 })
+        )));
+        match events.last() {
+            Some(Err(ProviderError::UnusableResponse { message, note, .. })) => {
+                (message.clone(), note.clone())
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    let events = finite_events(
+        &[
+            (json!({"reasoning":"Continue."}), None),
+            (json!({"content":""}), Some("stop")),
+        ],
+        3,
+        3,
+        read_file_request(),
+    )
+    .await;
+    assert_eq!(
+        refusal(&events),
+        (
+            "the model's response held no answer and no tool call (it wrote only reasoning; 3 \
+             output tokens). Nothing from this response ran; OpenRouter ended it with \
+             finish_reason \"stop\" and 1 tool offered"
+                .to_owned(),
+            "your response held only reasoning: no answer and no tool call".to_owned()
+        )
+    );
+
+    let events = finite_events(
+        &[(json!({"content":" \n"}), Some("stop"))],
+        1,
+        0,
+        read_file_request(),
+    )
+    .await;
+    assert_eq!(
+        refusal(&events).1,
+        "your response was empty: no answer and no tool call"
+    );
+
+    let events = finite_events(
+        &[(json!({"reasoning":"Let me think"}), Some("length"))],
+        32,
+        32,
+        read_file_request(),
+    )
+    .await;
+    let (message, note) = refusal(&events);
+    assert!(
+        message.contains("(it wrote only reasoning; it stopped at its output limit of 32 tokens; 32 output tokens)")
+            && message.contains("finish_reason \"length\""),
+        "{message}"
+    );
+    assert!(
+        note.starts_with("you spent this response's output limit of 32 tokens on reasoning"),
+        "{note}"
+    );
+
+    let events = finite_events(
+        &[(
+            json!({"tool_calls":[{"index":0,"id":"call-1","type":"function",
+                "function":{"name":"browser.search","arguments":"{\"query\":\"x\"}"}}]}),
+            Some("tool_calls"),
+        )],
+        5,
+        0,
+        read_file_request(),
+    )
+    .await;
+    assert_eq!(
+        refusal(&events),
+        (
+            "the model called browser.search, a tool it does not have (it has read_file). \
+             Nothing from this response ran"
+                .to_owned(),
+            "you called browser.search, a tool you do not have (you have read_file)".to_owned()
+        )
+    );
+
+    // An answer, and the non-streaming path, as before; an unusable one keeps
+    // its complete usage there too.
+    let events = finite_events(
+        &[(json!({"content":"Looks right."}), Some("stop"))],
+        3,
+        0,
+        read_file_request(),
+    )
+    .await;
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish_reason: FinishReason::Stop
+        }))
+    ));
+    let server = MockServer::start().await;
+    metadata(&server).await;
+    let empty = json!({"id":"gen-fixture","model":MODEL,"provider":"FiniteProvider",
+        "choices":[{"index":0,"delta":{"content":""},"finish_reason":"stop"}]});
+    let terminal = reply(true).split_once("\n\n").unwrap().1.to_owned();
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(format!("data: {empty}\n\n{terminal}"), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let outcome = provider(&server)
+        .await
+        .chat_with_accounting(ChatRequest::simple("one call"))
+        .await;
+    assert!(matches!(
+        outcome.response,
+        Err(ProviderError::UnusableResponse { .. })
+    ));
+    assert!(outcome.usage.complete);
+    assert_eq!(outcome.cost_microunits, Some(8));
+}
+
 #[tokio::test]
 async fn contract_breach_retains_observed_spend_and_refuses_acceptance() {
     let server = MockServer::start().await;

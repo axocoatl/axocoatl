@@ -275,15 +275,24 @@ fn attribution_keeps_the_checked_trees_and_the_last_writers_after_capture() {
     assert_eq!(attribution.paths, paths(&["a.txt"]));
     assert_eq!(attribution.checked, vec![tree(&checked)]);
     assert_eq!(attribution.last_writer_after, Some(tree(&after)));
+    // Both ran to their After capture; the helper changed nothing.
+    assert_eq!(attribution.captured, 2);
     let mut unusable = capture(CapturePhase::Check, Some(&checked));
     unusable.unavailable = Some("Execution was stopped".into());
     attribution.add_activation("checks", &[unusable]);
     assert_eq!(attribution.checked.len(), 1);
+    // A read-only reviewer's activation cannot change the repository and is
+    // not captured.
+    let mut reviewer = capture(CapturePhase::Before, None);
+    reviewer.unavailable = Some(format!("the profile {NO_CAPTURE_REASON}"));
+    attribution.add_activation("reviewer", &[reviewer]);
+    assert_eq!(attribution.captured, 2);
     // A later activation whose changes are unknown may have changed files
     // after that writer: its After capture is no longer what the run left.
     attribution.add_activation("writer 2", &[capture(CapturePhase::Before, Some(&after))]);
     assert_eq!(attribution.unattributable.len(), 1);
     assert_eq!(attribution.last_writer_after, None);
+    assert_eq!(attribution.captured, 2);
 }
 
 /// In a repository too large for a whole manifest, the judged capture's

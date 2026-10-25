@@ -33,6 +33,10 @@ getrandom = "0.4"
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `mkfifo`, for pipes no other program can inherit (`child_pipe`).
+libc = "0.2"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
 tempfile = "3.27"

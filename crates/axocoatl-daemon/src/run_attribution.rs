@@ -45,6 +45,10 @@ pub struct RunAttribution {
     /// changed inside one is not known. Keep refuses rather than guess, and
     /// a receipt names each as not covered.
     pub unread: BTreeSet<String>,
+    /// Activations whose captures establish what they changed, perhaps
+    /// nothing: each could change the repository, and ran to its After
+    /// capture.
+    pub captured: usize,
 }
 
 /// One repository capture's tree: its digest; when the capture holds it
@@ -121,6 +125,7 @@ impl RunAttribution {
         }
         match attribute_activation(captures) {
             ActivationChanges::Changed(paths) => {
+                self.captured += 1;
                 if !paths.is_empty() {
                     self.last_writer_after = captures
                         .iter()

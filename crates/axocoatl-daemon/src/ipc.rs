@@ -70,12 +70,85 @@ pub fn max_socket_path_bytes() -> usize {
     address.sun_path.len() - 1
 }
 
-/// The error for a socket path longer than [`max_socket_path_bytes`], or
-/// `None`. The standard library says only "path must be shorter than
-/// SUN_LEN"; this names the path, its length, the limit and the fix, for the
-/// environment that chose the path ([`default_socket_path`]).
-pub fn socket_path_too_long(socket_path: &Path) -> Option<std::io::Error> {
-    socket_path_too_long_in(
+/// A socket path longer than [`max_socket_path_bytes`]: why no daemon can
+/// listen on it ([`SocketPathTooLong::reason`]) and what to do
+/// ([`SocketPathTooLong::setting`], [`SocketPathTooLong::rules`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocketPathTooLong {
+    path: PathBuf,
+    length: usize,
+    limit: usize,
+    from: SocketPathSource,
+}
+
+/// Where a socket path came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketPathSource {
+    /// `AXOCOATL_SOCKET_PATH`'s value.
+    Explicit,
+    /// The default under `XDG_RUNTIME_DIR`.
+    RuntimeDir,
+    /// The default under the home directory.
+    Home,
+}
+
+impl SocketPathTooLong {
+    /// `the IPC socket path … is too long: N bytes, and a Unix socket path
+    /// may have at most L bytes on this system`.
+    pub fn reason(&self) -> String {
+        format!(
+            "the IPC socket path {} is too long: {} bytes, and a Unix socket path may have at \
+             most {} bytes on this system",
+            self.path.display(),
+            self.length,
+            self.limit
+        )
+    }
+
+    /// What to change, for where the path came from: `Set
+    /// AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter
+    /// home directory (…)`.
+    pub fn setting(&self) -> &'static str {
+        match self.from {
+            SocketPathSource::Explicit => "Set AXOCOATL_SOCKET_PATH to a shorter absolute path",
+            SocketPathSource::RuntimeDir => {
+                "Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter \
+                 XDG_RUNTIME_DIR (the path is $XDG_RUNTIME_DIR/axocoatl/axocoatl.sock)"
+            }
+            SocketPathSource::Home => {
+                "Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter home \
+                 directory (the path is $HOME/.axocoatl/run/axocoatl.sock)"
+            }
+        }
+    }
+
+    /// What the socket's directory and every command need.
+    pub fn rules(&self) -> &'static str {
+        "The socket's directory must be one only you can write to (it is made if missing), \
+         and every axocoatl command must see the same AXOCOATL_SOCKET_PATH (`axocoatl service \
+         install` records it for the Always-On Service)"
+    }
+}
+
+impl std::fmt::Display for SocketPathTooLong {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}. {}, then start Axocoatl again. {}.",
+            self.reason(),
+            self.setting(),
+            self.rules()
+        )
+    }
+}
+
+/// [`SocketPathTooLong`] for `socket_path`, or `None` when a socket can
+/// have it. The advice depends on where the path came from in this
+/// environment ([`default_socket_path`]): `AXOCOATL_SOCKET_PATH` when the
+/// path is its value, else the default under `XDG_RUNTIME_DIR` or the home
+/// directory.
+pub fn socket_path_problem(socket_path: &Path) -> Option<SocketPathTooLong> {
+    socket_path_problem_in(
         socket_path,
         max_socket_path_bytes(),
         std::env::var_os("AXOCOATL_SOCKET_PATH"),
@@ -83,37 +156,39 @@ pub fn socket_path_too_long(socket_path: &Path) -> Option<std::io::Error> {
     )
 }
 
-fn socket_path_too_long_in(
+/// The error for a socket path longer than [`max_socket_path_bytes`], or
+/// `None`. The standard library says only "path must be shorter than
+/// SUN_LEN"; this names the path, its length, the limit and the fix
+/// ([`socket_path_problem`]).
+pub fn socket_path_too_long(socket_path: &Path) -> Option<std::io::Error> {
+    socket_path_problem(socket_path)
+        .map(|problem| std::io::Error::new(std::io::ErrorKind::InvalidInput, problem.to_string()))
+}
+
+fn socket_path_problem_in(
     socket_path: &Path,
     limit: usize,
     explicit: Option<std::ffi::OsString>,
     runtime_dir: Option<std::ffi::OsString>,
-) -> Option<std::io::Error> {
+) -> Option<SocketPathTooLong> {
     let length = socket_path.as_os_str().len();
     if length <= limit {
         return None;
     }
     let set = |value: &Option<std::ffi::OsString>| value.as_ref().is_some_and(|v| !v.is_empty());
-    let shorter = if set(&explicit) {
-        "a shorter AXOCOATL_SOCKET_PATH"
+    let from = if explicit.as_deref() == Some(socket_path.as_os_str()) {
+        SocketPathSource::Explicit
     } else if set(&runtime_dir) {
-        "AXOCOATL_SOCKET_PATH set to a shorter path, or a shorter XDG_RUNTIME_DIR (the path is \
-         $XDG_RUNTIME_DIR/axocoatl/axocoatl.sock)"
+        SocketPathSource::RuntimeDir
     } else {
-        "AXOCOATL_SOCKET_PATH set to a shorter path, or a shorter home directory (the path is \
-         $HOME/.axocoatl/run/axocoatl.sock)"
+        SocketPathSource::Home
     };
-    Some(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "the IPC socket path {} is too long: {length} bytes, and a Unix socket path may have \
-             at most {limit} bytes on this system. Start Axocoatl with {shorter}. The socket's \
-             directory must be one only you can write to (it is made if missing), and every \
-             axocoatl command must see the same AXOCOATL_SOCKET_PATH (`axocoatl service install` \
-             records it for the Always-On Service).",
-            socket_path.display()
-        ),
-    ))
+    Some(SocketPathTooLong {
+        path: socket_path.to_path_buf(),
+        length,
+        limit,
+        from,
+    })
 }
 
 // ── IPC Message Types ────────────────────────────────────────────
@@ -1240,52 +1315,74 @@ mod tests {
     }
 
     /// A path one byte longer than a Unix socket path may be names itself,
-    /// its length, the limit and the fix for where the path came from; at
-    /// the limit there is nothing to say.
+    /// its length, the limit and the fix for where the path came from
+    /// (`AXOCOATL_SOCKET_PATH` only when the path is its value); at the
+    /// limit there is nothing to say.
     #[test]
     fn a_socket_path_too_long_says_so_and_how_to_fix_it() {
         let limit = max_socket_path_bytes();
         assert_eq!(limit, if cfg!(target_os = "macos") { 103 } else { 107 });
         let path = |length: usize| PathBuf::from(format!("/{}", "s".repeat(length - 1)));
         let unset = || None::<std::ffi::OsString>;
-        assert!(socket_path_too_long_in(&path(limit), limit, unset(), unset()).is_none());
+        assert!(socket_path_problem_in(&path(limit), limit, unset(), unset()).is_none());
         let long = path(limit + 1);
-        let message = |explicit, runtime| {
-            let error = socket_path_too_long_in(&long, limit, explicit, runtime).unwrap();
-            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-            error.to_string()
-        };
-        let home = message(None, None);
-        assert!(
-            home.starts_with(&format!(
+        let problem =
+            |explicit, runtime| socket_path_problem_in(&long, limit, explicit, runtime).unwrap();
+        let home = problem(None, None);
+        assert_eq!(
+            home.reason(),
+            format!(
                 "the IPC socket path {} is too long: {} bytes, and a Unix socket path may have at \
-                 most {limit} bytes on this system.",
+                 most {limit} bytes on this system",
                 long.display(),
                 limit + 1
-            )),
-            "{home}"
+            )
         );
-        assert!(
-            home.contains(
-                "AXOCOATL_SOCKET_PATH set to a shorter path, or a shorter home directory"
-            ),
-            "{home}"
+        assert_eq!(
+            home.setting(),
+            "Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter home \
+             directory (the path is $HOME/.axocoatl/run/axocoatl.sock)"
         );
-        assert!(
-            home.contains("`axocoatl service install` records it"),
-            "{home}"
+        assert!(home
+            .rules()
+            .contains("`axocoatl service install` records it"));
+        let message = home.to_string();
+        assert_eq!(
+            message,
+            format!(
+                "{}. {}, then start Axocoatl again. {}.",
+                home.reason(),
+                home.setting(),
+                home.rules()
+            )
         );
-        assert!(!home.contains("SUN_LEN"), "{home}");
-        let runtime = message(None, Some("/run/user/1000".into()));
+        assert!(!message.contains("SUN_LEN"), "{message}");
+        let runtime = problem(None, Some("/run/user/1000".into()));
         assert!(
-            runtime.contains("or a shorter XDG_RUNTIME_DIR"),
+            runtime
+                .setting()
+                .contains("or use a shorter XDG_RUNTIME_DIR"),
             "{runtime}"
         );
-        let explicit = message(Some("/x".into()), Some("/run/user/1000".into()));
-        assert!(
-            explicit.contains("Start Axocoatl with a shorter AXOCOATL_SOCKET_PATH."),
-            "{explicit}"
+        let explicit = problem(
+            Some(long.clone().into_os_string()),
+            Some("/run/user/1000".into()),
         );
+        assert_eq!(
+            explicit.setting(),
+            "Set AXOCOATL_SOCKET_PATH to a shorter absolute path"
+        );
+        // AXOCOATL_SOCKET_PATH set to another path (a relative one, which
+        // `service install` does not record, say): the long default path is
+        // fixed where the default comes from.
+        let other = problem(Some("ipc/axo.sock".into()), None);
+        assert!(
+            other.setting().contains("or use a shorter home directory"),
+            "{other}"
+        );
+        let error = socket_path_too_long(&long).unwrap();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("is too long"), "{error}");
     }
 
     /// Neither the daemon's reservation nor a client tries a path too long

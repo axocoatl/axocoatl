@@ -6,6 +6,7 @@ pub mod registry;
 pub mod tools;
 #[doc(hidden)]
 pub mod transport;
+pub mod unusable;
 
 pub use error::*;
 pub use extensions::*;

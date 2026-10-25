@@ -7,7 +7,7 @@ pub use native::ContractProbe;
 pub use native::{
     check_native_ollama_server, check_shown_model, describe_native_ollama_error,
     gguf_variant_commands, inspect_native_ollama_model, native_ollama_error_hint,
-    native_ollama_model_unloaded, observe_native_ollama_context,
+    native_ollama_model_unloaded, needs_gguf_variant, observe_native_ollama_context,
     observe_native_ollama_context_within, ollama_version_accepted, ollama_version_note,
     ollama_version_refusal, ollama_version_unaudited, show_native_ollama_model,
     validate_native_ollama_endpoint, NativeOllamaConfig, NativeOllamaContextObservation,
@@ -245,14 +245,20 @@ fn compat_text_calls(
 
 /// The refusal of an answer that calls an offered tool as text that cannot
 /// run: the turn needs attention instead of ending having run nothing.
-fn text_call_refusal(why: String, finish_reason: &str, request: &ChatRequest) -> ProviderError {
+fn text_call_refusal(
+    why: text_calls::Refusal,
+    finish_reason: &str,
+    request: &ChatRequest,
+) -> ProviderError {
     ProviderError::UnusableResponse {
         provider: "ollama".to_string(),
         message: format!(
-            "{why}. Nothing from this response ran; Ollama ended it with finish_reason \
+            "{}. Nothing from this response ran; Ollama ended it with finish_reason \
              \"{finish_reason}\" and {} offered",
+            why.message,
             text_calls::count_of(request.tools.len(), "tool")
         ),
+        note: why.note,
     }
 }
 

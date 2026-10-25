@@ -356,6 +356,7 @@ fn onboarding(shims: &Shims, ui: Ui, facts: Facts, mut args: OnboardArgs) -> Onb
         steps: Vec::new(),
         openrouter_api: "http://127.0.0.1:9/never".to_string(),
         socket_path: home.join("no-daemon.sock"),
+        service_socket_path: home.join("no-daemon.sock"),
         data_dir_override: Some(home.join("data")),
         openrouter_sign_in: None,
         kept: Kept::default(),
@@ -1538,8 +1539,11 @@ esac"#,
     assert!(!sandbox::run(&mut o).await);
     let calls = shims.calls();
     // With what Podman's readiness was after the reinstall and what
-    // onboarding said: one full run of the suite failed here once, after a
-    // `podman machine list` that was not read as a running machine.
+    // onboarding said. One full run of the suite on a loaded Mac failed here
+    // once: a program another test started inherited a probe's pipe, so
+    // that `podman machine list` had no end of file (fixed in `child_pipe`;
+    // `an_install_is_not_offered_again_after_podman_answered_something_else`
+    // covers the path it took).
     assert_eq!(
         calls.iter().filter(|call| call.starts_with("sudo")).count(),
         1,
@@ -1547,6 +1551,74 @@ esac"#,
         o.facts.podman.readiness,
         o.steps,
         o.ui.output()
+    );
+    assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
+    assert!(
+        o.steps[0].starts_with(
+            "`sudo apt-get install --reinstall -y uidmap` ran, but did not fix this: Rootless \
+             Podman cannot map"
+        ),
+        "{:?}",
+        o.steps
+    );
+    assert!(
+        !o.steps[0].contains("install -y uidmap &&"),
+        "{:?}",
+        o.steps
+    );
+}
+
+/// [`an_install_is_not_offered_again_when_podman_still_lacks_the_helpers`],
+/// where Podman answers something else once in between: right after
+/// `podman system migrate`, one `podman machine list` fails, so that
+/// re-inspection does not show the helpers' failure, and the next one does.
+/// Onboarding still offers no install of their package again, in either
+/// form. (One run of the suite on a loaded Mac took this path, when such a
+/// probe's output had no end of file.)
+#[cfg(unix)]
+#[tokio::test]
+async fn an_install_is_not_offered_again_after_podman_answered_something_else() {
+    let shims = Shims::new();
+    shims.id_map_tools(None);
+    stale_podman(&shims);
+    let script = std::fs::read_to_string(shims.dir.path().join("podman"))
+        .unwrap()
+        .replace(
+            r#"elif [ ! -e "$D/newuidmap" ] && [ -f "$D/migrated" ]; then"#,
+            r#"elif { [ ! -e "$D/newuidmap" ] || [ -f "$D/other-path" ]; } && [ -f "$D/migrated" ]; then"#,
+        )
+        .replace(
+            "\"machine list --format json\")\n",
+            "\"machine list --format json\")\n    if [ -f \"$D/migrated\" ] && [ ! -f \"$D/listed\" ]; then touch \"$D/listed\"; echo \"Cannot connect to Podman\" >&2; exit 125; fi\n",
+        );
+    assert!(script.contains("$D/listed"));
+    shims.write_program("podman", &script);
+    std::fs::write(shims.dir.path().join("other-path"), "").unwrap();
+    shims.add("dpkg-query", "printf installed");
+    let sudo = format!(
+        r#"case "$*" in
+  "apt-get install --reinstall -y uidmap") for n in newuidmap newgidmap; do printf '#!/bin/sh\nexit 1\n' > "{dir}/$n"; chmod 4755 "{dir}/$n"; done ;;
+  *) exit 1 ;;
+esac"#,
+        dir = shims.dir.path().display()
+    );
+    let mut o = linux_sandbox(
+        &shims,
+        &sudo,
+        OnboardArgs {
+            allow_sudo: true,
+            ..yes(WriterChoice::Ollama)
+        },
+    )
+    .await;
+    assert!(!sandbox::run(&mut o).await);
+    let calls = shims.calls();
+    assert!(shims.dir.path().join("listed").exists(), "{calls:?}");
+    assert_eq!(
+        calls.iter().filter(|call| call.starts_with("sudo")).count(),
+        1,
+        "{calls:?}\nsteps: {:?}",
+        o.steps
     );
     assert_eq!(o.steps.len(), 1, "{:?}", o.steps);
     assert!(
@@ -6350,6 +6422,7 @@ async fn the_first_run_says_why_no_daemon_can_start_for_it() {
         .path()
         .join("s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes()))
         .join("axocoatl.sock");
+    o.service_socket_path = o.socket_path.clone();
     assert!(!smoke::run(&mut o, WriterChoice::Ollama, &choice, false, false).await);
     let step = o.steps.last().cloned().unwrap_or_default();
     assert!(
@@ -6375,6 +6448,33 @@ async fn the_first_run_says_why_no_daemon_can_start_for_it() {
         step.starts_with("The Always-On Service cannot start: the IPC socket path"),
         "{:?}",
         o.steps
+    );
+    // With a relative AXOCOATL_SOCKET_PATH, which install does not record,
+    // this shell's path is short and the service's daemon would use its long
+    // default: the step says how to fix where that comes from, not to
+    // shorten AXOCOATL_SOCKET_PATH.
+    o.socket_path = PathBuf::from("ipc/axo.sock");
+    assert_eq!(start_service(&mut o).await, None);
+    let step = o.steps.last().cloned().unwrap_or_default();
+    assert!(
+        step.starts_with("The Always-On Service cannot start: the IPC socket path"),
+        "{:?}",
+        o.steps
+    );
+    // A service socket that fits but is not this shell's: the service's
+    // daemon would listen where this shell's commands do not look.
+    o.service_socket_path = socket_path.clone();
+    assert_eq!(start_service(&mut o).await, None);
+    let step = o.steps.last().cloned().unwrap_or_default();
+    assert_eq!(
+        step,
+        format!(
+            "The Always-On Service's daemon would listen at {}, but this shell's axocoatl \
+             commands look for it at ipc/axo.sock: `axocoatl service install` records \
+             AXOCOATL_SOCKET_PATH only when it is an absolute path (UTF-8, without control \
+             characters). Set it to such a path, then run `axocoatl onboard` again",
+            socket_path.display()
+        )
     );
     assert!(
         !shims

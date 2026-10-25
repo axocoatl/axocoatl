@@ -1389,13 +1389,12 @@ async fn receipts_child_body() {
     let run_id = manifest.run_id.clone();
     store.create(&manifest).unwrap();
     let outcome = ended_outcome(&manifest, "the environment failed".into(), Vec::new());
-    // Its writer changed no file: the receipt covers none, and the driver,
-    // which runs the team, is given the plain warning; a run that ended
-    // before its team ran is not.
-    let sealed = daemon.seal_loadout_run(&run_id, &outcome).await.unwrap();
+    // Its writer never ran (the run ended at its environment): the receipt
+    // covers no file, and the run is not said to have changed nothing,
+    // whichever path seals it.
     assert_eq!(
-        sealed.map(|warning| warning.code),
-        Some(crate::bootstrap::receipts::RUN_CHANGED_NOTHING.to_string())
+        daemon.seal_loadout_run(&run_id, &outcome).await.unwrap(),
+        None
     );
     assert_eq!(daemon.seal_or_warn(&run_id, &outcome).await, None);
     assert!(matches!(

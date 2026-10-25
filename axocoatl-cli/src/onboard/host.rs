@@ -331,7 +331,14 @@ impl Host {
             command.env(name, value);
         }
         let shown = Cmd::new(program, args).display();
-        let output = match tokio::time::timeout(PROBE_TIMEOUT, command.output()).await {
+        // Through pipes no program started at the same moment can inherit,
+        // so the output ends when the probe does.
+        let output = match tokio::time::timeout(
+            PROBE_TIMEOUT,
+            axocoatl_isolation::child_pipe::output(command),
+        )
+        .await
+        {
             Ok(Ok(output)) => output,
             Ok(Err(error)) => {
                 self.log(&format!("$ {shown}\n  could not run: {error}"));

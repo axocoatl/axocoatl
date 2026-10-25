@@ -388,7 +388,9 @@ fn dev_and_serve_say_a_socket_path_is_too_long_and_how_to_fix_it() {
         );
         assert!(
             stderr.contains(
-                "AXOCOATL_SOCKET_PATH set to a shorter path, or a shorter home directory"
+                "Set AXOCOATL_SOCKET_PATH to a shorter absolute path, or use a shorter home \
+                 directory (the path is $HOME/.axocoatl/run/axocoatl.sock), then start \
+                 Axocoatl again."
             ),
             "{command}: {stderr}"
         );

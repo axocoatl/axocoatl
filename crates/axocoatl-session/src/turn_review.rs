@@ -1196,7 +1196,10 @@ pub fn not_in_the_patch(before: Option<&str>, after: Option<&str>, unread: &[Str
         let then = before.map(submodules);
         let moved: Vec<String> = now
             .iter()
-            .filter(|(path, entry)| then.as_ref().is_none_or(|then| then.get(*path) != Some(entry)))
+            .filter(|(path, entry)| {
+                then.as_ref()
+                    .is_none_or(|then| then.get(*path) != Some(entry))
+            })
             .map(|(path, (_, entry))| {
                 format!(
                     "{} (now at commit {})\n",
@@ -1230,7 +1233,11 @@ pub fn not_in_the_patch(before: Option<&str>, after: Option<&str>, unread: &[Str
                  repository captures do not read, so the turn may have changed files inside {} \
                  that nothing here shows. You have not seen those; read them yourself:]",
                 if count == 1 { "" } else { "s" },
-                if count == 1 { "a submodule" } else { "submodules" },
+                if count == 1 {
+                    "a submodule"
+                } else {
+                    "submodules"
+                },
                 if count == 1 { "it" } else { "them" },
             ),
             lines,
@@ -1257,7 +1264,10 @@ fn list_lines(text: &mut String, heading: &str, lines: Vec<String>, room: &mut L
         listed += 1;
     }
     if listed < lines.len() {
-        text.push_str(&format!("...and {} more, not listed\n", lines.len() - listed));
+        text.push_str(&format!(
+            "...and {} more, not listed\n",
+            lines.len() - listed
+        ));
     }
 }
 

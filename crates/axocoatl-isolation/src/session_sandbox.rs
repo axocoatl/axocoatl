@@ -23,14 +23,15 @@
 //! `Arc<dyn Sandbox>` and never need to know the concrete backend.
 
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::io::AsyncRead;
 use tokio::process::Command;
 
 use axocoatl_core::SecureDir;
@@ -48,6 +49,15 @@ const PODMAN: &str = "podman";
 /// Podman client is killed. Callers that own a tighter product deadline can
 /// pass it to [`SessionSandbox::remove_named_many`].
 const NAMED_REMOVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// The bound on each removal the daemon makes before it starts, of the
+/// containers an earlier start left (after a crash or a reboot, say). A
+/// Session container's writable layer can hold many files (global npm, pip
+/// or apt installs): Podman 4.9.3 (Ubuntu 24.04) took 69 s to remove one
+/// whose layer held 600,000 files, Podman 6.1.4 in a macOS machine 7 s. A
+/// removal Podman has not finished within it (twice) is a Podman that did
+/// not answer, which the start asks again; Podman 4.9.3 goes on deleting an
+/// interrupted removal's files at its next command.
+pub const STARTUP_REMOVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 /// Killing the local Podman client must also reap it before cleanup continues.
 const COMMAND_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Podman on macOS proxies removal into a VM. The remote removal can finish
@@ -439,37 +449,66 @@ const NO_HOST_PROXY_ENV: &str = "--http-proxy=false";
 #[cfg(target_os = "macos")]
 const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
 #[cfg(not(target_os = "macos"))]
-const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+const PREFERRED_SESSION_PORT_ADDRESS: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 2));
+
+/// Why `podman port` output is not a Session's mapping
+/// (`SessionSandbox::published_on`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PublishedPortsProblem {
+    /// Not every expected port is reported yet; asking again may help.
+    Incomplete(String),
+    /// A port is published on another address; asking again cannot help.
+    Elsewhere(String),
+}
 
 /// The loopback address Session ports are published on: this platform's
 /// preferred one ([`PREFERRED_SESSION_PORT_ADDRESS`]) when this computer can
-/// listen there, else `127.0.0.1`. Decided once per process.
-pub fn session_port_address() -> IpAddr {
-    static ADDRESS: std::sync::OnceLock<IpAddr> = std::sync::OnceLock::new();
-    *ADDRESS.get_or_init(|| {
-        choose_session_port_address(PREFERRED_SESSION_PORT_ADDRESS, |address| {
-            std::net::TcpListener::bind((address, 0)).is_ok()
+/// listen there. Otherwise `Err` says why and what to do, and a Session that
+/// exposes ports does not start: Axocoatl never publishes them on
+/// `127.0.0.1` instead. Decided once per process.
+pub fn session_port_address() -> Result<IpAddr, String> {
+    static ADDRESS: std::sync::OnceLock<Result<IpAddr, String>> = std::sync::OnceLock::new();
+    ADDRESS
+        .get_or_init(|| {
+            choose_session_port_address(PREFERRED_SESSION_PORT_ADDRESS, |address| {
+                std::net::TcpListener::bind((address, 0)).is_ok()
+            })
         })
-    })
+        .clone()
 }
 
-fn choose_session_port_address(preferred: IpAddr, can_listen: impl Fn(IpAddr) -> bool) -> IpAddr {
+fn choose_session_port_address(
+    preferred: IpAddr,
+    can_listen: impl Fn(IpAddr) -> bool,
+) -> Result<IpAddr, String> {
     if can_listen(preferred) {
-        return preferred;
+        return Ok(preferred);
     }
-    tracing::warn!(
-        address = %preferred,
-        "this computer cannot listen on {preferred}, so Session ports are published on \
-         127.0.0.1, the workbench's address: a Session's app opened there receives the \
-         workbench's sign-in cookie"
+    let remedy = match preferred {
+        IpAddr::V6(_) => "turn IPv6 back on for the loopback interface (on macOS, `sudo ifconfig lo0 inet6 ::1/128 alias`)",
+        IpAddr::V4(_) => "add it to the loopback interface (`sudo ip addr add 127.0.0.2/8 dev lo`)",
+    };
+    let reason = format!(
+        "this computer cannot listen on {preferred}, the loopback address Axocoatl publishes \
+         Session ports on, so no Session that exposes ports can start. Axocoatl never publishes \
+         them on 127.0.0.1 instead: the workbench keeps its sign-in cookie there, and a \
+         Session's app there would receive it. To use Session ports, {remedy}, then restart \
+         Axocoatl; or start the Session without exposed ports"
     );
-    IpAddr::V4(Ipv4Addr::LOCALHOST)
+    tracing::warn!(address = %preferred, "{reason}");
+    Err(reason)
 }
 
 /// The `podman run -p` value for one Session port: on [`session_port_address`],
-/// on a host port Podman picks.
+/// on a host port Podman picks. A Session that publishes ports starts only
+/// when that address is usable (`SessionSandbox::start` checks first); were it
+/// not, this names the preferred address, which Podman then fails to use,
+/// never `127.0.0.1`.
 pub(crate) fn session_port_publish_arg(port: u16) -> String {
-    publish_arg(session_port_address(), port)
+    publish_arg(
+        session_port_address().unwrap_or(PREFERRED_SESSION_PORT_ADDRESS),
+        port,
+    )
 }
 
 fn publish_arg(address: IpAddr, port: u16) -> String {
@@ -1874,6 +1913,15 @@ impl SessionSandbox {
         }
         effective_policy.workload = workload;
         effective_policy.shared_sidecar_session = shared_sidecar.clone();
+        // A bridge Session publishes its ports on the host, and an egress
+        // Session's Preview container does; never on 127.0.0.1. Where this
+        // computer cannot listen on the address for them, such a Session does
+        // not start, before anything of it exists.
+        if !exposed_ports.is_empty()
+            && (effective_policy.network == SandboxNetwork::Bridge || egress_mode)
+        {
+            session_port_address().map_err(IsolationError::OciContainerFailed)?;
+        }
         podman::ensure_ready().await?;
         // Under rootful Podman the writer's id would be a real user of the
         // host, and `keep-id` would not map the Workspace's owner to it.
@@ -3654,7 +3702,7 @@ impl SessionSandbox {
             &inspected.stdout,
         )?;
         for container_id in &exposing {
-            Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT)
+            Self::remove_exact_container_identity(container_id, STARTUP_REMOVE_COMMAND_TIMEOUT)
                 .await?;
         }
         Ok(exposing)
@@ -3713,7 +3761,7 @@ impl SessionSandbox {
             crate::dependency_mountpoint::adopt_labelled(runtime_authority).await;
         }
         for (container_id, _) in &candidates {
-            Self::remove_exact_container_identity(container_id, NAMED_REMOVE_COMMAND_TIMEOUT)
+            Self::remove_exact_container_identity(container_id, STARTUP_REMOVE_COMMAND_TIMEOUT)
                 .await?;
         }
         Ok(candidates.into_iter().map(|(_, name)| name).collect())
@@ -3782,10 +3830,9 @@ impl SessionSandbox {
         }
     }
 
-    /// Parse `podman port <container>` output, for example:
-    /// `3000/tcp -> 127.0.0.2:43117` or `3000/tcp -> ::1:43117`. A mapping on
-    /// an address that is not loopback is left out.
-    fn parse_published_ports(stdout: &str) -> HashMap<u16, SocketAddr> {
+    /// Parse `podman port <container>` output, one mapping per line, for
+    /// example `3000/tcp -> 127.0.0.2:43117` or `3000/tcp -> ::1:43117`.
+    fn parse_published_ports(stdout: &str) -> Vec<(u16, SocketAddr)> {
         stdout
             .lines()
             .filter_map(|line| {
@@ -3798,10 +3845,48 @@ impl SessionSandbox {
                     .parse::<IpAddr>()
                     .ok()?;
                 let host_port = host_port.parse::<u16>().ok()?;
-                (container_port > 0 && host_port > 0 && address.is_loopback())
+                (container_port > 0 && host_port > 0)
                     .then_some((container_port, SocketAddr::new(address, host_port)))
             })
             .collect()
+    }
+
+    /// The mapping of each `expected` port in `podman port` output, on
+    /// `address`, the one Session ports are published on; or what is wrong.
+    /// An expected port that Podman also or instead published on any other
+    /// address fails it for good: on `127.0.0.1` the app would share the
+    /// workbench's cookies, and beyond loopback it would be on the network.
+    fn published_on(
+        address: IpAddr,
+        expected: &[u16],
+        reported: &str,
+    ) -> Result<HashMap<u16, SocketAddr>, PublishedPortsProblem> {
+        let mappings: Vec<(u16, SocketAddr)> = Self::parse_published_ports(reported)
+            .into_iter()
+            .filter(|(port, _)| expected.contains(port))
+            .collect();
+        let elsewhere: Vec<String> = mappings
+            .iter()
+            .filter(|(_, mapping)| mapping.ip() != address)
+            .map(|(port, mapping)| format!("{port} on {mapping}"))
+            .collect();
+        if !elsewhere.is_empty() {
+            return Err(PublishedPortsProblem::Elsewhere(format!(
+                "Podman published port {} rather than only on {address}, the address Axocoatl \
+                 asked for; Axocoatl uses no Session port on another address (reported \
+                 mappings: {})",
+                elsewhere.join(", "),
+                reported.trim()
+            )));
+        }
+        let mappings: HashMap<u16, SocketAddr> = mappings.into_iter().collect();
+        if expected.iter().all(|port| mappings.contains_key(port)) {
+            return Ok(mappings);
+        }
+        Err(PublishedPortsProblem::Incomplete(format!(
+            "reported mappings: {}",
+            reported.trim()
+        )))
     }
 
     /// Read back Podman's authoritative dynamic allocations. A successful
@@ -3814,6 +3899,7 @@ impl SessionSandbox {
         if expected.is_empty() {
             return Ok(HashMap::new());
         }
+        let address = session_port_address()?;
         let mut last_detail = String::new();
         for _ in 0..10 {
             let mut command = Command::new(PODMAN);
@@ -3821,11 +3907,15 @@ impl SessionSandbox {
             match Self::run_bounded_command(command, NAMED_REMOVE_PROBE_TIMEOUT).await {
                 Ok(output) if !output.timed_out && output.status.success() => {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mappings = Self::parse_published_ports(&stdout);
-                    if expected.iter().all(|port| mappings.contains_key(port)) {
-                        return Ok(mappings);
+                    match Self::published_on(address, expected, &stdout) {
+                        Ok(mappings) => return Ok(mappings),
+                        Err(PublishedPortsProblem::Incomplete(detail)) => last_detail = detail,
+                        Err(PublishedPortsProblem::Elsewhere(detail)) => {
+                            return Err(format!(
+                                "Podman started sandbox {container}, but {detail}"
+                            ));
+                        }
                     }
-                    last_detail = format!("reported mappings: {}", stdout.trim());
                 }
                 Ok(output) => {
                     last_detail = if output.timed_out {
@@ -4795,10 +4885,21 @@ impl SessionSandbox {
         Self::spawn_output_reader_with_limit(reader, COMMAND_OUTPUT_MAX_BYTES)
     }
 
-    fn spawn_output_reader_with_limit<R>(mut reader: R, limit: usize) -> OutputReader
+    #[cfg(test)]
+    fn spawn_output_reader_with_limit<R>(reader: R, limit: usize) -> OutputReader
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
+        Self::spawn_end_reader_with_limit(
+            crate::child_pipe::OutputEnd::Async(Box::new(reader)),
+            limit,
+        )
+    }
+
+    fn spawn_end_reader_with_limit(
+        end: crate::child_pipe::OutputEnd,
+        limit: usize,
+    ) -> OutputReader {
         let progress = Arc::new(Mutex::new(CaptureProgress {
             bytes: Vec::with_capacity(limit.min(16 * 1024)),
             observed_bytes: 0,
@@ -4808,36 +4909,37 @@ impl SessionSandbox {
         }));
         let task_progress = progress.clone();
         let task = tokio::spawn(async move {
-            let mut chunk = [0_u8; 16 * 1024];
-            loop {
-                let read = match reader.read(&mut chunk).await {
-                    Ok(read) => read,
-                    Err(error) => {
-                        task_progress
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .error = Some(Self::bounded_capture_error(format!(
-                            "reading output: {error}"
-                        )));
-                        break;
-                    }
-                };
-                let mut capture = task_progress
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                if read == 0 {
-                    capture.complete = true;
-                    break;
+            let chunk_progress = task_progress.clone();
+            let read = end
+                .read_chunks(move |chunk| {
+                    let mut capture = chunk_progress
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    let Some(observed_bytes) =
+                        capture.observed_bytes.checked_add(chunk.len() as u64)
+                    else {
+                        capture.error = Some("observed output length overflow".to_string());
+                        return false;
+                    };
+                    capture.observed_bytes = observed_bytes;
+                    capture.digest.update(chunk);
+                    let remaining = limit.saturating_sub(capture.bytes.len());
+                    let retained = remaining.min(chunk.len());
+                    capture.bytes.extend_from_slice(&chunk[..retained]);
+                    true
+                })
+                .await;
+            let mut capture = task_progress
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            match read {
+                // The end of the output, unless a chunk stopped the reading.
+                Ok(()) => capture.complete = capture.error.is_none(),
+                Err(error) => {
+                    capture.error = Some(Self::bounded_capture_error(format!(
+                        "reading output: {error}"
+                    )))
                 }
-                let Some(observed_bytes) = capture.observed_bytes.checked_add(read as u64) else {
-                    capture.error = Some("observed output length overflow".to_string());
-                    break;
-                };
-                capture.observed_bytes = observed_bytes;
-                capture.digest.update(&chunk[..read]);
-                let remaining = limit.saturating_sub(capture.bytes.len());
-                let retained = remaining.min(read);
-                capture.bytes.extend_from_slice(&chunk[..retained]);
             }
         });
         OutputReader { task, progress }
@@ -4942,42 +5044,32 @@ impl SessionSandbox {
                 "execution observation limits are invalid",
             )));
         }
-        command
-            .kill_on_drop(true)
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.kill_on_drop(true);
+        if input.is_none() {
+            command.stdin(Stdio::null());
+        }
+        // Pipes no program started at the same moment can inherit, so the
+        // output ends when the command does (`child_pipe`).
+        let pipes = crate::child_pipe::Pipes::attach(&mut command, input.is_some());
         let mut child = command
             .spawn()
             .map_err(|error| IsolationError::OciContainerFailed(error.to_string()))?;
-        let stdout_reader = Self::spawn_output_reader_with_limit(
-            child.stdout.take().ok_or_else(|| {
-                IsolationError::OciContainerFailed("Podman stdout was not captured".to_string())
-            })?,
-            stdout_limit,
-        );
-        let stderr_reader = Self::spawn_output_reader_with_limit(
-            child.stderr.take().ok_or_else(|| {
-                IsolationError::OciContainerFailed("Podman stderr was not captured".to_string())
-            })?,
-            stderr_limit,
-        );
+        drop(command);
+        let (mut child_stdin, stdout, stderr) = pipes.ends(&mut child).map_err(|error| {
+            IsolationError::OciContainerFailed(format!("Podman output was not captured: {error}"))
+        })?;
+        let stdout_reader = Self::spawn_end_reader_with_limit(stdout, stdout_limit);
+        let stderr_reader = Self::spawn_end_reader_with_limit(stderr, stderr_limit);
 
-        let mut child_stdin = child.stdin.take();
         let waited = tokio::time::timeout(timeout, async {
             if let Some(bytes) = input {
-                let sink = child_stdin.as_mut().ok_or_else(|| {
+                let sink = child_stdin.take().ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::BrokenPipe,
                         "Podman stdin was not captured",
                     )
                 })?;
-                sink.write_all(&bytes).await?;
-                sink.shutdown().await?;
+                sink.write_all_and_close(bytes).await?;
             }
             drop(child_stdin);
             child.wait().await
@@ -5332,10 +5424,34 @@ impl SessionSandbox {
         {
             Ok(())
         } else {
-            Err(IsolationError::OciContainerFailed(format!(
-                "removing exact sandbox container identity failed ({first_failure}; retry: \
-                 {retry_failure}); container {container_id} is still present"
-            )))
+            Err(Self::removal_error(
+                &first,
+                &retry,
+                timeout,
+                &[container_id.to_string()],
+                format!(
+                    "removing exact sandbox container identity failed ({first_failure}; retry: \
+                     {retry_failure}); container {container_id} is still present"
+                ),
+            ))
+        }
+    }
+
+    /// Why a removal and its retry left `remaining`: when Podman answered
+    /// neither within `timeout` (removing a large container takes it a
+    /// while), it did not answer, which a caller that can wait asks again;
+    /// otherwise `failed`, what each said.
+    fn removal_error(
+        first: &BoundedCommandOutput,
+        retry: &BoundedCommandOutput,
+        timeout: Duration,
+        remaining: &[String],
+        failed: String,
+    ) -> IsolationError {
+        if first.timed_out && retry.timed_out {
+            IsolationError::podman_not_answering(&format!("rm {}", remaining.join(" ")), timeout)
+        } else {
+            IsolationError::OciContainerFailed(failed)
         }
     }
 
@@ -5473,10 +5589,13 @@ impl SessionSandbox {
         if remaining.is_empty() {
             Ok(())
         } else {
-            Err(IsolationError::OciContainerFailed(format!(
+            let failed = format!(
                 "removing sandboxes failed ({first_failure}; retry: {retry_failure}); exact containers still present: {}",
                 remaining.join(", ")
-            )))
+            );
+            Err(Self::removal_error(
+                &first, &retry, timeout, &remaining, failed,
+            ))
         }
     }
 
@@ -6039,6 +6158,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::dependency_mountpoint::{Decision, Kept, Released};
+    use tokio::io::AsyncWriteExt;
 
     #[cfg(unix)]
     fn installed_test_supervisor(root: &Path) -> SupervisorProgram {
@@ -6413,6 +6533,54 @@ mod tests {
             );
             assert_eq!(result.stderr.retained, b"diagnostic");
             assert!(result.stderr.complete);
+        }
+    }
+
+    /// A removal and its retry that Podman answered neither in time is a
+    /// Podman that did not answer, naming the command and its bound, which
+    /// the daemon's start asks again; when Podman answered either with an
+    /// error, that error is what it said.
+    #[cfg(unix)]
+    #[test]
+    fn a_removal_podman_did_not_answer_twice_is_not_answering() {
+        use std::os::unix::process::ExitStatusExt;
+        let output = |timed_out: bool, code: i32| BoundedCommandOutput {
+            status: ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: b"Error: container is in use".to_vec(),
+            stdout_truncated: false,
+            stderr_truncated: false,
+            timed_out,
+        };
+        let remaining = ["axo-ses-1".to_string()];
+        let error = SessionSandbox::removal_error(
+            &output(true, 0),
+            &output(true, 0),
+            STARTUP_REMOVE_COMMAND_TIMEOUT,
+            &remaining,
+            "never shown".to_string(),
+        );
+        assert!(error.is_podman_not_answering(), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "Podman did not answer `podman rm axo-ses-1` within 90 s"
+        );
+        for (first, retry) in [
+            (output(true, 0), output(false, 2)),
+            (output(false, 2), output(true, 0)),
+        ] {
+            let error = SessionSandbox::removal_error(
+                &first,
+                &retry,
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+                &remaining,
+                "removing sandboxes failed (…)".to_string(),
+            );
+            assert!(!error.is_podman_not_answering(), "{error}");
+            assert_eq!(
+                error.to_string(),
+                "OCI container execution failed: removing sandboxes failed (…)"
+            );
         }
     }
 
@@ -6833,27 +7001,73 @@ mod tests {
 
     #[test]
     fn published_port_parser_keeps_container_and_host_identity_separate() {
-        let mappings = SessionSandbox::parse_published_ports(
-            "3000/tcp -> 127.0.0.2:43117\n5173/tcp -> ::1:43118\n8080/tcp -> [::1]:43119\n\
-             9000/tcp -> 127.0.0.1:43120\n",
+        let address = |text: &str| text.parse::<SocketAddr>().unwrap();
+        assert_eq!(
+            SessionSandbox::parse_published_ports(
+                "3000/tcp -> 127.0.0.2:43117\n5173/tcp -> ::1:43118\n8080/tcp -> [::1]:43119\n\
+                 9000/tcp -> 0.0.0.0:43120\nnot a mapping\n0/tcp -> 127.0.0.2:1\n",
+            ),
+            vec![
+                (3000, address("127.0.0.2:43117")),
+                (5173, address("[::1]:43118")),
+                (8080, address("[::1]:43119")),
+                (9000, address("0.0.0.0:43120")),
+            ]
         );
-        let address = |text: &str| Some(text.parse::<SocketAddr>().unwrap());
-        assert_eq!(mappings.get(&3000).copied(), address("127.0.0.2:43117"));
-        assert_eq!(mappings.get(&5173).copied(), address("[::1]:43118"));
-        assert_eq!(mappings.get(&8080).copied(), address("[::1]:43119"));
-        assert_eq!(mappings.get(&9000).copied(), address("127.0.0.1:43120"));
-        assert_eq!(mappings.len(), 4);
-        // A port Podman published beyond loopback is never a Preview's.
-        assert!(SessionSandbox::parse_published_ports(
-            "3000/tcp -> 0.0.0.0:43117\n3000/tcp -> 192.0.2.4:43118\n"
+    }
+
+    /// Every expected port must be published on the Session port address
+    /// and nowhere else; a mapping on `127.0.0.1` (the workbench's address)
+    /// or beyond loopback fails the start, naming it.
+    #[test]
+    fn published_ports_count_only_on_the_session_port_address() {
+        let ipv6: IpAddr = "::1".parse().unwrap();
+        let mappings = SessionSandbox::published_on(
+            ipv6,
+            &[3000, 5173],
+            "3000/tcp -> [::1]:43117\n5173/tcp -> ::1:43118\n",
         )
-        .is_empty());
+        .unwrap();
+        assert_eq!(
+            mappings.get(&3000).copied(),
+            Some("[::1]:43117".parse().unwrap())
+        );
+        assert_eq!(
+            mappings.get(&5173).copied(),
+            Some("[::1]:43118".parse().unwrap())
+        );
+        assert_eq!(mappings.len(), 2);
+        for reported in [
+            "3000/tcp -> 127.0.0.1:43117\n",
+            "3000/tcp -> [::1]:43117\n3000/tcp -> 127.0.0.1:43117\n",
+            "3000/tcp -> 0.0.0.0:43117\n",
+            "3000/tcp -> 127.0.0.2:43117\n",
+        ] {
+            let Err(PublishedPortsProblem::Elsewhere(error)) =
+                SessionSandbox::published_on(ipv6, &[3000], reported)
+            else {
+                panic!("{reported} was accepted or retried");
+            };
+            assert!(
+                error.starts_with("Podman published port 3000 on ")
+                    && error.contains("rather than only on ::1, the address Axocoatl asked for"),
+                "{error}"
+            );
+        }
+        // A port Podman has not reported yet: asking again may help.
+        assert_eq!(
+            SessionSandbox::published_on(ipv6, &[3000, 5173], "3000/tcp -> [::1]:43117\n"),
+            Err(PublishedPortsProblem::Incomplete(
+                "reported mappings: 3000/tcp -> [::1]:43117".to_string()
+            ))
+        );
     }
 
     /// Session ports are published on a loopback address other than
     /// `127.0.0.1`, where the workbench keeps its sign-in cookie: `[::1]` on
-    /// macOS, `127.0.0.2` elsewhere, and `127.0.0.1` only where this computer
-    /// cannot listen on that one.
+    /// macOS, `127.0.0.2` elsewhere. Where this computer cannot listen on
+    /// that address no Session that exposes ports starts; nothing falls back
+    /// to `127.0.0.1`.
     #[test]
     fn session_ports_are_published_beside_the_workbench_address_not_on_it() {
         let ipv6: IpAddr = "::1".parse().unwrap();
@@ -6865,16 +7079,29 @@ mod tests {
         } else {
             assert_eq!(PREFERRED_SESSION_PORT_ADDRESS, other_ipv4);
         }
-        assert_eq!(choose_session_port_address(ipv6, |_| true), ipv6);
-        assert_eq!(
-            choose_session_port_address(ipv6, |_| false),
-            IpAddr::V4(Ipv4Addr::LOCALHOST)
-        );
+        assert_eq!(choose_session_port_address(ipv6, |_| true), Ok(ipv6));
+        for preferred in [ipv6, other_ipv4] {
+            let error = choose_session_port_address(preferred, |_| false).unwrap_err();
+            assert!(
+                error.starts_with(&format!(
+                    "this computer cannot listen on {preferred}, the loopback address Axocoatl \
+                     publishes Session ports on, so no Session that exposes ports can start. \
+                     Axocoatl never publishes them on 127.0.0.1 instead"
+                )),
+                "{error}"
+            );
+            assert!(
+                error.contains("or start the Session without exposed ports"),
+                "{error}"
+            );
+        }
         // This computer can listen on the preferred address (CI and
         // development hosts have both), so that is the one used.
-        assert_eq!(session_port_address(), PREFERRED_SESSION_PORT_ADDRESS);
-        assert!(session_port_address().is_loopback());
-        assert_ne!(session_port_address(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+        assert_eq!(session_port_address(), Ok(PREFERRED_SESSION_PORT_ADDRESS));
+        assert_eq!(
+            session_port_publish_arg(3000),
+            publish_arg(PREFERRED_SESSION_PORT_ADDRESS, 3000)
+        );
     }
 
     #[test]

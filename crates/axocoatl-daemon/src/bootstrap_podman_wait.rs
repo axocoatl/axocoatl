@@ -6,10 +6,15 @@
 //! That proof fails closed: without an answer from Podman the daemon does
 //! not start. But a Podman that is only slow answers when asked again. Each
 //! `podman` command keeps its own bound (`podman ps` 10 s, the readiness
-//! probes 15 s); a command that did not answer within it
-//! ([`IsolationError::PodmanNotAnswering`]) is asked again until
+//! probes 15 s, a removal [`STARTUP_REMOVE_COMMAND_TIMEOUT`]); a command
+//! that did not answer within it ([`IsolationError::PodmanNotAnswering`]),
+//! or a machine that `podman machine list` says is still starting
+//! ([`IsolationError::PodmanMachineStarting`]), is asked again until
 //! [`PODMAN_ANSWER_WAIT`] has passed since the proof began. Any other error
 //! is final at once.
+//!
+//! [`STARTUP_REMOVE_COMMAND_TIMEOUT`]: axocoatl_isolation::STARTUP_REMOVE_COMMAND_TIMEOUT
+//! [`IsolationError::PodmanMachineStarting`]: axocoatl_isolation::IsolationError::PodmanMachineStarting
 
 use std::future::Future;
 use std::time::Duration;
@@ -23,9 +28,12 @@ use crate::DaemonError;
 /// that deletes a container's files ends: removing one whose writable layer
 /// held 600,000 files kept `podman ps` waiting 69 s on an otherwise idle
 /// 8-CPU VM. Podman 6.1.4 in a macOS machine answered `podman ps` within
-/// 4.4 s while an image loaded and containers came and went. A start that
-/// gives up after this wait and one more attempt (at most about a minute)
-/// still says why before onboarding stops waiting for it (300 s).
+/// 4.4 s while an image loaded and containers came and went. A start gives
+/// up once this wait has passed and the attempt then under way has ended:
+/// one that only lists and probes ends within about a minute, so the start
+/// says why before onboarding stops waiting for it (300 s); one that
+/// removes a container Podman does not remove can take twice the removal's
+/// bound more, and then the daemon's log says why.
 pub(crate) const PODMAN_ANSWER_WAIT: Duration = Duration::from_secs(180);
 /// The pause before asking again.
 const ASK_AGAIN_AFTER: Duration = Duration::from_secs(1);
@@ -79,9 +87,10 @@ impl PodmanPatience {
         if error.is_podman_not_answering() {
             return DaemonError::Session(format!(
                 "Podman did not answer for {} s ({error}), and Axocoatl goes on only once \
-                 Podman has said which Session containers an earlier start left. Podman may \
-                 still be starting, or another Podman command (removing a large container or \
-                 image, say) may be holding it. Check that `podman ps` answers, then try again.",
+                 Podman has said which Session containers an earlier start left and removed \
+                 them. Another Podman command (removing a large container or image, say) may \
+                 be holding it, or its machine may still be starting. Check that `podman ps` \
+                 answers, then try again.",
                 self.started.elapsed().as_secs()
             ));
         }

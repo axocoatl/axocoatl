@@ -11,9 +11,14 @@ pub enum AgentError {
     /// The provider completed a response whose output the Agent cannot use:
     /// no answer and no tool call that can run
     /// ([`axocoatl_llm::ProviderError::UnusableResponse`]). Its usage is
-    /// recorded; worded as any other provider error.
-    #[error("LLM provider error: {0}")]
-    UnusableResponse(String),
+    /// recorded. Worded as the provider error it is; `note` tells the model
+    /// what it did, for asking it once more.
+    #[error("LLM provider error: {provider} returned a response that was refused: {message}")]
+    UnusableResponse {
+        provider: String,
+        message: String,
+        note: String,
+    },
 
     /// The Agent's own token guard (`token_budget`) stopped a model call.
     #[error(
@@ -66,6 +71,15 @@ impl From<axocoatl_llm::ProviderError> for AgentError {
             axocoatl_llm::ProviderError::BudgetExhausted { message, .. } => {
                 Self::BudgetExhausted(message)
             }
+            axocoatl_llm::ProviderError::UnusableResponse {
+                provider,
+                message,
+                note,
+            } => Self::UnusableResponse {
+                provider,
+                message,
+                note,
+            },
             error => Self::Provider(error.to_string()),
         }
     }
@@ -118,6 +132,18 @@ mod tests {
         let text = refused.to_string();
         assert!(text.starts_with("The Session budget for this Agent is used up"));
         assert!(!text.contains("LLM provider error") && !text.contains("Invalid request"));
+        // An unusable response reads as the provider's refusal it is.
+        let unusable: AgentError = axocoatl_llm::ProviderError::UnusableResponse {
+            provider: "ollama".into(),
+            message: "the model's response held no answer and no tool call".into(),
+            note: "your response was empty: no answer and no tool call".into(),
+        }
+        .into();
+        assert_eq!(
+            unusable.to_string(),
+            "LLM provider error: ollama returned a response that was refused: the model's \
+             response held no answer and no tool call"
+        );
         let other: AgentError = axocoatl_llm::ProviderError::Network("reset".into()).into();
         assert_eq!(
             other.to_string(),

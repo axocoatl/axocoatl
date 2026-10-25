@@ -1744,10 +1744,18 @@ async fn build_commit(
         return Err(refused(format!(
             "the run moved the {} {} to another commit, and without a receipt that covers {} \
              Keep as PR cannot tell that {} the commit the run left; commit {} yourself",
-            if submodules.len() == 1 { "submodule" } else { "submodules" },
+            if submodules.len() == 1 {
+                "submodule"
+            } else {
+                "submodules"
+            },
             listed(&submodules),
             if submodules.len() == 1 { "it" } else { "them" },
-            if submodules.len() == 1 { "it still holds" } else { "they still hold" },
+            if submodules.len() == 1 {
+                "it still holds"
+            } else {
+                "they still hold"
+            },
             if submodules.len() == 1 { "it" } else { "them" },
         )));
     }
@@ -1962,9 +1970,21 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         return Err(refused(format!(
             "{}, so Keep as PR does not guess; ignore {} in .gitignore, or make {} {}",
             bounded(&note, 1200),
-            if job.attribution.unread.len() == 1 { "it" } else { "them" },
-            if job.attribution.unread.len() == 1 { "it" } else { "them" },
-            if job.attribution.unread.len() == 1 { "a submodule" } else { "submodules" },
+            if job.attribution.unread.len() == 1 {
+                "it"
+            } else {
+                "them"
+            },
+            if job.attribution.unread.len() == 1 {
+                "it"
+            } else {
+                "them"
+            },
+            if job.attribution.unread.len() == 1 {
+                "a submodule"
+            } else {
+                "submodules"
+            },
         )));
     }
     let git_paths: Vec<String> = job

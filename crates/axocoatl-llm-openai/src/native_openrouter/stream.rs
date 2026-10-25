@@ -179,6 +179,10 @@ pub(super) fn decode(
         let mut generation = None;
         let mut observed_provider = false;
         let mut sentinel = false;
+        // The response wrote answer text (not only blank space), or
+        // reasoning.
+        let mut answered = false;
+        let mut reasoned = false;
         // Reasoning text not yet yielded; every other event flushes it first
         // so the stream keeps its order.
         let mut pending_reasoning = String::new();
@@ -305,6 +309,7 @@ pub(super) fn decode(
                         if finished.is_some() && !text.is_empty() {
                             Err(protocol("reasoning after terminal completion"))?;
                         }
+                        reasoned |= !text.trim().is_empty();
                         pending_reasoning.push_str(text);
                         if pending_reasoning.len() >= REASONING_DELTA_BYTES {
                             yield StreamEvent::ReasoningDelta {
@@ -318,6 +323,7 @@ pub(super) fn decode(
                             .ok_or_else(|| protocol("reasoning details malformed"))?
                         {
                             reasoning.push(detail)?;
+                            reasoned = true;
                         }
                     }
                     if let Some(text) = delta.get("content").filter(|v| !v.is_null()) {
@@ -327,6 +333,7 @@ pub(super) fn decode(
                         if finished.is_some() && !text.is_empty() {
                             Err(protocol("content after terminal completion"))?;
                         }
+                        answered |= !text.trim().is_empty();
                         if !text.is_empty() {
                             if !pending_reasoning.is_empty() {
                                 yield StreamEvent::ReasoningDelta {
@@ -474,6 +481,33 @@ pub(super) fn decode(
         if let Some(served) = &served {
             served.record(&profile);
         }
+        // A completed response with neither an answer nor a call (gpt-oss can
+        // end one having written only reasoning) gives the Agent nothing to
+        // act on. Its usage and cost were observed above and stand; the
+        // Agent asks the model once more.
+        if !answered
+            && ids.is_empty()
+            && matches!(finish_reason, FinishReason::Stop | FinishReason::MaxTokens)
+        {
+            let at_limit = finish_reason == FinishReason::MaxTokens;
+            let ended = format!(
+                "OpenRouter ended it with finish_reason \"{}\"",
+                if at_limit { "length" } else { "stop" }
+            );
+            Err(axocoatl_llm::unusable::EmptyResponse {
+                reasoned,
+                output_tokens: terminal_usage.as_ref().map(|usage| {
+                    usage
+                        .usage
+                        .output_tokens
+                        .saturating_add(usage.usage.reasoning_tokens.unwrap_or(0))
+                }),
+                at_limit: at_limit.then_some(Some(shape.response_tokens)),
+                ended: &ended,
+                tools: request.tools.len(),
+            }
+            .refusal(PROVIDER))?;
+        }
         yield StreamEvent::Done { finish_reason };
     })
 }
@@ -567,7 +601,14 @@ pub(super) async fn collect(
         Ok(_) => FailureFacts::default(),
         Err(error) => facts.unwrap_or_else(|| failover::answer_facts(error)),
     };
-    if response.is_err() {
+    // A response the provider completed and that was refused for what it
+    // holds keeps the usage it reported; any other failure leaves it partial.
+    if response.as_ref().is_err_and(|error| {
+        !matches!(
+            error,
+            ProviderError::RefusedResponse { .. } | ProviderError::UnusableResponse { .. }
+        )
+    }) {
         usage.complete = false;
     }
     (

@@ -63,8 +63,8 @@ pub use repository_snapshot::{
     RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES, MAX_CHANGED_PATHS,
     MAX_COMPARED_PATH_BYTES, MAX_PATCH_PREFIX_BYTES, MAX_RECORDED_PATCH_BYTES,
     MAX_UNREAD_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT, REPOSITORY_SNAPSHOT_COMMAND,
-    REPOSITORY_SNAPSHOT_COMMAND_V1, REPOSITORY_SNAPSHOT_COMMAND_V2,
-    REPOSITORY_SNAPSHOT_COMMAND_V3, SPECIAL_KIND, UNREAD_DIGEST,
+    REPOSITORY_SNAPSHOT_COMMAND_V1, REPOSITORY_SNAPSHOT_COMMAND_V2, REPOSITORY_SNAPSHOT_COMMAND_V3,
+    SPECIAL_KIND, UNREAD_DIGEST,
 };
 
 #[path = "execution_content_reattachment.rs"]
@@ -848,17 +848,44 @@ pub struct ExecutionActivationView {
 const TEXT_CALL_REFUSAL: &str = "ollama returned a response that was refused: the model wrote a \
                                  call to ";
 
-/// How an Ollama provider's refusal of a completed response with no answer
-/// and no tool call that can run starts, after `LLM provider error: `
-/// (`ProviderError::UnusableResponse`): an empty response, a call to a tool
-/// the model does not have under a name that cannot be answered, and how a
-/// 1.5.0 candidate worded an empty native response.
-const NO_ANSWER_REFUSALS: [&str; 3] = [
-    "ollama returned a response that was refused: the model's response held no answer and no \
-     tool call",
-    "ollama returned a response that was refused: the model called ",
-    "Streaming error: native Ollama: native response has no final content or tool call",
+/// How a provider's refusal of a completed response begins, after `LLM
+/// provider error: ` and the provider's id (`ollama`, `openrouter`).
+const REFUSED_RESPONSE: &str = " returned a response that was refused: ";
+
+/// How a refusal of a completed response with no answer and no tool call
+/// that can run goes on after [`REFUSED_RESPONSE`]
+/// (`ProviderError::UnusableResponse`, `axocoatl_llm::unusable`): an empty
+/// response, and a call to a tool the model does not have under a name that
+/// cannot be answered.
+const NO_ANSWER_REFUSALS: [&str; 2] = [
+    "the model's response held no answer and no tool call",
+    "the model called ",
 ];
+
+/// How Axocoatl 1.2.0 to 1.4.0 worded an empty native Ollama response,
+/// after `LLM provider error: `.
+const LEGACY_NO_ANSWER: &str =
+    "Streaming error: native Ollama: native response has no final content or tool call";
+
+/// Whether a provider error (after `LLM provider error: `) refused a
+/// completed response with no answer and no tool call that can run.
+fn names_no_answer(rest: &str) -> bool {
+    if rest.starts_with(LEGACY_NO_ANSWER) {
+        return true;
+    }
+    rest.split_once(REFUSED_RESPONSE)
+        .filter(|(provider, _)| {
+            !provider.is_empty()
+                && provider
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+        .is_some_and(|(_, said)| {
+            NO_ANSWER_REFUSALS
+                .iter()
+                .any(|prefix| said.starts_with(prefix))
+        })
+}
 
 /// How the host's failure line begins for a writer stopped before its
 /// repository captures could establish what it changed: the stop ended it,
@@ -921,11 +948,7 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
     // A completed response with no answer and no tool call that can run,
     // even when the model was asked once more: the model's own output, not
     // the provider's failure.
-    if provider.is_some_and(|rest| {
-        NO_ANSWER_REFUSALS
-            .iter()
-            .any(|prefix| rest.starts_with(prefix))
-    }) {
+    if provider.is_some_and(names_no_answer) {
         return Some(ActivationFailureView {
             class: "no_answer",
             explanation: "The model gave no answer and no tool call Axocoatl could run, so \
@@ -5480,11 +5503,13 @@ mod tests {
             );
         }
         // A response with no answer and no tool call that can run, as the
-        // Ollama providers word it, and as a 1.5.0 candidate worded an empty
-        // native response: the model's output, not a provider failure.
+        // native providers word it, and as Axocoatl 1.2.0 to 1.4.0 worded an
+        // empty native Ollama response: the model's output, not a provider
+        // failure.
         for line in [
-            "Activation failed: LLM provider error: ollama returned a response that was refused: the model's response held no answer and no tool call (it wrote only reasoning). Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered. This was its answer when asked once more after a response that could not be used either (the model's response held no answer and no tool call (it wrote only reasoning))",
+            "Activation failed: LLM provider error: ollama returned a response that was refused: the model's response held no answer and no tool call (it wrote only reasoning). Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered. That was its answer when Axocoatl asked it once more; its first response could not be used either: the model's response held no answer and no tool call (it wrote only reasoning). Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered",
             "Activation failed: LLM provider error: ollama returned a response that was refused: the model called browser.search, a tool it does not have (it has read_file, glob). Nothing from this response ran",
+            "Activation failed: LLM provider error: openrouter returned a response that was refused: the model's response held no answer and no tool call (it wrote only reasoning; 3 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 1 tool offered. The model was not asked again: The Session budget for this Agent is used up",
             "Activation failed: LLM provider error: Streaming error: native Ollama: native response has no final content or tool call",
         ] {
             let view = classify_activation_failure(line).unwrap();

@@ -2339,28 +2339,41 @@ mod tests {
         ] {
             assert_eq!(rerun_cause_of_text(&text), None, "{text}");
         }
-        // The native Ollama provider words an empty response as the host
-        // reads it, after the reviewer's activation asked once more, and as a
-        // 1.5.0 candidate worded it.
-        for line in [
-            "LLM provider error: ollama returned a response that was refused: the model's \
-             response held no answer and no tool call (it wrote only reasoning). Nothing from \
-             this response ran; Ollama ended it with done_reason \"stop\" and 6 tools offered. \
-             This was its answer when asked once more after a response that could not be used \
-             either (the model's response held no answer and no tool call)",
-            "LLM provider error: Streaming error: native Ollama: native response has no final \
-             content or tool call",
+        // The native providers word an empty response, and a call to a tool
+        // the model does not have, as the host reads it after the reviewer's
+        // activation asked once more (the actor's own wording of each
+        // refusal, from `axocoatl_llm::unusable`); and as Axocoatl 1.2.0 to
+        // 1.4.0 worded an empty native Ollama response.
+        let empty = axocoatl_llm::unusable::EmptyResponse {
+            reasoned: true,
+            output_tokens: Some(24),
+            at_limit: None,
+            ended: "OpenRouter ended it with finish_reason \"stop\"",
+            tools: 6,
+        };
+        let tool = axocoatl_llm::ToolDefinition {
+            name: "read_file".into(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            concurrency: Default::default(),
+        };
+        for error in [
+            empty.refusal("ollama"),
+            empty.refusal("openrouter"),
+            axocoatl_llm::unusable::unoffered_call("ollama", "browser.search", &[tool]),
         ] {
+            let line = axocoatl_actor::AgentError::from(error).to_string();
             assert_eq!(
-                rerun_cause_of_text(&failed(line)),
+                rerun_cause_of_text(&failed(&line)),
                 Some("its model gave no answer and called no tool it was offered"),
                 "{line}"
             );
         }
-        assert!(
-            include_str!("../../axocoatl-llm-ollama/src/native.rs").contains(
-                "const NO_ANSWER: &str = \"the model's response held no answer and no tool call\";"
-            )
+        let legacy = "LLM provider error: Streaming error: native Ollama: native response has no \
+                      final content or tool call";
+        assert_eq!(
+            rerun_cause_of_text(&failed(legacy)),
+            Some("its model gave no answer and called no tool it was offered")
         );
     }
 

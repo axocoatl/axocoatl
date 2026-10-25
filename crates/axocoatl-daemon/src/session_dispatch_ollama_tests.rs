@@ -380,7 +380,10 @@ async fn a_text_call_that_cannot_run_fails_the_activation_with_its_reason() {
     assert_eq!(usage.calls, 2);
     assert_eq!(usage.unsettled_calls, 0);
     assert_eq!(usage.tokens.usage, TokenUsageStats::new(20, 4));
-    assert!(failure.contains("This was its answer when asked once more"), "{failure}");
+    assert!(
+        failure.contains("That was its answer when Axocoatl asked it once more"),
+        "{failure}"
+    );
 }
 
 /// `unusable` until the request carries the host's note about it, then a
@@ -420,23 +423,30 @@ impl Respond for AskedAgainReply {
 /// response held, and goes on when it answers: the m4-rust writer's prose
 /// that ended in `<tool_call>` and nothing after it, a response that held
 /// only reasoning (gpt-oss), and a call written as text that cannot run.
-/// Every response is charged and settled, the re-ask is the activation's one
-/// recorded provider retry, and the note is not kept in its conversation.
+/// Every response is charged and settled to the usage Ollama reported (so
+/// the activation's tokens are complete), the re-ask is the activation's one
+/// recorded provider retry with what the response held, the note tells the
+/// model in its own terms, and the note is not kept in its conversation.
 #[tokio::test]
 async fn a_native_activation_asks_once_more_after_an_unusable_response() {
-    for (unusable, says) in [
+    for (unusable, says, told) in [
         (
             "This logic seems right, but let me create a test to verify what happens.<tool_call>",
-            "its answer ends with <tool_call> and nothing after it",
+            "the model wrote a call to a tool as answer text that Axocoatl cannot run: the \
+             answer ends with <tool_call> and nothing after it",
+            "you wrote a call to a tool as answer text, which cannot run: the answer ends with \
+             <tool_call> and nothing after it",
         ),
         (
             "",
             "the model's response held no answer and no tool call (it wrote only reasoning; 2 \
              output tokens)",
+            "your response held only reasoning: no answer and no tool call",
         ),
         (
             "Looking.\n<function=glob>\n<parameter=pattern>\nsrc/paginate.js\n</function>",
             "call to glob as answer text that Axocoatl cannot run",
+            "you wrote a call to glob as answer text, which cannot run",
         ),
     ] {
         let server = server_replying(AskedAgainReply { unusable }).await;
@@ -472,6 +482,7 @@ async fn a_native_activation_asks_once_more_after_an_unusable_response() {
             .unwrap();
         assert_eq!((usage.calls, usage.unsettled_calls), (3, 0), "{unusable:?}");
         assert_eq!(usage.tokens.usage, TokenUsageStats::new(30, 6));
+        assert!(usage.tokens.complete, "{unusable:?}: the refused response settled to its usage");
         let requests: Vec<serde_json::Value> = server
             .received_requests()
             .await
@@ -485,7 +496,13 @@ async fn a_native_activation_asks_once_more_after_an_unusable_response() {
             .as_str()
             .unwrap()
             .to_owned();
-        assert!(note.contains(says), "{note}");
+        assert!(
+            note.starts_with(&format!(
+                "[Note from the host: your last response could not be used, and nothing from it \
+                 ran: {told}"
+            )),
+            "{note}"
+        );
         assert!(
             !requests[2]["messages"]
                 .as_array()
@@ -513,7 +530,7 @@ async fn a_native_activation_asks_once_more_after_an_unusable_response() {
         };
         assert_eq!(retries.len(), 1, "{retries:?}");
         assert!(
-            retries[0].starts_with("the model's response could not be used (")
+            retries[0].starts_with("the model's response could not be used: ")
                 && retries[0].contains(says),
             "{retries:?}"
         );

@@ -7405,6 +7405,68 @@ fn inject_preview_bridge(mut html: String, mode: &PreviewProxyMode) -> String {
     html
 }
 
+/// Whether `error` is a connection the published address refused: nothing
+/// listened there.
+fn connection_was_refused(error: &reqwest::Error) -> bool {
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if io.kind() == std::io::ErrorKind::ConnectionRefused {
+                return true;
+            }
+        }
+        source = cause.source();
+    }
+    false
+}
+
+/// What a Preview says when its request did not reach the Session's app at
+/// `published`, the address Podman reported for `logical_port`.
+///
+/// A refused connection means nothing listens at that address on this
+/// computer. Podman on macOS (its machine's forwarder) and rootless Podman on
+/// Linux (rootlessport, pasta) listen there whether or not the app does, and
+/// close a connection the app does not take; rootful Podman on Linux forwards
+/// in the kernel, which refuses until the app listens (measured with Podman
+/// 6.1.4 on macOS and 4.9.3 on Ubuntu 24.04). So on macOS a refusal means
+/// Podman does not forward that address, and on Linux it may.
+fn preview_unreachable(
+    detail: &str,
+    published: std::net::SocketAddr,
+    logical_port: u16,
+    refused: bool,
+) -> String {
+    let address = published.ip();
+    let not_forwarded = format!(
+        "Podman reported port {logical_port} of this Session published at {published}, but \
+         nothing on this computer accepts connections there. Axocoatl publishes Session ports \
+         on {address}, never on 127.0.0.1, where the workbench keeps its sign-in cookie"
+    );
+    let advice = format!(
+        "Check with `podman port` on the Session's container, and see Troubleshooting, \
+         \"Preview: nothing accepts connections at the Session's published address\""
+    );
+    if !refused {
+        return format!(
+            "{detail}. Is a dev server running on port {logical_port} inside the Session sandbox?"
+        );
+    }
+    if cfg!(target_os = "macos") {
+        format!(
+            "{detail}. {not_forwarded}. The Podman machine forwards a published port whether \
+             or not the app listens, so this Podman does not forward ports on {address}. \
+             {advice}."
+        )
+    } else {
+        format!(
+            "{detail}. {not_forwarded}. Rootless Podman forwards a published port whether or \
+             not the app listens, so with it this Podman does not forward ports on {address}; \
+             rootful Podman refuses until a dev server listens on port {logical_port} inside \
+             the Session sandbox. {advice}."
+        )
+    }
+}
+
 async fn resolve_preview_address(
     state: &AppState,
     target: &PreviewHostTarget,
@@ -7513,34 +7575,35 @@ async fn proxy_preview_http_to_port(
     if !body.is_empty() {
         upstream_request = upstream_request.body(body);
     }
-    let upstream_response = match tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        upstream_request.send(),
-    )
-    .await
-    {
-        Ok(Ok(response)) => response,
-        Ok(Err(error)) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!(
-                    "couldn't reach {upstream}: {error}. Is a dev server running on port {} inside the Session sandbox?",
-                    target.logical_port
-                ),
-            )
-                .into_response();
-        }
-        Err(_) => {
-            return (
-                StatusCode::GATEWAY_TIMEOUT,
-                format!(
-                    "Preview app on port {} did not send response headers within 15 seconds",
-                    target.logical_port
-                ),
-            )
-                .into_response();
-        }
-    };
+    let upstream_response =
+        match tokio::time::timeout(std::time::Duration::from_secs(15), upstream_request.send())
+            .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                let refused = connection_was_refused(&error);
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    preview_unreachable(
+                        &format!("couldn't reach {upstream}: {error}"),
+                        published,
+                        target.logical_port,
+                        refused,
+                    ),
+                )
+                    .into_response();
+            }
+            Err(_) => {
+                return (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    format!(
+                        "Preview app on port {} did not send response headers within 15 seconds",
+                        target.logical_port
+                    ),
+                )
+                    .into_response();
+            }
+        };
     let status = upstream_response.status();
     let upstream_headers = upstream_response.headers().clone();
     let content_type = upstream_headers
@@ -7775,9 +7838,19 @@ async fn preview_websocket_proxy_to_port(
     {
         Ok(Ok(connection)) => connection,
         Ok(Err(error)) => {
+            let refused = matches!(
+                &error,
+                tokio_tungstenite::tungstenite::Error::Io(io)
+                    if io.kind() == std::io::ErrorKind::ConnectionRefused
+            );
             return (
                 StatusCode::BAD_GATEWAY,
-                format!("Preview WebSocket could not reach {upstream}: {error}"),
+                preview_unreachable(
+                    &format!("Preview WebSocket could not reach {upstream}: {error}"),
+                    published,
+                    target.logical_port,
+                    refused,
+                ),
             )
                 .into_response();
         }
@@ -9163,6 +9236,78 @@ mod tests {
         assert_eq!(legacy.working_dir, "/tmp/project");
     }
 
+    /// A Preview whose request the published address refused says that
+    /// nothing accepts connections there, and on macOS that Podman does not
+    /// forward that address; a connection the app did not take still asks
+    /// whether a dev server runs.
+    #[tokio::test]
+    async fn a_refused_preview_connection_names_the_published_address() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let free = listener.local_addr().unwrap();
+        drop(listener);
+        let error = reqwest::Client::new()
+            .get(format!("http://{free}/"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(connection_was_refused(&error), "{error:?}");
+
+        let published: std::net::SocketAddr = "[::1]:43117".parse().unwrap();
+        let message =
+            preview_unreachable("couldn't reach http://[::1]:43117/", published, 3000, true);
+        assert!(
+            message.starts_with(
+                "couldn't reach http://[::1]:43117/. Podman reported port 3000 of this Session \
+                 published at [::1]:43117, but nothing on this computer accepts connections there. \
+                 Axocoatl publishes Session ports on ::1, never on 127.0.0.1"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains(
+                "\"Preview: nothing accepts connections at the Session's published address\""
+            ),
+            "{message}"
+        );
+        if cfg!(target_os = "macos") {
+            assert!(
+                message.contains("so this Podman does not forward ports on ::1."),
+                "{message}"
+            );
+        } else {
+            assert!(
+                message.contains("rootful Podman refuses until a dev server listens on port 3000"),
+                "{message}"
+            );
+        }
+        assert_eq!(
+            preview_unreachable(
+                "couldn't reach http://[::1]:43117/: closed",
+                published,
+                3000,
+                false
+            ),
+            "couldn't reach http://[::1]:43117/: closed. Is a dev server running on port 3000 \
+             inside the Session sandbox?"
+        );
+
+        // A forwarder that accepts and closes, as Podman's do while nothing
+        // listens in the container, is not a refusal.
+        let accepting = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let accepting_address = accepting.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = accepting.accept().await {
+                drop(socket);
+            }
+        });
+        let error = reqwest::Client::new()
+            .get(format!("http://{accepting_address}/"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(!connection_was_refused(&error), "{error:?}");
+    }
+
     #[test]
     fn preview_proxy_uses_strict_virtual_origin_and_resolved_transport() {
         const BROWSER_JS: &str = include_str!("../static/ui/browser.js");
@@ -9294,8 +9439,10 @@ mod tests {
         ));
         assert!(!BROWSER_JS.contains("window.open("));
         assert!(PREVIEW_EMBEDDING_JS.contains(
-            "export const KEEPS_PREVIEWS_EMBEDDED = isSafariEngineOnApple(globalThis.navigator);"
+            "const BECAUSE = previewsStayEmbeddedBecause(globalThis.navigator, globalThis.isSecureContext);"
         ));
+        assert!(PREVIEW_EMBEDDING_JS
+            .contains("export const KEEPS_PREVIEWS_EMBEDDED = BECAUSE !== null;"));
         assert!(TERMINAL_JS
             .contains("...(KEEPS_PREVIEWS_EMBEDDED ? { linkHandler: SAFARI_LINK_HANDLER } : {}),"));
         assert!(DASHBOARD_HTML.contains("guardTopLevelPreviews(window);"));
@@ -9593,7 +9740,7 @@ mod tests {
 
         // Where Podman publishes Session ports on this platform.
         let listener =
-            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address().unwrap(), 0))
                 .await
                 .expect("bind real Preview upstream");
         let published = listener
@@ -9900,7 +10047,7 @@ mod tests {
     async fn preview_websocket_proxy_bridges_real_clients_and_upstream() {
         // Where Podman publishes Session ports on this platform.
         let upstream_listener =
-            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address(), 0))
+            tokio::net::TcpListener::bind((axocoatl_isolation::session_port_address().unwrap(), 0))
                 .await
                 .expect("bind real Preview WebSocket upstream");
         let upstream_address = upstream_listener

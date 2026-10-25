@@ -778,7 +778,7 @@ async fn terminal_usage_survives_payload_capacity_failure() {
 
 #[test]
 fn repeated_thinking_metadata_is_preflighted_before_amplification() {
-    let mut state = NativeResponse::new("test-model".into(), tools_request(), 64 * 1024, 2080);
+    let mut state = NativeResponse::new("test-model".into(), tools_request(), 64 * 1024, 2080, 32);
     state.terminal = Some(FinishReason::ToolUse);
     state.thinking = "x".repeat(32 * 1024);
     state.calls = (0..128)
@@ -1196,8 +1196,13 @@ fn a_text_call_split_anywhere_is_recovered_without_showing_its_markup() {
         .collect();
     splits.push((0..TEXT_CALL.len()).map(|at| &TEXT_CALL[at..=at]).collect());
     for pieces in splits {
-        let mut state =
-            NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+        let mut state = NativeResponse::new(
+            "test-model".into(),
+            workbench_request(),
+            64 * 1024,
+            40_000,
+            256,
+        );
         let mut events = Vec::new();
         for piece in &pieces {
             events.extend(state.record(&record(piece, false), 200).unwrap());
@@ -1762,8 +1767,13 @@ async fn text_before_a_structured_call_arrives_before_it() {
 
 #[test]
 fn a_call_mentioned_mid_answer_does_not_hold_the_text_after_it() {
-    let mut state =
-        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    let mut state = NativeResponse::new(
+        "test-model".into(),
+        workbench_request(),
+        64 * 1024,
+        40_000,
+        256,
+    );
     let first = state
         .record(&record("I'll use <function=glob> later.\n", false), 200)
         .unwrap();
@@ -1779,8 +1789,13 @@ fn a_call_mentioned_mid_answer_does_not_hold_the_text_after_it() {
 /// a recovered call included, is released.
 #[test]
 fn a_finish_that_overflows_releases_nothing() {
-    let mut state =
-        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    let mut state = NativeResponse::new(
+        "test-model".into(),
+        workbench_request(),
+        64 * 1024,
+        40_000,
+        256,
+    );
     state.record(&record(TEXT_CALL, false), 200).unwrap();
     state.record(&record("", true), 200).unwrap();
     state.emitted = state.cap - ACCOUNTING_RESERVE - 300;
@@ -1792,8 +1807,13 @@ fn a_finish_that_overflows_releases_nothing() {
 /// runs), and their charges and recovered calls are taken back.
 #[test]
 fn a_finish_that_fails_leaves_its_text_for_the_failure() {
-    let mut state =
-        NativeResponse::new("test-model".into(), workbench_request(), 64 * 1024, 40_000);
+    let mut state = NativeResponse::new(
+        "test-model".into(),
+        workbench_request(),
+        64 * 1024,
+        40_000,
+        256,
+    );
     // As if no record had shown any of it yet.
     state.content = TEXT_CALL.into();
     state.terminal = Some(FinishReason::Stop);
@@ -2081,8 +2101,9 @@ async fn the_recorded_gpt_oss_review_step_calls_its_tool() {
 /// no call (the 1.5.0 measurement's failed review step ended so, with the
 /// reasoning "Continue."). That is an unusable response, not a protocol
 /// failure: its reasoning is shown, its usage is settled as reported, and
-/// the refusal says what the model did and how Ollama ended it, so the
-/// Agent can ask once more.
+/// the refusal says what the model did and how Ollama ended it, and tells
+/// the model so, so the Agent can ask once more. One that used the whole
+/// output limit on reasoning says that, with the limit, to both.
 #[tokio::test]
 async fn a_response_with_only_reasoning_is_unusable_and_keeps_its_usage() {
     let events = gpt_oss_events(&gpt_oss_records(None)).await;
@@ -2095,7 +2116,7 @@ async fn a_response_with_only_reasoning_is_unusable_and_keeps_its_usage() {
         Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
     )));
     match &events[events.len() - 2..] {
-        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, note, .. })] =>
         {
             assert!(usage.complete);
             assert_eq!(usage.usage, TokenUsageStats::new(372, 30));
@@ -2104,6 +2125,31 @@ async fn a_response_with_only_reasoning_is_unusable_and_keeps_its_usage() {
                 "the model's response held no answer and no tool call (it wrote only \
                  reasoning; 30 output tokens). Nothing from this response ran; Ollama ended it \
                  with done_reason \"stop\" and 2 tools offered"
+            );
+            assert_eq!(
+                note,
+                "your response held only reasoning: no answer and no tool call"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+
+    let mut records = gpt_oss_records(None);
+    records.last_mut().unwrap()["done_reason"] = json!("length");
+    let events = gpt_oss_events(&records).await;
+    match events.last() {
+        Some(Err(ProviderError::UnusableResponse { message, note, .. })) => {
+            assert!(
+                message.contains(
+                    "(it wrote only reasoning; it stopped at its output limit of 256 tokens; 30 \
+                     output tokens)"
+                ) && message.contains("done_reason \"length\""),
+                "{message}"
+            );
+            assert_eq!(
+                note,
+                "you spent this response's output limit of 256 tokens on reasoning and wrote no \
+                 answer and no tool call; reason briefly this time"
             );
         }
         other => panic!("{other:?}"),
@@ -2136,13 +2182,17 @@ async fn an_unoffered_call_is_returned_or_refused_by_the_name_it_uses() {
         Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
     )));
     match &events[events.len() - 2..] {
-        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, note, .. })] =>
         {
             assert_eq!(usage.usage, TokenUsageStats::new(372, 30));
             assert_eq!(
                 message,
                 "the model called browser.search, a tool it does not have (it has read_file, \
                  glob). Nothing from this response ran"
+            );
+            assert_eq!(
+                note,
+                "you called browser.search, a tool you do not have (you have read_file, glob)"
             );
         }
         other => panic!("{other:?}"),
@@ -2151,8 +2201,9 @@ async fn an_unoffered_call_is_returned_or_refused_by_the_name_it_uses() {
 
 /// The m4-rust writer's last response (qwen3-coder:30b on Ollama 0.40.8,
 /// 289 output tokens in the run): prose ending in `<tool_call>` and nothing
-/// after it. Before 1.5.0's last round it was the final answer of a fix that
-/// changed nothing; now it is an unusable response after its text and usage.
+/// after it. Axocoatl 1.4.0 took it as the final answer of a fix that
+/// changed nothing; now it is an unusable response after its text and
+/// usage, and the note tells the model what it did.
 #[tokio::test]
 async fn an_answer_ending_in_a_bare_call_tag_is_unusable() {
     let content = "This logic seems right, but let me create a test to verify what happens when \
@@ -2167,15 +2218,20 @@ async fn an_answer_ending_in_a_bare_call_tag_is_unusable() {
     .await;
     assert_eq!(shown_text(&events), content);
     match &events[events.len() - 2..] {
-        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, note, .. })] =>
         {
             assert_eq!(usage.usage, TokenUsageStats::new(2510, 97));
             assert!(
                 message.starts_with(
                     "the model wrote a call to a tool as answer text that Axocoatl cannot run: \
-                     its answer ends with <tool_call> and nothing after it"
+                     the answer ends with <tool_call> and nothing after it"
                 ) && message.ends_with("done_reason \"stop\" and 4 tools offered"),
                 "{message}"
+            );
+            assert_eq!(
+                note,
+                "you wrote a call to a tool as answer text, which cannot run: the answer ends \
+                 with <tool_call> and nothing after it, so the call was never written"
             );
         }
         other => panic!("{other:?}"),

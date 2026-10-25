@@ -2308,11 +2308,13 @@ pub(crate) fn fake_opener(root: &Path, status: u8) -> (PathBuf, PathBuf) {
     let directory = root.join("opener-bin");
     std::fs::create_dir_all(&directory).unwrap();
     let opened = root.join("opened");
+    // Each run's lines in one write, so a test that waits for them never
+    // reads only the first.
     install_script(
         &directory.join(browser::Opener::name()),
         &format!(
-            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\n{{ printf 'argc=%s\\n' \"$#\"; for a in \
-             \"$@\"; do printf 'arg=%s\\n' \"$a\"; done; }} >> '{}'\nexit {status}\n",
+            "#!/bin/sh\n[ \"$*\" = probe ] && exit 0\nlines=\"argc=$#\"\nfor a in \"$@\"; do \
+             lines=\"$lines\narg=$a\"; done\nprintf '%s\\n' \"$lines\" >> '{}'\nexit {status}\n",
             opened.display()
         ),
     );
@@ -2783,11 +2785,12 @@ async fn no_browser_or_a_failing_opener_leaves_the_printed_address() {
     let (result, screen) = run_container_login(&fixture, login, false, CODEX_PROMPT).await;
     result.unwrap_or_else(|failure| panic!("{}", failure.message));
     // Wait out the opener's answer, then the relay has nothing to say.
+    let expected = format!("argc=1\narg={SIGN_IN_ADDRESS}\n");
     let deadline = Instant::now() + HANG_GUARD;
-    while opened(&log).is_empty() && Instant::now() < deadline {
+    while opened(&log) != expected && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(opened(&log), format!("argc=1\narg={SIGN_IN_ADDRESS}\n"));
+    assert_eq!(opened(&log), expected);
     assert!(!screen.contains(browser::OPENED));
 }
 

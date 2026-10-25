@@ -7,8 +7,9 @@
  * included (operate/security.mdx, "Safari shares Domain=localhost cookies").
  * The workbench, at `127.0.0.1`, never receives it. Embedded in the
  * workbench's frame, Safari gives a Preview no cookies at all. So where
- * the browser is Safari's engine on an Apple platform, the workbench never
- * runs a Preview top-level:
+ * the browser is Safari's engine on an Apple platform, or claims to be a
+ * Chromium-based browser without being one (`claimsChromiumWithoutClientHints`),
+ * the workbench never runs a Preview top-level:
  * - `<ax-browser>` does not offer Open full preview, and its frame may not
  *   open windows (no `allow-popups`);
  * - `guardTopLevelPreviews` keeps every link and `window.open` in the
@@ -22,10 +23,17 @@
  * changes nothing until a caller asks it to.
  */
 
-/** Why, in the words the workbench shows. */
-export const PREVIEW_STAYS_EMBEDDED = 'In Safari, a Preview in its own tab could set cookies '
+/** Why, in the words the workbench shows, in Safari. */
+export const SAFARI_KEEPS_PREVIEWS_EMBEDDED = 'In Safari, a Preview in its own tab could set cookies '
   + 'for other Sessions and other apps on localhost, so Previews stay in this pane. For a full-page '
   + 'Preview, open the workbench in another browser.';
+
+/** Why, where the browser claims to be Chromium-based without being one. */
+export const UNCONFIRMED_CHROMIUM_KEEPS_PREVIEWS_EMBEDDED = 'This browser says it is '
+  + 'Chromium-based but does not identify itself as Chromium-based browsers do, so it is taken '
+  + 'for Safari, where a Preview in its own tab could set cookies for other Sessions and other '
+  + 'apps on localhost: Previews stay in this pane. For a full-page Preview, open the workbench '
+  + 'in another browser, or in this one with its own user agent.';
 
 /** The event the shell turns into a notice when a link was not opened. */
 export const PREVIEW_STAYS_EMBEDDED_EVENT = 'preview-stays-embedded';
@@ -62,6 +70,38 @@ export function isSafariEngineOnApple(nav) {
 }
 
 /**
+ * True when the user agent of `nav` names a Chromium-based browser (Chrome,
+ * Chromium, Edge, Opera) but `nav` has no `userAgentData`, in a secure
+ * context (`secure`), where every Chromium-based browser has it: a Safari or
+ * Firefox told to send that user agent. The daemon refuses such a browser's
+ * Preview pages the same way, by the client hints its requests lack
+ * (src/preview_document.rs). Outside a secure context nothing tells; the
+ * daemon still decides.
+ *
+ * @param {{userAgent?: string, userAgentData?: object} | undefined} nav
+ * @param {boolean} secure
+ * @returns {boolean}
+ */
+export function claimsChromiumWithoutClientHints(nav, secure) {
+  const userAgent = typeof nav?.userAgent === 'string' ? nav.userAgent : '';
+  return Boolean(secure) && /(?:Chrome|Chromium|Edg|OPR)\//.test(userAgent) && !nav?.userAgentData;
+}
+
+/**
+ * Whether this browser keeps Previews embedded, and why in its words, or
+ * `null` when it does not.
+ *
+ * @param {object | undefined} nav
+ * @param {boolean} secure
+ * @returns {string | null}
+ */
+export function previewsStayEmbeddedBecause(nav, secure) {
+  if (isSafariEngineOnApple(nav)) return SAFARI_KEEPS_PREVIEWS_EMBEDDED;
+  if (claimsChromiumWithoutClientHints(nav, secure)) return UNCONFIRMED_CHROMIUM_KEEPS_PREVIEWS_EMBEDDED;
+  return null;
+}
+
+/**
  * True when `url`, resolved against `base`, is a page on a subdomain of
  * `localhost`, where every Preview runs (`<session>-p<port>.localhost`).
  * `localhost` itself is not one.
@@ -79,8 +119,13 @@ export function isLocalhostSubdomain(url, base) {
   }
 }
 
-/** True in this browser: Safari's engine on an Apple platform. */
-export const KEEPS_PREVIEWS_EMBEDDED = isSafariEngineOnApple(globalThis.navigator);
+const BECAUSE = previewsStayEmbeddedBecause(globalThis.navigator, globalThis.isSecureContext);
+
+/** True in this browser: Safari's engine on an Apple platform, or a browser taken for it. */
+export const KEEPS_PREVIEWS_EMBEDDED = BECAUSE !== null;
+
+/** Why Previews stay embedded in this browser, in the words the workbench shows. */
+export const PREVIEW_STAYS_EMBEDDED = BECAUSE ?? SAFARI_KEEPS_PREVIEWS_EMBEDDED;
 
 /** True when this browser must not open `url` in a tab or window of its own. */
 export function refusesTopLevel(url) {
@@ -95,17 +140,18 @@ export function announcePreviewStaysEmbedded() {
 }
 
 /**
- * In Safari, keep the workbench's links and `window.open` from opening a
- * `*.localhost` address in a tab or window of its own. A click (with or
- * without a modifier), a middle click, the link's context menu and dragging
- * it out are all refused; the shell is told, once per refused click. Returns
- * whether it guarded anything (false in every other browser).
+ * In Safari, and a browser taken for it, keep the workbench's links and
+ * `window.open` from opening a `*.localhost` address in a tab or window of
+ * its own. A click (with or without a modifier), a middle click, the link's
+ * context menu and dragging it out are all refused; the shell is told, once
+ * per refused click. Returns whether it guarded anything (false in every
+ * other browser).
  *
  * @param {Window} win
  * @returns {boolean}
  */
 export function guardTopLevelPreviews(win = globalThis) {
-  if (!isSafariEngineOnApple(win.navigator)) return false;
+  if (previewsStayEmbeddedBecause(win.navigator, win.isSecureContext) === null) return false;
   if (win.__axTopLevelPreviewGuard) return true;
   win.__axTopLevelPreviewGuard = true;
   const refusedLink = (event) => event.composedPath().find((node) =>

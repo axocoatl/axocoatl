@@ -1234,7 +1234,10 @@ mod tests {
             .into_iter()
             .find(|(path, ..)| path == "sub")
             .unwrap();
-        assert_eq!((kind.as_str(), digest.as_str()), ("special", older.as_str()));
+        assert_eq!(
+            (kind.as_str(), digest.as_str()),
+            ("special", older.as_str())
+        );
         let patch = String::from_utf8(decoded(&compared, "patch_b64")).unwrap();
         assert!(
             patch.starts_with("diff --git a/sub b/sub\nindex ")
@@ -1301,8 +1304,7 @@ mod tests {
             "if [ \"$unread_size\" -gt 20 ]; then",
         );
         assert_ne!(small, REPOSITORY_CAPTURE_SCRIPT);
-        let (code, stdout, stderr) =
-            run_command(root, &format!("capture_mode=observe\n{small}"));
+        let (code, stdout, stderr) = run_command(root, &format!("capture_mode=observe\n{small}"));
         assert_eq!(code, 71, "{stderr}");
         assert_eq!(stdout, "");
         assert!(

@@ -1360,7 +1360,6 @@ async fn a_profile_retained_before_failover_still_loads_and_its_activation_can_f
     assert_eq!(serde_json::to_string(&runtime).unwrap(), legacy);
     assert!(runtime.openrouter_failover_endpoints().is_empty());
     assert!(retained_call_reservation(&legacy, &config).is_some());
-    assert!(!retained_profile_refused(&legacy));
 
     let credentials = NativeProviderCredentials {
         openrouter_api_key: Some("fixture-inference-key".into()),

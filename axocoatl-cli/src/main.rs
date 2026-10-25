@@ -1811,18 +1811,23 @@ async fn reserve_cli_ipc() -> CliIpcReservation {
     }
 }
 
-/// What `service install` says when the service's daemon could not listen
-/// on its IPC socket: the `AXOCOATL_SOCKET_PATH` install recorded, or else
-/// the default path, is too long for a Unix socket.
-fn service_socket_warning(environment: &axocoatl_service::ServiceEnvironment) -> Option<String> {
-    let recorded = environment
+/// The IPC socket the Always-On Service's daemon listens on when installed
+/// with `environment`: the `AXOCOATL_SOCKET_PATH` install records, else the
+/// default path.
+fn service_socket_path(environment: &axocoatl_service::ServiceEnvironment) -> std::path::PathBuf {
+    environment
         .variables()
         .iter()
         .find(|(name, _)| name == axocoatl_service::SOCKET_PATH_VARIABLE)
-        .map(|(_, value)| std::path::PathBuf::from(value));
-    let socket =
-        recorded.unwrap_or_else(axocoatl_daemon::ipc::default_socket_path_without_override);
-    axocoatl_daemon::ipc::socket_path_too_long(&socket)
+        .map(|(_, value)| std::path::PathBuf::from(value))
+        .unwrap_or_else(axocoatl_daemon::ipc::default_socket_path_without_override)
+}
+
+/// What `service install` says when the service's daemon could not listen
+/// on its IPC socket ([`service_socket_path`]): the path is too long for a
+/// Unix socket.
+fn service_socket_warning(environment: &axocoatl_service::ServiceEnvironment) -> Option<String> {
+    axocoatl_daemon::ipc::socket_path_too_long(&service_socket_path(environment))
         .map(|error| format!("The service's daemon cannot start: {error}"))
 }
 

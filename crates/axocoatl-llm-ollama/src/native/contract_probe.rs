@@ -25,10 +25,16 @@
 //!   template Ollama renders the model with (its own renderer, a Go
 //!   template, the model's chat template in llama-server, or Harmony).
 //!
-//! A probe Ollama does not answer (a request that fails, an error status,
-//! an answer that ends before its final record) is not a failed guarantee:
-//! the error says what Ollama did, and nothing is kept, so the next try
-//! probes again.
+//! A probe Ollama does not answer is not a failed guarantee: a request that
+//! fails, a server error (5xx) or a status that refuses for another reason
+//! than the request (404, 408, 429, 499), an answer that ends before its
+//! final record without generating anything (Ollama 0.40.8 answered a
+//! runner that had stopped with one empty record), or an error record other
+//! than Ollama's refusal to parse the tool-call probe's call. The error says
+//! what Ollama did, and nothing is kept, so the next try probes again. Only
+//! a 4xx refusal with Ollama's message passes the over-long probe (Ollama
+//! 0.40.8: `400 {"error":"request (65546 tokens) exceeds the available
+//! context size (32768 tokens), try increasing it"}`).
 //!
 //! All send the same `num_ctx` and `shift:false` as inference (and as the
 //! observation's load request), so none makes Ollama reload the model, and
@@ -213,40 +219,81 @@ fn failed(guarantee: &str, model: &str, version: &str, detail: impl AsRef<str>) 
 enum Unanswered {
     /// The request was not sent, or its answer not read, in time or at all.
     Request(String),
-    /// A status that is not 2xx, or one that does not refuse the over-long
-    /// prompt for its length, with Ollama's message.
+    /// A server error, or a status that refuses for another reason than the
+    /// request, with Ollama's message.
     Status(u16, String),
-    /// The answer ended before its final record, with Ollama's message if
-    /// it sent one.
+    /// The answer ended before its final record, or with an error record
+    /// that is not about the guarantee, with Ollama's message if it sent one.
     Unfinished(Option<String>),
 }
 
 /// A probe Ollama did not answer: the request failed, Ollama answered with
-/// an error status, or its answer ended before its final record (a model
-/// runner that stopped, out of memory for one; on Ollama 0.40.8 a request to
-/// a runner that had stopped got an answer without one). That shows nothing
-/// about the guarantee, so the model is not refused for it: the error says
-/// what Ollama did, and the probes run again on the next try.
+/// a server error or a status that refuses for another reason, or its answer
+/// ended before its final record (a model runner that stopped, out of memory
+/// for one; on Ollama 0.40.8 a request to a runner that had stopped got one
+/// empty record and no final one). That shows nothing about the guarantee,
+/// so the model is not refused for it: the error says what Ollama did and
+/// ends the same way in each case, and the probes run again on the next try.
 fn unanswered(guarantee: &str, model: &str, version: &str, how: Unanswered) -> ProviderError {
-    let check = format!("the {guarantee} check of {model} on Ollama {version}");
+    let not_run = format!("so the {guarantee} check of {model} on Ollama {version} did not run");
     match how {
-        Unanswered::Request(error) => ProviderError::Network(format!(
-            "{error}, so {check} did not run; try again once Ollama answers"
-        )),
+        Unanswered::Request(error) => {
+            ProviderError::Network(format!("{error}, {not_run}: try again once Ollama answers"))
+        }
         Unanswered::Status(status, message) => ProviderError::ApiError {
             provider: PROVIDER.into(),
             status,
-            message: format!("{message}; {check} did not run: try again once Ollama answers"),
+            message: format!("{message}, {not_run}: try again once Ollama answers"),
         },
         Unanswered::Unfinished(message) => ProviderError::IncompleteStream {
             provider: PROVIDER.into(),
             message: format!(
-                "Ollama ended its answer in {check} before its final record{}, so the check did \
-                 not run; Ollama's log says why (a model runner that stopped, for one): try again",
+                "Ollama ended its answer before its final record{}, {not_run}: try again; \
+                 Ollama's log says why (a model runner that stopped, for one)",
                 message.map(|text| format!(" ({text})")).unwrap_or_default()
             ),
         },
     }
+}
+
+/// Whether a status refuses the request itself: a 4xx other than a model
+/// Ollama does not have, a request it timed out, a busy server or a client
+/// that went away (404, 408, 429, 499), which refuse for another reason, as
+/// a server error does.
+fn refuses_the_request(status: u16) -> bool {
+    (400..500).contains(&status) && !matches!(status, 404 | 408 | 429 | 499)
+}
+
+/// Whether an error record inside a tool-call probe's answer is Ollama's
+/// refusal to parse the model's call (`error parsing tool call: raw='…'`,
+/// or a model parser's own words for it, which all name the tool call),
+/// rather than a model runner that failed (`an error was encountered while
+/// running the model: unexpected EOF`).
+fn names_unparsed_call(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("tool call") || lower.contains("parse arguments")
+}
+
+/// Whether a probe record streams a piece of text or thinking.
+fn streams_text(record: &Value) -> bool {
+    ["/message/content", "/message/thinking"]
+        .iter()
+        .any(|field| {
+            record
+                .pointer(field)
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+        })
+}
+
+/// Whether a probe record shows generation: a generated-token count or a
+/// piece of text or thinking.
+fn generated(record: &Value) -> bool {
+    record.get("eval_count").is_some() || streams_text(record)
+}
+
+fn is_final(record: &Value) -> bool {
+    record.get("done").and_then(Value::as_bool) == Some(true)
 }
 
 /// Why a probe's request or answer failed: Ollama did not answer it, or
@@ -383,10 +430,9 @@ async fn over_long_probe(
     )
     .await
     .map_err(|error| error.into_error(OVER_LONG, model, version))?;
-    if records
-        .iter()
-        .any(|record| record.get("eval_count").is_some())
-    {
+    // Whatever the status, a record that shows generation means the prompt
+    // was not refused.
+    if records.iter().any(generated) {
         return Err(failed(
             OVER_LONG,
             model,
@@ -399,33 +445,48 @@ async fn over_long_probe(
             ),
         ));
     }
+    let message = error_text(&records);
     if (200..300).contains(&status) {
-        return Err(failed(
+        if records.iter().any(is_final) {
+            return Err(failed(
+                OVER_LONG,
+                model,
+                version,
+                format!(
+                    "a prompt longer than the {}-token context was accepted (status {status}) \
+                     instead of refused",
+                    key.context_tokens
+                ),
+            ));
+        }
+        // Accepted, then ended before its final record without generating
+        // anything (or with an error record): a runner that stopped, not an
+        // answer to the prompt's length.
+        return Err(unanswered(
             OVER_LONG,
             model,
             version,
-            format!(
-                "a prompt longer than the {}-token context was accepted (status {status}) instead \
-                 of refused",
-                key.context_tokens
-            ),
+            Unanswered::Unfinished(message),
         ));
     }
-    match error_text(&records) {
-        // Ollama answered with a refusal, but not one of the prompt's length:
-        // the probe proves nothing about the guarantee.
-        Some(message) if matches!(status, 404 | 429 | 499 | 503) => Err(unanswered(
+    if !refuses_the_request(status) {
+        // A server error or a refusal for another reason proves nothing about
+        // the guarantee.
+        return Err(unanswered(
             OVER_LONG,
             model,
             version,
             Unanswered::Status(
                 status,
                 format!(
-                    "{message}, which is not a refusal of the prompt's length (try again when \
-                     the server is idle)"
+                    "{}, which is not a refusal of the prompt's length",
+                    message.as_deref().unwrap_or("Ollama gave no reason")
                 ),
             ),
-        )),
+        ));
+    }
+    match message {
+        // Ollama refused the request itself, before any generation.
         Some(_) => Ok(()),
         None => Err(failed(
             OVER_LONG,
@@ -439,15 +500,16 @@ async fn over_long_probe(
 /// Whether Ollama answered a probe that should have been generated: a 2xx
 /// status and a final record. An error status, or an answer that ends
 /// before its final record, leaves the probe [`unanswered`]. An error record
-/// inside the answer does too, unless `error_fails` (the tool-call probe:
-/// Ollama ends an answer with one when it cannot parse the model's call),
-/// in which case the guarantee failed. `what` names the request.
+/// inside the answer does too, unless `reads_calls` (the tool-call probe)
+/// and it is Ollama's refusal to parse the model's call
+/// ([`names_unparsed_call`]), in which case the guarantee failed. `what`
+/// names the request.
 fn answered(
     status: u16,
     records: &[Value],
     (guarantee, model, version): (&str, &str, &str),
     what: &str,
-    error_fails: bool,
+    reads_calls: bool,
 ) -> Result<(), ProviderError> {
     let error = error_text(records);
     if !(200..300).contains(&status) {
@@ -459,11 +521,9 @@ fn answered(
             Unanswered::Status(status, message),
         ));
     }
-    let done = records
-        .iter()
-        .any(|record| record.get("done").and_then(Value::as_bool) == Some(true));
+    let done = records.iter().any(is_final);
     match error {
-        Some(message) if error_fails => Err(failed(
+        Some(message) if reads_calls && names_unparsed_call(&message) => Err(failed(
             guarantee,
             model,
             version,
@@ -489,10 +549,7 @@ fn answered(
 /// `done_reason` (`stop` or `length`) and the generated-token count it
 /// reports (Ollama omits a zero count). `what` names the request.
 fn finished<'a>(records: &'a [Value], what: &str) -> Result<(&'a Value, &'a str, u64), String> {
-    let done: Vec<&Value> = records
-        .iter()
-        .filter(|record| record.get("done").and_then(Value::as_bool) == Some(true))
-        .collect();
+    let done: Vec<&Value> = records.iter().filter(|record| is_final(record)).collect();
     let [last] = done.as_slice() else {
         return Err(format!(
             "{what} ended with {} final records instead of one",
@@ -609,16 +666,7 @@ async fn long_output_probe(
     // generated token, however many tokens a step accepts.
     let pieces = records[..records.len() - 1]
         .iter()
-        .filter(|record| {
-            ["/message/content", "/message/thinking"]
-                .iter()
-                .any(|field| {
-                    record
-                        .pointer(field)
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| !text.is_empty())
-                })
-        })
+        .filter(|record| streams_text(record))
         .count() as u64;
     if pieces > generated {
         return Err(fail(format!(
@@ -705,6 +753,7 @@ async fn tool_call_probe(
         request,
         MAX_PROBE_RESPONSE_BYTES,
         (key.context_tokens + TOOL_CALL_TOKENS) as u64,
+        TOOL_CALL_TOKENS,
     );
     let read = read_as_inference(&mut answer, &records, status);
     if answer.calls.is_empty() {

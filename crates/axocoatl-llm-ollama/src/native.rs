@@ -145,23 +145,60 @@ fn shown_name(model: &str) -> String {
 }
 
 /// The commands that replace `name`, a model Ollama runs with MLX or that
-/// is not GGUF, with its GGUF variant. `ollama pull --runner llamacpp`, a
-/// flag Ollama does not document, pulls the GGUF variant of a tag that also
-/// has an MLX one, but leaves a variant already installed in place (Ollama
-/// 0.40.8: with the MLX `qwen3.5:0.8b` installed it pulled nothing and the
-/// tag stayed MLX; after `ollama rm` it pulled the GGUF one), so the
-/// installed one is removed first.
+/// is not GGUF, with its GGUF variant from ollama.com. `ollama pull --runner
+/// llamacpp`, a flag Ollama does not document, pulls the GGUF variant of a
+/// tag that also has an MLX one, but leaves a variant already installed in
+/// place (Ollama 0.40.8: with the MLX `qwen3.5:0.8b` installed it pulled
+/// nothing and the tag stayed MLX; after `ollama rm` it pulled the GGUF
+/// one), so the installed one is removed first. `;`, not `&&`: run again
+/// after a pull that failed, the `ollama rm` of a model already removed
+/// fails, and the pull must still run.
 pub fn gguf_variant_commands(name: &str) -> String {
-    format!("ollama rm {name} && ollama pull --runner llamacpp {name}")
+    format!("ollama rm {name}; ollama pull --runner llamacpp {name}")
 }
 
-/// What to do about a model Ollama runs with MLX or that is not GGUF.
+/// What to do about a model Ollama runs with MLX or that is not GGUF. The
+/// pull works only for a model ollama.com has a GGUF variant of, and the
+/// `ollama rm` before it removes the installed one whatever the pull does,
+/// so the fix says both.
 pub(crate) fn gguf_fix(name: &str) -> String {
     format!(
-        "remove it and pull its GGUF variant with `{}` (an undocumented Ollama flag, which \
-         does not replace a variant already installed), or choose another model",
+        "replace it with its GGUF variant when ollama.com has one, with `{}` (an undocumented \
+         Ollama flag, which does not replace a variant already installed, hence the `ollama \
+         rm`; a model you created yourself is removed for good), or choose another model",
         gguf_variant_commands(name)
     )
+}
+
+/// Whether native execution refuses `shown`, a `POST /api/show` answer,
+/// only for its format or its MLX runner: a local model, which its GGUF
+/// variant ([`gguf_variant_commands`]) would replace. Not for a cloud model.
+pub fn needs_gguf_variant(shown: &Value) -> bool {
+    !shown_remote(shown) && {
+        let (format, runner) = shown_format_and_runner(shown);
+        runner.eq_ignore_ascii_case("mlx") || format != "gguf"
+    }
+}
+
+/// Whether Ollama shows a model as one it runs remotely, on ollama.com.
+fn shown_remote(shown: &Value) -> bool {
+    ["remote_host", "remote_model"].iter().any(|key| {
+        shown
+            .get(key)
+            .is_some_and(|value| value.as_str() != Some(""))
+    })
+}
+
+/// The format and runner Ollama shows for a model, empty when it shows
+/// none.
+fn shown_format_and_runner(shown: &Value) -> (&str, &str) {
+    let field = |pointer| {
+        shown
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+    };
+    (field("/details/format"), field("/details/runner"))
 }
 
 /// Refuse a model native execution cannot bound: a cloud model, a model that
@@ -171,26 +208,14 @@ pub(crate) fn gguf_fix(name: &str) -> String {
 /// before each inference.
 pub fn check_shown_model(model: &str, shown: &Value) -> Result<ShownModel, ProviderError> {
     let name = shown_name(model);
-    let remote = ["remote_host", "remote_model"].iter().any(|key| {
-        shown
-            .get(key)
-            .is_some_and(|value| value.as_str() != Some(""))
-    });
-    if remote {
+    if shown_remote(shown) {
         return Err(invalid(format!(
             "The model {name} is a cloud model that Ollama runs remotely; native execution runs \
              only local models"
         )));
     }
-    let format = shown
-        .pointer("/details/format")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let runner = shown
-        .pointer("/details/runner")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if runner.eq_ignore_ascii_case("mlx") || format != "gguf" {
+    let (format, runner) = shown_format_and_runner(shown);
+    if needs_gguf_variant(shown) {
         return Err(invalid(format!(
             "The model {name} is {}; native execution accepts only GGUF models, which Ollama \
              runs in llama.cpp's llama-server. Ollama's MLX runner holds the model's own maximum \
@@ -256,61 +281,6 @@ fn invalid(message: impl Into<String>) -> ProviderError {
         message: message.into(),
     }
 }
-/// How the refusal of a completed response with no answer and no tool call
-/// begins; [`no_answer`] words it.
-const NO_ANSWER: &str = "the model's response held no answer and no tool call";
-
-/// The refusal of a completed response with no answer and no tool call:
-/// whether the model wrote reasoning, the output tokens Ollama counted for
-/// it when it did (one is a stop at once: Ollama answers so when its runner
-/// fails, for example when the GPU runs out of memory), how Ollama ended it,
-/// and how many tools were offered.
-fn no_answer(reasoned: bool, output: Option<usize>, done_reason: &str, tools: usize) -> String {
-    let mut said = Vec::new();
-    if reasoned {
-        said.push("it wrote only reasoning".to_owned());
-    }
-    if let Some(output) = output {
-        said.push(text_calls::count_of(output, "output token"));
-    }
-    format!(
-        "{NO_ANSWER}{}. Nothing from this response ran; Ollama ended it with done_reason \
-         \"{done_reason}\" and {} offered",
-        if said.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", said.join("; "))
-        },
-        text_calls::count_of(tools, "tool")
-    )
-}
-
-/// The refusal of a response that calls `name`, a tool `offered` does not
-/// hold, under a name that cannot be answered with a tool error.
-fn unoffered_call(name: &str, offered: &[axocoatl_llm::ToolDefinition]) -> String {
-    let name: String = name
-        .chars()
-        .filter(|ch| !ch.is_control())
-        .take(64)
-        .collect();
-    let offered = if offered.is_empty() {
-        "it was offered none".to_owned()
-    } else {
-        format!(
-            "it has {}",
-            offered
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
-    format!(
-        "the model called {name}, a tool it does not have ({offered}). Nothing from this \
-         response ran"
-    )
-}
-
 fn protocol(message: impl Into<String>) -> ProviderError {
     ProviderError::Stream(format!("native Ollama: {}", message.into()))
 }
@@ -711,7 +681,14 @@ impl NativeOllamaProvider {
             .execution_bounds(&request)
             .ok_or_else(|| invalid("request has no native bound"))?
             .token_limit;
-        let mut state = NativeResponse::new(self.config.model.clone(), request, cap, token_limit);
+        let output_limit = self.prediction_limit(&request);
+        let mut state = NativeResponse::new(
+            self.config.model.clone(),
+            request,
+            cap,
+            token_limit,
+            output_limit,
+        );
         let stream = async_stream::stream! {
             if too_long { yield Err(protocol("response exceeds its byte limit")); return; }
             let mut pending = Vec::new();
@@ -1204,6 +1181,8 @@ struct NativeResponse {
     terminal_counts: bool,
     counts_conflict: bool,
     token_limit: u64,
+    /// The `num_predict` the request was sent with.
+    output_limit: usize,
     terminal: Option<FinishReason>,
     content: String,
     /// How much of `content` is shown, and what is held while the response
@@ -1221,9 +1200,16 @@ struct NativeResponse {
     rejected: Option<ProviderError>,
 }
 impl NativeResponse {
-    fn new(model: String, request: ChatRequest, cap: usize, token_limit: u64) -> Self {
+    fn new(
+        model: String,
+        request: ChatRequest,
+        cap: usize,
+        token_limit: u64,
+        output_limit: usize,
+    ) -> Self {
         Self {
             model,
+            output_limit,
             free: !text_calls::reads_text_calls(&request),
             request,
             cap,
@@ -1359,17 +1345,9 @@ impl NativeResponse {
             // gpt-oss on Ollama can call one of harmony's own tools
             // (`browser.search`, `browser.open`) that nobody offered. A call
             // to an unoffered tool is answered with a tool error, but only
-            // under a name every provider takes back in history; this one is
-            // not, so the response is refused, naming the call, and the
-            // Agent asks the model once more.
-            if !self.request.tools.iter().any(|tool| tool.name == name)
-                && !axocoatl_llm::is_portable_tool_name(name)
-            {
-                return Err(ProviderError::UnusableResponse {
-                    provider: PROVIDER.into(),
-                    message: unoffered_call(name, &self.request.tools),
-                });
-            }
+            // under a name every provider takes back in history; under this
+            // one the response is unusable, naming the call, and the Agent
+            // asks the model once more.
             validate_response_tool_call(PROVIDER, name, arguments, &self.request.tools)?;
             accepted.push(ToolCall {
                 id: id.into(),
@@ -1597,10 +1575,12 @@ impl NativeResponse {
                 self.rejected = Some(ProviderError::UnusableResponse {
                     provider: PROVIDER.into(),
                     message: format!(
-                        "{why}. Nothing from this response ran; Ollama ended it with \
+                        "{}. Nothing from this response ran; Ollama ended it with \
                          done_reason \"{done_reason}\" and {} offered",
+                        why.message,
                         text_calls::count_of(self.request.tools.len(), "tool")
                     ),
+                    note: why.note,
                 });
                 return Ok(events);
             }
@@ -1627,23 +1607,28 @@ impl NativeResponse {
             self.calls.iter().map(|call| call.id.as_str()),
         )?;
         // A completed response with neither an answer nor a call (gpt-oss
-        // can end one having written only reasoning) gives the Agent nothing
-        // to act on; its usage stands, and the Agent asks once more.
+        // can end one having written only reasoning; an Ollama runner that
+        // failed, for example out of GPU memory, ends one at once) gives the
+        // Agent nothing to act on; its usage stands, and the Agent asks once
+        // more. The output tokens are named only when Ollama counted them.
         if self.content.trim().is_empty() && self.calls.is_empty() {
-            self.rejected = Some(ProviderError::UnusableResponse {
-                provider: PROVIDER.into(),
-                message: no_answer(
-                    !self.thinking.trim().is_empty(),
-                    self.terminal_counts
+            let at_limit = reason == FinishReason::MaxTokens;
+            let ended = format!(
+                "Ollama ended it with done_reason \"{}\"",
+                if at_limit { "length" } else { "stop" }
+            );
+            self.rejected = Some(
+                axocoatl_llm::unusable::EmptyResponse {
+                    reasoned: !self.thinking.trim().is_empty(),
+                    output_tokens: self
+                        .terminal_counts
                         .then_some(self.usage.usage.output_tokens),
-                    if reason == FinishReason::MaxTokens {
-                        "length"
-                    } else {
-                        "stop"
-                    },
-                    self.request.tools.len(),
-                ),
-            });
+                    at_limit: at_limit.then_some(Some(self.output_limit)),
+                    ended: &ended,
+                    tools: self.request.tools.len(),
+                }
+                .refusal(PROVIDER),
+            );
             return Ok(events);
         }
         if self.request.response_format == Some(ResponseFormat::Json) && self.calls.is_empty() {

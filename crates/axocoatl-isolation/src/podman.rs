@@ -194,8 +194,20 @@ async fn runtime_available_with(program: &str) -> Result<(), IsolationError> {
     validate_runtime_info(&output.stdout)
 }
 
-/// `(machine exists, machine running)` — only meaningful on macOS/Windows.
-async fn machine_state_with(program: &str) -> Result<(bool, bool), IsolationError> {
+/// What `podman machine list` says of the machines — only meaningful on
+/// macOS/Windows.
+#[derive(Debug, PartialEq, Eq)]
+struct MachineState {
+    exists: bool,
+    running: bool,
+    /// A machine that runs and is still starting (`"Starting": true`):
+    /// Podman sets it before `podman machine start` starts the VM and clears
+    /// it once the machine's API is forwarded, so Podman may refuse requests
+    /// until then.
+    starting: Option<String>,
+}
+
+async fn machine_state_with(program: &str) -> Result<MachineState, IsolationError> {
     let output = bounded_output(
         program,
         &["machine", "list", "--format", "json"],
@@ -207,7 +219,7 @@ async fn machine_state_with(program: &str) -> Result<(bool, bool), IsolationErro
 
 fn machine_state_from_output(
     output: &BoundedCommandOutput,
-) -> Result<(bool, bool), IsolationError> {
+) -> Result<MachineState, IsolationError> {
     if output.timed_out {
         return Err(IsolationError::podman_not_answering(
             "machine list",
@@ -226,10 +238,28 @@ fn machine_state_from_output(
                 "podman machine list returned invalid JSON: {error}"
             ))
         })?;
-    let running = machines
+    let flag = |machine: &serde_json::Value, name: &str| {
+        machine
+            .get(name)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
+    let running = machines.iter().any(|m| flag(m, "Running"));
+    let starting = machines
         .iter()
-        .any(|m| m.get("Running").and_then(|v| v.as_bool()).unwrap_or(false));
-    Ok((!machines.is_empty(), running))
+        .find(|m| flag(m, "Running") && flag(m, "Starting"))
+        .map(|m| {
+            m.get("Name")
+                .and_then(|name| name.as_str())
+                .unwrap_or("podman-machine-default")
+                .trim_end_matches('*')
+                .to_string()
+        });
+    Ok(MachineState {
+        exists: !machines.is_empty(),
+        running,
+        starting,
+    })
 }
 
 /// Which Podman connection this process's environment selects.
@@ -337,9 +367,8 @@ pub async fn preflight_with(program: &str) -> PodmanReadiness {
 pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -> PodmanReadiness {
     preflight_answering_through(program, connection)
         .await
-        .unwrap_or_else(|error| {
-            PodmanReadiness::Unavailable(unavailable_through(connection, &error))
-        })
+        // A Podman that did not answer names the connection itself.
+        .unwrap_or_else(|error| PodmanReadiness::Unavailable(error.to_string()))
 }
 
 /// [`preflight_through`], except that a Podman that did not answer one of
@@ -377,14 +406,14 @@ async fn preflight_answering_through(
     }
 }
 
-/// [`PodmanReadiness::Unavailable`] for `error`, or `error` itself when
-/// Podman did not answer in time.
+/// [`PodmanReadiness::Unavailable`] for `error`, or `error` itself, with
+/// the connection it was asked through, when Podman did not answer in time.
 fn unanswered(
     connection: &ConnectionOverride,
     error: IsolationError,
 ) -> Result<PodmanReadiness, IsolationError> {
     if error.is_podman_not_answering() {
-        return Err(error);
+        return Err(error.through(connection.describe()));
     }
     Ok(PodmanReadiness::Unavailable(unavailable_through(
         connection, &error,
@@ -511,12 +540,21 @@ async fn default_connection_unanswered(
     }
     match machine_state_with(program).await {
         Err(error) => unanswered(none, error),
-        Ok((false, _)) => Ok(PodmanReadiness::MachineMissing),
-        Ok((true, false)) => Ok(PodmanReadiness::MachineStopped),
+        Ok(MachineState { exists: false, .. }) => Ok(PodmanReadiness::MachineMissing),
+        Ok(MachineState { running: false, .. }) => Ok(PodmanReadiness::MachineStopped),
         // A machine runs: it may have finished starting since `error`.
-        Ok((true, true)) => match runtime_available_with(program).await {
+        Ok(MachineState { starting, .. }) => match runtime_available_with(program).await {
             Ok(()) => Ok(PodmanReadiness::Ready),
-            Err(error) => unanswered(none, error),
+            // Still starting, its API may not be forwarded yet.
+            Err(error) => match starting {
+                Some(machine) if !error.is_podman_not_answering() => {
+                    Err(IsolationError::PodmanMachineStarting {
+                        machine,
+                        error: error.to_string(),
+                    })
+                }
+                _ => unanswered(none, error),
+            },
         },
     }
 }
@@ -2017,17 +2055,30 @@ esac"#,
             error.to_string(),
             "Podman did not answer `podman machine list` within 15 s"
         );
-        let unanswered_error = unanswered(&ConnectionOverride::None, error).unwrap_err();
+        let unanswered_error =
+            unanswered(&ConnectionOverride::None, error.through(None)).unwrap_err();
         assert!(unanswered_error.is_podman_not_answering());
-        let host = ConnectionOverride::Host("ssh://core@127.0.0.1:1/run/podman.sock".into());
         assert_eq!(
-            unavailable_through(&host, &unanswered_error),
-            format!(
-                "{} is set, and Podman does not answer through it: Podman did not answer \
-                 `podman machine list` within 15 s",
-                host.describe().unwrap()
-            )
+            unanswered_error.to_string(),
+            "Podman did not answer `podman machine list` within 15 s"
         );
+        // Through a connection the environment selects, the error that ends
+        // a start (and the readiness doctor reports) names it.
+        for connection in [
+            ConnectionOverride::Host("ssh://core@127.0.0.1:1/run/podman.sock".into()),
+            ConnectionOverride::Connection("axocoatl".into()),
+        ] {
+            let error = IsolationError::podman_not_answering("info", Duration::from_secs(15));
+            let error = unanswered(&connection, error).unwrap_err();
+            assert!(error.is_podman_not_answering());
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "{} is set, and Podman did not answer `podman info` through it within 15 s",
+                    connection.describe().unwrap()
+                )
+            );
+        }
         // Any other failure is the readiness it always was.
         let refused = IsolationError::OciSetupFailed("podman info failed: refused".into());
         assert_eq!(
@@ -2036,6 +2087,71 @@ esac"#,
                 "OCI container setup failed: podman info failed: refused".into()
             )
         );
+    }
+
+    /// While `podman machine start` runs, `podman machine list` says the
+    /// machine runs and is starting (Podman clears `Starting` once its API
+    /// is forwarded), and `podman info` is refused: Podman has not answered
+    /// yet, so the daemon's start asks again, and doctor and onboarding say
+    /// it is starting. A machine that runs and is not starting is the
+    /// refusal as before, and one stopped (even with a stale `Starting`
+    /// left by a `podman machine start` that was killed) is stopped.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_machine_still_starting_has_not_answered_yet() {
+        let cases = [
+            (
+                r#"[{"Name":"podman-machine-default","Running":true,"Starting":true}]"#,
+                "starting",
+            ),
+            (
+                r#"[{"Name":"podman-machine-default","Running":true,"Starting":false}]"#,
+                "refused",
+            ),
+            (
+                r#"[{"Name":"podman-machine-default","Running":false,"Starting":true}]"#,
+                "stopped",
+            ),
+        ];
+        for (machines, expected) in cases {
+            let directory = tempfile::tempdir().unwrap();
+            let podman = shim(
+                directory.path(),
+                &format!(
+                    r#"case "$*" in
+  "--version") echo "podman version 6.1.4" ;;
+  "machine list --format json") echo '{machines}' ;;
+  "info --format json") echo "Cannot connect to Podman: connection refused" >&2; exit 125 ;;
+  *) exit 125 ;;
+esac"#
+                ),
+            );
+            let answer = preflight_answering_through(&podman, &ConnectionOverride::None).await;
+            match expected {
+                "starting" => {
+                    let error = answer.unwrap_err();
+                    assert!(error.is_podman_not_answering(), "{error}");
+                    assert!(
+                        error.to_string().starts_with(
+                            "the Podman machine `podman-machine-default` is still starting \
+                             (`podman machine list` says so), and Podman refused a request \
+                             meanwhile: OCI container setup failed: podman info failed: Cannot \
+                             connect to Podman: connection refused"
+                        ),
+                        "{error}"
+                    );
+                    assert_eq!(
+                        preflight_through(&podman, &ConnectionOverride::None).await,
+                        PodmanReadiness::Unavailable(error.to_string())
+                    );
+                }
+                "refused" => assert!(
+                    matches!(&answer, Ok(PodmanReadiness::Unavailable(error)) if error.contains("connection refused")),
+                    "{answer:?}"
+                ),
+                _ => assert_eq!(answer.unwrap(), PodmanReadiness::MachineStopped),
+            }
+        }
     }
 
     #[cfg(unix)]

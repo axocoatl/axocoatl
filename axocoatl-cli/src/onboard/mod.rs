@@ -377,6 +377,10 @@ pub(crate) struct Onboarding {
     pub(crate) openrouter_api: String,
     /// The daemon's IPC socket (Step 5 asks whether a daemon runs).
     pub(crate) socket_path: PathBuf,
+    /// The IPC socket the Always-On Service's daemon would listen on: the
+    /// `AXOCOATL_SOCKET_PATH` `axocoatl service install` records, else the
+    /// default path (a test's, given instead).
+    pub(crate) service_socket_path: PathBuf,
     /// The data directory, when it is not the one the configuration selects
     /// (tests).
     pub(crate) data_dir_override: Option<PathBuf>,
@@ -737,6 +741,9 @@ pub(crate) async fn cmd_onboard(args: OnboardArgs) -> i32 {
         steps: Vec::new(),
         openrouter_api: openrouter::OPENROUTER_API.to_string(),
         socket_path: axocoatl_daemon::ipc::default_socket_path(),
+        service_socket_path: crate::service_socket_path(
+            &axocoatl_service::ServiceEnvironment::capture(),
+        ),
         data_dir_override: None,
         openrouter_sign_in: None,
         kept: Kept::default(),
@@ -1552,8 +1559,20 @@ async fn start_service(o: &mut Onboarding) -> Option<bool> {
     }
     // Its daemon would stop at once and start again, and the first run would
     // wait for it in vain.
-    if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(&o.socket_path) {
+    if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(&o.service_socket_path) {
         o.step_left(format!("The Always-On Service cannot start: {error}"));
+        return None;
+    }
+    // Nor would this shell's commands find its daemon.
+    if o.service_socket_path != o.socket_path {
+        o.step_left(format!(
+            "The Always-On Service's daemon would listen at {}, but this shell's axocoatl \
+             commands look for it at {}: `axocoatl service install` records \
+             AXOCOATL_SOCKET_PATH only when it is an absolute path (UTF-8, without control \
+             characters). Set it to such a path, then run `axocoatl onboard` again",
+            o.service_socket_path.display(),
+            o.socket_path.display()
+        ));
         return None;
     }
     let config = std::fs::read_to_string(&o.paths.config_path).unwrap_or_default();

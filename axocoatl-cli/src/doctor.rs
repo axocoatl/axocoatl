@@ -2344,12 +2344,16 @@ fn daemon_version_item(
 /// a Unix socket here (a long home directory), so `axocoatl dev` would stop
 /// at once.
 fn no_daemon_item(socket_path: &Path) -> Item {
-    match axocoatl_daemon::ipc::socket_path_too_long(socket_path) {
-        Some(error) => Item::fail(
+    match axocoatl_daemon::ipc::socket_path_problem(socket_path) {
+        Some(problem) => Item::fail(
             "Daemon",
-            format!("no daemon can run here: {error}"),
-            "With it set, start one: `axocoatl dev`, or `axocoatl service install` and \
-             `axocoatl service start`",
+            format!("no daemon can run here: {}", problem.reason()),
+            format!(
+                "{}, then start one: `axocoatl dev`, or `axocoatl service install` and \
+                 `axocoatl service start`. {}",
+                problem.setting(),
+                problem.rules()
+            ),
         ),
         None => Item::warn(
             "Daemon",
@@ -2851,12 +2855,21 @@ mod tests {
                 .starts_with("Daemon: no daemon can run here: the IPC socket path /s"),
             "{item:?}"
         );
-        assert!(item.detail.contains("is too long"), "{item:?}");
-        assert!(item.detail.contains("AXOCOATL_SOCKET_PATH"), "{item:?}");
+        assert!(item.detail.ends_with("bytes on this system"), "{item:?}");
+        // The step reads as one sentence after the line: no stray period
+        // before its colon.
+        let step = item.step();
         assert!(
-            item.fix.as_deref().unwrap().contains("axocoatl dev"),
-            "{item:?}"
+            step.contains(
+                "bytes on this system: Set AXOCOATL_SOCKET_PATH to a shorter absolute path"
+            ),
+            "{step}"
         );
+        assert!(
+            step.contains(", then start one: `axocoatl dev`, or `axocoatl service install`"),
+            "{step}"
+        );
+        assert!(!step.contains(").:") && !step.contains(".:"), "{step}");
     }
 
     /// The Daemon line names the running daemon's version, from the IPC

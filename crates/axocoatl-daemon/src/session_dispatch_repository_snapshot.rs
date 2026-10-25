@@ -1427,13 +1427,14 @@ fn unread_paths(listed: &str) -> Result<Vec<String>> {
         let path = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .ok()
+            .map(|path| String::from_utf8_lossy(&path).into_owned())
             .filter(|path| !path.is_empty() && path.len() <= 4096)
             .ok_or_else(|| error("Invalid nested checkout in a repository capture"))?;
         bytes += path.len();
         if bytes > MAX_UNREAD_PATH_BYTES {
             return Err(error("Repository capture exceeds its declared bounds"));
         }
-        paths.push(String::from_utf8_lossy(&path).into_owned());
+        paths.push(path);
     }
     paths.sort();
     paths.dedup();
@@ -1652,10 +1653,11 @@ mod judgement_tests {
         );
         let formatted = |format: &str, extra: &str| {
             let mut value = output(extra);
-            let stdout = value["stdout"]
-                .as_str()
-                .unwrap()
-                .replacen("format=1", &format!("format={format}"), 1);
+            let stdout = value["stdout"].as_str().unwrap().replacen(
+                "format=1",
+                &format!("format={format}"),
+                1,
+            );
             value["stdout"] = serde_json::Value::String(stdout);
             value
         };
@@ -1675,12 +1677,17 @@ mod judgement_tests {
             &CaptureMode::Observe,
         )
         .unwrap();
-        assert_eq!(named.unread_paths, vec!["a b/c".to_owned(), "tools".to_owned()]);
+        assert_eq!(
+            named.unread_paths,
+            vec!["a b/c".to_owned(), "tools".to_owned()]
+        );
         for bad in [
             "!!".to_owned(),
             format!("{},", encode("tools")),
             format!("{},", encode(&"x".repeat(4097))),
             vec![encode(&"y".repeat(4000)); 13].join(","),
+            base64::engine::general_purpose::STANDARD.encode([0xff; 1400]),
+            vec![base64::engine::general_purpose::STANDARD.encode([0xff; 1260]); 14].join(","),
         ] {
             assert!(
                 parse_capture(
@@ -1730,7 +1737,11 @@ mod judgement_tests {
             ),
             format3(
                 "1",
-                &encode(&format!("{}\t755\trepository\t{}\n", encode("a"), digest('3'))),
+                &encode(&format!(
+                    "{}\t755\trepository\t{}\n",
+                    encode("a"),
+                    digest('3')
+                )),
             ),
             format3(
                 "1",
@@ -1738,7 +1749,11 @@ mod judgement_tests {
             ),
             format3(
                 "1",
-                &encode(&format!("{}\t755\tspecial\t{}\n", encode("a"), "3".repeat(41))),
+                &encode(&format!(
+                    "{}\t755\tspecial\t{}\n",
+                    encode("a"),
+                    "3".repeat(41)
+                )),
             ),
             format3("1", "!!"),
             // Formats 2 and 3 without their fields, format 1 with them.
@@ -1750,7 +1765,10 @@ mod judgement_tests {
             ),
             formatted(
                 "2",
-                &format!("changed_complete=1\nchanged_b64={}\nunread=\n", encode(&lines)),
+                &format!(
+                    "changed_complete=1\nchanged_b64={}\nunread=\n",
+                    encode(&lines)
+                ),
             ),
             output(&format!(
                 "changed_complete=1\nchanged_b64={}\n",

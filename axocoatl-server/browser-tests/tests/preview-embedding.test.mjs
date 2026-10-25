@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  guardTopLevelPreviews, isLocalhostSubdomain, isSafariEngineOnApple,
+  claimsChromiumWithoutClientHints, guardTopLevelPreviews, isLocalhostSubdomain,
+  isSafariEngineOnApple, previewsStayEmbeddedBecause, SAFARI_KEEPS_PREVIEWS_EMBEDDED,
+  UNCONFIRMED_CHROMIUM_KEEPS_PREVIEWS_EMBEDDED,
 } from '../../static/ui/preview-embedding.js';
 
 const APPLE = 'Apple Computer, Inc.';
@@ -50,6 +52,35 @@ for (const [name, nav, expected] of BROWSERS) {
     assert.equal(isSafariEngineOnApple(nav), expected);
   });
 }
+
+// navigator.userAgentData, which every Chromium-based browser has in a
+// secure context (Playwright 1.64.1's Chromium 156 with its own user agent
+// and with one Playwright set; Safari and Firefox have none).
+const CHROMIUM_UA_DATA = { brands: [{ brand: 'Chromium', version: '156' }], mobile: false, platform: 'macOS' };
+const FIREFOX_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:143.0) Gecko/20100101 Firefox/143.0';
+
+test('a browser that claims to be Chromium-based without its userAgentData keeps Previews embedded, in a secure context', () => {
+  const chrome = { vendor: GOOGLE, platform: 'MacIntel', userAgent: MAC_CHROME, userAgentData: CHROMIUM_UA_DATA };
+  const edge = { ...chrome, userAgent: `${MAC_CHROME} Edg/141.0.3537.57` };
+  // Firefox told to send Chrome's user agent (navigator.vendor is empty).
+  const firefoxAsChrome = { vendor: '', platform: 'MacIntel', userAgent: MAC_CHROME };
+  const firefox = { vendor: '', platform: 'MacIntel', userAgent: FIREFOX_MAC };
+  const safariAsChrome = { vendor: APPLE, platform: 'MacIntel', userAgent: MAC_CHROME };
+  for (const nav of [chrome, edge, firefox]) {
+    assert.equal(claimsChromiumWithoutClientHints(nav, true), false, nav.userAgent);
+    assert.equal(previewsStayEmbeddedBecause(nav, true), null, nav.userAgent);
+  }
+  assert.equal(claimsChromiumWithoutClientHints(firefoxAsChrome, true), true);
+  assert.equal(previewsStayEmbeddedBecause(firefoxAsChrome, true), UNCONFIRMED_CHROMIUM_KEEPS_PREVIEWS_EMBEDDED);
+  assert.match(UNCONFIRMED_CHROMIUM_KEEPS_PREVIEWS_EMBEDDED, /^This browser says it is Chromium-based/);
+  // Outside a secure context Chromium has no userAgentData either, so the
+  // page cannot tell; the daemon still decides from its requests.
+  assert.equal(claimsChromiumWithoutClientHints(firefoxAsChrome, false), false);
+  assert.equal(previewsStayEmbeddedBecause({ ...chrome, userAgentData: undefined }, false), null);
+  // Safari's own rule comes first, whatever it claims.
+  assert.equal(previewsStayEmbeddedBecause(safariAsChrome, true), SAFARI_KEEPS_PREVIEWS_EMBEDDED);
+  assert.equal(previewsStayEmbeddedBecause(undefined, true), null);
+});
 
 test('only a page on a subdomain of localhost counts as a Preview\'s address', () => {
   // The workbench's own address.
@@ -107,11 +138,21 @@ function linkEvent(href, button = 0) {
 }
 
 test('in Chromium the guard installs nothing', () => {
-  const win = fakeWindow({ vendor: GOOGLE, platform: 'MacIntel', userAgent: MAC_CHROME });
+  const win = fakeWindow({ vendor: GOOGLE, platform: 'MacIntel', userAgent: MAC_CHROME, userAgentData: CHROMIUM_UA_DATA });
+  win.isSecureContext = true;
   const open = win.open;
   assert.equal(guardTopLevelPreviews(win), false);
   assert.equal(win.open, open);
   assert.deepEqual(win.listeners, []);
+});
+
+test('in a browser that claims to be Chromium-based without being one, the guard refuses a Preview\'s address', () => {
+  const win = fakeWindow({ vendor: '', platform: 'MacIntel', userAgent: MAC_CHROME });
+  win.isSecureContext = true;
+  assert.equal(guardTopLevelPreviews(win), true);
+  assert.equal(win.open('http://ses-1-p3000.localhost:8300/'), null);
+  assert.deepEqual(win.opened, []);
+  assert.equal(win.open('https://docs.axocoatl.ai/'), 'a window');
 });
 
 test('in Safari the guard refuses links and window.open to a Preview\'s address, and nothing else', () => {

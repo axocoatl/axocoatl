@@ -851,7 +851,10 @@ async fn a_tool_call_leaves_the_estimate_of_the_call_that_reads_its_result() {
     // 100 reserved, plus the 40 reasoning tokens sent back, the returned
     // turn's bytes and one helper answer.
     let growth = estimate.tokens - 100;
-    assert!(growth > 40 + answer && growth < 40 + answer + 1024, "{growth}");
+    assert!(
+        growth > 40 + answer && growth < 40 + answer + 1024,
+        "{growth}"
+    );
     assert_eq!(estimate.cost_microunits, 10 + growth);
 
     // The largest earlier reservation (100 tokens) would admit a helper that
@@ -1103,7 +1106,9 @@ fn recorded_retries(fixture: &Fixture) -> Vec<String> {
 }
 
 async fn drain(
-    stream: &mut Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>>,
+    stream: &mut Pin<
+        Box<dyn Stream<Item = std::result::Result<StreamEvent, ProviderError>> + Send>,
+    >,
 ) -> std::result::Result<(), ProviderError> {
     while let Some(event) = stream.next().await {
         if let StreamEvent::Done { .. } = event? {
@@ -1111,6 +1116,60 @@ async fn drain(
         }
     }
     Err(ProviderError::Stream("ended without Done".into()))
+}
+
+/// Admission is observed after the grant reserves the call and before the
+/// transport opens it, even when opening fails without returning a stream.
+/// Refusal by the grant never reports a call, and a failed observer never
+/// dispatches one.
+#[tokio::test]
+async fn stream_admission_distinguishes_a_failed_open_from_a_budget_refusal() {
+    let (fixture, wrapped, inner) =
+        scripted_fixture(vec![Scripted::Open(unavailable(400))], roomy());
+    let observed = AtomicUsize::new(0);
+    let on_admitted = || {
+        assert_eq!(provider_usage(&fixture).calls, 1);
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 0);
+        observed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    };
+    let error = wrapped
+        .chat_stream_with_admission(ChatRequest::simple("input"), &on_admitted)
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, ProviderError::ApiError { status: 400, .. }));
+    assert_eq!(observed.load(Ordering::SeqCst), 1);
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+
+    let (fixture, wrapped, inner) = scripted_fixture(
+        vec![],
+        GrantLimits {
+            tokens: 99,
+            ..roomy()
+        },
+    );
+    let error = wrapped
+        .chat_stream_with_admission(ChatRequest::simple("input"), &|| {
+            panic!("a refused call is not admitted")
+        })
+        .await
+        .err()
+        .unwrap();
+    assert!(matches!(error, ProviderError::BudgetExhausted { .. }));
+    assert_eq!(provider_usage(&fixture).calls, 0);
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 0);
+
+    let (_fixture, wrapped, inner) = scripted_fixture(vec![], roomy());
+    let error = wrapped
+        .chat_stream_with_admission(ChatRequest::simple("input"), &|| {
+            Err(ProviderError::Stream("retry observation failed".into()))
+        })
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("retry observation failed"));
+    assert_eq!(inner.calls.load(Ordering::SeqCst), 0);
 }
 
 /// A 503 before anything streamed is sent again once, as a new call with
@@ -1143,7 +1202,11 @@ async fn a_transient_failure_is_retried_once_as_a_new_reserved_call() {
         .usage("grant")
         .unwrap();
     assert_eq!(charged.invocations, 2);
-    assert_eq!(charged.tokens, 100 + 12, "first reservation kept, retry settled");
+    assert_eq!(
+        charged.tokens,
+        100 + 12,
+        "first reservation kept, retry settled"
+    );
     let retries = recorded_retries(&fixture);
     assert_eq!(retries.len(), 1, "{retries:?}");
     assert!(
@@ -1228,8 +1291,7 @@ async fn a_second_failure_and_every_rejection_end_the_call() {
             reason: "safety".into(),
         },
     ] {
-        let (fixture, wrapped, inner) =
-            scripted_fixture(vec![Scripted::Open(rejected)], roomy());
+        let (fixture, wrapped, inner) = scripted_fixture(vec![Scripted::Open(rejected)], roomy());
         assert!(wrapped
             .chat_stream(ChatRequest::simple("input"))
             .await
@@ -1321,25 +1383,29 @@ async fn openrouter_metadata(server: &wiremock::MockServer) {
     use wiremock::{Mock, ResponseTemplate};
     Mock::given(method("GET"))
         .and(path("/models"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
-            "id": OPENROUTER_MODEL,
-            "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
-            "supported_parameters": ["max_tokens","tools"]
-        }]})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
+                "id": OPENROUTER_MODEL,
+                "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
+                "supported_parameters": ["max_tokens","tools"]
+            }]})),
+        )
         .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("/models/{OPENROUTER_MODEL}/endpoints")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{
-            "id": OPENROUTER_MODEL,
-            "endpoints": [{
-                "model_id": OPENROUTER_MODEL, "provider_name": "FiniteProvider",
-                "tag": "finite/exact", "context_length": 2048, "max_completion_tokens": 128,
-                "supported_parameters": ["max_tokens","tools"],
-                "pricing": {"prompt":"0.000001","completion":"0.000002"},
-                "status": 0, "supports_implicit_caching": false
-            }]
-        }})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{
+                "id": OPENROUTER_MODEL,
+                "endpoints": [{
+                    "model_id": OPENROUTER_MODEL, "provider_name": "FiniteProvider",
+                    "tag": "finite/exact", "context_length": 2048, "max_completion_tokens": 128,
+                    "supported_parameters": ["max_tokens","tools"],
+                    "pricing": {"prompt":"0.000001","completion":"0.000002"},
+                    "status": 0, "supports_implicit_caching": false
+                }]
+            }})),
+        )
         .mount(server)
         .await;
 }
@@ -1424,9 +1490,7 @@ async fn openrouter_session_served(
 }
 
 /// Each endpoint calls went to: (tag, calls answered, calls moved away).
-fn served_counts(
-    served: &axocoatl_llm_openai::NativeOpenRouterServed,
-) -> Vec<(String, u32, u32)> {
+fn served_counts(served: &axocoatl_llm_openai::NativeOpenRouterServed) -> Vec<(String, u32, u32)> {
     served
         .endpoints()
         .into_iter()
@@ -1550,7 +1614,10 @@ async fn native_openrouter_503_is_retried_once_and_both_calls_are_accounted() {
     for request in server.received_requests().await.unwrap() {
         if request.method.as_str() == "POST" {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
-            assert_eq!(body["provider"]["only"], serde_json::json!(["finite/exact"]));
+            assert_eq!(
+                body["provider"]["only"],
+                serde_json::json!(["finite/exact"])
+            );
             assert_eq!(body["model"], OPENROUTER_MODEL);
         }
     }
@@ -1558,7 +1625,10 @@ async fn native_openrouter_503_is_retried_once_and_both_calls_are_accounted() {
     assert_eq!(usage.calls, 2);
     assert_eq!(usage.unsettled_calls, 0);
     assert_eq!(usage.unreported_calls, 0);
-    assert!(usage.tokens.complete, "the refused call is known to be free");
+    assert!(
+        usage.tokens.complete,
+        "the refused call is known to be free"
+    );
     assert!(usage.cost_known);
     assert_eq!(usage.cost_microunits, 8);
     let charged = fixture
@@ -1593,10 +1663,9 @@ async fn native_openrouter_503_is_retried_once_and_both_calls_are_accounted() {
 /// A 401 is a rejection: nothing more is sent.
 #[tokio::test]
 async fn native_openrouter_401_is_not_retried() {
-    let (server, fixture, wrapped) = openrouter_session(
-        wiremock::ResponseTemplate::new(401).set_body_string("no such key"),
-    )
-    .await;
+    let (server, fixture, wrapped) =
+        openrouter_session(wiremock::ResponseTemplate::new(401).set_body_string("no such key"))
+            .await;
     let error = wrapped
         .chat_stream(ChatRequest::simple("Answer once"))
         .await
@@ -1641,11 +1710,13 @@ async fn openrouter_catalog(
     use wiremock::{Mock, ResponseTemplate};
     Mock::given(method("GET"))
         .and(path("/models"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
-            "id": OPENROUTER_MODEL,
-            "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
-            "supported_parameters": ["max_tokens","tools"]
-        }]})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":[{
+                "id": OPENROUTER_MODEL,
+                "architecture": {"input_modalities":["text"],"output_modalities":["text"]},
+                "supported_parameters": ["max_tokens","tools"]
+            }]})),
+        )
         .mount(server)
         .await;
     let rows = |endpoints: Vec<serde_json::Value>| {
@@ -1689,7 +1760,9 @@ async fn openrouter_answers(
     use wiremock::matchers::{body_partial_json, method, path};
     wiremock::Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_partial_json(serde_json::json!({"provider":{"only":[tag]}})))
+        .and(body_partial_json(
+            serde_json::json!({"provider":{"only":[tag]}}),
+        ))
         .respond_with(template)
         .mount(server)
         .await;
@@ -1755,7 +1828,12 @@ async fn native_openrouter_429_on_one_endpoint_moves_the_call_to_the_next_at_onc
         wiremock::ResponseTemplate::new(429).set_body_string(UPSTREAM_LIMITED),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("OtherProvider"),
+    )
+    .await;
     let (fixture, wrapped) = openrouter_session_on(&server).await;
     let started = std::time::Instant::now();
     let mut stream = wrapped
@@ -1778,7 +1856,10 @@ async fn native_openrouter_429_on_one_endpoint_moves_the_call_to_the_next_at_onc
     assert!(usage.tokens.complete && usage.cost_known);
     assert_eq!(usage.cost_microunits, 8);
     let charged = charged(&fixture);
-    assert_eq!((charged.invocations, charged.tokens, charged.cost_microunits), (2, 6, 8));
+    assert_eq!(
+        (charged.invocations, charged.tokens, charged.cost_microunits),
+        (2, 6, 8)
+    );
     let notes = recorded_retries(&fixture);
     assert_eq!(
         notes,
@@ -1791,7 +1872,10 @@ async fn native_openrouter_429_on_one_endpoint_moves_the_call_to_the_next_at_onc
     let plane = fixture.controller.control_plane().unwrap();
     assert!(matches!(
         crate::provider_retry::run_events(&plane).as_slice(),
-        [axocoatl_session::run_record::RunEvent::ProviderRetry { status: Some(429), .. }]
+        [axocoatl_session::run_record::RunEvent::ProviderRetry {
+            status: Some(429),
+            ..
+        }]
     ));
     // The next call goes to the endpoint that answered.
     let mut stream = wrapped
@@ -1887,11 +1971,19 @@ async fn native_openrouter_every_endpoint_limited_waits_once_then_says_it_is_an_
     assert_eq!(usage.unreported_calls, 0);
     assert!(usage.tokens.complete && usage.cost_known);
     let charged = charged(&fixture);
-    assert_eq!((charged.invocations, charged.tokens, charged.cost_microunits), (4, 0, 0));
+    assert_eq!(
+        (charged.invocations, charged.tokens, charged.cost_microunits),
+        (4, 0, 0)
+    );
     let notes = recorded_retries(&fixture);
     assert_eq!(notes.len(), 3, "{notes:?}");
-    assert!(notes[0].contains("from endpoint finite/exact (FiniteProvider) to endpoint other/exact"));
-    assert!(notes[1].starts_with("HTTP 429 from openrouter; retrying once in 2 s"), "{notes:?}");
+    assert!(
+        notes[0].contains("from endpoint finite/exact (FiniteProvider) to endpoint other/exact")
+    );
+    assert!(
+        notes[1].starts_with("HTTP 429 from openrouter; retrying once in 2 s"),
+        "{notes:?}"
+    );
     assert!(notes[2].contains("from endpoint other/exact (OtherProvider) to endpoint finite/exact"));
 }
 
@@ -1919,7 +2011,12 @@ async fn native_openrouter_account_limit_is_waited_out_on_the_same_endpoint() {
         .with_priority(1)
         .mount(&server)
         .await;
-    openrouter_answers(&server, "finite/exact", openrouter_reply_from("FiniteProvider")).await;
+    openrouter_answers(
+        &server,
+        "finite/exact",
+        openrouter_reply_from("FiniteProvider"),
+    )
+    .await;
     let (fixture, wrapped) = openrouter_session_on(&server).await;
     let started = std::time::Instant::now();
     let mut stream = wrapped
@@ -1934,7 +2031,10 @@ async fn native_openrouter_account_limit_is_waited_out_on_the_same_endpoint() {
     );
     let notes = recorded_retries(&fixture);
     assert_eq!(notes.len(), 1);
-    assert!(notes[0].starts_with("HTTP 429 from openrouter; retrying once in 1 s"), "{notes:?}");
+    assert!(
+        notes[0].starts_with("HTTP 429 from openrouter; retrying once in 1 s"),
+        "{notes:?}"
+    );
     assert!(provider_usage(&fixture).tokens.complete);
 }
 
@@ -1950,7 +2050,9 @@ async fn openrouter_answers_then(
     use wiremock::matchers::{body_partial_json, method, path};
     wiremock::Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_partial_json(serde_json::json!({"provider":{"only":[tag]}})))
+        .and(body_partial_json(
+            serde_json::json!({"provider":{"only":[tag]}}),
+        ))
         .respond_with(first)
         .up_to_n_times(times)
         .with_priority(1)
@@ -1958,7 +2060,9 @@ async fn openrouter_answers_then(
         .await;
     wiremock::Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_partial_json(serde_json::json!({"provider":{"only":[tag]}})))
+        .and(body_partial_json(
+            serde_json::json!({"provider":{"only":[tag]}}),
+        ))
         .respond_with(then)
         .with_priority(2)
         .mount(server)
@@ -2098,7 +2202,12 @@ async fn native_openrouter_a_move_the_grant_cannot_pay_is_not_made() {
         openrouter_reply_from("FiniteProvider"),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("OtherProvider"),
+    )
+    .await;
     let request = ChatRequest::simple("Answer once");
     let (fixture, wrapped, executor, _) = openrouter_session_served(&server, |executor| {
         3 * executor.execution_bounds(&request).unwrap().cost_microunits
@@ -2148,7 +2257,12 @@ async fn native_openrouter_a_call_the_grant_cannot_pay_where_calls_moved_goes_to
         openrouter_reply_from("FiniteProvider"),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("OtherProvider"),
+    )
+    .await;
     let request = ChatRequest::simple("Answer once");
     // Enough for one call on the pricier endpoint, not for two.
     let (fixture, wrapped, executor, served) = openrouter_session_served(&server, |executor| {
@@ -2173,7 +2287,11 @@ async fn native_openrouter_a_call_the_grant_cannot_pay_where_calls_moved_goes_to
         pinned_endpoints(&server).await,
         ["finite/exact", "other/exact", "finite/exact"]
     );
-    assert_eq!(recorded_retries(&fixture).len(), 1, "a new call is no retry");
+    assert_eq!(
+        recorded_retries(&fixture).len(),
+        1,
+        "a new call is no retry"
+    );
     assert_eq!(
         served_counts(&served),
         [
@@ -2210,7 +2328,9 @@ async fn native_openrouter_errors_inside_every_answer_are_said_as_an_outage() {
     let failure = |provider: &str| {
         error_in_answer(
             provider,
-            &[serde_json::json!({"error":{"code":429,"message":"Rate limit exceeded"},"choices":[]})],
+            &[
+                serde_json::json!({"error":{"code":429,"message":"Rate limit exceeded"},"choices":[]}),
+            ],
         )
     };
     openrouter_answers(&server, "finite/exact", failure("FiniteProvider")).await;
@@ -2278,7 +2398,12 @@ async fn native_openrouter_an_error_inside_an_answer_keeps_its_reservation() {
         ),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("OtherProvider"),
+    )
+    .await;
     let request = ChatRequest::simple("Answer once");
     let (fixture, wrapped, executor, served) =
         openrouter_session_served(&server, |_| 100_000).await;
@@ -2328,8 +2453,18 @@ async fn native_openrouter_fallback_whose_contract_changed_is_skipped_unsent() {
         wiremock::ResponseTemplate::new(429).set_body_string(UPSTREAM_LIMITED),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("OtherProvider")).await;
-    openrouter_answers(&server, "third/exact", openrouter_reply_from("ThirdProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("OtherProvider"),
+    )
+    .await;
+    openrouter_answers(
+        &server,
+        "third/exact",
+        openrouter_reply_from("ThirdProvider"),
+    )
+    .await;
     let (fixture, wrapped) = openrouter_session_on(&server).await;
     let mut stream = wrapped
         .chat_stream(ChatRequest::simple("Answer once"))
@@ -2379,8 +2514,18 @@ async fn native_openrouter_fallback_that_answers_as_another_provider_is_refused(
         wiremock::ResponseTemplate::new(429).set_body_string(UPSTREAM_LIMITED),
     )
     .await;
-    openrouter_answers(&server, "other/exact", openrouter_reply_from("FiniteProvider")).await;
-    openrouter_answers(&server, "third/exact", openrouter_reply_from("ThirdProvider")).await;
+    openrouter_answers(
+        &server,
+        "other/exact",
+        openrouter_reply_from("FiniteProvider"),
+    )
+    .await;
+    openrouter_answers(
+        &server,
+        "third/exact",
+        openrouter_reply_from("ThirdProvider"),
+    )
+    .await;
     let (fixture, wrapped) = openrouter_session_on(&server).await;
     let mut stream = wrapped
         .chat_stream(ChatRequest::simple("Answer once"))

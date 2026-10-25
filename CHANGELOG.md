@@ -917,6 +917,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sessions left.
 
 ### Fixed
+- **Cancelled macOS command I/O closes its pipe ends.** Child pipes are created
+  close-on-exec so unrelated programs cannot inherit them. The parent's FIFO ends
+  use nonblocking reads and writes that yield to deadlines; cancellation releases
+  them immediately, without leaving detached workers or continuing a cancelled write.
+- **Snapshot coverage distinguishes submodules from unread nested checkouts.**
+  Submodules record their checked-out commit, with the index gitlink as a fallback;
+  their contents are not captured. Every other nested checkout is named as not
+  covered, even when its entry did not change. Malformed or oversized encoded path
+  lists are refused before duplicate names can reduce their apparent size.
+- **Signed-out browser fixtures wait for cookie writes before closing their page.**
+  Chromium's queued writes can otherwise be lost, making the cookie-flood journeys
+  fail before they exercise sign-in behavior.
 - **A change whose patch is too large for a repository capture to print no longer stops
   the turn: the capture records it by its digest and size, and reads a repository of tens
   of thousands of files within its time.**

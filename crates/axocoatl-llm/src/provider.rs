@@ -137,7 +137,10 @@ pub fn is_portable_tool_name(name: &str) -> bool {
 /// next to a finished answer). It is returned so the caller can answer it
 /// with a tool error and let the model continue; the caller must never run
 /// it. Its name must still fit the portable contract, because the call is
-/// replayed to the provider as history.
+/// replayed to the provider as history: a call under another name (gpt-oss's
+/// own `browser.search`) makes the response unusable
+/// ([`crate::unusable::unoffered_call`]), so the Agent can ask the model
+/// once more.
 pub fn validate_response_tool_call(
     provider: &str,
     name: &str,
@@ -152,12 +155,7 @@ pub fn validate_response_tool_call(
         });
     }
     if !tools.iter().any(|tool| tool.name == name) && !is_portable_tool_name(name) {
-        return Err(ProviderError::ApiError {
-            provider: provider.to_string(),
-            status: 200,
-            message: "provider returned a call to an undeclared tool whose name is outside the portable tool-name contract"
-                .to_string(),
-        });
+        return Err(crate::unusable::unoffered_call(provider, name, tools));
     }
     if !arguments.is_object() {
         return Err(ProviderError::ApiError {
@@ -420,6 +418,22 @@ pub trait LlmProvider: Send + Sync + 'static {
         &self,
         request: ChatRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>;
+
+    /// Open a stream, calling `on_admitted` once after local admission and
+    /// before dispatch. Opening the response may still fail before a stream
+    /// exists. Hosts with a budget must override this method to call the
+    /// observer only after their reservation succeeds; a rejected call must
+    /// not invoke it. An observer failure stops dispatch.
+    async fn chat_stream_with_admission(
+        &self,
+        request: ChatRequest,
+        on_admitted: &(dyn Fn() -> Result<(), ProviderError> + Send + Sync),
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>, ProviderError>
+    {
+        self.validate_request(&request)?;
+        on_admitted()?;
+        self.chat_stream(request).await
+    }
 
     /// Count tokens for a request (for budget pre-checking).
     /// Default implementation counts complete message/tool serialization with
@@ -952,6 +966,32 @@ mod tests {
             concurrency: Default::default(),
         }];
         validate_provider_request(&request, "test").unwrap();
+    }
+
+    /// A call to an undeclared tool under a portable name is returned for
+    /// the caller to answer with a tool error; under a name no provider
+    /// takes back in history (gpt-oss's `browser.search`) it makes the
+    /// response unusable, naming the call and the tools the model has.
+    #[test]
+    fn a_call_to_an_undeclared_tool_outside_the_portable_names_is_unusable() {
+        let tools = [ToolDefinition {
+            name: "read_file".to_string(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+            concurrency: Default::default(),
+        }];
+        let arguments = serde_json::json!({"query": "x"});
+        validate_response_tool_call("ollama", "search", &arguments, &tools).unwrap();
+        match validate_response_tool_call("ollama", "browser.search", &arguments, &tools) {
+            Err(ProviderError::UnusableResponse { message, note, .. }) => {
+                assert!(
+                    message.starts_with("the model called browser.search, a tool it does not have"),
+                    "{message}"
+                );
+                assert!(note.ends_with("(you have read_file)"), "{note}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

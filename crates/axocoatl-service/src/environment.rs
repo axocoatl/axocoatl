@@ -123,15 +123,21 @@ impl ServiceEnvironment {
             }
         }
         if let Some(value) = var(SOCKET_PATH_VARIABLE).filter(|value| !value.is_empty()) {
-            match value.into_string() {
-                Ok(value)
-                    if Path::new(&value).is_absolute() && !value.chars().any(char::is_control) =>
-                {
-                    variables.push((SOCKET_PATH_VARIABLE.to_string(), value));
+            let why = match value.into_string() {
+                Err(_) => Some("is not valid UTF-8"),
+                Ok(value) if value.chars().any(char::is_control) => {
+                    Some("contains a control character")
                 }
-                _ => warnings.push(format!(
-                    "{SOCKET_PATH_VARIABLE} is not an absolute path and was not recorded, so the service's daemon listens at its default socket, where commands from this shell do not look. Set it to an absolute path, then run `axocoatl service install` again."
-                )),
+                Ok(value) if !Path::new(&value).is_absolute() => Some("is not an absolute path"),
+                Ok(value) => {
+                    variables.push((SOCKET_PATH_VARIABLE.to_string(), value));
+                    None
+                }
+            };
+            if let Some(why) = why {
+                warnings.push(format!(
+                    "{SOCKET_PATH_VARIABLE} {why} and was not recorded, so the service's daemon listens at its default socket, where commands from this shell do not look. Set it to an absolute path, then run `axocoatl service install` again."
+                ));
             }
         }
 
@@ -383,6 +389,38 @@ mod tests {
             environment.warnings()[0].contains("AXOCOATL_SOCKET_PATH is not an absolute path"),
             "{:?}",
             environment.warnings()
+        );
+    }
+
+    /// An absolute socket path that cannot be recorded says why: not UTF-8,
+    /// or a control character.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_path_that_cannot_be_recorded_says_why() {
+        use std::os::unix::ffi::OsStringExt;
+        let warning = |socket: OsString| {
+            let environment = ServiceEnvironment::from_lookup(
+                |name| match name {
+                    "PATH" => Some("/usr/bin".into()),
+                    SOCKET_PATH_VARIABLE => Some(socket.clone()),
+                    _ => None,
+                },
+                |path| path == Path::new("/usr/bin/podman"),
+            );
+            assert_eq!(value(&environment, SOCKET_PATH_VARIABLE), None);
+            environment.warnings()[0].clone()
+        };
+        let not_utf8 = warning(OsString::from_vec(b"/tmp/axo-\xff.sock".to_vec()));
+        assert!(
+            not_utf8.starts_with("AXOCOATL_SOCKET_PATH is not valid UTF-8 and was not recorded"),
+            "{not_utf8}"
+        );
+        let control = warning(OsString::from("/tmp/axo\n.sock"));
+        assert!(
+            control.starts_with(
+                "AXOCOATL_SOCKET_PATH contains a control character and was not recorded"
+            ),
+            "{control}"
         );
     }
 

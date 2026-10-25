@@ -9,10 +9,13 @@
 //! ([`crate::routes::WORKBENCH_HOST`]), never receives such a cookie.
 //! Embedded in the workbench's frame, Safari gives a Preview no cookies at
 //! all. So where the request comes from Safari's engine on an Apple platform
-//! ([`is_safari_engine_on_apple`]) and asks for a page of its own
-//! ([`page_request`]: `Sec-Fetch-Dest: document`, or any other navigation that
-//! is not a frame), [`refuse_top_level_preview`] answers with a short page that
-//! says why ([`top_level_preview_refusal`]) and the app is never asked. That
+//! ([`is_safari_engine_on_apple`]), or from a browser whose user agent names a
+//! Chromium-based browser but that sends no client hints, as a Safari told to
+//! send Chrome's user agent does ([`claims_chromium_without_client_hints`]),
+//! and asks for a page of its own ([`page_request`]: `Sec-Fetch-Dest:
+//! document`, or any other navigation that is not a frame),
+//! [`refuse_top_level_preview`] answers with a short page that says why
+//! ([`top_level_preview_refusal`]) and the app is never asked. That
 //! holds whatever led there: a link, a redirect, Command-click, the context
 //! menu, a window the Preview opened, or an address typed or pasted. The
 //! Preview in the workbench's frame (`Sec-Fetch-Dest: iframe`) and every
@@ -58,11 +61,13 @@ use std::str::FromStr;
 /// Chromium-based browsers and Firefox on a Mac, and WebKit on Linux with its
 /// own user agent (`X11; Linux`, which WebKitGTK and WPE build by default;
 /// that engine refuses a `Domain=localhost` cookie), are not. Only the user
-/// agent counts, so a browser is taken for what it says it is: a Safari whose
-/// user agent was changed to another browser's (Develop > User Agent) for that
-/// browser, and Playwright's WebKit on Linux, which sends Safari's Mac user
-/// agent, for Safari. static/ui/preview-embedding.js makes the same decision
-/// in the page, from `navigator.vendor` first.
+/// agent counts here, so Playwright's WebKit on Linux, which sends Safari's
+/// Mac user agent, is taken for Safari, and a Safari whose user agent was
+/// changed to another browser's (Develop > User Agent) is not. Where that
+/// other browser is Chromium-based, the missing client hints give it away
+/// ([`claims_chromium_without_client_hints`]); a Safari that claims to be
+/// Firefox is taken for Firefox. static/ui/preview-embedding.js makes the
+/// same decisions in the page, from `navigator.vendor` first.
 pub(crate) fn is_safari_engine_on_apple(user_agent: &str) -> bool {
     let has = |token: &str| user_agent.contains(token);
     let ios = ["iPhone", "iPad", "iPod", "CriOS/", "FxiOS/", "EdgiOS/"]
@@ -76,6 +81,38 @@ pub(crate) fn is_safari_engine_on_apple(user_agent: &str) -> bool {
         && !["Chrome/", "Chromium/", "Edg/", "OPR/", "Firefox/"]
             .into_iter()
             .any(has)
+}
+
+/// True when `user_agent` names a Chromium-based browser (`Chrome/`,
+/// `Chromium/`, `Edg/`, `OPR/`) but the request carries no `Sec-CH-UA`.
+///
+/// Chromium-based browsers have sent `Sec-CH-UA` with every request to a
+/// secure origin since Chrome 89 (2021), and an `http://*.localhost` Preview origin
+/// is one; a page cannot remove it from a navigation, and Safari and Firefox
+/// do not send it. Measured with Playwright 1.64.1 on macOS: its Chromium 156,
+/// with its own user agent and with Chrome's set by Playwright, and Google
+/// Chrome 155 sent it on a typed Preview address, a link, a Command-click,
+/// `window.open` and a redirect; its WebKit, with its own user agent and with
+/// Chrome's, sent none. Such a browser is taken for Safari's engine with
+/// another browser's user agent.
+pub(crate) fn claims_chromium_without_client_hints(user_agent: &str, headers: &HeaderMap) -> bool {
+    let claims_chromium = ["Chrome/", "Chromium/", "Edg/", "OPR/"]
+        .into_iter()
+        .any(|token| user_agent.contains(token));
+    let client_hints = headers
+        .get("sec-ch-ua")
+        .is_some_and(|value| !value.as_bytes().trim_ascii().is_empty());
+    claims_chromium && !client_hints
+}
+
+/// Which rule keeps a Preview embedded for this browser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeptEmbedded {
+    /// Safari's engine on an Apple platform ([`is_safari_engine_on_apple`]).
+    Safari,
+    /// A Chromium-based browser's user agent without client hints
+    /// ([`claims_chromium_without_client_hints`]).
+    UnconfirmedChromium,
 }
 
 /// A request for a page of its own, in a tab or a window.
@@ -123,16 +160,25 @@ pub(crate) fn page_request(headers: &HeaderMap) -> Option<PageRequest> {
     }
 }
 
-/// The page request ([`page_request`]) of Safari's engine on an Apple
-/// platform ([`is_safari_engine_on_apple`]), which a Preview origin refuses.
-pub(crate) fn top_level_preview_in_safari(headers: &HeaderMap) -> Option<PageRequest> {
+/// The page request ([`page_request`]) that a Preview origin refuses, and
+/// why: one of Safari's engine on an Apple platform
+/// ([`is_safari_engine_on_apple`]), or of a browser that claims to be
+/// Chromium-based without client hints
+/// ([`claims_chromium_without_client_hints`]).
+pub(crate) fn refused_top_level_preview(
+    headers: &HeaderMap,
+) -> Option<(KeptEmbedded, PageRequest)> {
     let user_agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())?;
-    if !is_safari_engine_on_apple(user_agent) {
+    let browser = if is_safari_engine_on_apple(user_agent) {
+        KeptEmbedded::Safari
+    } else if claims_chromium_without_client_hints(user_agent, headers) {
+        KeptEmbedded::UnconfirmedChromium
+    } else {
         return None;
-    }
-    page_request(headers)
+    };
+    page_request(headers).map(|kind| (browser, kind))
 }
 
 /// A Session id as [`crate::routes`] validates it from a Preview Host
@@ -181,34 +227,65 @@ code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
 /// It runs no script and loads nothing (`default-src 'none'`), and its CSP
 /// `sandbox` gives it an opaque origin, so it can set no cookie either. A
 /// `HEAD` request gets the same headers and no body.
+///
+/// Its link leaves a `*.localhost` address for `127.0.0.1`, another site, so
+/// the browser leaves the workbench's SameSite=Strict sign-in cookie off that
+/// navigation and the workbench answers with its sign-in page. That page's
+/// Continue is same-origin, so the cookie goes with it, and it opens the
+/// Session the link named (a journey follows both in Chromium and WebKit).
+/// The page says so, and that the workbench's own tab still shows the
+/// Preview.
 pub(crate) fn top_level_preview_refusal(
     method: &Method,
     session_id: &str,
     listener_port: Option<u16>,
+    browser: KeptEmbedded,
     kind: PageRequest,
 ) -> Response {
+    const SHARED_COOKIES: &str = "A page on a <code>*.localhost</code> address that runs in \
+its own tab in Safari can set cookies that Safari then sends to every other app on a \
+<code>localhost</code> address, other Sessions' Previews included.";
     let workbench = workbench_url(session_id, listener_port);
-    let reason = match kind {
-        PageRequest::TopLevel => {
+    let reason = match (browser, kind) {
+        (KeptEmbedded::Safari, PageRequest::TopLevel) => format!(
             "<h1>This Preview opens only in the workbench</h1>\n\
 <p>In Safari, Axocoatl does not show a Preview in a tab or window of its own. \
-A page on a <code>*.localhost</code> address that runs in its own tab can set cookies \
-that Safari then sends to every other app on a <code>localhost</code> address, other \
-Sessions' Previews included. In the workbench's Preview pane Safari gives it no cookies \
+{SHARED_COOKIES} In the workbench's Preview pane Safari gives it no cookies \
 at all, so in Safari a Preview opens only there.</p>\n"
-        }
-        PageRequest::Unlabelled => {
+        ),
+        (KeptEmbedded::UnconfirmedChromium, PageRequest::TopLevel) => format!(
+            "<h1>This Preview opens only in the workbench</h1>\n\
+<p>This browser's user agent names a Chromium-based browser, such as Chrome or Edge, but \
+its request carried none of the client hints (<code>Sec-CH-UA</code>) that every \
+Chromium-based browser sends here, so Axocoatl takes it for Safari with another browser's \
+user agent and does not show a Preview in a tab or window of its own. {SHARED_COOKIES}</p>\n"
+        ),
+        (KeptEmbedded::Safari, PageRequest::Unlabelled) => format!(
             "<h1>This Safari cannot show Previews</h1>\n\
 <p>Safari 16.4 and later say whether a page is for the workbench's Preview pane or \
-for a tab of its own; this one did not. A Preview in a tab of its own can set cookies \
-that Safari then sends to every other app on a <code>localhost</code> address, other \
-Sessions' Previews included, so Axocoatl shows no Preview in this Safari. Update \
-Safari.</p>\n"
-        }
+for a tab of its own; this one did not. {SHARED_COOKIES} So Axocoatl shows no Preview \
+in this Safari. Update Safari.</p>\n"
+        ),
+        (KeptEmbedded::UnconfirmedChromium, PageRequest::Unlabelled) => format!(
+            "<h1>This browser cannot show Previews</h1>\n\
+<p>This browser's user agent names a Chromium-based browser, but its request carried \
+neither Fetch Metadata nor client hints, which Chromium-based browsers send, so Axocoatl \
+can tell neither whether a page is for the workbench's Preview pane or for a tab of its \
+own, nor that this browser is not Safari. {SHARED_COOKIES} So Axocoatl shows no Preview \
+in this browser. Use the browser's own user agent, or update it.</p>\n"
+        ),
+    };
+    let elsewhere = match browser {
+        KeptEmbedded::Safari => "",
+        KeptEmbedded::UnconfirmedChromium => ", or this browser with its own user agent",
     };
     let body = format!(
-        "{REFUSAL_HEAD}{reason}<p><a href=\"{workbench}\">Open the workbench</a>. \
-For a full-page Preview, open the workbench in a browser other than Safari on a Mac.</p>\n\
+        "{REFUSAL_HEAD}{reason}<p>The workbench's tab, if it is still open, shows this Preview in \
+its Preview pane. Or <a href=\"{workbench}\">open the workbench</a>: coming from this \
+page, the browser does not send the workbench its sign-in cookie, so the workbench first \
+shows Axocoatl's sign-in page; if this browser is signed in, choose Continue there. \
+For a full-page Preview, open the workbench in a Chromium-based browser such as Chrome or \
+Edge{elsewhere}; on iPhone and iPad every browser uses Safari's engine.</p>\n\
 </body>\n</html>\n"
     );
     let mut response = if *method == Method::HEAD {
@@ -241,8 +318,9 @@ For a full-page Preview, open the workbench in a browser other than Safari on a 
 
 /// Middleware in front of the Preview Host boundary
 /// ([`crate::routes::preview_host_boundary`]): on a valid Preview Host, from
-/// a loopback peer, a page request of Safari's engine on an Apple platform
-/// ([`top_level_preview_in_safari`]) gets [`top_level_preview_refusal`].
+/// a loopback peer, a page request of Safari's engine on an Apple platform,
+/// or of a browser that claims to be Chromium-based without client hints
+/// ([`refused_top_level_preview`]), gets [`top_level_preview_refusal`].
 /// Everything else, including an invalid Preview Host and a peer that is not
 /// on loopback (the boundary refuses both), goes on unchanged.
 pub async fn refuse_top_level_preview(request: Request, next: Next) -> Response {
@@ -256,7 +334,7 @@ pub async fn refuse_top_level_preview(request: Request, next: Next) -> Response 
     {
         return next.run(request).await;
     }
-    let Some(kind) = top_level_preview_in_safari(request.headers()) else {
+    let Some((browser, kind)) = refused_top_level_preview(request.headers()) else {
         return next.run(request).await;
     };
     let listener_port = request
@@ -265,7 +343,13 @@ pub async fn refuse_top_level_preview(request: Request, next: Next) -> Response 
         .and_then(|value| value.to_str().ok())
         .and_then(|value| Authority::from_str(value).ok())
         .and_then(|authority| authority.port_u16());
-    top_level_preview_refusal(request.method(), &target.session_id, listener_port, kind)
+    top_level_preview_refusal(
+        request.method(),
+        &target.session_id,
+        listener_port,
+        browser,
+        kind,
+    )
 }
 
 /// Whether a browser asked the legacy Preview path for anything but a data
@@ -357,6 +441,13 @@ mod tests {
     const WEBKIT_LINUX_OWN_TAB: &str = "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/60.5 Safari/605.1.15";
     const CHROME_ANDROID: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
     const CHROME_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
+    // `Sec-CH-UA` as measured with Playwright 1.64.1 on macOS: Google Chrome
+    // 155 and Playwright's Chromium 156.
+    const CHROME_CLIENT_HINTS: &str =
+        r#""Google Chrome";v="155", "Chromium";v="155", "Not(A:Brand";v="24""#;
+    const HEADLESS_CLIENT_HINTS: &str =
+        r#""Not:A-Brand";v="8", "Chromium";v="156", "HeadlessChrome";v="156""#;
 
     const PREVIEW_HOST: &str = "ses-123e4567-e89b-12d3-a456-426614174000-p3000.localhost:18080";
     const NAVIGATION_ACCEPT: &str =
@@ -482,10 +573,11 @@ mod tests {
     #[test]
     fn only_safari_on_apple_has_its_page_requests_refused() {
         let navigation = |user_agent: &str, dest: &str| {
-            top_level_preview_in_safari(&headers(&[
+            refused_top_level_preview(&headers(&[
                 ("user-agent", user_agent),
                 ("sec-fetch-dest", dest),
                 ("sec-fetch-mode", "navigate"),
+                ("sec-ch-ua", CHROME_CLIENT_HINTS),
             ]))
         };
         for user_agent in [
@@ -497,7 +589,7 @@ mod tests {
         ] {
             assert_eq!(
                 navigation(user_agent, "document"),
-                Some(PageRequest::TopLevel),
+                Some((KeptEmbedded::Safari, PageRequest::TopLevel)),
                 "{user_agent}"
             );
             assert_eq!(navigation(user_agent, "iframe"), None, "{user_agent}");
@@ -506,7 +598,7 @@ mod tests {
             assert_eq!(navigation(user_agent, "document"), None, "{user_agent}");
         }
         assert_eq!(
-            top_level_preview_in_safari(&headers(&[
+            refused_top_level_preview(&headers(&[
                 ("sec-fetch-dest", "document"),
                 ("sec-fetch-mode", "navigate"),
             ])),
@@ -514,12 +606,82 @@ mod tests {
             "a request without a User-Agent is not Safari"
         );
         assert_eq!(
-            top_level_preview_in_safari(&headers(&[
+            refused_top_level_preview(&headers(&[
                 ("user-agent", SAFARI_MAC),
                 ("accept", NAVIGATION_ACCEPT),
                 ("upgrade-insecure-requests", "1"),
             ])),
-            Some(PageRequest::Unlabelled)
+            Some((KeptEmbedded::Safari, PageRequest::Unlabelled))
+        );
+    }
+
+    /// Safari told to send a Chromium-based browser's user agent sends no
+    /// client hints, so its page requests are refused too; a real
+    /// Chromium-based browser's, with them, are not. Firefox and WebKit on
+    /// Linux send none and claim no Chromium.
+    #[test]
+    fn a_chromium_user_agent_without_client_hints_has_its_page_requests_refused() {
+        let navigation = |user_agent: &str, hints: Option<&str>, dest: &str| {
+            let mut pairs = vec![
+                ("user-agent", user_agent),
+                ("sec-fetch-dest", dest),
+                ("sec-fetch-mode", "navigate"),
+            ];
+            pairs.extend(hints.map(|hints| ("sec-ch-ua", hints)));
+            refused_top_level_preview(&headers(&pairs))
+        };
+        for user_agent in [
+            CHROME_MAC,
+            HEADLESS_CHROME_MAC,
+            EDGE_MAC,
+            OPERA_MAC,
+            CHROME_WINDOWS,
+            CHROME_ANDROID,
+        ] {
+            for hints in [CHROME_CLIENT_HINTS, HEADLESS_CLIENT_HINTS] {
+                assert_eq!(
+                    navigation(user_agent, Some(hints), "document"),
+                    None,
+                    "{user_agent}"
+                );
+            }
+            for hints in [None, Some(""), Some("  ")] {
+                assert_eq!(
+                    navigation(user_agent, hints, "document"),
+                    Some((KeptEmbedded::UnconfirmedChromium, PageRequest::TopLevel)),
+                    "{user_agent} {hints:?}"
+                );
+                assert_eq!(
+                    navigation(user_agent, hints, "iframe"),
+                    None,
+                    "{user_agent}"
+                );
+            }
+            assert_eq!(
+                refused_top_level_preview(&headers(&[
+                    ("user-agent", user_agent),
+                    ("accept", NAVIGATION_ACCEPT),
+                ])),
+                Some((KeptEmbedded::UnconfirmedChromium, PageRequest::Unlabelled)),
+                "{user_agent}"
+            );
+        }
+        for user_agent in [
+            FIREFOX_MAC,
+            WEBKIT_LINUX,
+            WEBKIT_LINUX_OWN_TAB,
+            "curl/8.7.1",
+        ] {
+            assert_eq!(
+                navigation(user_agent, None, "document"),
+                None,
+                "{user_agent}"
+            );
+        }
+        // A Safari's own user agent is Safari's rule, with or without hints.
+        assert_eq!(
+            navigation(SAFARI_MAC, Some(CHROME_CLIENT_HINTS), "document"),
+            Some((KeptEmbedded::Safari, PageRequest::TopLevel))
         );
     }
 
@@ -575,7 +737,17 @@ mod tests {
             "{body}"
         );
         assert!(
-            body.contains(r#"<a href="http://127.0.0.1:18080/?session=ses-123e4567-e89b-12d3-a456-426614174000">Open the workbench</a>"#),
+            body.contains(r#"Or <a href="http://127.0.0.1:18080/?session=ses-123e4567-e89b-12d3-a456-426614174000">open the workbench</a>: coming from this page, the browser does not send the workbench its sign-in cookie, so the workbench first shows Axocoatl's sign-in page; if this browser is signed in, choose Continue there."#),
+            "{body}"
+        );
+        assert!(
+            body.contains(
+                "The workbench's tab, if it is still open, shows this Preview in its Preview pane."
+            ),
+            "{body}"
+        );
+        assert!(
+            body.contains("open the workbench in a Chromium-based browser such as Chrome or Edge; on iPhone and iPad every browser uses Safari's engine.</p>"),
             "{body}"
         );
         assert!(!body.contains("<script"), "{body}");
@@ -628,24 +800,49 @@ mod tests {
             );
         }
 
-        // Chromium, Firefox and WebKit on Linux with its own user agent get
-        // the app top-level.
+        // Chromium (with its client hints), Firefox and WebKit on Linux with
+        // its own user agent get the app top-level.
         for user_agent in [
             HEADLESS_CHROME_MAC,
             FIREFOX_MAC,
             WEBKIT_LINUX,
             WEBKIT_LINUX_OWN_TAB,
         ] {
-            let mut pairs = document;
-            pairs[0] = ("user-agent", user_agent);
-            let (status, _, body) =
-                through_preview_guard(preview_request(PREVIEW_HOST, &pairs)).await;
+            let mut request = preview_request(PREVIEW_HOST, &document);
+            request
+                .headers_mut()
+                .insert(header::USER_AGENT, HeaderValue::from_static(user_agent));
+            request
+                .headers_mut()
+                .insert("sec-ch-ua", HeaderValue::from_static(HEADLESS_CLIENT_HINTS));
+            let (status, _, body) = through_preview_guard(request).await;
             assert_eq!(
                 (status, body.as_str()),
                 (StatusCode::OK, "app content"),
                 "{user_agent}"
             );
         }
+        // Chrome's user agent without them (a Safari told to send it) gets
+        // the refusal page, which says why.
+        let mut pairs = document;
+        pairs[0] = ("user-agent", CHROME_MAC);
+        let (status, _, body) = through_preview_guard(preview_request(PREVIEW_HOST, &pairs)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!body.contains("app content"), "{body}");
+        assert!(
+            body.contains("<h1>This Preview opens only in the workbench</h1>"),
+            "{body}"
+        );
+        assert!(
+            body.contains("This browser's user agent names a Chromium-based browser, such as Chrome or Edge, but its request carried none of the client hints (<code>Sec-CH-UA</code>)"),
+            "{body}"
+        );
+        assert!(
+            body.contains(
+                "such as Chrome or Edge, or this browser with its own user agent; on iPhone"
+            ),
+            "{body}"
+        );
 
         // A POST navigation (a form a Preview submits to a new window) is
         // refused too, and HEAD gets the headers without a body.

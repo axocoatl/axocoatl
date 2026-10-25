@@ -335,6 +335,7 @@ impl ReviewerFailure {
                           reasoning). Nothing from this response ran; Ollama ended it with \
                           done_reason \"stop\" and 6 tools offered"
                     .into(),
+                note: "your response held only reasoning: no answer and no tool call".into(),
             },
         }
     }
@@ -1958,9 +1959,11 @@ async fn a_reviewer_whose_model_answered_nothing_runs_its_round_again_once() {
     assert_eq!(retries.len(), 1, "{retries:?}");
     assert!(
         matches!(&retries[0], axocoatl_session::run_record::RunEvent::ProviderRetry { reason, status: None, .. }
-            if reason.starts_with("the model's response could not be used (the model's response \
-                                   held no answer and no tool call (it wrote only reasoning)); \
-                                   asking it once more with a note")),
+            if reason.starts_with("the model's response could not be used: the model's response \
+                                   held no answer and no tool call (it wrote only reasoning). \
+                                   Nothing from this response ran")
+                && reason.ends_with("Asking it once more with a note, as a new, separately \
+                                     reserved call")),
         "{retries:?}"
     );
     let plane = run.controller.control_plane().unwrap();

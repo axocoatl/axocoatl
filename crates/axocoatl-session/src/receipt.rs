@@ -953,7 +953,12 @@ fn read_git(dir: &Path, args: &[&str], ceiling: Option<&Path>) -> Result<String,
         .arg(&dir)
         .arg("-c")
         .arg(format!("safe.directory={}", dir.display()))
-        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -2075,7 +2080,10 @@ mod tests {
         );
         // Not checked out (as in a pull request's checkout without its
         // submodules): the commit the index records.
-        git(root, &["submodule", "deinit", "--quiet", "--force", "vendor/sub"]);
+        git(
+            root,
+            &["submodule", "deinit", "--quiet", "--force", "vendor/sub"],
+        );
         assert_eq!(
             hash_repo_path(root, "vendor/sub"),
             PathState::Commit(newest.clone())

@@ -2638,16 +2638,28 @@ fn repository_with_a_submodule(root: &std::path::Path, upstream: &std::path::Pat
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
 async fn actual_a_submodule_is_judged_by_its_commit() {
     for (writes, command, accepted) in [
-        (&["lib/"][..], "git -C vendor/sub checkout --quiet OLDER", false),
+        (
+            &["lib/"][..],
+            "git -C vendor/sub checkout --quiet OLDER",
+            false,
+        ),
         (&["lib/"][..], "printf y > lib/file-1.js", true),
-        (&["lib/", "vendor/"][..], "git -C vendor/sub checkout --quiet OLDER", true),
+        (
+            &["lib/", "vendor/"][..],
+            "git -C vendor/sub checkout --quiet OLDER",
+            true,
+        ),
     ] {
         let mut f = fixture().await;
         let upstream = tempfile::tempdir().unwrap();
         let older = repository_with_a_submodule(f._workspace.path(), upstream.path());
         let command = command.replace("OLDER", &older);
         let (settled, _) = settle_scoped_shell(&mut f, writes, &command).await;
-        assert_eq!(settled.accepted, accepted, "{command}: {:?}", settled.failure);
+        assert_eq!(
+            settled.accepted, accepted,
+            "{command}: {:?}",
+            settled.failure
+        );
         if !accepted {
             let failure = settled.failure.unwrap();
             assert!(

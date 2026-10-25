@@ -629,22 +629,32 @@ code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; }
 <h1>Sign in to Axocoatl</h1>
 "#;
 
-const SIGN_IN_PAGE_BODY: &str = r#"<p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
-<p>Already opened the link? <a href="/">Continue</a></p>
-<p>If you open the link and this page comes back, another page open in this browser, on another <code>127.0.0.1</code> address, may have set so many cookies for <code>127.0.0.1</code> that the browser no longer sends the sign-in cookie. Close that page, remove this browser's website data for <code>127.0.0.1</code> (in Safari: Settings &gt; Privacy &gt; Manage Website Data), then open the sign-in link again.</p>
+const SIGN_IN_PAGE_INSTRUCTIONS: &str = r#"<p>Run <code>axocoatl url</code> in a terminal, with the same <code>--config</code> and <code>AXOCOATL_DATA_DIR</code> that started this daemon, and open the link it prints. You can also open the sign-in link that <code>axocoatl serve</code> or <code>axocoatl dev</code> printed when it started.</p>
+"#;
+
+const SIGN_IN_PAGE_BODY: &str = r#"<p>If you open the link and this page comes back, another page open in this browser, on another <code>127.0.0.1</code> address, may have set so many cookies for <code>127.0.0.1</code> that the browser no longer sends the sign-in cookie. Close that page, remove this browser's website data for <code>127.0.0.1</code> (in Safari: Settings &gt; Privacy &gt; Manage Website Data), then open the sign-in link again.</p>
 </body>
 </html>
 "#;
 
-fn sign_in_page(invalid_link: bool) -> Response {
+/// The sign-in page for `GET uri`. Its Continue opens the same address
+/// without a `token=` value, so a browser that holds the token cookie but
+/// arrived from another site (a Preview's refusal page links to its
+/// Session) lands where that link pointed.
+fn sign_in_page(invalid_link: bool, uri: &Uri) -> Response {
     let reason = if invalid_link {
         "<p>That sign-in link is not valid for this Axocoatl daemon.</p>\n"
     } else {
         "<p>This workbench needs the sign-in token for this Axocoatl daemon.</p>\n"
     };
+    let target = html_attribute_url(&location_without_sign_in_token(uri));
     let mut response = (
         StatusCode::UNAUTHORIZED,
-        format!("{SIGN_IN_PAGE_HEAD}{reason}{SIGN_IN_PAGE_BODY}"),
+        format!(
+            "{SIGN_IN_PAGE_HEAD}{reason}{SIGN_IN_PAGE_INSTRUCTIONS}\
+             <p>Already opened the link? <a href=\"{target}\">Continue</a></p>\n\
+             {SIGN_IN_PAGE_BODY}"
+        ),
     )
         .into_response();
     let headers = response.headers_mut();
@@ -726,7 +736,7 @@ async fn local_dashboard(
         return if secret_matches(local.secret.expose_secret(), presented) {
             sign_in_redirect(local, request.uri())
         } else {
-            sign_in_page(true)
+            sign_in_page(true, request.uri())
         };
     }
     if is_authorized(config, request.headers()) {
@@ -747,7 +757,7 @@ async fn local_dashboard(
     {
         return same_origin_retry_page(local, request.uri());
     }
-    sign_in_page(false)
+    sign_in_page(false, request.uri())
 }
 
 /// `Set-Cookie` headers that remove this daemon's sign-in cookies from a
@@ -1403,7 +1413,7 @@ mod tests {
         assert!(response.headers().get(header::SET_COOKIE).is_none());
         let body = body_text(response).await;
         assert!(body.contains("axocoatl url"));
-        assert!(body.contains(r#"href="/""#));
+        assert!(body.contains(r#"<p>Already opened the link? <a href="/">Continue</a></p>"#));
         assert!(!body.contains("ax-rail"));
         // A browser a cookie flood keeps signed out only ever sees this page,
         // so it names that cause and the remedy.
@@ -1411,6 +1421,45 @@ mod tests {
             "another page open in this browser, on another <code>127.0.0.1</code> address"
         ));
         assert!(body.contains("Settings &gt; Privacy &gt; Manage Website Data"));
+    }
+
+    /// The sign-in page's Continue opens the address it was served for, so a
+    /// signed-in browser that a link from another site brought there (a
+    /// Preview's refusal page links to its Session) lands on that Session.
+    /// A `token=` value never goes into it, and the rest stays quoted.
+    #[tokio::test]
+    async fn the_sign_in_page_continues_to_the_address_it_was_served_for() {
+        for (uri, continue_to) in [
+            (
+                "/?session=s1&view=trace",
+                r#"<a href="/?session=s1&amp;view=trace">Continue</a>"#,
+            ),
+            (
+                "/?token=not-the-token&session=s1",
+                r#"<a href="/?session=s1">Continue</a>"#,
+            ),
+            (
+                "/?session=%22%3E%3Cscript%3E",
+                r#"<a href="/?session=%22%3E%3Cscript%3E">Continue</a>"#,
+            ),
+        ] {
+            let response = send(
+                &token_config(),
+                Method::GET,
+                uri,
+                &[
+                    ("sec-fetch-site", "cross-site"),
+                    ("sec-fetch-mode", "navigate"),
+                    ("sec-fetch-dest", "document"),
+                ],
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+            let body = body_text(response).await;
+            assert!(body.contains(continue_to), "{uri}: {body}");
+            assert!(!body.contains("not-the-token"), "{uri}");
+            assert!(!body.contains("<script>"), "{uri}");
+        }
     }
 
     #[tokio::test]
