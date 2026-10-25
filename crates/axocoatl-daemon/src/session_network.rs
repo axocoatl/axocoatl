@@ -594,7 +594,7 @@ pub(crate) mod tests {
 
     impl Stores {
         pub(crate) fn new(sessions: &[&str]) -> Arc<Self> {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let ownership = Arc::new(
                 LegacyFormatOwnership::acquire(root.path())
                     .unwrap()

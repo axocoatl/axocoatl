@@ -8,7 +8,7 @@ fn fixture() -> (
     SessionExecutionStore,
     Vec<TurnContractEnvelope>,
 ) {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()

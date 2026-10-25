@@ -205,10 +205,23 @@ This includes workflow, film, site, browser, cross-Linux, installer, release,
 MSRV, Rust, and package checks. The focused commands below are useful during
 iteration, but they do not replace a green preflight before a PR.
 
-Some sandbox tests require Podman and are ignored by default. Webhook tests bind
+Some sandbox tests require Podman, prepared images, the internet or a live
+Ollama and are ignored by default. CI runs them through
+`scripts/test-podman-suites.sh`, which you can run too: `list GROUP` shows a
+group's tests without Podman, `prepare GROUP` pulls and builds the images they
+need, and `run GROUP` runs them (groups `isolation`, `daemon`, `cli`, `other`
+and `ollama`; see the script's header). Webhook tests bind
 a local port; if an execution sandbox blocks that bind, rerun the same test in
 an environment that permits it rather than treating the denial as a product
 failure.
+
+The tests pass under any umask (the native gate runs them under 002,
+Ubuntu's login default) and whatever `CONTAINER_HOST` or `CONTAINER_CONNECTION`
+your shell sets, with one exception:
+`bootstrap::tests::installed_format_admits_checked_cleanup_without_mutating_legacy_history`
+runs the daemon's startup check in the test process, and, as the daemon does,
+it refuses a connection one of those variables names when Podman does not
+answer through it. Unset them, or start that connection.
 
 For focused runtime work, useful package gates include:
 

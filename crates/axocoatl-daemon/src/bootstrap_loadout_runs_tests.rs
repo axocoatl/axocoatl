@@ -2439,7 +2439,12 @@ async fn loadout_session_container_runs_egress_and_hardened() {
             "{{.HostConfig.NetworkMode}}",
         )
         .await;
-        assert_eq!(plain_mode, "bridge", "an unbound Session keeps bridge");
+        // `network: bridge` is Podman's default network, whatever Podman
+        // calls it (rootless Podman 4.9 reports `slirp4netns`), not `none`.
+        assert!(
+            !plain_mode.is_empty() && plain_mode != "none",
+            "an unbound Session keeps Podman's default network: {plain_mode}"
+        );
         let plain_id = plain_sandbox
             .exec(&["id", "-u"], Duration::from_secs(30))
             .await

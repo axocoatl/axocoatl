@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn restrict_file_sets_0600() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let f = dir.path().join("secret.bin");
         std::fs::write(&f, b"sk-xyz").unwrap();
         restrict_file(&f);
@@ -51,7 +51,7 @@ mod tests {
 
     #[test]
     fn restrict_dir_sets_0700() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let d = dir.path().join("data");
         std::fs::create_dir_all(&d).unwrap();
         restrict_dir(&d);

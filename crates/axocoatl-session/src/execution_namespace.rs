@@ -741,7 +741,7 @@ mod tests {
         Arc<UpgradedFormatOwnership>,
         SessionExecutionStore,
     ) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -1015,7 +1015,7 @@ mod tests {
             .component_namespace(ExecutionComponent::ActivationState)
             .unwrap();
         let root_path = store.path().parent().unwrap().join("activation-state");
-        let outside = tempfile::tempdir().unwrap();
+        let outside = crate::private_tempdir_test_support::private_tempdir();
         symlink(outside.path(), root_path.join("linked")).unwrap();
         assert!(namespace.existing_child("linked").is_err());
         assert!(fs::read_dir(outside.path()).unwrap().next().is_none());

@@ -221,7 +221,7 @@ pub(crate) fn signing_in() -> (Browser, Arc<Seen>) {
 }
 
 fn data_root() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().unwrap();
+    let directory = crate::private_tempdir_test_support::private_tempdir();
     axocoatl_daemon::AxocoatlDaemon::initialize_data_root(directory.path()).unwrap();
     directory
 }

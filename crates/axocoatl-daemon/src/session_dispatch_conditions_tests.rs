@@ -25,7 +25,7 @@ fn fixture() -> Fixture {
         .iter()
         .map(|step| serde_json::from_value(step["envelope"].clone()).unwrap())
         .collect();
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let owner = ExecutionStoreOwner {
         workspace_id: "check-workspace".into(),
         session_id: events[0].session_id.clone(),

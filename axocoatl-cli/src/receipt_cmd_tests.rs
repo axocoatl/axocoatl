@@ -273,7 +273,7 @@ fn without_a_trusted_key_a_valid_signature_is_exit_two() {
     assert_eq!(report.signature.as_deref(), Some("untrusted"));
     assert!(report.problems[0].contains("not one you trust"));
     // Another key is no better.
-    let other = tempfile::tempdir().unwrap();
+    let other = crate::private_tempdir_test_support::private_tempdir();
     let (other_key, _) = receipt_key::load_or_create(other.path()).unwrap();
     let report = verify(&VerifyRequest {
         key: vec![other_key.public().line("someone")],

@@ -89,8 +89,12 @@ AXO_BROWSER_ENGINE=webkit npm test
 
 `scripts/verify-product-browser-gate.sh` takes the same variable, installs
 that engine, and with `AXO_BROWSER_PROFILE=release` drives the release
-build. CI runs the release build in Chromium on x86_64 and aarch64 and in
-WebKit on x86_64. Set `AXOCOATL_E2E_BINARY` to select a binary other
+build. CI and `release.yml` run the release build in Chromium on x86_64 and
+aarch64 Linux and in WebKit on x86_64 Linux and on macOS 26. The macOS
+runner has no Podman: there `AXO_BROWSER_WITHOUT_PODMAN=1` leaves out the
+journey files that start a Session on Podman (the gate script lists them),
+and the release gate's `scripts/release-gate/browser-webkit-mac.sh` runs
+every journey in WebKit on a Mac with Podman. Set `AXOCOATL_E2E_BINARY` to select a binary other
 than `target/debug/axocoatl`; `npm run test:no-build` deliberately skips the
 Cargo build and uses that selected or default binary as-is.
 

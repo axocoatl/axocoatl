@@ -1648,7 +1648,7 @@ mod tests {
     use serde_json::json;
 
     fn setup() -> (tempfile::TempDir, SessionExecutionStore, serde_json::Value) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let guard = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -1870,7 +1870,7 @@ mod tests {
     }
 
     fn condition_setup() -> (tempfile::TempDir, SessionExecutionStore, serde_json::Value) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let guard = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -2032,7 +2032,7 @@ mod tests {
     fn lost_begin_acknowledgement_recovers_the_same_request_binding() {
         use crate::execution_content::{ExecutionContentStore, ExecutionRequestContent};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -2094,7 +2094,7 @@ mod tests {
         use crate::execution_content::ExecutionContentStore;
         use crate::SessionTurnStore;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         SessionTurnStore::open(root.path().join("session-history")).unwrap();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())

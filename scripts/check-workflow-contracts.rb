@@ -22,6 +22,27 @@ def walk(value, &block)
   end
 end
 
+# Every action a workflow, a composite action or a docs example uses is a
+# reviewed release that runs on Node.js 24 or is a composite action: GitHub's
+# runners force Node 20 actions onto Node 24 and warn on every job. To move
+# one, check its action.yml's `runs.using` at the new commit and change it here.
+REVIEWED_ACTIONS = {
+  "actions/checkout" => "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09", # v5.1.0, node24
+  "actions/setup-node" => "249970729cb0ef3589644e2896645e5dc5ba9c38", # v6.5.0, node24
+  "actions/setup-go" => "924ae3a1cded613372ab5595356fb5720e22ba16", # v6.5.0, node24
+  "actions/setup-python" => "e797f83bcb11b83ae66e0230d6156d7c80228e7c", # v6.0.0, node24
+  "actions/upload-artifact" => "cf430e030ddbb5b0abf93d22962f4752f3646cd9", # v7.0.2, node24
+  "actions/download-artifact" => "9000827ccba6bdab643e8b6fd33ac0654aef8333", # v8.0.2, node24
+  "actions/attest-build-provenance" => "4d101475d8b20a2381f78447822ac1eab6504dd8", # v4.2.2, composite
+  "Swatinem/rust-cache" => "6323deb102c322ba6fcbdcafc7e3dddab59af2b6", # v2.9.2, node24
+  "dtolnay/rust-toolchain" => "4360b52568e2003a75bf9bc1d59f33a8e3fc893c", # composite
+  "cloudflare/wrangler-action" => "953926a2e2182532811c01a25e53647d93bf07c0", # v4.1.3, node24
+}.freeze
+reviewed_action = lambda do |reference|
+  name, sha = reference.split("@", 2)
+  REVIEWED_ACTIONS[name] == sha
+end
+
 workflows = Dir[WORKFLOW_DIR.join("*.{yml,yaml}")].sort
 workflows.each do |path|
   begin
@@ -43,6 +64,9 @@ workflows.each do |path|
       reference = mapping["uses"].to_s
       unless reference.start_with?("./") || reference.match?(/\A[^\s@]+@\h{40}\z/)
         errors << "#{path}: action is not pinned to a full commit: #{reference}"
+      end
+      unless reference.start_with?("./") || reviewed_action.call(reference)
+        errors << "#{path}: #{reference} is not a reviewed Node 24 or composite release (REVIEWED_ACTIONS)"
       end
     end
 
@@ -88,6 +112,9 @@ composite_actions.each do |path|
       unless reference.start_with?("./") || reference.match?(/\A[^\s@]+@\h{40}\z/)
         errors << "#{label}: action is not pinned to a full commit: #{reference}"
       end
+      unless reference.start_with?("./") || reviewed_action.call(reference)
+        errors << "#{label}: #{reference} is not a reviewed Node 24 or composite release (REVIEWED_ACTIONS)"
+      end
     end
     next unless step["run"]
     run_blocks += 1
@@ -100,6 +127,18 @@ composite_actions.each do |path|
       File.write(file, step["run"].to_s + "\n")
       _stdout, stderr, status = Open3.capture3("bash", "-n", file)
       errors << "#{label}: invalid run-block shell syntax: #{stderr.strip}" unless status.success?
+    end
+  end
+end
+
+# The workflow examples people copy from the docs pin the same releases.
+docs_examples = `git -C #{ROOT} ls-files --cached --others --exclude-standard -- 'sites/docs/src/content/*.md' 'sites/docs/src/content/*.mdx' 'README.md'`
+                .lines.map(&:strip).reject(&:empty?).uniq.sort
+docs_examples.each do |relative|
+  ROOT.join(relative).read(encoding: "UTF-8").scan(/^\s*-?\s*uses:\s*([^\s#]+@[^\s#]+)/).flatten.each do |reference|
+    next if reference.start_with?("./", "axocoatl/")
+    unless reviewed_action.call(reference)
+      errors << "#{relative}: its example uses #{reference}, not a reviewed Node 24 release (REVIEWED_ACTIONS)"
     end
   end
 end
@@ -147,6 +186,9 @@ contracts = {
     "./scripts/release-gate/newuser-mac-ci.sh",
     "./scripts/release-gate/test-release-gate.sh",
     "node --test scripts/release-gate/*.test.mjs",
+    "./scripts/test-podman-suites.sh check",
+    "./scripts/test-podman-suites.sh run",
+    "./scripts/test-exec-supervisor-runtime.sh run",
   ],
   ".github/workflows/release.yml" => [
     "./scripts/verify-marketing-gate.sh source-bound",
@@ -188,6 +230,8 @@ contracts = {
     "cargo clippy --locked --workspace --all-targets --all-features --jobs 1",
     "cargo test --locked --workspace --jobs 1",
     "cargo test --locked --doc --workspace --jobs 1",
+    # The tests pass under Ubuntu's login umask, not only under 022.
+    "(umask 002 && cargo test --locked --workspace --jobs 1",
     "cargo build --locked --release -p axocoatl-cli --jobs 1",
     './scripts/check-no-live-verify.sh "$release_target_dir/release/axocoatl"',
   ],
@@ -505,6 +549,84 @@ unless final_release_proof && final_release_proof.fetch("run", "").include?("/re
 end
 unless step_position.call("test-gate", "Require a monotonic stable release version")
   errors << ".github/workflows/release.yml: normal release gate lacks the stable-SemVer frontier proof"
+end
+
+# Build provenance: prove-artifacts, which verified the four archives, signs
+# an attestation of each and proves it verifies for this workflow at this
+# tag; only that job may ask for an OIDC token.
+attest_steps = release_steps.call("prove-artifacts")
+attest = attest_steps.index { |step| step["uses"].to_s.start_with?("actions/attest-build-provenance@") }
+verify_set = attest_steps.index { |step| step["name"] == "Verify checksums, contents, and completeness" }
+attest_verify = attest_steps.index { |step| step["run"].to_s.include?("gh attestation verify") }
+unless attest && verify_set && attest_verify && verify_set < attest && attest < attest_verify
+  errors << ".github/workflows/release.yml: prove-artifacts must attest the verified archives (actions/attest-build-provenance) and then run gh attestation verify"
+end
+subjects = attest ? attest_steps[attest].dig("with", "subject-path").to_s : ""
+%w[x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin].each do |target|
+  errors << ".github/workflows/release.yml: the attestation does not name the #{target} archive" \
+    unless subjects.include?("-#{target}.tar.gz")
+end
+verify_source = attest_verify ? attest_steps[attest_verify]["run"].to_s : ""
+["--signer-workflow", "--source-ref", "--source-digest", "--deny-self-hosted-runners"].each do |flag|
+  errors << ".github/workflows/release.yml: gh attestation verify lacks #{flag}" unless verify_source.include?(flag)
+end
+attest_permissions = jobs.fetch("prove-artifacts").fetch("permissions", {})
+unless attest_permissions["attestations"] == "write" && attest_permissions["id-token"] == "write"
+  errors << ".github/workflows/release.yml: prove-artifacts needs attestations: write and id-token: write"
+end
+jobs.each do |job_name, job|
+  next if job_name == "prove-artifacts"
+  if job.is_a?(Hash) && job.dig("permissions", "id-token")
+    errors << ".github/workflows/release.yml: #{job_name} must not ask for an OIDC token (id-token)"
+  end
+end
+
+# The browser gate: ci.yml's product-browser legs, which release.yml repeats
+# before anything is built: the release build in Chromium on x86_64 and
+# aarch64 Linux, and in WebKit on x86_64 Linux and macOS.
+ci = YAML.load_file(ROOT.join(".github/workflows/ci.yml"))
+{ "ci.yml" => ci, "release.yml" => release }.each do |file, document|
+  job = document.dig("jobs", "product-browser") || {}
+  legs = Array(job.dig("strategy", "matrix", "include"))
+  wanted = [%w[chromium ubuntu-24.04], %w[chromium ubuntu-24.04-arm], %w[webkit ubuntu-24.04], %w[webkit macos-26]]
+  unless legs.map { |leg| [leg["engine"], leg["runner"]] }.sort == wanted.sort
+    errors << ".github/workflows/#{file}: product-browser must run Chromium on ubuntu-24.04 and ubuntu-24.04-arm and WebKit on ubuntu-24.04 and macos-26"
+  end
+  gate = Array(job["steps"]).find { |step| step["run"].to_s.include?("./scripts/verify-product-browser-gate.sh") }
+  unless gate && gate.dig("env", "AXO_BROWSER_PROFILE") == "release" \
+      && gate.dig("env", "AXO_BROWSER_ENGINE") == "${{ matrix.engine }}"
+    errors << ".github/workflows/#{file}: product-browser must run the release build in each leg's engine"
+  end
+end
+
+# Every job that pulls with Podman or runs the new-user gate first points
+# Podman at the Docker Hub mirror, so anonymous pulls meet no rate limit.
+{ "ci.yml" => ci, "release.yml" => release }.each do |file, document|
+  document.fetch("jobs").each do |job_name, job|
+    steps = Array(job["steps"])
+    pulls = steps.index do |step|
+      text = step["run"].to_s
+      text.include?("podman pull") || text.include?("newuser-linux.sh") || text.include?("test-podman-suites.sh prepare") \
+        || text.include?("test-exec-supervisor-runtime.sh prepare")
+    end
+    next unless pulls
+    mirror = steps.index { |step| step["run"].to_s.include?("./scripts/ci-registry-mirror.sh") }
+    unless mirror && mirror < pulls
+      errors << ".github/workflows/#{file}: #{job_name} pulls images before ./scripts/ci-registry-mirror.sh"
+    end
+  end
+end
+
+# The ignored suites run in CI, and the check that none is missing runs too.
+podman_groups = Array(ci.dig("jobs", "podman-suites", "strategy", "matrix", "group"))
+unless podman_groups.sort == %w[cli daemon isolation other]
+  errors << ".github/workflows/ci.yml: podman-suites must run the isolation, daemon, cli and other groups"
+end
+unless Array(ci.dig("jobs", "supervisor-runtime", "strategy", "matrix", "include")).map { |leg| leg["arch"] }.sort == %w[aarch64 x86_64]
+  errors << ".github/workflows/ci.yml: supervisor-runtime must run on x86_64 and aarch64"
+end
+unless Array(ci.dig("jobs", "ollama-suites", "steps")).any? { |step| step["run"].to_s.include?("./scripts/test-podman-suites.sh run ollama") }
+  errors << ".github/workflows/ci.yml: ollama-suites must run ./scripts/test-podman-suites.sh run ollama"
 end
 
 release_python = release_steps.call("build").find do |step|

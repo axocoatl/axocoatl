@@ -36,7 +36,7 @@ fn turn(store: &mut SessionTurnStore, session: &str, id: &str) {
 
 #[test]
 fn legacy_lifecycle_selection_preserves_rewind_delete_and_other_session_rows() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     turn(&mut legacy, "session-a", "a-first");
     turn(&mut legacy, "session-b", "b-first");
@@ -79,7 +79,7 @@ fn legacy_lifecycle_selection_preserves_rewind_delete_and_other_session_rows() {
 
 #[test]
 fn upgraded_history_uses_exact_seal_and_refuses_all_lifecycle_effects() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut legacy = SessionTurnStore::open(root.path().join("session-history")).unwrap();
     turn(&mut legacy, "session-a", "sealed");
     let upgraded = Arc::new(
@@ -149,7 +149,7 @@ fn upgraded_history_uses_exact_seal_and_refuses_all_lifecycle_effects() {
 
 #[test]
 fn retained_canonical_controller_never_grants_legacy_mutation() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership =
         DataRootFormatOwnership::Legacy(LegacyFormatOwnership::acquire(root.path()).unwrap());
     for operation in [

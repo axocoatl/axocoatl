@@ -1,12 +1,23 @@
-# The plan line `axocoatl run fix` printed on each tests/fixtures/newuser
-# fixture in CI ("New user (Linux, x86_64)", commit 583320b7, 2026-10-20),
-# as PlanSummary::summary (crates/axocoatl-daemon/src/loadout/toolchain.rs)
-# returns it; the CLI prints it as `· note: <line>` and as `  <line>` under
-# Notes:. One fixture and its line per row, separated by a tab.
-# lib.sh's gate_chosen_image reads these lines, fake-axocoatl.mjs prints them,
-# and test-release-gate.sh checks both.
+# The plan line `axocoatl run fix` prints on each tests/fixtures/newuser
+# fixture, as EnvironmentPlan::summary (crates/axocoatl-daemon/src/loadout/
+# toolchain.rs) returns it; the CLI prints it as `· note: <line>` and as
+# `  <line>` under Notes:. The node-plain, node-deps, python-pytest and rust
+# lines are the ones CI printed ("New user (Linux, x86_64)", commit 583320b7,
+# 2026-10-20); the others are that summary on the fixtures as they are now
+# (go with a dependency, and the fixtures added since). The daemon test
+# the_new_user_fixtures_plan_what_the_gate_expects fails when a line here is
+# not the summary (but for the recipe image's tag). One fixture and its line
+# per row, separated by a tab. lib.sh's gate_chosen_image reads these lines,
+# fake-axocoatl.mjs prints them, and test-release-gate.sh checks both.
 node-plain	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
 node-deps	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
 python-pytest	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
 rust	image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
-go	image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup none
+go	image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+node-pnpm	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup pnpm install --frozen-lockfile --prefer-offline --store-dir "$AXOCOATL_CACHE/node/pnpm-store" (detected; registries registry.npmjs.org open for it alone)
+node-yarn	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+node-yarn-berry	image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup YARN_HTTPS_PROXY="$HTTPS_PROXY" YARN_HTTP_PROXY="$HTTP_PROXY" yarn install --immutable (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+python-poetry	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8.0,<9' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+python-uv	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+python-pdm	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+python-hatch	image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8' (detected; registries pypi.org, files.pythonhosted.org open for it alone)

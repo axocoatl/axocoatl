@@ -863,6 +863,79 @@ mod tests {
         );
     }
 
+    /// The new-user gate's fixtures (tests/fixtures/newuser): `run fix`
+    /// plans each with the toolchain and image its fixtures.json entry
+    /// names, and a fixture whose entry names a setup gets that setup with
+    /// its registries open, so the gate's check of the live run's output can
+    /// only fail on what the live run did. The plan lines the gate's
+    /// self-test reads (scripts/release-gate/testdata/run-plan-lines.txt)
+    /// are this summary, but for the recipe image's tag.
+    #[test]
+    fn the_new_user_fixtures_plan_what_the_gate_expects() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = repository.join("tests/fixtures/newuser");
+        let expected: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("fixtures.json")).unwrap())
+                .unwrap();
+        let fixtures = expected["fixtures"].as_object().unwrap();
+        assert!(fixtures.len() >= 12, "{fixtures:?}");
+        let lines = std::fs::read_to_string(
+            repository.join("scripts/release-gate/testdata/run-plan-lines.txt"),
+        )
+        .unwrap();
+        let recorded: std::collections::HashMap<&str, &str> = lines
+            .lines()
+            .filter(|line| !line.starts_with('#') && !line.is_empty())
+            .map(|line| line.split_once('\t').unwrap())
+            .collect();
+        // The recipe image's tag is a hash of the recipes, which other
+        // changes move.
+        let untagged = |line: &str| {
+            line.split(' ')
+                .map(|word| match word.split_once(':') {
+                    Some((image, _)) if image.starts_with("localhost/axocoatl-recipe-") => {
+                        format!("{image}:TAG")
+                    }
+                    _ => word.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut stale = Vec::new();
+        for (name, fixture) in fixtures {
+            let plan = run_plan(
+                &root.join(name),
+                "fix",
+                EnvironmentRequest::default(),
+                None,
+                None,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let summary = plan.summary();
+            let language = fixture["language"].as_str().unwrap();
+            assert_eq!(
+                plan.toolchain.map(Toolchain::name),
+                Some(language),
+                "{name}: {summary}"
+            );
+            let image = fixture["image_contains"].as_str().unwrap();
+            assert!(plan.image_text().contains(image), "{name}: {summary}");
+            if let Some(setup) = fixture["setup_contains"].as_str() {
+                assert!(summary.contains(setup), "{name}: {setup} in {summary}");
+                let planned = plan.setup.as_ref().unwrap();
+                assert!(!planned.registries.is_empty(), "{name}: {summary}");
+            }
+            if recorded.get(name.as_str()).map(|line| untagged(line)) != Some(untagged(&summary)) {
+                stale.push(format!("{name}\t{summary}"));
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "run-plan-lines.txt should hold these lines:\n{}",
+            stale.join("\n")
+        );
+    }
+
     #[test]
     fn external_writers_compose_their_recipe_with_the_toolchain() {
         let dir = repo(&[(

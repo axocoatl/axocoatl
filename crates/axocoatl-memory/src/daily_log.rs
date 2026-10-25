@@ -194,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_and_read_a_day() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let log = DailyLogMemory::new("test-agent", tmp.path());
 
         // Pin an explicit date so a real midnight crossing during the test can't
@@ -211,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_range() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let log = DailyLogMemory::new("test-agent", tmp.path());
 
         let today = chrono::Local::now().date_naive();
@@ -234,7 +234,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn scoped_id_reads_legacy_log_and_appends_only_to_portable_path() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let id = "ses-123:coder";
         let day = chrono::NaiveDate::from_ymd_opt(2020, 1, 15).unwrap();
         let legacy_dir = tmp.path().join(id);
@@ -257,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn traversal_id_appends_under_the_supplied_root() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = crate::private_tempdir_test_support::private_tempdir();
         let root = parent.path().join("daily");
         let outside = parent.path().join("outside");
         tokio::fs::create_dir_all(&outside).await.unwrap();
@@ -276,7 +276,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn lowercase_current_log_does_not_adopt_uppercase_legacy_directory() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let day = chrono::NaiveDate::from_ymd_opt(2020, 1, 15).unwrap();
         let legacy_dir = tmp.path().join("Coder");
         tokio::fs::create_dir_all(&legacy_dir).await.unwrap();

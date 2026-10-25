@@ -226,6 +226,9 @@ esac
             .env("AXOCOATL_DATA_DIR", &data)
             .env("AXOCOATL_SOCKET_PATH", root.path().join("ipc/daemon.sock"))
             .env("PATH", path)
+            // The fake Podman above, not a connection the shell names.
+            .env_remove("CONTAINER_HOST")
+            .env_remove("CONTAINER_CONNECTION")
             .current_dir(root.path())
             .kill_on_drop(true)
             .output(),

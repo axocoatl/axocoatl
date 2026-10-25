@@ -3,8 +3,13 @@
 //! The gated live egress tests (`AXOCOATL_LIVE_EGRESS=1`, in the daemon's
 //! `session_egress` tests) verified `npm` (`npm ci` of an Express fixture),
 //! `crates` (`cargo fetch`), `alpine` and `debian` (readiness provisioning)
-//! on 2026-10-02: none of their connections was refused. The other lists are
-//! UNVERIFIED. Correct a list from a live test's refusals, never by guessing.
+//! on 2026-10-02: none of their connections was refused. They also check
+//! `ubuntu` (readiness provisioning) and `github` (`git ls-remote`), and CI
+//! runs them on every push to main (scripts/test-podman-suites.sh, the
+//! daemon group). The new-user gate's Linux paths (CI's "New user (Linux)"
+//! legs) install the dependencies of the tests/fixtures/newuser fixtures
+//! through `npm`, `yarn`, `pypi`, `crates` and `go`. Correct a list from a
+//! live test's refusals, never by guessing.
 
 /// One preset: the hosts and ports it allows, and what the user should know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

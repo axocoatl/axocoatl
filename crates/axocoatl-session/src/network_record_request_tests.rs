@@ -138,7 +138,7 @@ fn request_events_are_bounded() {
 
 #[test]
 fn request_events_are_stored_and_read_back_in_order() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()

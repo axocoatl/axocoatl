@@ -23,7 +23,7 @@ fn open(path: &std::path::Path) -> KnowledgeStore {
 }
 #[test]
 fn knowledge_versions_reopen_export_and_revision_conflicts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     let one = store.save(draft("decision"), 0).unwrap();
     let mut edited = one.draft();
@@ -44,7 +44,7 @@ fn knowledge_versions_reopen_export_and_revision_conflicts() {
 }
 #[test]
 fn knowledge_corruption_never_resets() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     store.save(draft("d"), 0).unwrap();
     let path = store.state.records["d"][0].file.clone();
@@ -55,19 +55,19 @@ fn knowledge_corruption_never_resets() {
 }
 #[test]
 fn knowledge_owner_and_single_writer_are_enforced() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     assert!(store.bind_workspace("other").is_err());
     #[cfg(unix)]
     assert!(KnowledgeStore::open(SecureDir::open(dir.path()).unwrap()).is_err());
-    let other = tempfile::tempdir().unwrap();
+    let other = crate::private_tempdir_test_support::private_tempdir();
     let second = open(other.path());
     store.save(draft("private"), 0).unwrap();
     assert!(second.list().unwrap().is_empty());
 }
 #[test]
 fn knowledge_backlinks_search_bounds_and_snapshot_relative_freshness() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     store.save(draft("first"), 0).unwrap();
     let mut note = draft("second");
@@ -103,7 +103,7 @@ fn knowledge_backlinks_search_bounds_and_snapshot_relative_freshness() {
 }
 #[test]
 fn knowledge_paths_and_duplicate_links_rejected() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     for path in ["../secret", "/tmp/x", "a/../b", "a\\b", "a//b", "a\0b"] {
         let mut note = draft("d");
@@ -126,7 +126,7 @@ fn knowledge_paths_and_duplicate_links_rejected() {
     assert!(store.save(note, 0).is_err());
 }
 fn history(workspace: &str) -> (tempfile::TempDir, SessionExecutionStore) {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()
@@ -258,7 +258,7 @@ fn proposal(
 }
 #[test]
 fn knowledge_agent_promotion_requires_closed_exact_accepted_generation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut notes = open(dir.path());
     let (_root, mut turns) = history("workspace-a");
     let activation = started(&mut turns);
@@ -304,7 +304,7 @@ fn knowledge_agent_promotion_requires_closed_exact_accepted_generation() {
 }
 #[test]
 fn knowledge_failed_cancelled_or_foreign_workspace_cannot_publish() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut notes = open(dir.path());
     let (_root, mut turns) = history("workspace-b");
     let activation = started(&mut turns);
@@ -341,7 +341,7 @@ fn knowledge_failed_cancelled_or_foreign_workspace_cannot_publish() {
 }
 #[test]
 fn knowledge_proposal_human_decisions_preserve_provenance_and_conflicts() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut notes = open(dir.path());
     let (_root, mut turns) = history("workspace-a");
     let activation = started(&mut turns);
@@ -376,7 +376,7 @@ fn knowledge_proposal_human_decisions_preserve_provenance_and_conflicts() {
 }
 #[test]
 fn knowledge_real_parsers_and_unsupported_source_search() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     let files=vec![SourceFile{path:"a.rs".into(),content:"// fn fake() {}\nuse std::fmt;\npub struct Thing;\nimpl Thing { pub fn run(&self) {} }\n".into()},SourceFile{path:"a.py".into(),content:"# def fake(): pass\nimport os\nclass Thing:\n    def run(self):\n        pass\n".into()},SourceFile{path:"a.js".into(),content:"import {x} from './x.js';\nexport function run() { return x; }".into()},SourceFile{path:"a.ts".into(),content:"import type { X } from './x';\nexport interface Shape { x: number }\nexport function run(x: number): number { return x; }".into()},SourceFile{path:"notes.txt".into(),content:"def not_a_python_definition():\nknowledge text".into()}];
     let index = store
@@ -412,7 +412,7 @@ fn knowledge_real_parsers_and_unsupported_source_search() {
 }
 #[test]
 fn knowledge_index_rebuild_and_snapshot_separation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     let a = store
         .rebuild_source_index(
@@ -453,7 +453,7 @@ fn knowledge_index_rebuild_and_snapshot_separation() {
 
 #[test]
 fn knowledge_natural_language_retrieval_matches_terms_without_stopword_noise() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     let mut relevant = draft("retry");
     relevant.title = "Retry behavior".into();
@@ -480,7 +480,7 @@ fn knowledge_natural_language_retrieval_matches_terms_without_stopword_noise() {
 }
 #[test]
 fn a_proposal_too_large_to_publish_is_refused_when_proposed() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let mut store = open(dir.path());
     let activation = ActivationRef {
         session_id: SessionId::new("session-a").unwrap(),

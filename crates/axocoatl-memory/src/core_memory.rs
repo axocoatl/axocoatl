@@ -637,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_round_trips_and_ensure_block_no_clobber() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let path = dir.path().join("agent_a.json");
         let mut s = CoreMemoryStore::new("a", &path);
         let mut human = MemoryBlock::new("human", 0);
@@ -655,7 +655,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_block_clones_share_state() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut reg = SharedBlockRegistry::new(dir.path().join("shared"));
         let h1 = reg.ensure(MemoryBlock::new("team", 0)).await;
         // A second declaration of the same label returns the SAME block.
@@ -674,7 +674,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn scoped_core_store_promotes_safe_legacy_file_to_portable_path() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let data_dir = data.path().to_str().unwrap();
         let id = "ses-123:coder";
         let legacy = legacy_core_store_path(data_dir, id).unwrap();
@@ -693,7 +693,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn unreadable_legacy_core_does_not_create_a_hiding_current_file() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let data_dir = data.path().to_str().unwrap();
         let id = "ses-123:coder";
         let legacy = legacy_core_store_path(data_dir, id).unwrap();
@@ -707,7 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsafe_core_and_shared_ids_stay_inside_the_memory_root() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let data_dir = data.path().to_str().unwrap();
         let outside = data.path().join("outside.json");
         std::fs::write(&outside, b"sentinel").unwrap();
@@ -737,7 +737,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn lowercase_core_store_does_not_adopt_uppercase_legacy_file() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let data_root = SecureDir::open(data.path()).unwrap();
         let legacy = legacy_core_store_path(data.path().to_str().unwrap(), "Coder").unwrap();
         std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -774,7 +774,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn lowercase_shared_block_does_not_adopt_uppercase_legacy_file() {
-        let data = tempfile::tempdir().unwrap();
+        let data = crate::private_tempdir_test_support::private_tempdir();
         let data_root = SecureDir::open(data.path()).unwrap();
         let legacy_dir = data.path().join("memory/core/shared");
         std::fs::create_dir_all(&legacy_dir).unwrap();

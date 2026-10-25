@@ -909,6 +909,24 @@ if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- "$expected"; then
 else
   fail "newuser-mac-ci.sh refusal (exit $status): $out"
 fi
+out=$("$script_dir/browser-webkit-mac.sh" --help 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- 'C1-browser-webkit'; then
+  pass "browser-webkit-mac.sh --help"
+else
+  fail "browser-webkit-mac.sh --help (exit $status)"
+fi
+case "$(uname -s)" in
+  Darwin) expected="--tarball must be the candidate's macOS release archive" ;;
+  *) expected='runs the WebKit journeys on a Mac' ;;
+esac
+out=$("$script_dir/browser-webkit-mac.sh" --tarball "$work/nonexistent.tar.gz" 2>&1)
+status=$?
+if [ "$status" = 2 ] && printf '%s' "$out" | grep -q -- "$expected"; then
+  pass "browser-webkit-mac.sh refuses before doing anything ($expected)"
+else
+  fail "browser-webkit-mac.sh refusal (exit $status): $out"
+fi
 
 # --- newuser-linux.sh end to end against a stand-in axocoatl (it follows
 # the shared onboard/doctor/run contract) and the real stub model server.
@@ -942,6 +960,16 @@ case "$1" in
 esac
 PODMAN
   chmod 0755 "$sim/fakebin/podman"
+  # A stand-in npm: the copy-paste lint's `npm ci` would install into this
+  # checkout's sites/docs from the registry (the lint's own case above
+  # covers that step). It installs nothing, so the lint fails here; the
+  # simulated path fails anyway.
+  cat >"$sim/fakebin/npm" <<NPM
+#!/bin/sh
+printf '%s|%s\n' "\$(pwd -P)" "\$*" >>"$sim/npm.log"
+NPM
+  chmod 0755 "$sim/fakebin/npm"
+  docs_modules_before=$([ -e "$repo_root/sites/docs/node_modules" ] && echo yes || echo no)
   commit=$(printf 'b%.0s' $(seq 1 40))
   set +e
   env -u GITHUB_ACTIONS GATE_SIMULATION=1 GATE_TMPDIR="$sim" FAKE_AXOCOATL_VERSION="$version" PATH="$sim/fakebin:$PATH" \
@@ -950,8 +978,15 @@ PODMAN
   status=$?
   set -e
   [ "$status" = 1 ] || { tail -n 30 "$sim/run.log" >&2; echo "simulation exit $status, expected 1" >&2; exit 1; }
-  # node-plain is onboarding's sample: checked once it is in the tree.
-  present=$(cd "$repo_root/tests/fixtures/newuser" && for f in node-plain node-deps python-pytest rust go; do [ -d "$f" ] && printf '%s ' "$f"; done)
+  # The fixtures each tier runs (fixtures.json), as far as they are in the
+  # tree: node-plain is onboarding's sample, checked once it is there.
+  tier_fixtures() {
+    GATE_TIER=$1 gate_fixture_names | while IFS= read -r f; do
+      [ -d "$repo_root/tests/fixtures/newuser/$f" ] && printf '%s ' "$f"
+    done
+  }
+  present=$(tier_fixtures A)
+  present_live=$(tier_fixtures D)
   node -e '
     const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     const status = Object.fromEntries(e.steps.map((s) => [s.name, s.status]));
@@ -1097,7 +1132,7 @@ PODMAN
     if (!e.attachments.includes("D1-sim/answers.txt")) { console.error("no answers.txt"); process.exit(1); }
     const forward = e.steps.find((s) => s.name.startsWith("the sign-in browser reached"));
     if (!/listener on 127\.0\.0\.1:\d+ received the request \(GET \/<the gate path> Host 127\.0\.0\.1:\d+\)/.test(forward.detail)) { console.error(forward.detail); process.exit(1); }
-  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present" "$(required_steps D1)"
+  ' "$sim/evidence/$version/$commit/D1-sim.json" "$present_live" "$(required_steps D1)"
   # The account's range is back, beside the other user's, and the service
   # was uninstalled.
   grep -qx "$me:165536:65536" "$sim/subuid" || { cat "$sim/subuid" >&2; echo "the account has no range after onboarding" >&2; exit 1; }
@@ -1109,6 +1144,11 @@ PODMAN
   fi
   [ ! -e "$sim/evidence/$version/$commit/D1-again.json" ] || { echo "the refused live run wrote evidence" >&2; exit 1; }
   [ -d "$live_home" ] || { echo "the live run removed the account's HOME" >&2; exit 1; }
+  # Nothing was installed into this checkout.
+  if [ "$docs_modules_before" = no ] && [ -e "$repo_root/sites/docs/node_modules" ]; then
+    echo "the simulation installed sites/docs/node_modules into this checkout" >&2
+    exit 1
+  fi
 )
 sim_status=$?
 if [ "$sim_status" = 0 ]; then
@@ -1191,17 +1231,19 @@ done
   # A path the release does not require may fail: a warning, not a refusal.
   make_path "$from" C1-workbench-chromium fail
 
-  # A stand-in gh: run 111 is CI's push run of this commit; 222 is a fork's
-  # pull request; 333 ran another commit; 444 is the release workflow.
+  # A stand-in gh: run 111 is CI's green push run of this commit; 222 is a
+  # fork's pull request; 333 ran another commit; 444 is the release
+  # workflow; 555 is CI's push run of this commit with a failed job.
   mkdir -p "$work/gh-bin"
   cat >"$work/gh-bin/gh" <<GH
 #!/bin/sh
-run() { printf '{"head_sha":"%s","event":"%s","path":"%s","status":"completed","head_branch":"main","head_repository":{"full_name":"%s"},"repository":{"full_name":"axocoatl/axocoatl"}}\n' "\$1" "\$2" "\$3" "\$4"; }
+run() { printf '{"id":%s,"head_sha":"%s","event":"%s","path":"%s","status":"completed","conclusion":"%s","head_branch":"main","head_repository":{"full_name":"%s"},"repository":{"full_name":"axocoatl/axocoatl"}}\n' "\$5" "\$1" "\$2" "\$3" "\${6:-success}" "\$4"; }
 case "\$1 \$2" in
-  "api repos/axocoatl/axocoatl/actions/runs/111") run $commit push .github/workflows/ci.yml axocoatl/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/222") run $commit pull_request .github/workflows/ci.yml someone/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/333") run $(printf 'f%.0s' $(seq 1 40)) push .github/workflows/ci.yml axocoatl/axocoatl ;;
-  "api repos/axocoatl/axocoatl/actions/runs/444") run $commit push .github/workflows/release.yml axocoatl/axocoatl ;;
+  "api repos/axocoatl/axocoatl/actions/runs/111") run $commit push .github/workflows/ci.yml axocoatl/axocoatl 111 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/222") run $commit pull_request .github/workflows/ci.yml someone/axocoatl 222 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/333") run $(printf 'f%.0s' $(seq 1 40)) push .github/workflows/ci.yml axocoatl/axocoatl 333 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/444") run $commit push .github/workflows/release.yml axocoatl/axocoatl 444 ;;
+  "api repos/axocoatl/axocoatl/actions/runs/555") run $commit push .github/workflows/ci.yml axocoatl/axocoatl 555 failure ;;
   "run download")
     [ "\$3" = 111 ] || { echo "gh stand-in: downloaded run \$3" >>"$work/gh-downloads"; }
     shift 2; dir=''
@@ -1219,7 +1261,7 @@ GH
   for name in A-x86 A-arm; do
     make_path "$work/ci-evidence/1.5.0/$commit" "$name" pass
   done
-  for bad in 222:'pull_request run' 333:'not '"$commit" 444:'not .github/workflows/ci.yml'; do
+  for bad in 222:'pull_request run' 333:'not '"$commit" 444:'not .github/workflows/ci.yml' 555:'concluded failure, not success'; do
     if PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
       --ci-run "${bad%%:*}" --no-sign >"$work/bad-run.log" 2>&1; then
       echo "run ${bad%%:*} was collected" >&2
@@ -1295,6 +1337,19 @@ GH
       cat "$work/collect-fail.log" >&2
       exit 1
     fi
+    # The run each Tier A path came from is in the signed bundle, and a Tier
+    # A path taken from a directory instead of its CI run does not count.
+    grep -q '"conclusion": "success"' "$repo/release-evidence/1.5.0/$commit/A-x86/ci-run.json"
+    grep -q '"id": 111' "$repo/release-evidence/1.5.0/$commit/A-arm/ci-run.json"
+    set +e
+    HOME="$sign_home" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
+      --from "$work/ci-evidence" --replace --axocoatl "$bin" >"$work/collect-from.log" 2>&1
+    status=$?
+    set -e
+    if [ "$status" != 1 ] || ! grep -q 'A-x86: Tier A evidence comes only from a CI run' "$work/collect-from.log"; then
+      cat "$work/collect-from.log" >&2
+      exit 1
+    fi
   else
     PATH="$work/gh-bin:$PATH" "$script_dir/collect-evidence.sh" --repo-root "$repo" --version 1.5.0 --commit "$commit" \
       --from "$from" --ci-run 111 --no-sign >"$work/collect.log" 2>&1
@@ -1314,7 +1369,7 @@ else
   signed="an unsigned bundle fails check-evidence (no axocoatl built)"
 fi
 if [ "$collect_status" = 0 ]; then
-  pass "collect-evidence.sh: takes Tier A only from the canonical repository's ci.yml push run of the commit; refuses credential-looking files and secret file names; $signed"
+  pass "collect-evidence.sh: takes Tier A only from the canonical repository's green ci.yml push run of the commit and records that run; refuses credential-looking files and secret file names; $signed"
 else
   fail "collect-evidence.sh"
 fi

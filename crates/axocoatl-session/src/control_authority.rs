@@ -3175,7 +3175,7 @@ mod provider_tests {
             .iter()
             .map(|step| serde_json::from_value(step["envelope"].clone()).unwrap())
             .collect();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -3784,7 +3784,7 @@ mod provider_tests {
                 fixture.gate.revision().unwrap()
             )
             .is_err());
-        let unowned_dir = tempfile::tempdir().unwrap();
+        let unowned_dir = crate::private_tempdir_test_support::private_tempdir();
         let unowned = ControlAuthority::open(
             unowned_dir.path(),
             activation.session_id.clone(),
@@ -3912,7 +3912,7 @@ mod provider_tests {
         }
     }
     fn fixture() -> (tempfile::TempDir, ControlAuthority, ActivationLease) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let gate = ControlAuthority::open(
             root.path(),
             activation("a").session_id,
@@ -3984,7 +3984,7 @@ mod provider_tests {
         ActivationLease,
         ActivationLease,
     ) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let holder = activation("a");
         let gate = ControlAuthority::open(
             root.path(),
@@ -4913,7 +4913,7 @@ mod provider_tests {
     }
 
     fn scoped_gate(limit: ExecutionProfile) -> (tempfile::TempDir, ControlAuthority) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let gate = ControlAuthority::open(
             root.path(),
             activation("a").session_id,
@@ -5296,7 +5296,7 @@ mod condition_tests {
             serde_json::from_value(source["steps"][0]["envelope"].clone()).unwrap();
         let start: TurnContractEnvelope =
             serde_json::from_value(source["steps"][1]["envelope"].clone()).unwrap();
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = SessionExecutionStore::open(
             Arc::new(
                 LegacyFormatOwnership::acquire(root.path())

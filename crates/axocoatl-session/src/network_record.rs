@@ -1939,7 +1939,7 @@ mod tests {
         Arc<UpgradedFormatOwnership>,
         SessionExecutionStore,
     ) {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let ownership = Arc::new(
             LegacyFormatOwnership::acquire(root.path())
                 .unwrap()
@@ -2115,7 +2115,7 @@ mod tests {
         let (_root, _ownership, store) = setup();
         drop(open(&store));
         let directory = file_path(&store).parent().unwrap().join(SCREENSHOT_DIR);
-        std::fs::create_dir(&directory).unwrap();
+        crate::private_tempdir_test_support::create_private_dir_all(&directory);
         let jpeg = |n: u32, len: usize| {
             let mut bytes = vec![0xff, 0xd8, 0xff, 0xe0];
             bytes.extend_from_slice(&n.to_le_bytes());

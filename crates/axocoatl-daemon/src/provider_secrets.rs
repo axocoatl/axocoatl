@@ -180,7 +180,7 @@ mod tests {
     use super::*;
 
     fn data_root() -> tempfile::TempDir {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = crate::private_tempdir_test_support::private_tempdir();
         crate::AxocoatlDaemon::initialize_data_root(directory.path()).unwrap();
         directory
     }

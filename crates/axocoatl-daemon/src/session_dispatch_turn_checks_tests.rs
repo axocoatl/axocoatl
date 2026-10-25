@@ -27,7 +27,7 @@ fn check_frontier(group: &CheckGroup, dynamic: bool) {
         serde_json::from_value(fixture["steps"][1]["envelope"].clone()).unwrap();
     let source_accept: TurnContractEnvelope =
         serde_json::from_value(fixture["steps"][2]["envelope"].clone()).unwrap();
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = SessionExecutionStore::open(
         Arc::new(
             LegacyFormatOwnership::acquire(root.path())

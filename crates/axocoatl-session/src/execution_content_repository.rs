@@ -506,10 +506,10 @@ mod tests {
     /// the capture nor makes the capture run a program.
     #[test]
     fn repository_capture_ignores_outside_configuration_and_runs_no_configured_program() {
-        let repo = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
+        let repo = crate::private_tempdir_test_support::private_tempdir();
+        let home = crate::private_tempdir_test_support::private_tempdir();
         let root = repo.path();
-        let markers = tempfile::tempdir().unwrap();
+        let markers = crate::private_tempdir_test_support::private_tempdir();
         let program = |name: &str| {
             let path = markers.path().join(format!("{name}.sh"));
             std::fs::write(
@@ -633,7 +633,7 @@ mod tests {
 
     /// A committed repository of 300 files, far beyond an 8 KiB manifest.
     fn sizeable_repository() -> tempfile::TempDir {
-        let repo = tempfile::tempdir().unwrap();
+        let repo = crate::private_tempdir_test_support::private_tempdir();
         let root = repo.path();
         git(root, &["init", "--quiet"]);
         std::fs::create_dir_all(root.join("lib")).unwrap();
@@ -822,6 +822,13 @@ mod tests {
         std::os::unix::fs::symlink("prod.js", root.join("config/alias.js")).unwrap();
         std::fs::create_dir_all(root.join("build")).unwrap();
         std::fs::write(root.join("build/out.js"), "ignored\n").unwrap();
+        // The modes the rows below assert, whatever the umask (0664 under
+        // Ubuntu's 002).
+        for path in ["config/prod.js", "lib/file-7.js", "new file.txt"] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join(path), std::fs::Permissions::from_mode(0o644))
+                .unwrap();
+        }
         let output = capture(root, "capture_mode=observe\n").unwrap();
         let row = |path: &str, mode: &str, kind: &str, digest: &str| {
             (
@@ -1540,7 +1547,7 @@ mod tests {
     #[test]
     fn repository_capture_handles_shared_sandbox_ownership_only_at_the_exact_root() {
         use std::process::Command;
-        let repo = tempfile::tempdir().unwrap();
+        let repo = crate::private_tempdir_test_support::private_tempdir();
         assert!(Command::new("git")
             .args(["init", "--quiet"])
             .current_dir(repo.path())

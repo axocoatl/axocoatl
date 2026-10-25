@@ -372,6 +372,17 @@ mod tests {
     #[test]
     fn an_unowned_root_without_sessions_starts_native_and_an_owned_one_does_not() {
         let parent = tempfile::tempdir().unwrap();
+        // The directories are made 0755, as `mkdir` makes them under the
+        // usual umask; under 002 they would be group-writable, which the
+        // daemon refuses as a data root.
+        let mkdir = |path: &std::path::Path| {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o755)
+                .create(path)
+                .unwrap();
+        };
         let legacy = |lease: &DataDirLease| {
             matches!(
                 lease.ownership,
@@ -379,8 +390,8 @@ mod tests {
             )
         };
         let made = parent.path().join("made");
-        std::fs::create_dir(&made).unwrap();
-        std::fs::create_dir(made.join("secrets")).unwrap();
+        mkdir(&made);
+        mkdir(&made.join("secrets"));
         std::fs::write(made.join("secrets").join("route-key"), b"value").unwrap();
         let (directory, created) = open_data_root(&made).unwrap();
         assert!(created.is_none());
@@ -399,7 +410,7 @@ mod tests {
         assert!(!legacy(&DataDirLease::acquire(&directory).unwrap()));
 
         let owned = parent.path().join("owned");
-        std::fs::create_dir(&owned).unwrap();
+        mkdir(&owned);
         std::fs::write(
             owned.join(axocoatl_session::execution_ownership::LEGACY_LOCK_NAME),
             b"",
@@ -410,13 +421,13 @@ mod tests {
         assert!(legacy(&DataDirLease::acquire(&directory).unwrap()));
 
         let with_session = parent.path().join("with-session");
-        std::fs::create_dir_all(with_session.join("sessions")).unwrap();
+        mkdir(&with_session.join("sessions"));
         std::fs::write(with_session.join("sessions").join("ses-1.json"), b"{}").unwrap();
         let (directory, _) = open_data_root(&with_session).unwrap();
         assert!(unowned_data_root(&directory).is_none());
 
         let racing = parent.path().join("racing");
-        std::fs::create_dir(&racing).unwrap();
+        mkdir(&racing);
         let (directory, _) = open_data_root(&racing).unwrap();
         let unowned = unowned_data_root(&directory).expect("unowned before the lease");
         std::fs::create_dir(racing.join("session-history")).unwrap();
@@ -445,7 +456,7 @@ mod tests {
 
     #[test]
     fn startup_retains_empty_native_history_without_creating_legacy_history_or_owner() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, session, stores) = native_session(&root, &workspace);
         let identity = stores.canonical.identity().unwrap();
@@ -472,7 +483,7 @@ mod tests {
 
     #[test]
     fn startup_interrupts_the_prior_epoch_and_preserves_the_exact_request_without_dispatch() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, session, mut stores) = native_session(&root, &workspace);
         let turn_id = LogicalTurnId::new("recovered-turn").unwrap();
@@ -577,7 +588,7 @@ mod tests {
 
     #[test]
     fn recovered_pre_invocation_failure_can_finish_without_ready_runtime_and_unblock_rebuild() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, mut session, mut stores) = native_session(&root, &workspace);
         let turn_id = LogicalTurnId::new("recovered-turn").unwrap();
@@ -867,7 +878,7 @@ mod tests {
 
     #[test]
     fn startup_refuses_missing_previously_initialized_content_without_replacement() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, session, stores) = native_session(&root, &workspace);
         let content_path = stores
@@ -884,7 +895,7 @@ mod tests {
     }
     #[tokio::test]
     async fn successful_close_retains_owned_history_and_reopen_does_not_create_execution() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, session, stores) = native_session(&root, &workspace);
         let identity = stores.canonical.identity().unwrap();
@@ -938,7 +949,7 @@ mod tests {
 
     #[test]
     fn startup_closed_session_history_stays_fenced_until_explicit_reopen() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let workspace = tempfile::tempdir().unwrap();
         let (ownership, mut session, stores) = native_session(&root, &workspace);
         drop(stores);

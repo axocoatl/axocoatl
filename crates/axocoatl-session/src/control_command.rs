@@ -1418,7 +1418,7 @@ mod tests {
                 .map(|update| ControlCommandEvent::Transition { update }),
         );
         for cut in 0..events.len() {
-            let root = tempfile::TempDir::new().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let mut store = ControlCommandStore::open(root.path(), owner()).unwrap();
             for event in &events[..cut] {
                 store.append(event.clone()).unwrap();
@@ -1633,7 +1633,7 @@ mod historical_read_tests {
         else {
             panic!("Begin fixture")
         };
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = SessionExecutionStore::open(
             Arc::new(
                 LegacyFormatOwnership::acquire(root.path())

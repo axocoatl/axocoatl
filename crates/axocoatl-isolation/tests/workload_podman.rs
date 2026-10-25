@@ -258,13 +258,17 @@ impl Fixture {
             "network", "create", "--label", &label, "--subnet", &subnet, &network,
         ])
         .await;
-        podman_ok(&[
+        let started = podman(&[
             "run",
             "-d",
             "--name",
             &upstream,
             "--label",
             &label,
+            // `podman logs` reads it on any host: Podman's journald default
+            // shows nothing to a user who may not read the journal.
+            "--log-driver",
+            "k8s-file",
             "--network",
             &network,
             "--ip",
@@ -275,6 +279,16 @@ impl Fixture {
             UPSTREAM_SERVER,
         ])
         .await;
+        if !started.status.success() {
+            // The case's cleanup never runs: leave neither the created
+            // upstream nor its network behind.
+            let _ = podman(&["rm", "--force", "--time", "0", "--ignore", &upstream]).await;
+            let _ = podman(&["network", "rm", "--force", &network]).await;
+            panic!(
+                "podman run {upstream}: {}",
+                String::from_utf8_lossy(&started.stderr)
+            );
+        }
         Self {
             label,
             network,
@@ -314,6 +328,13 @@ impl Fixture {
         std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(workspace.join("public.txt"), "public\n").unwrap();
         std::fs::write(workspace.join("private.txt"), "private\n").unwrap();
+        // Explicit modes: the files are made with the caller's umask (0664
+        // under Ubuntu's 002).
+        std::fs::set_permissions(
+            workspace.join("public.txt"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         std::fs::set_permissions(
             workspace.join("private.txt"),
             std::fs::Permissions::from_mode(0o600),

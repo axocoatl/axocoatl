@@ -6,6 +6,9 @@
 // A bundle is release-evidence/<version>/<commit>/ holding
 //   <path>.json          one file per gate path (A-x86, C1-local, D1, ...)
 //   <path>/...           that path's transcripts, receipts and logs
+//   <path>/ci-run.json   for a path CI records (Tier A and B): the GitHub
+//                        run collect-evidence.sh took it from, which must be
+//                        a successful push run of ci.yml on the commit
 //   manifest.json        every other file with its SHA-256, and each path's
 //                        pass/fail
 //   manifest.dsse.json   manifest.json's exact bytes in a DSSE envelope,
@@ -47,6 +50,11 @@ export const REQUIRED_END = '<!-- release-gate:required-paths:end -->';
 export const STEPS_START = '<!-- release-gate:required-steps:start -->';
 export const STEPS_END = '<!-- release-gate:required-steps:end -->';
 export const SIXTEEN_GB_CONDITION = '(when the public copy names 16 GB)';
+export const CI_RUN_SCHEMA = 'axocoatl.release-evidence.ci-run/1';
+export const CI_RUN_FILE = 'ci-run.json';
+export const CI_WORKFLOW = '.github/workflows/ci.yml';
+// The tiers CI records: Tier A (Linux) and Tier B (macOS plumbing).
+const CI_TIERS = new Set(['A', 'B']);
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 const PATH_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -193,6 +201,31 @@ export function checkPathEvidence(name, evidence, { version, commit }) {
 }
 
 /**
+ * Problems of a CI tier's path (Tier A or B): its `<path>/ci-run.json`, which
+ * collect-evidence.sh writes from the GitHub run it downloaded the path
+ * from, must name a successful push run of ci.yml on the bundle's commit. A
+ * path from a red run does not count: CI is green before a tag.
+ */
+export function checkCiRun(name, run, { commit }) {
+  const problems = [];
+  const where = `${name}/${CI_RUN_FILE}`;
+  if (run?.schema !== CI_RUN_SCHEMA) {
+    return [`${where}: schema is not ${CI_RUN_SCHEMA}`];
+  }
+  const label = `${name}: CI run ${JSON.stringify(run.id)}`;
+  if (run.workflow_path !== CI_WORKFLOW) problems.push(`${label} is a run of ${JSON.stringify(run.workflow_path)}, not ${CI_WORKFLOW}`);
+  if (run.event !== 'push') problems.push(`${label} is a ${JSON.stringify(run.event)} run, not a push run`);
+  if (typeof run.repository !== 'string' || run.repository !== run.head_repository) {
+    problems.push(`${label} ran ${JSON.stringify(run.head_repository)}'s code in ${JSON.stringify(run.repository)}`);
+  }
+  if (commit && run.head_sha !== commit) problems.push(`${label} ran commit ${JSON.stringify(run.head_sha)}, not ${commit}`);
+  if (run.status !== 'completed' || run.conclusion !== 'success') {
+    problems.push(`${label} concluded ${JSON.stringify(run.conclusion ?? run.status)}, not success: a path from a red CI run does not count`);
+  }
+  return problems;
+}
+
+/**
  * Verify one bundle directory. Returns `{ problems, paths }`: `paths` maps
  * each path the signed manifest lists to whether its evidence passed.
  */
@@ -266,6 +299,24 @@ export function verifyBundle(dir, { keys, version, commit }) {
     }
     const pathProblems = checkPathEvidence(name, evidence, { version: manifest?.version, commit: manifest?.commit });
     if (entry.pass !== evidence.pass) pathProblems.push(`${name}: the manifest and ${entry.file} disagree on pass`);
+    if (CI_TIERS.has(evidence?.tier)) {
+      const runFile = `${name}/${CI_RUN_FILE}`;
+      const runBytes = contents.get(runFile);
+      if (!listed.has(runFile)) {
+        pathProblems.push(`${name}: Tier ${evidence.tier} evidence comes only from a CI run, and ${runFile} is missing (collect it with collect-evidence.sh --ci-run)`);
+      } else if (runBytes) {
+        let run;
+        try {
+          run = JSON.parse(runBytes.toString('utf8'));
+        } catch (error) {
+          run = null;
+          pathProblems.push(`${runFile} is not JSON: ${error.message}`);
+        }
+        if (run) pathProblems.push(...checkCiRun(name, run, { commit: manifest?.commit }));
+      } else {
+        pathProblems.push(`${name}: ${runFile} could not be read`);
+      }
+    }
     paths.set(name, { pass: pathProblems.length === 0, problems: pathProblems, steps: evidence.steps });
   }
   return { problems, paths, key: opened.key, manifest };

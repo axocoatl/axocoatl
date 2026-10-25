@@ -482,6 +482,26 @@ mod tests {
         assert_eq!(toolchain_of(&names(&["claude-code", "e2e"])).unwrap(), None);
     }
 
+    /// The builder of Podman 4.9, the Podman of Ubuntu 24.04, reads a
+    /// heredoc's lines as instructions and fails ("Unknown instruction"), so
+    /// no fragment uses one.
+    #[test]
+    fn no_recipe_uses_a_heredoc() {
+        let fragments = RECIPES
+            .iter()
+            .chain(TOOLCHAIN_RECIPES.iter())
+            .map(|recipe| (recipe.name, recipe.fragment))
+            .chain([("base", RECIPE_BASE), ("node-graft", NODE_GRAFT)]);
+        for (name, fragment) in fragments {
+            for line in fragment.lines() {
+                assert!(
+                    line.trim_start().starts_with('#') || !line.contains("<<"),
+                    "{name}: {line}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_toolchain_image_starts_from_its_pinned_language_image() {
         for image in TOOLCHAIN_IMAGES {

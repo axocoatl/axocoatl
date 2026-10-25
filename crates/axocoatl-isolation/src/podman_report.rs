@@ -3164,7 +3164,9 @@ esac
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let report = inspect_with(program.to_str().unwrap()).await;
+        // Not the developer's CONTAINER_HOST or CONTAINER_CONNECTION: the
+        // default machine is the one this asserts on.
+        let report = inspect_through(program.to_str().unwrap(), ConnectionOverride::None).await;
         let calls = std::fs::read_to_string(&log).unwrap();
         for call in calls.lines() {
             assert!(

@@ -8648,8 +8648,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_shared_proxy_needs_egress_and_no_ports() {
+        use std::os::unix::fs::PermissionsExt;
         let workspace = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
+        // 0700 whatever the umask: a group-writable root is refused first.
+        let root = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let error = SessionSandbox::start(
             "attempt-s-x-0",
             workspace.path(),

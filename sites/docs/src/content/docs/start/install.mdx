@@ -65,6 +65,21 @@ repository can start, and the release notes must then name the paths not run.
     line above that point, instead of saying new terminals find `axocoatl`.
     In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
     job's later steps.
+
+    The macOS binaries are signed ad hoc, not with an Apple Developer ID, and are not
+    notarized. The installer downloads with `curl`, which does not mark the archive
+    for Gatekeeper. An archive downloaded with a web browser is quarantined, the
+    binary extracted from it keeps the quarantine mark, and Gatekeeper refuses to
+    run a quarantined binary that is not notarized. Use the installer, or download
+    the archive with `curl`.
+
+    From 1.5.0, each release archive has a build provenance attestation from the
+    release workflow, signed for the release tag. With the `gh` CLI, check that an
+    archive was built by that workflow from that tag:
+
+    ```sh
+    gh attestation verify axocoatl-v1.5.0-aarch64-apple-darwin.tar.gz --repo axocoatl/axocoatl --signer-workflow axocoatl/axocoatl/.github/workflows/release.yml --source-ref refs/tags/v1.5.0
+    ```
   </TabItem>
   <TabItem label="Cargo">
     ```sh

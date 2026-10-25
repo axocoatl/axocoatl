@@ -23,6 +23,12 @@ const SUPPORT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const TEST_ROOT = path.resolve(SUPPORT_DIR, '..');
 export const REPOSITORY_ROOT = path.resolve(TEST_ROOT, '..', '..');
 
+// The journeys make their data roots, Workspaces and files with this
+// process's umask, and Axocoatl refuses a group- or world-writable directory
+// as a data root: under 002, Ubuntu's login default, no fixture daemon would
+// start. They make them as a user with the usual 022 does.
+process.umask(0o022);
+
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 // Every fixture daemon this process started that is still running. A test

@@ -3800,9 +3800,9 @@ mod tests {
                 ConditionProcessStatus::Signalled { signal: 15 },
             ),
         ] {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let mut canonical = canonical(&root);
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::private_tempdir_test_support::private_tempdir();
             let identity = canonical.identity().unwrap();
             let mut content = store(dir.path(), identity.clone());
             let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -3856,9 +3856,9 @@ mod tests {
 
     #[test]
     fn supervised_result_rejects_conflicting_status_identity_and_bounds_before_retention() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let arguments = content
@@ -3937,9 +3937,9 @@ mod tests {
     #[test]
     fn not_dispatched_requires_zero_observed_output_with_or_without_supervision() {
         for supervised in [false, true] {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let mut canonical = canonical(&root);
-            let dir = tempfile::tempdir().unwrap();
+            let dir = crate::private_tempdir_test_support::private_tempdir();
             let mut content = store(dir.path(), canonical.identity().unwrap());
             let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
             let arguments = content
@@ -3985,9 +3985,9 @@ mod tests {
 
     #[test]
     fn maximal_supervision_metadata_settles_and_reopens() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let (snapshot, mut run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -4021,9 +4021,9 @@ mod tests {
 
     #[test]
     fn reopening_rejects_hash_consistent_supervision_for_another_run() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -4067,9 +4067,9 @@ mod tests {
 
     #[test]
     fn condition_reservation_selects_exact_inputs_without_executing_or_creating_intent() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let canonical_before = std::fs::read(canonical.path()).unwrap();
@@ -4111,9 +4111,9 @@ mod tests {
 
     #[test]
     fn condition_arguments_reject_missing_foreign_wrong_role_and_stale_inputs_without_writes() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let before = stored(dir.path());
@@ -4148,9 +4148,9 @@ mod tests {
         assert!(content
             .reserve_condition_arguments(&snapshot, &invalid, &repository)
             .is_err());
-        let other_root = tempfile::tempdir().unwrap();
+        let other_root = crate::private_tempdir_test_support::private_tempdir();
         let other = self::canonical(&other_root);
-        let other_dir = tempfile::tempdir().unwrap();
+        let other_dir = crate::private_tempdir_test_support::private_tempdir();
         let mut other_content = store(other_dir.path(), other.identity().unwrap());
         assert!(matches!(
             other_content.reserve_condition_arguments(&snapshot, &run, &repository),
@@ -4178,9 +4178,9 @@ mod tests {
 
     #[test]
     fn condition_late_result_retains_real_status_observed_prefix_and_exact_duplicate() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -4266,9 +4266,9 @@ mod tests {
 
     #[test]
     fn condition_pending_intent_and_fresh_observation_refuse_another_run() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let arguments = content
@@ -4335,17 +4335,17 @@ mod tests {
 
     #[test]
     fn condition_result_requires_same_namespace_and_exact_reserved_prefix() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
         let receipt = content
             .reserve_condition_arguments(&snapshot, &run, &repository)
             .unwrap();
-        let other_root = tempfile::tempdir().unwrap();
+        let other_root = crate::private_tempdir_test_support::private_tempdir();
         let other = self::canonical(&other_root);
-        let other_dir = tempfile::tempdir().unwrap();
+        let other_dir = crate::private_tempdir_test_support::private_tempdir();
         let mut other_content = store(other_dir.path(), other.identity().unwrap());
         assert!(matches!(
             other_content.record_condition_result(
@@ -4393,9 +4393,9 @@ mod tests {
 
     #[test]
     fn condition_settlement_bytes_and_slot_survive_unrelated_history_and_reopen() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -4430,9 +4430,9 @@ mod tests {
 
     #[test]
     fn condition_definition_and_observation_bounds_fail_before_retention() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let valid = RepositoryCheckDefinition {
             argv: vec!["check".into()],
@@ -4482,9 +4482,9 @@ mod tests {
 
     #[test]
     fn condition_uncertain_reservation_and_result_ack_require_reopen_without_inventing_success() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let (snapshot, run, repository) = condition_fixture(&mut canonical, &mut content);
@@ -4535,7 +4535,7 @@ mod tests {
 
     #[test]
     fn owned_condition_intent_crash_prefix_reopens_unknown_and_never_implies_dispatch_permission() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
         let owner = canonical.owner().clone();
         let mut content = ExecutionContentStore::open_owned(
@@ -4710,9 +4710,9 @@ mod tests {
 
     #[test]
     fn proposed_input_resolution_is_read_only_and_does_not_admit_an_activation() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
@@ -4759,9 +4759,9 @@ mod tests {
 
     #[test]
     fn proposed_input_resolver_checks_roles_and_exact_retained_identity_without_writes() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
@@ -4816,9 +4816,9 @@ mod tests {
 
     #[test]
     fn proposed_input_resolution_rejects_foreign_owner_turn_journal_and_request() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical_store = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), canonical_store.identity().unwrap());
         let (snapshot, start) = proposed_input_fixture(&mut canonical_store, &mut content);
         let TurnContractEvent::StartActivation { input } = &start.event else {
@@ -4836,9 +4836,9 @@ mod tests {
                 Err(ExecutionContentError::OwnerMismatch)
             ));
         }
-        let foreign_root = tempfile::tempdir().unwrap();
+        let foreign_root = crate::private_tempdir_test_support::private_tempdir();
         let mut foreign_canonical = canonical(&foreign_root);
-        let foreign_dir = tempfile::tempdir().unwrap();
+        let foreign_dir = crate::private_tempdir_test_support::private_tempdir();
         let mut foreign_content = store(foreign_dir.path(), foreign_canonical.identity().unwrap());
         let (foreign_snapshot, _) =
             proposed_input_fixture(&mut foreign_canonical, &mut foreign_content);
@@ -4869,9 +4869,9 @@ mod tests {
 
     #[test]
     fn legacy_standing_check_record_still_loads() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         // A check result as the removed standing-work inbox recorded it.
         let recorded = |activation: &ActivationRef| -> Body {
@@ -4918,9 +4918,9 @@ mod tests {
 
     #[test]
     fn a_single_file_journal_migrates_once_across_segments_and_an_interrupted_move_is_redone() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let reservation = reservation();
@@ -4939,7 +4939,7 @@ mod tests {
         write_legacy(dir.path(), &journal);
 
         // A crash during an earlier move left part of a log behind.
-        let partial = tempfile::tempdir().unwrap();
+        let partial = crate::private_tempdir_test_support::private_tempdir();
         let mut leftover = store(partial.path(), identity.clone());
         for index in 0..segments::SPEC.segment_records + 1 {
             leftover
@@ -4979,9 +4979,9 @@ mod tests {
     #[test]
     fn torn_tail_and_interrupted_seal_recover_through_the_store() {
         use std::io::Write;
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let per = segments::SPEC.segment_records;
@@ -5038,9 +5038,9 @@ mod tests {
 
     #[test]
     fn history_rotates_across_segments_and_reserved_result_still_settles_and_reopens() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let reservation = reservation();
@@ -5090,9 +5090,9 @@ mod tests {
 
     #[test]
     fn legacy_journal_over_its_old_bounds_is_refused_without_conversion() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let reservation = reservation();
@@ -5144,9 +5144,9 @@ mod tests {
 
     #[test]
     fn uncertain_post_rename_write_poisoning_requires_durable_reopen_before_receipt() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let identity = canonical.identity().unwrap();
         let mut content = store(dir.path(), identity.clone());
         let body = request("turn-a", 20);
@@ -5195,10 +5195,10 @@ mod tests {
 
     #[test]
     fn output_settlement_survives_unrelated_history_and_worst_case_json() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let reference = content
@@ -5249,10 +5249,10 @@ mod tests {
 
     #[test]
     fn output_record_reservation_rejects_underfunded_legacy_journal_and_forged_receipts() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let reference = content
@@ -5296,10 +5296,10 @@ mod tests {
 
     #[test]
     fn lost_reservation_or_settlement_ack_requires_reopen_and_keeps_original_evidence() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let canonical = canonical(&root);
         let identity = canonical.identity().unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut content = store(dir.path(), identity.clone());
         let body = output_reservation();
         let record = Body::ActivationOutputReservation(body.clone());
@@ -5342,7 +5342,7 @@ mod tests {
     }
     #[test]
     fn selected_way_stays_in_session_history_independently_of_review_archive() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let mut canonical = canonical(&root);
         let mut content = ExecutionContentStore::open_owned(
             canonical

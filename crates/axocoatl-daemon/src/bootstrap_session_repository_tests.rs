@@ -135,7 +135,7 @@ async fn fixture_with_legacy_turn_visibility(
 }
 
 async fn fixture_with_origin(legacy_turn_id: Option<&str>, hidden: bool, native: bool) -> Fixture {
-    let data = tempfile::tempdir().unwrap();
+    let data = crate::private_tempdir_test_support::private_tempdir();
     let workspace_dir = tempfile::tempdir().unwrap();
     let data_root = SecureDir::open(data.path()).unwrap();
     let mut workspaces = WorkspaceStore::new_in_secure(&data_root, "workspaces").unwrap();
@@ -2296,7 +2296,7 @@ async fn canonical_missing_turn_and_missing_upgraded_controller_never_read_legac
     drop(controller);
     // The canonical registry is decisive even if a host still owns a legacy
     // ledger containing a matching stale row. This is the actual route selector.
-    let legacy_root = tempfile::tempdir().unwrap();
+    let legacy_root = crate::private_tempdir_test_support::private_tempdir();
     let legacy = DataRootFormatOwnership::Legacy(
         LegacyFormatOwnership::acquire(legacy_root.path()).unwrap(),
     );
@@ -2309,7 +2309,7 @@ async fn canonical_missing_turn_and_missing_upgraded_controller_never_read_legac
         .await
         .unwrap();
     assert!(absent.is_none());
-    let upgraded_root = tempfile::tempdir().unwrap();
+    let upgraded_root = crate::private_tempdir_test_support::private_tempdir();
     let upgraded = DataRootFormatOwnership::Upgraded(Arc::new(
         LegacyFormatOwnership::acquire(upgraded_root.path())
             .unwrap()

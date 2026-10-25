@@ -1,8 +1,9 @@
 package pages
 
 import (
-	"reflect"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func numbers(count int) []int {
@@ -14,18 +15,16 @@ func numbers(count int) []int {
 }
 
 func TestAPartialLastPageKeepsTheItemsLeftOver(t *testing.T) {
-	got := Paginate(numbers(11), 5)
 	want := [][]int{{1, 2, 3, 4, 5}, {6, 7, 8, 9, 10}, {11}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Paginate(11 items, 5) = %v, want %v", got, want)
+	if diff := cmp.Diff(want, Paginate(numbers(11), 5)); diff != "" {
+		t.Fatalf("Paginate(11 items, 5) mismatch (-want +got):\n%s", diff)
 	}
 }
 
 func TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize(t *testing.T) {
-	got := Paginate(numbers(10), 5)
 	want := [][]int{{1, 2, 3, 4, 5}, {6, 7, 8, 9, 10}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Paginate(10 items, 5) = %v, want %v", got, want)
+	if diff := cmp.Diff(want, Paginate(numbers(10), 5)); diff != "" {
+		t.Fatalf("Paginate(10 items, 5) mismatch (-want +got):\n%s", diff)
 	}
 }
 

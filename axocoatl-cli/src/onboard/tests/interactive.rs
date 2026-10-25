@@ -65,7 +65,7 @@ async fn enter_writes_the_update_the_person_chose() {
             ..OnboardArgs::default()
         },
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     let old = config::render(&config::ConfigPlan {
         ollama_base_url: Some(ollama.url()),
         openrouter_key: None,

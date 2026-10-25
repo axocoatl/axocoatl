@@ -1281,7 +1281,7 @@ mod tests {
 
     #[test]
     fn an_uncertain_append_requires_reopening_and_its_record_is_then_durable() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         let command = intent();
         // The line reached storage, but the write reported an error.
@@ -1306,7 +1306,7 @@ mod tests {
     /// after reopening, and memory holds only the active segment.
     #[test]
     fn invocations_beyond_the_old_bound_are_found_across_sealed_segments() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         let count = 300;
         for n in 0..count {
@@ -1388,7 +1388,7 @@ mod tests {
     /// intact, as a segmented store, and an interrupted conversion is redone.
     #[test]
     fn a_single_file_audit_is_migrated_into_segments() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut records = vec![];
         for n in 0..20 {
             let command = numbered(n);
@@ -1450,7 +1450,7 @@ mod tests {
     /// is refused on open, though each segment alone is well formed.
     #[test]
     fn a_duplicate_across_segments_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         let meta = audit.head.meta();
         drop(audit);
@@ -1485,7 +1485,7 @@ mod tests {
     /// it and the audit continues.
     #[test]
     fn a_torn_append_is_dropped_on_reopen() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::private_tempdir_test_support::private_tempdir();
         let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
         for n in 0..5 {
             audit.record_intent(numbered(n)).unwrap();

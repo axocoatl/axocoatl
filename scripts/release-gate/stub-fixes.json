@@ -31,6 +31,48 @@
       "probe": "src/paging.js",
       "find": "Math.floor(items.length / size)",
       "replace": "Math.ceil(items.length / size)"
+    },
+    {
+      "fixture": "node-pnpm",
+      "probe": "src/pager.js",
+      "find": "const length = page < count - 1 ? size : list.length % size;",
+      "replace": "const length = page < count - 1 ? size : list.length - start;"
+    },
+    {
+      "fixture": "node-yarn",
+      "probe": "src/pages.js",
+      "find": "const length = page < count - 1 ? size : entries.length % size;",
+      "replace": "const length = page < count - 1 ? size : entries.length - start;"
+    },
+    {
+      "fixture": "node-yarn-berry",
+      "probe": "lib/paginate.js",
+      "find": "const length = page < count - 1 ? size : values.length % size;",
+      "replace": "const length = page < count - 1 ? size : values.length - start;"
+    },
+    {
+      "fixture": "python-poetry",
+      "probe": "paging/__init__.py",
+      "find": "length = size if page < count - 1 else len(entries) % size",
+      "replace": "length = size if page < count - 1 else len(entries) - start"
+    },
+    {
+      "fixture": "python-uv",
+      "probe": "pagination/__init__.py",
+      "find": "length = size if page < count - 1 else len(rows) % size",
+      "replace": "length = size if page < count - 1 else len(rows) - start"
+    },
+    {
+      "fixture": "python-pdm",
+      "probe": "pager/__init__.py",
+      "find": "length = size if page < count - 1 else len(records) % size",
+      "replace": "length = size if page < count - 1 else len(records) - start"
+    },
+    {
+      "fixture": "python-hatch",
+      "probe": "pagebreak/__init__.py",
+      "find": "length = size if page < count - 1 else len(elements) % size",
+      "replace": "length = size if page < count - 1 else len(elements) - start"
     }
   ]
 }

@@ -10,6 +10,8 @@ mod ollama_setup;
 mod onboard;
 #[cfg(test)]
 mod paste_safe;
+#[cfg(test)]
+mod private_tempdir_test_support;
 mod proxy_env;
 mod receipt_cmd;
 mod recipe_cmd;
@@ -3589,7 +3591,7 @@ mod tests {
     fn doctor_probe_never_follows_the_predictable_legacy_probe_name() {
         use std::os::unix::fs::symlink;
 
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let outside = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(outside.path(), b"safe").unwrap();
         symlink(outside.path(), root.path().join(".write_probe")).unwrap();

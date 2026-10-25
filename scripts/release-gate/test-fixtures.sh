@@ -51,17 +51,25 @@ require_tools() {
   done
 }
 
+# A field of the fixture's fixtures.json entry ("" when it has none).
+field() {
+  node -e '
+    const value = require(process.argv[1]).fixtures[process.argv[2]]?.[process.argv[3]];
+    process.stdout.write(value == null ? "" : String(value));
+  ' "$fixtures_root/fixtures.json" "$1" "$2"
+}
+
 # Run the fixture's test command in $1; print its output on failure of the
 # expectation $2 (pass|fail).
 run_tests() {
   local dir=$1 expect=$2 fixture=$3 log status
   log="$work/$fixture-$expect.log"
   set +e
-  case "$fixture" in
-    node-plain | node-deps) (cd "$dir" && npm test) >"$log" 2>&1 ;;
-    python-pytest) (cd "$dir" && "$dir/.venv/bin/python" -m pytest -q) >"$log" 2>&1 ;;
+  case "$(field "$fixture" language)" in
+    node) (cd "$dir" && npm test) >"$log" 2>&1 ;;
+    python) (cd "$dir" && "$dir/.venv/bin/python" -m pytest -q) >"$log" 2>&1 ;;
     rust) (cd "$dir" && CARGO_TARGET_DIR="$work/$fixture-target" cargo test --quiet) >"$log" 2>&1 ;;
-    go) (cd "$dir" && GOFLAGS=-mod=mod go test ./...) >"$log" 2>&1 ;;
+    go) (cd "$dir" && go test ./...) >"$log" 2>&1 ;;
     *) set -e; fail "no test command for fixture $fixture" ;;
   esac
   status=$?
@@ -72,19 +80,26 @@ run_tests() {
   fi
 }
 
+# The fixture's host_setup (fixtures.json), as a person runs it: a Node
+# package manager through corepack, pip in a new virtual environment. Rust
+# and Go fetch their dependencies when they test.
 setup() {
-  local dir=$1 fixture=$2
-  case "$fixture" in
-    node-deps)
-      (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund) >"$work/$fixture-setup.log" 2>&1 \
-        || { cat "$work/$fixture-setup.log" >&2; fail "$fixture: npm ci failed"; }
+  local dir=$1 fixture=$2 command
+  command=$(field "$fixture" host_setup)
+  [[ -n "$command" ]] || return 0
+  case "$(field "$fixture" language)" in
+    node)
+      (cd "$dir" && COREPACK_HOME="$work/corepack" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+        npm_config_cache="$work/npm-cache" YARN_CACHE_FOLDER="$work/yarn-cache" \
+        YARN_GLOBAL_FOLDER="$work/yarn-global" YARN_ENABLE_TELEMETRY=0 /bin/bash -c "$command") \
+        >"$work/$fixture-setup.log" 2>&1
       ;;
-    python-pytest)
-      { python3 -m venv "$dir/.venv" && "$dir/.venv/bin/python" -m pip install --quiet -e "${dir}[test]"; } \
-        >"$work/$fixture-setup.log" 2>&1 \
-        || { cat "$work/$fixture-setup.log" >&2; fail "$fixture: pip install -e .[test] failed"; }
+    python)
+      (cd "$dir" && python3 -m venv .venv && /bin/bash -c ".venv/bin/python -m $command --quiet") \
+        >"$work/$fixture-setup.log" 2>&1
       ;;
-  esac
+    *) false ;;
+  esac || { cat "$work/$fixture-setup.log" >&2; fail "$fixture: $command failed"; }
 }
 
 checked=0
@@ -103,11 +118,17 @@ for fixture in "${fixtures[@]}"; do
     echo "SKIP $fixture: not in this tree yet"
     continue
   fi
-  case "$fixture" in
-    node-plain | node-deps) require_tools "$fixture" node npm || continue ;;
-    python-pytest) require_tools "$fixture" python3 || continue ;;
+  case "$(field "$fixture" language)" in
+    node)
+      case "$(field "$fixture" host_setup)" in
+        corepack\ *) require_tools "$fixture" node npm corepack || continue ;;
+        *) require_tools "$fixture" node npm || continue ;;
+      esac
+      ;;
+    python) require_tools "$fixture" python3 || continue ;;
     rust) require_tools "$fixture" cargo || continue ;;
     go) require_tools "$fixture" go || continue ;;
+    *) fail "fixture $fixture names no language this script knows" ;;
   esac
   dir="$work/$fixture"
   cp -R "$source_dir" "$dir"

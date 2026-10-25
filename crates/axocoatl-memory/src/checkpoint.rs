@@ -1696,7 +1696,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_and_load_checkpoint() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
 
         let ckpt = test_checkpoint("agent-1", 1);
@@ -1721,7 +1721,7 @@ mod tests {
 
     #[tokio::test]
     async fn normal_load_ignores_a_noncanonical_numeric_filename_alias() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.save(&test_checkpoint("agent-1", 1)).await.unwrap();
 
@@ -1829,7 +1829,7 @@ mod tests {
 
     #[tokio::test]
     async fn versioned_checkpoint_preserves_exact_provider_tool_metadata() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let provider_metadata = ProviderMetadata::from([
             ("axocoatl.route.slot".to_string(), "fallback".to_string()),
@@ -1889,7 +1889,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_latest_picks_highest_version() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
 
         store.save(&test_checkpoint("agent-1", 1)).await.unwrap();
@@ -1906,7 +1906,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_nonexistent_returns_none() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
 
         let result = store.load_latest(&AgentId::new("ghost")).await.unwrap();
@@ -1915,7 +1915,7 @@ mod tests {
 
     #[tokio::test]
     async fn older_or_corrupt_checkpoint_cache_is_ignored() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let dir = tmp.path().join("agent-1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -1929,7 +1929,7 @@ mod tests {
 
     #[tokio::test]
     async fn real_v0_1_0_bincode_checkpoint_decodes_without_reencoding() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let dir = tmp.path().join("legacy-session:coder");
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -1958,7 +1958,7 @@ mod tests {
 
     #[tokio::test]
     async fn real_v0_1_4_bincode_checkpoint_preserves_tool_records() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let dir = tmp.path().join("legacy-session:coder");
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -2038,7 +2038,7 @@ mod tests {
 
     #[tokio::test]
     async fn temporary_unframed_postcard_checkpoint_remains_loadable() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let checkpoint = test_checkpoint("launch-session:coder", 9);
         let bytes = postcard::to_stdvec(&checkpoint).unwrap();
@@ -2060,7 +2060,7 @@ mod tests {
 
     #[tokio::test]
     async fn corrupt_newest_candidate_falls_back_without_mutating_either_file() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let dir = tmp.path().join("legacy-session:coder");
         tokio::fs::create_dir_all(&dir).await.unwrap();
@@ -2085,7 +2085,7 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_sparse_newest_candidate_is_rejected_before_read_and_falls_back() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.save(&test_checkpoint("agent-1", 1)).await.unwrap();
         let oversized_path = storage_path(tmp.path(), "agent-1").join("0000000000000002.ckpt");
@@ -2108,7 +2108,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_trailing_bytes_and_identity_mismatch_fail_safely() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let mut trailing = v0_1_4_fixture();
         trailing.push(0);
@@ -2150,7 +2150,7 @@ mod tests {
 
     #[tokio::test]
     async fn removing_prepared_version_restores_previous_latest() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.save(&test_checkpoint("agent-1", 1)).await.unwrap();
         store.save(&test_checkpoint("agent-1", 2)).await.unwrap();
@@ -2166,7 +2166,7 @@ mod tests {
 
     #[tokio::test]
     async fn prune_keeps_last_n() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
 
         // Save 5 checkpoints — pruning keeps last 3
@@ -2185,7 +2185,7 @@ mod tests {
 
     #[tokio::test]
     async fn scoped_ids_read_legacy_posix_paths_and_promote_to_portable_keys() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let id = "ses-123:coder";
         let legacy_dir = tmp.path().join(id);
@@ -2222,7 +2222,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsafe_ids_cannot_escape_or_make_pruning_touch_an_outside_sentinel() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = crate::private_tempdir_test_support::private_tempdir();
         let root = parent.path().join("checkpoints");
         let outside = parent.path().join("outside");
         tokio::fs::create_dir_all(&outside).await.unwrap();
@@ -2275,7 +2275,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn lowercase_current_checkpoint_does_not_adopt_uppercase_legacy_directory() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let legacy_dir = tmp.path().join("Coder");
         tokio::fs::create_dir_all(&legacy_dir).await.unwrap();
@@ -2313,7 +2313,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_turn_staging_is_scoped_until_commit() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store
             .save(&test_checkpoint("ses-a:coder", 1))
@@ -2404,7 +2404,7 @@ mod tests {
 
     #[tokio::test]
     async fn staged_alias_fails_retryably_before_commit_state_is_published() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.begin_session_turn("ses-a", "turn-a").await.unwrap();
         store
@@ -2451,7 +2451,7 @@ mod tests {
 
     #[tokio::test]
     async fn abort_restores_transcript_but_preserves_pending_usage_accounting() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let mut baseline = test_checkpoint("ses-a:coder", 1);
         baseline.behavior_state = Some("committed behavior".to_string());
@@ -2486,7 +2486,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconciliation_repeats_durable_in_progress_dispositions() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store
             .save(&test_checkpoint("ses-a:coder", 1))
@@ -2566,7 +2566,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_recovers_initial_manifest_atomic_temp_without_a_manifest() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let base = store.secure_base().unwrap();
         let turn_dir = store
@@ -2587,7 +2587,7 @@ mod tests {
 
     #[tokio::test]
     async fn startup_uses_old_manifest_after_state_transition_atomic_temp() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.begin_session_turn("ses-a", "turn-a").await.unwrap();
         let base = store.secure_base().unwrap();
@@ -2614,7 +2614,7 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_recovers_manifest_atomic_temp_but_rejects_lookalikes() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.begin_session_turn("ses-a", "turn-a").await.unwrap();
         let base = store.secure_base().unwrap();
@@ -2650,7 +2650,7 @@ mod tests {
 
     #[tokio::test]
     async fn abort_discards_incomplete_agent_identity_temp_but_commit_fails_closed() {
-        let aborted_tmp = tempfile::tempdir().unwrap();
+        let aborted_tmp = crate::private_tempdir_test_support::private_tempdir();
         let aborted = CheckpointStore::new(aborted_tmp.path(), CheckpointPolicy::Manual);
         aborted
             .begin_session_turn("ses-a", "turn-abort")
@@ -2670,7 +2670,7 @@ mod tests {
             .unwrap();
         assert!(aborted.list_session_turn_transactions().unwrap().is_empty());
 
-        let committed_tmp = tempfile::tempdir().unwrap();
+        let committed_tmp = crate::private_tempdir_test_support::private_tempdir();
         let committed = CheckpointStore::new(committed_tmp.path(), CheckpointPolicy::Manual);
         committed
             .begin_session_turn("ses-a", "turn-commit")
@@ -2699,7 +2699,7 @@ mod tests {
 
     #[tokio::test]
     async fn commit_ignores_only_a_stranded_staged_checkpoint_temp() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         store.begin_session_turn("ses-a", "turn-a").await.unwrap();
         let base = store.secure_base().unwrap();
@@ -2725,7 +2725,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_adoption_sanitizes_only_the_exact_session_prefix_once() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         for agent_id in ["ses-a:coder", "ses-a:reviewer", "ses-ab:coder"] {
             let mut checkpoint = test_checkpoint(agent_id, 1);
@@ -2772,7 +2772,7 @@ mod tests {
 
     #[tokio::test]
     async fn legacy_adoption_rejects_checkpoint_path_identity_confusion() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let confused_dir = tmp.path().join("v1").join(storage_key("ses-other:coder"));
         tokio::fs::create_dir_all(&confused_dir).await.unwrap();
@@ -2793,7 +2793,7 @@ mod tests {
 
     #[test]
     fn identity_discovery_ignores_noncanonical_numeric_filename_aliases() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let base = store.secure_base().unwrap();
         let agent_id = "ses-a:coder";
@@ -2818,7 +2818,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn legacy_adoption_includes_pre_transaction_literal_agent_directories() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let store = CheckpointStore::new(tmp.path(), CheckpointPolicy::Manual);
         let agent_id = "ses-a:legacy";
         let legacy_dir = tmp.path().join(agent_id);
@@ -2859,7 +2859,7 @@ mod tests {
 
     #[test]
     fn should_checkpoint_honors_policy() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = crate::private_tempdir_test_support::private_tempdir();
         let every = CheckpointStore::new(tmp.path(), CheckpointPolicy::EveryLlmCall);
         assert!(every.should_checkpoint(1));
         assert!(every.should_checkpoint(7));

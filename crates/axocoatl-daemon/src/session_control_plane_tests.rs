@@ -173,7 +173,7 @@ mod execution {
 
     impl Fixture {
         fn new() -> Self {
-            let root = tempfile::tempdir().unwrap();
+            let root = crate::private_tempdir_test_support::private_tempdir();
             let guard = Arc::new(
                 LegacyFormatOwnership::acquire(root.path())
                     .unwrap()

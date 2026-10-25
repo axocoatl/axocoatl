@@ -34,6 +34,7 @@ bundle, and each must say `pass: true`.
   link to a commit, then its Previews and cookies
 - `C1-recovery`: Tier C, a run that starts a stopped Podman machine
 - `C1-real-repo`: Tier C, timed runs on the pinned real repositories
+- `C1-browser-webkit`: Tier C, every product browser journey in WebKit on the gate Mac with Podman, against the candidate's macOS binary (`browser-webkit-mac.sh`)
 - `D1`: Tier D, Ubuntu 24.04 VM, a new user made with `adduser`, OpenRouter
   models, the Always-On Service (`newuser-linux.sh --live`)
 - `C2-local` (when the public copy names 16 GB): Tier C on a 16 GB Apple-silicon Mac
@@ -259,6 +260,14 @@ step of its path.
   has a file whose `pass` is `true`, whose required steps all passed (a
   skipped required step fails the path), which holds every step "Required
   steps" lists for it, passed, and whose version and commit match.
+- Every path CI records (Tier A and Tier B) carries `<path>/ci-run.json`,
+  which `collect-evidence.sh --ci-run` writes from the GitHub run it
+  downloaded the path from: a push run of `.github/workflows/ci.yml` on the
+  bundle's commit, in the repository whose code it ran, that completed with
+  the conclusion `success`. A path from a red run, or one collected with
+  `--from` instead of from its run, fails: CI is green on the commit before a
+  tag. `collect-evidence.sh` refuses a run that has not succeeded before it
+  downloads anything.
 
 When it refuses, it names every missing or failing path and why, and the job
 fails.
@@ -411,13 +420,17 @@ on a GitHub-hosted runner (ubuntu-24.04 and ubuntu-24.04-arm; job
    version and a start after the configuration last changed, as onboarding
    reads it.
 7. On each fixture in `tests/fixtures/newuser/` (`node-plain`, `node-deps`,
-   `python-pytest`, `rust`, `go`), the README's `axocoatl run fix` command
+   `python-pytest`, `rust`, `go`, and in Tier A also `node-pnpm`,
+   `node-yarn`, `node-yarn-berry`, `python-poetry`, `python-uv`, `python-pdm`
+   and `python-hatch`), the README's `axocoatl run fix` command
    exactly as written, plus `--junit`, `--record` and `--receipt` when it
    lacks them, must exit 0. `node-plain`, onboarding's first-run sample, has
    another bug than the README's task describes, so it runs the command its
    own README gives (`"command": "fixture-readme"` in `fixtures.json`). Each
-   run's plan line must name the image the fixture needs (and the setup,
-   for `node-deps` and `python-pytest`). The documented
+   run's plan line must name the image the fixture needs and, for every
+   fixture with dependencies (all but `node-plain`), the setup that installs
+   them through the registries opened for it (`setup_contains` in
+   `fixtures.json`). The documented
    `axocoatl receipt verify receipt.json --key "$(axocoatl receipt key)" --repo .`
    and `axocoatl record verify` must exit 0, the receipt must match the
    record, and no accepted output may hold tool-call markup (see "Required
@@ -505,30 +518,46 @@ Supporting checks, run in CI's workflow-contracts job:
   Podman, models or a release build. A simulated path always records a
   failed step and can never be evidence.
 
-CI's "Podman suites (ignored tests)" job runs the Podman tests that are
-ignored by default against the ubuntu-24.04 runner's rootless Podman 4.9.3:
-`session_trust_podman`, and the eleven `node_modules` mount point tests
-(`a_repository_without_node_modules_has_none_left_behind`,
-`under_the_hardened_workload_the_mount_point_is_the_persons_until_removal`,
-`a_development_containers_node_modules_volume_keeps_the_mount_point`,
-`a_container_that_bind_mounts_the_mount_point_itself_keeps_it`,
-`a_bind_of_the_mount_point_through_a_link_keeps_it`,
-`a_bind_volume_of_the_mount_point_keeps_it`,
-`an_overlay_volume_of_the_mount_point_keeps_it`,
-`a_tmpfs_on_node_modules_through_a_bind_of_the_repository_keeps_it`,
-`mounts_taken_with_volumes_from_keep_the_mount_point`,
-`an_overlay_of_a_keep_id_container_keeps_it_and_says_why` and
-`dependency_mountpoint::tests::podman_names_what_is_gone_and_the_rest_is_inspected`:
-plain, hardened keep-id, a development container, a bind of the mount point
-itself, a bind through a link, a bind volume, an overlay volume, a tmpfs
-through a bind of the repository, mounts taken with `--volumes-from`, a
-keep-id container's overlay volume, and Podman's `no such container` and
-`no such volume` answers). Each removal they assert runs while an
+Every test that is `#[ignore]`d by default because it needs Podman, prepared
+images, the internet or a live Ollama runs in CI, against the ubuntu-24.04
+runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
+
+- "Podman and live suites" runs four groups, one job each: `isolation`
+  (`axocoatl-isolation`, among them the Session sandbox, the `node_modules`
+  mount point, egress, relay, workload, SearXNG, browser and trust volume
+  suites, and the `sandbox-session` example), `daemon` (`axocoatl-daemon`:
+  native activations, egress routes, loadout and audit runs, the pinned Claude
+  Code and Codex from their recipe images, the browser tools, live web search
+  and the live `npm`, `crates`, `github`, `alpine`, `debian` and `ubuntu`
+  presets), `cli`
+  (`axocoatl-cli`) and `other` (`axocoatl-memory` and `axocoatl-session`).
+  `prepare` pulls the images pinned by digest and builds the supervisor test
+  images, the browser image and the recipe images with this commit's CLI;
+  `run` lists every ignored test of the group's crates and fails unless every
+  one of them ran and passed, so a renamed test cannot pass by matching
+  nothing. `list GROUP` prints what `run` would run, with no Podman.
+- "Execution supervisor runtime" runs `scripts/test-exec-supervisor-runtime.sh`
+  on x86_64 and on aarch64: the supervisor suite in Alpine and Debian images,
+  as root and as a non-root user, on a kernel of each architecture.
+- "Live Ollama suites" installs Ollama 0.40.6, the audited release, serves it
+  with cloud models off and runs the contract probes and a native Session's
+  provider against `qwen3:0.6b`: plain, JSON, a tool round-trip and an
+  over-long input. It also serves a second Ollama with its cloud features on,
+  for the live test that the host route to Ollama refuses such a server.
+- `test-podman-suites.sh check`, in the "Workflow contracts" job, fails when
+  an ignored test is in no group or one is left out without a reason. Left
+  out: the four live E2B tests (E2B's hosted service with a key; the project
+  has no E2B account), the four live OpenRouter tests (credit and a key; the
+  `C1-openrouter` and `D1` paths run OpenRouter models live) and four helpers
+  that other tests, or a private probe of released binaries, start.
+
+Each removal the `node_modules` mount point tests assert runs while an
 unrelated container exists, and each keep of the empty mount point they
-assert names why, so a broken `podman container inspect` fails them. The
-step must report `11 passed` (as many as it names), so that a renamed test
-cannot pass by matching nothing. The egress and workload suites need
-prepared local images and are not wired yet.
+assert names why, so a broken `podman container inspect` fails them. Every
+CI job that pulls images first points Podman at `mirror.gcr.io`, Google's
+public cache of Docker Hub (`scripts/ci-registry-mirror.sh`), so the
+anonymous pulls of many jobs at once meet no Docker Hub rate limit; a digest
+pull is the same bytes from either.
 
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
 with `GATE_REQUIRE_ALL_TOOLCHAINS=1`, which proves each fixture in
@@ -687,12 +716,31 @@ browser.
 GATE_ACCOUNT="$(id -un)" scripts/release-gate/reset-mac-account.sh --dedicated-machine
 GATE_ACCOUNT="$(id -un)" scripts/release-gate/newuser-mac.sh --release-dir ~/candidate \
   --site ~/candidate/site --pr-repo OWNER/axocoatl-gate-receipts --workbench-driver
+# In any account with Node 22 and a running Podman machine, in a checkout of
+# the same commit: the product browser journeys in WebKit (C1-browser-webkit).
+scripts/release-gate/browser-webkit-mac.sh \
+  --tarball ~/candidate/axocoatl-vX.Y.Z-aarch64-apple-darwin.tar.gz --commit SHA
 scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   --from release-evidence --ci-run RUN_ID
 ```
 
 `RUN_ID` is the CI run of that commit on `main` (a push run), whose
-"New user (Linux)" legs uploaded the Tier A evidence.
+"New user (Linux)" legs uploaded the Tier A evidence. It must have
+succeeded: `collect-evidence.sh` refuses a run whose conclusion is not
+`success`.
+
+`browser-webkit-mac.sh` (`C1-browser-webkit`) runs
+`scripts/verify-product-browser-gate.sh` in WebKit with the binary from the
+candidate's macOS archive (checked against its `.sha256`, so nothing is
+built) on the Mac's running Podman machine, with the Preview's Session image
+(`node:20-slim`, pulled by the digest CI pins) required, so no Preview
+journey is skipped, and `rust:bookworm` (pulled by the digest CI pins) for
+the native turn and coordination reference journeys, which run real
+Sessions as on CI's Linux legs. Safari's own cookie behaviour exists only in WebKit on
+macOS, and the journeys that assert it with a real Preview need a Session on
+Podman: CI's macOS WebKit leg has no Podman, and its Linux legs have Linux
+WebKit. The suite's log is the path's evidence. It does not need the gate
+account; any account of the gate Mac with Node 22 will do.
 
 - `reset-mac-account.sh`:
   - It runs only as the gate account (`GATE_ACCOUNT`, default `axo-newuser`).
@@ -847,9 +895,15 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
 - Separately, CI's "Product browser regressions" job runs
   every browser regression on WebKit, Safari's engine
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),
-  and in Chromium on x86_64 and aarch64, all against the release build.
-  `release.yml`'s browser gate runs Chromium only, on a debug build. In
-  every engine a failure that followed a browser crash
+  on x86_64 Linux and on macOS 26 (arm64), and in Chromium on x86_64 and
+  aarch64, all against the release build; `release.yml`'s browser gate runs
+  the same four legs, and a failing one blocks the release. A hosted macOS
+  runner has no Podman, so its leg sets `AXO_BROWSER_WITHOUT_PODMAN=1`: it
+  leaves out the five journey files that start a Session on Podman (listed in
+  `scripts/verify-product-browser-gate.sh`), and the Preview journeys skip;
+  the macOS journeys of the signed-out and readiness files run there, and
+  `C1-browser-webkit` runs every journey in WebKit on the gate Mac with
+  Podman. In every engine a failure that followed a browser crash
   the suite detected is marked `# browser crash:`; nothing is rerun, so it
   still fails the suite (that README, "Browser crashes"). Run on a Mac with
   `AXO_BROWSER_ENGINE=webkit`, Playwright's
@@ -874,9 +928,11 @@ scripts/release-gate/collect-evidence.sh --version X.Y.Z --commit SHA \
   cookie reaches the workbench at `127.0.0.1`, and that the workbench still
   opens, connects and reads the API. `preview-cookies.test.mjs` needs Podman and
   `docker.io/library/node:20-slim`. On a developer machine it is skipped
-  without that image. CI's product-browser legs and `release.yml`'s browser
-  gate pull the image by digest and set `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`,
-  so there a missing image fails it. Through the real Preview proxy and a real
+  without that image. The Linux legs of CI's product-browser job and of
+  `release.yml`'s browser gate pull the image by digest and set
+  `AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1`, so there a missing image fails it, as
+  it does in `C1-browser-webkit` on the gate Mac; the macOS leg has no Podman
+  and skips it. Through the real Preview proxy and a real
   Session app it asserts that:
   - in WebKit on a Mac, a Preview address typed into a tab, a redirect from
     another site to one, and a real Command-click on a Preview link inside the

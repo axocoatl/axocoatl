@@ -340,12 +340,21 @@ fn connect_refuses_a_store_that_cannot_take_the_token_before_the_sign_in() {
             assert!(output.status.success(), "{output:?}");
         }
     };
+    // The secret store's directory, 0700 as Axocoatl makes it: under a umask
+    // of 002 `create_dir` makes it group-writable, which the store refuses.
+    let secrets = |root: &Path| {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join("data/secrets"))
+            .unwrap();
+    };
     type Prepare<'a> = &'a dyn Fn(&Path);
     let cases: [(&str, Prepare, &str); 3] = [
         (
             "a link",
             &|root: &Path| {
-                std::fs::create_dir_all(root.join("data/secrets")).unwrap();
+                secrets(root);
                 std::fs::create_dir(root.join("elsewhere")).unwrap();
                 std::os::unix::fs::symlink(
                     root.join("elsewhere"),
@@ -358,7 +367,8 @@ fn connect_refuses_a_store_that_cannot_take_the_token_before_the_sign_in() {
         (
             "a directory",
             &|root: &Path| {
-                std::fs::create_dir_all(secret_file(root, "claude-code-oauth")).unwrap();
+                secrets(root);
+                std::fs::create_dir(secret_file(root, "claude-code-oauth")).unwrap();
             },
             "unexpected file type",
         ),

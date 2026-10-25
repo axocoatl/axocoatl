@@ -743,7 +743,11 @@ async fn native_ollama_real_model_through_durable_controller() {
     } else {
         "Reply with the single word ready."
     };
-    let bound = ((context + output) * if json || use_tool { 2 } else { 1 }) as u64;
+    // A tool round's budget covers the call that asks for the tool and the
+    // one after it, each reserving its context: with less, the host
+    // withdraws the tools and asks for the final answer, and a small model
+    // then writes a summary instead of "ready".
+    let bound = ((context + output) * if use_tool { 4 } else if json { 2 } else { 1 }) as u64;
     let fixture = local_fixture(agent_config(&model, json, use_tool, output), bound, input);
     let tool = Arc::new(CountingTool::default());
     let settled = fixture

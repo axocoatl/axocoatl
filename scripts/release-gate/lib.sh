@@ -834,9 +834,14 @@ gate_fixture_expect() {
   ' "$gate_repo/tests/fixtures/newuser/fixtures.json" "$1" "$2"
 }
 
+# gate_fixture_names: the fixtures this path's tier runs (GATE_TIER, set by
+# gate_begin): every fixture, but one whose fixtures.json entry lists its
+# "tiers" only in those.
 gate_fixture_names() {
-  node -e 'for (const name of Object.keys(require(process.argv[1]).fixtures)) console.log(name)' \
-    "$gate_repo/tests/fixtures/newuser/fixtures.json"
+  node -e '
+    for (const [name, fixture] of Object.entries(require(process.argv[1]).fixtures)) {
+      if (!Array.isArray(fixture.tiers) || fixture.tiers.includes(process.argv[2])) console.log(name);
+    }' "$gate_repo/tests/fixtures/newuser/fixtures.json" "${GATE_TIER:-}"
 }
 
 # gate_fixture_command FIXTURE PUBLISHED: the command the gate runs on

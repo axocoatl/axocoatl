@@ -225,9 +225,14 @@ async function run() {
   const manifest = ['package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod'].find((file) => existsSync(file));
   // The plan line the product printed in CI on the fixture this
   // repository is (run-plan-lines.txt), as the CLI prints it.
+  const pyproject = manifest === 'pyproject.toml' ? readFileSync('pyproject.toml', 'utf8') : '';
+  const python = [['[tool.poetry]', 'python-poetry'], ['[tool.uv]', 'python-uv'], ['[tool.pdm.', 'python-pdm'],
+    ['[tool.hatch.envs.', 'python-hatch']].find(([marker]) => pyproject.includes(marker))?.[1];
+  const node = [['pnpm-lock.yaml', 'node-pnpm'], ['.yarnrc.yml', 'node-yarn-berry'], ['yarn.lock', 'node-yarn'],
+    ['package-lock.json', 'node-deps']].find(([file]) => existsSync(file))?.[1];
   const fixture = {
-    'package.json': existsSync('package-lock.json') ? 'node-deps' : 'node-plain',
-    'pyproject.toml': 'python-pytest',
+    'package.json': node ?? 'node-plain',
+    'pyproject.toml': python ?? 'python-pytest',
     'Cargo.toml': 'rust',
     'go.mod': 'go',
   }[manifest];
@@ -247,7 +252,7 @@ async function run() {
   const repoHead = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const messages = [{ role: 'user', content: flag('--task') }];
   let answer = '';
-  for (let turn = 0; turn < 12; turn += 1) {
+  for (let turn = 0; turn < 32; turn += 1) {
     const message = await chat(config.baseUrl, writer, messages, ['read_file', 'edit_file', 'write_file']);
     messages.push(message);
     if (!message.tool_calls?.length) {

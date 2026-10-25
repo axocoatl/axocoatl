@@ -157,7 +157,7 @@ fn a_record_keeps_proposals_in_order_and_reads_them_back() {
     use crate::execution_ownership::LegacyFormatOwnership;
     use crate::execution_store::{ExecutionStoreOwner, SessionExecutionStore};
     use crate::turn_contract::SessionId;
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let ownership = std::sync::Arc::new(
         LegacyFormatOwnership::acquire(root.path())
             .unwrap()

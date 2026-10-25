@@ -211,9 +211,11 @@ How a Session runs under it:
 - Each `bash` command of an Agent that may change files, each approved setup
   command, readiness provisioning and each terminal you open gets its own proxy
   credential, in `HTTPS_PROXY`, `HTTP_PROXY`, their lowercase forms, the npm proxy
-  settings, `NO_PROXY` and `NODE_USE_ENV_PROXY=1`. The credential ends when that
-  command, setup step or terminal does. It reaches the process through an
-  environment file that Podman reads, never through a command line.
+  settings, `NO_PROXY`, `NODE_USE_ENV_PROXY=1` and `GIT_HTTP_PROXY_AUTHMETHOD=basic`
+  (Git then sends the credential with its first request instead of asking without it
+  first). The credential ends when that command, setup step or terminal does. It
+  reaches the process through an environment file that Podman reads, never through a
+  command line.
 - Read-only helpers, required checks, Axocoatl's own repository captures,
   background tasks and other commands get no credential, so they have no network.
 - Exposed ports still work in Preview. The Session container publishes nothing and

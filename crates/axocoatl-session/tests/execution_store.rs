@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs;
 use std::sync::Arc;
 
@@ -25,8 +27,8 @@ fn boundary(root: &tempfile::TempDir) -> Arc<UpgradedFormatOwnership> {
 
 #[test]
 fn runtime_binding_requires_the_actual_held_data_root() {
-    let root = tempfile::tempdir().unwrap();
-    let foreign = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
+    let foreign = support::private_tempdir();
     let store = SessionExecutionStore::open(boundary(&root), owner()).unwrap();
     let actual = axocoatl_core::SecureDir::open_existing_all(root.path()).unwrap();
     store.verify_data_root(&actual).unwrap();
@@ -100,7 +102,7 @@ fn close(turn: &str, revision: u64, id: &str) -> TurnContractEnvelope {
 
 #[test]
 fn reopened_running_turn_becomes_attention_once_and_original_receipt_survives() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     let request = begin("turn-a", "begin-a", None);
@@ -121,7 +123,7 @@ fn reopened_running_turn_becomes_attention_once_and_original_receipt_survives() 
 
 #[test]
 fn unfinished_ownership_includes_attention_and_closed_successor_resolves_exact_history() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     store.append(begin("turn-a", "begin-a", None)).unwrap();
@@ -153,7 +155,7 @@ fn unfinished_ownership_includes_attention_and_closed_successor_resolves_exact_h
 
 #[test]
 fn closed_reference_from_another_projection_cannot_forge_canonical_history() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut store = SessionExecutionStore::open(boundary(&root), owner()).unwrap();
     let mut fabricated = TurnContract::default();
     fabricated
@@ -173,7 +175,7 @@ fn closed_reference_from_another_projection_cannot_forge_canonical_history() {
 
 #[test]
 fn independent_sessions_share_format_guard_but_cannot_share_a_session_writer() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     assert!(SessionExecutionStore::open(guard.clone(), owner()).is_err());
@@ -190,7 +192,7 @@ fn independent_sessions_share_format_guard_but_cannot_share_a_session_writer() {
 
 #[test]
 fn command_identity_is_session_wide_and_changed_replay_cannot_mutate_closed_history() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let mut store = SessionExecutionStore::open(boundary(&root), owner()).unwrap();
     let first = begin("turn-a", "begin-a", None);
     let receipt = store.append(first.clone()).unwrap();
@@ -218,7 +220,7 @@ fn active_segment(store: &SessionExecutionStore) -> std::path::PathBuf {
 
 #[test]
 fn foreign_workspace_and_corrupt_journal_fail_without_overwriting_evidence() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     store.append(begin("turn-a", "begin-a", None)).unwrap();
@@ -237,7 +239,7 @@ fn foreign_workspace_and_corrupt_journal_fail_without_overwriting_evidence() {
 #[test]
 fn duplicate_or_foreign_canonical_records_fail_replay() {
     for mutation in ["duplicate", "owner", "schema"] {
-        let root = tempfile::tempdir().unwrap();
+        let root = support::private_tempdir();
         let guard = boundary(&root);
         let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
         store.append(begin("turn-a", "begin-a", None)).unwrap();
@@ -269,7 +271,7 @@ fn duplicate_or_foreign_canonical_records_fail_replay() {
 
 #[test]
 fn failed_publication_poison_requires_reopen_before_any_receipt() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     // Records are appended to the active segment beside the head.
@@ -297,7 +299,7 @@ fn failed_publication_poison_requires_reopen_before_any_receipt() {
 
 #[test]
 fn replaced_session_directory_and_changed_format_manifest_revoke_writing() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard, owner()).unwrap();
     let path = store.path();
@@ -315,7 +317,7 @@ fn replaced_session_directory_and_changed_format_manifest_revoke_writing() {
 
 #[test]
 fn existing_recovery_never_creates_a_missing_namespace_or_journal() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     assert!(SessionExecutionStore::open_existing(guard.clone(), owner()).is_err());
     assert!(!root.path().join("execution-v2").exists());
@@ -333,7 +335,7 @@ fn existing_recovery_never_creates_a_missing_namespace_or_journal() {
 /// original receipts.
 #[test]
 fn a_session_holds_more_turns_than_the_old_lifetime_bound() {
-    let root = tempfile::tempdir().unwrap();
+    let root = support::private_tempdir();
     let guard = boundary(&root);
     let mut store = SessionExecutionStore::open(guard.clone(), owner()).unwrap();
     let mut predecessor = None;

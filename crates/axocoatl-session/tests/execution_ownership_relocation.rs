@@ -7,6 +7,8 @@
 //! now re-records those three identities, keeping the ownership id, while
 //! it holds every lease; every other difference is still refused unchanged.
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
@@ -183,7 +185,7 @@ fn assert_recorded_here(root: &Path, original: &FormatManifest) -> FormatManifes
 
 #[test]
 fn a_cold_backup_restored_in_place_is_re_recorded_and_keeps_its_ownership_id() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let backup = parent.path().join("backup");
     copy_tree(&root, &backup);
@@ -236,7 +238,7 @@ fn a_cold_backup_restored_in_place_is_re_recorded_and_keeps_its_ownership_id() {
 
 #[test]
 fn a_moved_root_records_only_its_new_path() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let moved = parent.path().join("moved");
     fs::rename(&root, &moved).unwrap();
@@ -258,7 +260,7 @@ fn a_moved_root_records_only_its_new_path() {
 
 #[test]
 fn a_copy_at_another_path_is_re_recorded_and_the_original_is_untouched() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let copy = parent.path().join("migrated");
     copy_tree(&root, &copy);
@@ -280,7 +282,7 @@ fn a_copy_at_another_path_is_re_recorded_and_the_original_is_untouched() {
 fn an_interrupted_re_recording_is_removed_at_the_next_start() {
     // The reserved file written, the crash before its rename: the lock
     // directory still holds the old manifest, alone.
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let copy = parent.path().join("copy");
     copy_tree(&root, &copy);
@@ -331,7 +333,7 @@ fn an_interrupted_re_recording_is_removed_at_the_next_start() {
 
 #[test]
 fn every_other_difference_in_a_copied_root_is_still_refused_unchanged() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     for corruption in [
         "missing",
@@ -448,7 +450,7 @@ fn copy_back_into(backup: &Path, root: &Path) {
 #[test]
 fn a_backup_copied_back_into_the_same_directory_is_re_recorded() {
     for moved in [false, true] {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = support::private_tempdir();
         let (mut root, original) = installed_root(parent.path(), "data");
         let backup = parent.path().join("backup");
         copy_tree(&root, &backup);
@@ -473,7 +475,7 @@ fn a_backup_copied_back_into_the_same_directory_is_re_recorded() {
 
 #[test]
 fn a_replaced_lock_file_never_admits_a_second_owner_of_a_held_directory() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let (owner, relocation) = admit(&root).unwrap();
     assert_eq!(relocation, None);
@@ -513,7 +515,7 @@ fn a_replaced_lock_file_never_admits_a_second_owner_of_a_held_directory() {
 
 #[test]
 fn a_second_owner_reaching_the_same_directory_through_another_path_is_excluded() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let (root, original) = installed_root(parent.path(), "data");
     let (owner, relocation) = admit(&root).unwrap();
     assert_eq!(relocation, None);
@@ -552,7 +554,7 @@ fn a_second_owner_reaching_the_same_directory_through_another_path_is_excluded()
 
 #[test]
 fn a_copied_interrupted_conversion_is_re_recorded_and_then_finished() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let root = parent.path().join("data");
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
@@ -584,15 +586,15 @@ fn a_copied_interrupted_conversion_is_re_recorded_and_then_finished() {
 
 #[test]
 fn doctor_reads_every_shape_without_changing_it() {
-    let parent = tempfile::tempdir().unwrap();
+    let parent = support::private_tempdir();
     let empty = parent.path().join("empty");
-    fs::create_dir(&empty).unwrap();
+    support::create_private_dir_all(&empty);
     assert_eq!(
         inspect_format_ownership(&empty),
         FormatOwnershipReport::Unrecorded
     );
     let legacy = parent.path().join("legacy");
-    fs::create_dir(&legacy).unwrap();
+    support::create_private_dir_all(&legacy);
     fs::write(legacy.join(LEGACY_LOCK_NAME), b"").unwrap();
     assert_eq!(
         inspect_format_ownership(&legacy),
@@ -616,7 +618,7 @@ fn doctor_reads_every_shape_without_changing_it() {
     drop(owner);
     assert_eq!(inventory(&root), before);
     let ambiguous = parent.path().join("ambiguous");
-    fs::create_dir(&ambiguous).unwrap();
+    support::create_private_dir_all(&ambiguous);
     fs::create_dir(ambiguous.join(LEGACY_LOCK_NAME)).unwrap();
     fs::create_dir(ambiguous.join(RETIRED_LOCK_NAME)).unwrap();
     assert!(matches!(

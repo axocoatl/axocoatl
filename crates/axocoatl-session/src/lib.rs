@@ -26,6 +26,8 @@ pub mod invocation_audit;
 pub mod native_history;
 pub mod network_record;
 pub mod path_scope;
+#[cfg(test)]
+pub(crate) mod private_tempdir_test_support;
 pub mod qa_repro;
 pub mod receipt;
 pub mod record_bundle;

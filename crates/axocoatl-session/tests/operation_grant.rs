@@ -1,4 +1,7 @@
 //! Contract regressions; these do not establish delegated controller execution.
+
+mod support;
+
 use axocoatl_session::control_authority::*;
 use axocoatl_session::control_command::{BlockerResponse, ControlParameters, FinishMode};
 use axocoatl_session::turn_contract::*;
@@ -66,7 +69,7 @@ fn exact_policy_roundtrip_keeps_limits_required_checks_and_no_default_blockers()
 
 #[test]
 fn exact_owner_mixed_legacy_authority_and_unknown_schema_are_rejected_without_mutation() {
-    let dir = TempDir::new().unwrap();
+    let dir = support::private_tempdir();
     let gate = authority(&dir);
     let mut foreign = policy();
     foreign.delegation.as_mut().unwrap().scope.turn_id = LogicalTurnId::new("other-turn").unwrap();
@@ -82,7 +85,7 @@ fn exact_owner_mixed_legacy_authority_and_unknown_schema_are_rejected_without_mu
 
 #[test]
 fn narrowed_grant_cannot_add_operation_budget_template_or_remove_completion_obligation() {
-    let dir = TempDir::new().unwrap();
+    let dir = support::private_tempdir();
     let gate = authority(&dir);
     let original = policy();
     gate.install_grant(original.clone(), 0).unwrap();
@@ -149,7 +152,7 @@ fn future_subtree_growth_is_explicit_and_cannot_expand_through_narrowing() {
         "fixtures/operation-grant/explicit-future-subtree-v1.json"
     ))
     .unwrap();
-    let dir = TempDir::new().unwrap();
+    let dir = support::private_tempdir();
     let gate = authority(&dir);
     gate.install_grant(original.clone(), 0).unwrap();
     // A pure NodeId lookup is deliberately insufficient for canonical topology.
@@ -178,7 +181,7 @@ fn future_subtree_growth_is_explicit_and_cannot_expand_through_narrowing() {
 
 #[test]
 fn new_contract_cannot_enter_legacy_dispatch_and_revocation_survives_restart() {
-    let dir = TempDir::new().unwrap();
+    let dir = support::private_tempdir();
     let gate = authority(&dir);
     let policy = policy();
     gate.install_grant(policy.clone(), 0).unwrap();

@@ -295,13 +295,17 @@ impl Fixture {
         podman_ok(&[
             "network", "create", "--label", &label, "--subnet", &subnet, &network,
         ]);
-        podman_ok(&[
+        let started = podman(&[
             "run",
             "-d",
             "--name",
             &upstream,
             "--label",
             &label,
+            // `podman logs` reads it on any host: Podman's journald default
+            // shows nothing to a user who may not read the journal.
+            "--log-driver",
+            "k8s-file",
             "--network",
             &network,
             "--ip",
@@ -311,6 +315,16 @@ impl Fixture {
             "-e",
             UPSTREAM_SERVER,
         ]);
+        if !started.status.success() {
+            // The case's cleanup never runs: leave neither the created
+            // upstream nor its network behind.
+            let _ = podman(&["rm", "--force", "--time", "0", "--ignore", &upstream]);
+            let _ = podman(&["network", "rm", "--force", &network]);
+            panic!(
+                "podman run {upstream}: {}",
+                String::from_utf8_lossy(&started.stderr)
+            );
+        }
         Self {
             label,
             network,

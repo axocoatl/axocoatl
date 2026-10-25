@@ -1,3 +1,5 @@
+mod support;
+
 use axocoatl_session::invocation_audit::{
     InvocationAudit, InvocationAuditError, InvocationAuditOwner, InvocationEvidenceCommand,
     InvocationFinalEvidence, InvocationIntentCommand, InvocationOutcomeSource, ProtectedArguments,
@@ -42,7 +44,7 @@ fn outcome(intent: &InvocationIntentCommand) -> InvocationEvidenceCommand {
 
 #[test]
 fn durable_intent_identity_survives_restart_without_becoming_replay_authority() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     let receipt = audit.record_intent(command.clone()).unwrap();
@@ -89,7 +91,7 @@ fn durable_intent_identity_survives_restart_without_becoming_replay_authority() 
 
 #[test]
 fn late_outcome_settles_unknown_without_reopening_or_rewriting_closed_turn() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     let receipt = audit.record_intent(command.clone()).unwrap();
@@ -155,7 +157,7 @@ fn late_outcome_settles_unknown_without_reopening_or_rewriting_closed_turn() {
 
 #[test]
 fn failed_tool_result_never_proves_no_effect_and_cannot_be_rewritten_as_cancellation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     audit.record_intent(command.clone()).unwrap();
@@ -189,7 +191,7 @@ fn failed_tool_result_never_proves_no_effect_and_cannot_be_rewritten_as_cancella
 
 #[test]
 fn positive_pre_dispatch_cancellation_is_retained_and_prevents_dispatch_claim() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     let receipt = audit.record_intent(command.clone()).unwrap();
@@ -212,7 +214,7 @@ fn positive_pre_dispatch_cancellation_is_retained_and_prevents_dispatch_claim() 
 
 #[test]
 fn stale_conflicting_and_cross_owner_evidence_is_rejected_without_mutation() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     audit.record_intent(command.clone()).unwrap();
@@ -273,8 +275,8 @@ fn stale_conflicting_and_cross_owner_evidence_is_rejected_without_mutation() {
 
 #[test]
 fn receipts_from_another_audit_cannot_certify_this_store_even_with_identical_intent() {
-    let first_dir = tempfile::tempdir().unwrap();
-    let second_dir = tempfile::tempdir().unwrap();
+    let first_dir = support::private_tempdir();
+    let second_dir = support::private_tempdir();
     let mut first = InvocationAudit::open(first_dir.path(), owner()).unwrap();
     let mut second = InvocationAudit::open(second_dir.path(), owner()).unwrap();
     let first_receipt = first.record_intent(intent()).unwrap();
@@ -293,7 +295,7 @@ fn receipts_from_another_audit_cannot_certify_this_store_even_with_identical_int
 
 #[test]
 fn protected_arguments_are_distinct_from_preview_and_invalid_metadata_cannot_acknowledge() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     let command = intent();
     for field in [
@@ -345,7 +347,7 @@ fn active_segment(audit: &InvocationAudit) -> std::path::PathBuf {
 
 #[test]
 fn corrupted_or_future_journals_fail_closed_without_rewriting_their_bytes() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     audit.record_intent(intent()).unwrap();
     let head_path = audit.path();
@@ -407,7 +409,7 @@ fn corrupted_or_future_journals_fail_closed_without_rewriting_their_bytes() {
 #[test]
 fn ownership_lock_and_failed_storage_never_issue_dispatch_acknowledgements() {
     use std::os::unix::fs::{symlink, PermissionsExt};
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let mut audit = InvocationAudit::open(dir.path(), owner()).unwrap();
     for path in [audit.path(), active_segment(&audit)] {
         assert_eq!(
@@ -442,7 +444,7 @@ fn ownership_lock_and_failed_storage_never_issue_dispatch_acknowledgements() {
 
 #[test]
 fn missing_control_directory_is_not_implicitly_created() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = support::private_tempdir();
     let path = dir.path().join("unprovisioned").join("audit");
     assert!(InvocationAudit::open(&path, owner()).is_err());
     assert!(!path.parent().unwrap().exists());

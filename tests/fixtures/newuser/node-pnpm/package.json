@@ -1,0 +1,12 @@
+{
+  "name": "newuser-node-pnpm",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.7",
+  "scripts": {
+    "test": "uvu test"
+  },
+  "devDependencies": {
+    "uvu": "0.5.6"
+  }
+}
