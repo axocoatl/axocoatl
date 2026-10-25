@@ -397,6 +397,10 @@ pub enum FailureClass {
     /// The model wrote a tool call as answer text that Axocoatl cannot run,
     /// so nothing from that response ran; the provider did not fail.
     UnrunnableToolCall,
+    /// The model gave no answer and no tool call that can run (an empty
+    /// response, or a call to a tool it does not have), even when asked once
+    /// more, so nothing from that response ran; the provider did not fail.
+    NoAnswer,
     /// A grant, budget or wall-clock limit ran out.
     Budget,
     /// The Agent reported it could not proceed, or the host blocked it.
@@ -419,6 +423,7 @@ impl FailureClass {
             FailureClass::ProviderFailure => "provider_failure",
             FailureClass::ProviderRejected => "provider_rejected",
             FailureClass::UnrunnableToolCall => "unrunnable_tool_call",
+            FailureClass::NoAnswer => "no_answer",
             FailureClass::Budget => "budget",
             FailureClass::Blocked => "blocked",
             FailureClass::NotReached => "not_reached",
@@ -1696,6 +1701,7 @@ mod tests {
             ProviderFailure,
             ProviderRejected,
             UnrunnableToolCall,
+            NoAnswer,
             Budget,
             Blocked,
             NotReached,

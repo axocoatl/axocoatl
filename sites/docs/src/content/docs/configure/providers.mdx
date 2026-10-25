@@ -371,6 +371,19 @@ Lead and Reviewer pair onboarding offers with 48 to 95 GB of memory when no inst
 pair fits (how well `gpt-oss:20b` reviews has not been measured). Axocoatl sets nothing that keeps both loaded or unloads either (no
 `keep_alive`): whether both stay in memory is up to Ollama.
 
+**Another program on the same Ollama.** To read a model's context, Axocoatl loads it
+(a load without a prompt) and then asks Ollama which models it has loaded. When another
+program loads a model in between and Ollama unloads this one to make room (or the model
+is unloaded by `ollama stop` or a keep-alive of 0), Axocoatl loads it again, three times
+in all. When Ollama unloads it every time, the run is refused as infrastructure (exit 5),
+or Team & budget's Apply fails, with "Ollama unloaded MODEL each of the 3 times Axocoatl
+loaded it to read its context", naming what is loaded instead and what to do: run again
+when that program has finished with Ollama, or let Ollama keep both loaded (more memory,
+or a higher `OLLAMA_MAX_LOADED_MODELS`). Measured on a 48 GB Mac: a second client that
+loaded qwen3-coder:30b right after Axocoatl loaded gpt-oss:20b made Ollama unload
+gpt-oss:20b. When it did so once, `axocoatl run --dry-run` loaded gpt-oss:20b again and was
+ready; when it did so after each of the three loads, the dry run was refused (exit 5).
+
 **Contract probes.** When Team & budget observes a model's context, Axocoatl sends a few
 small requests to your server with that context and the settings every call uses
 (`truncate: false`, `shift: false`):
@@ -463,16 +476,44 @@ refused instead of ending the turn having run nothing:
 - a call written as JSON (`{"name": …, "arguments": …}`, the arguments as an
   object or as a string holding one, or `{"NAME": {…}}`) that ends the answer:
   the whole answer, the lines from its last line that starts with `{`, or a
-  `<tool_call>` block.
+  `<tool_call>` block;
+- an answer that ends with a call tag (`<tool_call>` or `<function=`) and
+  nothing after it: the model began a call and wrote none of it (qwen3-coder:30b
+  ended a fix with `…let me create a test to verify what happens.<tool_call>`,
+  which earlier 1.5 builds took as its final answer, so the fix changed nothing).
 
-The activation fails with the reason, the done reason and the number of tools
-offered; the workbench says "The model wrote a tool call as answer text that
-Axocoatl cannot run", the turn needs attention, and a run's Outcome lists it as
-`unrunnable_tool_call`, not as a provider failure. Nothing from that response
-ran; **Continue** asks the model again. JSON never runs as a call: JSON in a
-code fence, or followed by more text, stays the answer. Text from a line that
-starts a call is shown only when the response ends, and a `<tool_call>` that
-ends a line is shown only once the next line shows it opens no call.
+Nothing from that response ran. The model is asked once more within the same
+activation, with a note from the host that says what was wrong with its answer,
+as a new, separately admitted and budgeted call; the record shows it as a
+provider retry, and the note is not kept in the conversation. When the answer to
+the note cannot run either, or the budget cannot pay for asking, the activation
+fails with the reason, the done reason and the number of tools offered; the
+workbench says "The model wrote a tool call as answer text that Axocoatl cannot
+run", the turn needs attention, and a run's Outcome lists it as
+`unrunnable_tool_call`, not as a provider failure. **Continue** asks the model
+again. JSON never runs as a call: JSON in a code fence, or followed by more text,
+stays the answer. Text from a line that starts a call is shown only when the
+response ends, and a `<tool_call>` that ends a line is shown only once the next
+line shows it opens no call.
+
+### Responses with no answer
+
+gpt-oss:20b on Ollama can end a response having written only reasoning: no
+answer and no tool call. It can also call one of its own tools that nobody
+offered. Under a plain name (`search`, `grep`) such a call is answered with a
+tool error that names the tools the model has, and the model goes on. Under
+gpt-oss's dotted names (`browser.search`, `browser.open`) it cannot be answered,
+so the response is refused, naming the call and the tools the model has. A
+response with no answer, or with such a call, ran nothing; its usage is counted,
+and the model is asked once more within the activation, as for a call that cannot
+run. A second one fails the activation of any Agent (writer, lead, helper or
+reviewer): the workbench says "The model gave no answer and no tool call Axocoatl
+could run", and a run's Outcome lists it as `no_answer`, not as a provider
+failure. A required reviewer's round then runs again once in a fresh
+conversation. When Ollama's own runner fails (it answered so when the GPU ran out
+of memory, measured on a 48 GB Mac running other models), the response it returns
+is empty too; the refusal names the output tokens Ollama counted, and its log
+says why.
 
 Qwen2.5-Coder (`qwen2.5-coder:14b` in Axocoatl's tests) returns its tool calls
 as JSON text rather than as calls Ollama lifts, so they never run. Onboarding

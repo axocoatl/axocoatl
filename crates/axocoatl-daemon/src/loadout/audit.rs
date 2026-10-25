@@ -1001,6 +1001,7 @@ pub fn class_name(class: FailureClass) -> &'static str {
         FailureClass::ProviderFailure => "provider_failure",
         FailureClass::ProviderRejected => "provider_rejected",
         FailureClass::UnrunnableToolCall => "unrunnable_tool_call",
+        FailureClass::NoAnswer => "no_answer",
         FailureClass::Budget => "budget",
         FailureClass::Blocked => "blocked",
         FailureClass::NotReached => "not_reached",
@@ -2891,6 +2892,7 @@ impl Audit<'_> {
                 | FailureClass::ProviderRefusal
                 | FailureClass::ProviderRejected
                 | FailureClass::UnrunnableToolCall
+                | FailureClass::NoAnswer
         ) {
             let why = format!(
                 "the integrator has no result{} ({})",

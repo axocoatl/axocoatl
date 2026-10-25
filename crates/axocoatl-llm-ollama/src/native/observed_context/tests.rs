@@ -538,6 +538,8 @@ async fn architecture_metadata_cannot_replace_missing_invalid_or_unloaded_contex
         assert_eq!(count(&server, "/api/generate").await, 1);
         assert_eq!(count(&server, "/api/chat").await, 0);
     }
+    // A model that is never loaded when its context is read is not given
+    // one; how often it is loaded again is the eviction test's.
     let server = MockServer::start().await;
     profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
     fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
@@ -546,6 +548,152 @@ async fn architecture_metadata_cannot_replace_missing_invalid_or_unloaded_contex
     assert!(observe_native_ollama_context(&server.uri(), "test-model")
         .await
         .is_err());
+    assert_eq!(count(&server, "/api/chat").await, 0);
+}
+
+/// What the eviction test's Ollama has loaded, and when its other client
+/// takes the room: an Ollama that keeps one model loaded, shared with
+/// another program that loads `other-model` right after each of the first
+/// `evictions` loads of the test's model (before Axocoatl reads `/api/ps`),
+/// or that unloads it without loading anything (`other` false).
+struct SharedOllama {
+    loaded: Option<&'static str>,
+    loads: usize,
+    evictions: usize,
+    other: bool,
+}
+
+async fn shared_ollama(server: &MockServer, digest: &str, evictions: usize, other: bool) {
+    profile(server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(server, "GET", "/api/tags", listed(digest)).await;
+    probes(server, Probes::Pass).await;
+    let state = Arc::new(std::sync::Mutex::new(SharedOllama {
+        loaded: None,
+        loads: 0,
+        evictions,
+        other,
+    }));
+    let load = state.clone();
+    Mock::given(method("POST"))
+        .and(path("/api/generate"))
+        .respond_with(move |_: &wiremock::Request| {
+            let mut state = load.lock().unwrap();
+            state.loads += 1;
+            // The other client's load (or `ollama stop`) lands between this
+            // acknowledgement and Axocoatl's next read.
+            state.loaded = if state.loads <= state.evictions {
+                state.other.then_some("other-model:latest")
+            } else {
+                Some("test-model:latest")
+            };
+            ResponseTemplate::new(200).set_body_json(acknowledgement())
+        })
+        .mount(server)
+        .await;
+    let digest = digest.to_owned();
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(move |_: &wiremock::Request| {
+            let running = match state.lock().unwrap().loaded {
+                Some("test-model:latest") => loaded(json!(4096), &digest),
+                Some(name) => {
+                    let mut other = loaded(json!(8192), OTHER_DIGEST);
+                    other["models"][0]["name"] = json!(name);
+                    other["models"][0]["model"] = json!(name);
+                    other
+                }
+                None => json!({"models": []}),
+            };
+            ResponseTemplate::new(200).set_body_json(running)
+        })
+        .mount(server)
+        .await;
+}
+
+/// Another program on the same Ollama can make it unload the model between
+/// Axocoatl's load and its read of `/api/ps`. The model is loaded again, at
+/// most three times in all; when it stays loaded the observation is made as
+/// usual, and when it never does the refusal says what happened, names what
+/// the other program loaded, and what to do, instead of "the exact local
+/// model was not listed". Either way nothing but the contract probes is
+/// generated, and only once the context is known.
+#[tokio::test]
+async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named() {
+    for (seed, evictions) in [(20, 1), (21, 2)] {
+        let server = MockServer::start().await;
+        shared_ollama(&server, &unique_digest(seed), evictions, true).await;
+        let observation = observe_native_ollama_context(&server.uri(), "test-model")
+            .await
+            .unwrap();
+        assert_eq!(observation.context_tokens, 4096);
+        assert_eq!(count(&server, "/api/generate").await, evictions + 1);
+        let (probe_bodies, other) = chats(&server).await;
+        assert_eq!((probe_bodies.len(), other), (2, 0));
+    }
+
+    let server = MockServer::start().await;
+    shared_ollama(&server, &unique_digest(22), 3, true).await;
+    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(native_ollama_model_unloaded(&refusal), "{refusal}");
+    assert_eq!(
+        crate::native::describe_native_ollama_error(&refusal),
+        "Ollama unloaded test-model:latest each of the 3 times Axocoatl loaded it to read its \
+         context, because another program loaded other-model:latest on the same Ollama, and \
+         Ollama unloads a model to make room for another. Run again when that program has \
+         finished with Ollama, or let Ollama keep both loaded (more memory, or a higher \
+         OLLAMA_MAX_LOADED_MODELS)"
+    );
+    assert_eq!(count(&server, "/api/generate").await, 3);
+    assert_eq!(count(&server, "/api/chat").await, 0);
+
+    // Unloaded with nothing loaded instead: a stop, or a keep-alive of 0.
+    let server = MockServer::start().await;
+    shared_ollama(&server, &unique_digest(23), 3, false).await;
+    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(native_ollama_model_unloaded(&refusal), "{refusal}");
+    let said = crate::native::describe_native_ollama_error(&refusal);
+    assert!(said.contains("has no model loaded now"), "{said}");
+    assert!(said.contains("OLLAMA_KEEP_ALIVE"), "{said}");
+    assert_eq!(count(&server, "/api/chat").await, 0);
+
+    // Unloaded between the two reads of the context: loaded again too.
+    let server = MockServer::start().await;
+    let digest = unique_digest(24);
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(&server, "GET", "/api/tags", listed(&digest)).await;
+    fixed(&server, "POST", "/api/generate", acknowledgement()).await;
+    probes(&server, Probes::Pass).await;
+    sequence(
+        &server,
+        "GET",
+        "/api/ps",
+        vec![
+            loaded(json!(4096), &digest),
+            json!({"models": []}),
+            loaded(json!(4096), &digest),
+        ],
+    )
+    .await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.context_tokens, 4096);
+    assert_eq!(count(&server, "/api/generate").await, 2);
+
+    // A model Ollama does not list at all is still refused at once, and is
+    // not this eviction.
+    let server = MockServer::start().await;
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(&server, "GET", "/api/tags", json!({"models": []})).await;
+    let refusal = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap_err();
+    assert!(!native_ollama_model_unloaded(&refusal), "{refusal}");
+    assert_eq!(count(&server, "/api/generate").await, 0);
 }
 
 #[tokio::test]
@@ -562,10 +710,6 @@ async fn changed_digest_runner_or_context_never_becomes_an_observation() {
         (
             vec![listed(DIGEST)],
             vec![loaded(json!(4096), DIGEST), loaded(json!(8192), DIGEST)],
-        ),
-        (
-            vec![listed(DIGEST)],
-            vec![loaded(json!(4096), DIGEST), json!({"models":[]})],
         ),
     ] {
         let server = MockServer::start().await;

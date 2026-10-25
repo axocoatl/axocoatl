@@ -1027,7 +1027,10 @@ impl Stream for SessionProviderStream {
                 // A response the adapter refused after the provider completed
                 // it and reported its usage (a malformed tool call) settles to
                 // that usage. Any other failure keeps the whole reservation.
-                let refused = matches!(error, ProviderError::RefusedResponse { .. });
+                let refused = matches!(
+                    error,
+                    ProviderError::RefusedResponse { .. } | ProviderError::UnusableResponse { .. }
+                );
                 let settled = if refused && this.pending.terminal_usage_reported {
                     this.pending.finish(ProviderCallTerminal::Failed, true)
                 } else {

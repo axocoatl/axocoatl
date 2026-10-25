@@ -86,6 +86,8 @@ pub(crate) fn read_text_calls(
     let mut blocks = Blocks::default();
     // The first call line, and where the answer's own text before it ends.
     let mut first = None;
+    // Where every call line starts.
+    let mut call_lines = Vec::new();
     let mut called = None;
     let mut json_line = None;
     // Call tags that do not begin their line, outside code fences, HTML
@@ -101,6 +103,7 @@ pub(crate) fn read_text_calls(
         let open = blocks.read(line);
         if open && is_call_line(line) {
             first.get_or_insert((at, opener.end().unwrap_or(at)));
+            call_lines.push(at);
             if called.is_none() {
                 called = called_tool(line, &content[at..]).filter(|name| offered(name));
             }
@@ -143,6 +146,24 @@ pub(crate) fn read_text_calls(
     }
     if let Some(refusal) = inline_call(content, &inline, request, complete) {
         return TextCalls::Unreadable(refusal);
+    }
+    // A call tag that ends the answer with nothing after it: the model began
+    // a call and wrote none of it (qwen3-coder:30b ended a fix so: "…let me
+    // create a test to verify what happens.<tool_call>"), and ran nothing.
+    if let Some(tag) = call_lines
+        .iter()
+        .chain(&inline)
+        .map(|&at| content[at..].trim_end())
+        .find(|rest| MARKERS.contains(rest))
+    {
+        let why = if complete {
+            format!(
+                "its answer ends with {tag} and nothing after it, so the call was never written"
+            )
+        } else {
+            CUT_CALL.to_owned()
+        };
+        return TextCalls::Unreadable(cannot_run("a tool", &why));
     }
     // A call written as JSON, the whole answer or the lines that end it.
     for candidate in [Some(0), json_line].into_iter().flatten() {

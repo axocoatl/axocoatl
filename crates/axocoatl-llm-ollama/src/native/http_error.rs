@@ -101,9 +101,16 @@ pub fn native_ollama_error_hint(error: &ProviderError) -> Option<String> {
 /// `error` in words with what to do about it, when Axocoatl knows
 /// ([`native_ollama_error_hint`]).
 pub fn describe_native_ollama_error(error: &ProviderError) -> String {
-    match native_ollama_error_hint(error) {
-        Some(hint) => format!("{error}. {hint}"),
-        None => error.to_string(),
+    match (error, native_ollama_error_hint(error)) {
+        // An observation whose model another program kept unloading says
+        // what happened and what to do; it is no invalid request.
+        (ProviderError::InvalidRequest { message, .. }, _)
+            if super::native_ollama_model_unloaded(error) =>
+        {
+            message.clone()
+        }
+        (_, Some(hint)) => format!("{error}. {hint}"),
+        (_, None) => error.to_string(),
     }
 }
 

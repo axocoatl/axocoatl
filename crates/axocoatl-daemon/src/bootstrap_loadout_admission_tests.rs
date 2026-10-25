@@ -783,6 +783,42 @@ async fn more_problems_child_body() {
         "{calls:?}"
     );
 
+    // Ollama acknowledges each load of UNLOADED and then does not list it
+    // loaded, as when another program on the same Ollama takes the room:
+    // it is loaded three times in all, then the run is refused as
+    // infrastructure (exit code 5), saying what happened and naming what
+    // is loaded instead, not "the exact local model was not listed".
+    let unloaded_model = format!("ollama:{UNLOADED}");
+    let loads = received(&server, "/api/generate").await;
+    match admit(
+        &daemon,
+        request(
+            "fix",
+            repo.path(),
+            &[
+                ("writer_model", &writer),
+                ("reviewer_model", &unloaded_model),
+            ],
+            "evicted",
+        ),
+    )
+    .await
+    {
+        Err(DaemonError::Session(message)) => assert!(
+            message.starts_with(&format!(
+                "the reviewer runs {unloaded_model}, which the Ollama at {} did not keep \
+                 loaded: Ollama unloaded {UNLOADED} each of the 3 times Axocoatl loaded it to \
+                 read its context, because another program loaded {WRITER}, {REVIEWER}, {SMALL} \
+                 on the same Ollama",
+                server.uri()
+            )) && message.contains("OLLAMA_MAX_LOADED_MODELS"),
+            "{message}"
+        ),
+        Err(other) => panic!("expected an unloaded model, got {other}"),
+        Ok((accepted, _)) => panic!("admitted {}", accepted.run_id),
+    }
+    assert!(received(&server, "/api/generate").await >= loads + 3);
+
     // A credential the writer cannot send is named with a missing
     // parameter, not after it.
     let preflight = daemon

@@ -308,7 +308,11 @@ suite's `verdict` case is an `<error>` of type `busy` (exit code 7), `usage` (3)
 so. A finished run whose receipt could not be signed has the warning
 `receipt_unavailable`; `--receipt` then writes nothing, says why, and the exit code is
 the run's. A run whose receipt does not cover every path it changed has the warning
-`receipt_incomplete`, and standard error says so after where the receipt was written. With `--keep`, Keep runs first,
+`receipt_incomplete`, and standard error says so after where the receipt was written. A
+run of a loadout with a writer that changed no file of the repository has the warning
+`run_changed_nothing` ("The run changed no file of the repository: its writer (writer)
+made no change that the result keeps"), so a check that failed is seen to have run on the
+repository as it was; it never changes the verdict. With `--keep`, Keep runs first,
 so the `--record` file holds its `keep` event like `GET /api/runs/{run_id}/record`. When
 the run passed but one of the files could not be written, `axocoatl run` exits with that
 error's code instead of 0.

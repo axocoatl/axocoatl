@@ -1673,7 +1673,7 @@ async fn a_call_that_cannot_run_is_refused_after_its_text_and_usage() {
                 &events[events.len() - 2..],
                 [
                     Ok(StreamEvent::UsageObservation(usage)),
-                    Err(ProviderError::RefusedResponse { message, .. }),
+                    Err(ProviderError::UnusableResponse { message, .. }),
                 ] if usage.complete
                     && usage.usage == TokenUsageStats::new(2054, 55)
                     && message.contains(says)
@@ -1693,7 +1693,7 @@ async fn a_call_cut_at_the_output_limit_is_refused() {
     assert_eq!(shown_text(&events), content);
     assert!(matches!(
         events.last(),
-        Some(Err(ProviderError::RefusedResponse { message, .. }))
+        Some(Err(ProviderError::UnusableResponse { message, .. }))
             if message.contains("output limit") && message.contains("done_reason \"length\"")
     ));
 }
@@ -1875,7 +1875,7 @@ async fn a_call_glued_to_the_prose_is_refused() {
     assert!(
         matches!(
             events.last(),
-            Some(Err(ProviderError::RefusedResponse { message, .. }))
+            Some(Err(ProviderError::UnusableResponse { message, .. }))
                 if message.contains("does not begin a line")
                     && message.ends_with("done_reason \"stop\" and 1 tool offered")
         ),
@@ -1979,4 +1979,191 @@ async fn recoveries_across_a_dropped_round_take_different_ids() {
             .push(ChatMessage::tool_result("[]", "glob", call.id.as_str()));
     }
     provider.validate_request(&history).unwrap();
+}
+
+/// What gpt-oss:20b on Ollama 0.40.8 streamed for a review step: three
+/// reasoning records, then the `done` record with its one structured call
+/// (`read_file`) and its counts (372 in, 30 out).
+const GPT_OSS_REVIEW_CALL: &str =
+    include_str!("fixtures/ollama-0.40.8-gpt-oss-20b-review-call.jsonl");
+
+/// The recorded gpt-oss records, with the `done` record's calls replaced by
+/// `calls` (`None` drops them).
+fn gpt_oss_records(calls: Option<Value>) -> Vec<Value> {
+    let mut records: Vec<Value> = GPT_OSS_REVIEW_CALL
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let done = records.last_mut().unwrap();
+    match calls {
+        Some(calls) => done["message"]["tool_calls"] = calls,
+        None => {
+            done["message"]
+                .as_object_mut()
+                .unwrap()
+                .remove("tool_calls");
+        }
+    }
+    records
+}
+
+/// A reviewer's request offering what the recorded one offered.
+fn review_request() -> ChatRequest {
+    let mut request = ChatRequest::simple("Review the change to pages.py");
+    for (name, properties) in [
+        ("read_file", json!({"path":{"type":"string"}})),
+        ("glob", json!({"pattern":{"type":"string"}})),
+    ] {
+        request.tools.push(ToolDefinition {
+            name: name.into(),
+            description: String::new(),
+            parameters: json!({"type":"object","properties":properties}),
+            concurrency: Default::default(),
+        });
+    }
+    request
+}
+
+/// The events of one streamed gpt-oss response made of `records`.
+async fn gpt_oss_events(records: &[Value]) -> Vec<Result<StreamEvent, ProviderError>> {
+    let server = MockServer::start().await;
+    valid_profile(&server).await;
+    response(&server, records).await;
+    let settings = NativeOllamaConfig {
+        model: "gpt-oss:20b".into(),
+        ..workbench_config(&server)
+    };
+    let provider = NativeOllamaProvider::connect(settings).await.unwrap();
+    provider
+        .chat_stream(review_request())
+        .await
+        .unwrap()
+        .collect()
+        .await
+}
+
+/// The recorded response as it was: its reasoning and its call.
+#[tokio::test]
+async fn the_recorded_gpt_oss_review_step_calls_its_tool() {
+    let records: Vec<Value> = GPT_OSS_REVIEW_CALL
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let events = gpt_oss_events(&records).await;
+    let events: Vec<StreamEvent> = events.into_iter().map(Result::unwrap).collect();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::ToolCallDelta { name: Some(name), .. } if name == "read_file"
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(StreamEvent::Done {
+            finish_reason: FinishReason::ToolUse
+        })
+    ));
+}
+
+/// gpt-oss can end a response having written only reasoning: no answer and
+/// no call (the 1.5.0 measurement's failed review step ended so, with the
+/// reasoning "Continue."). That is an unusable response, not a protocol
+/// failure: its reasoning is shown, its usage is settled as reported, and
+/// the refusal says what the model did and how Ollama ended it, so the
+/// Agent can ask once more.
+#[tokio::test]
+async fn a_response_with_only_reasoning_is_unusable_and_keeps_its_usage() {
+    let events = gpt_oss_events(&gpt_oss_records(None)).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::ReasoningDelta { delta }) if delta == " tests"
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
+    )));
+    match &events[events.len() - 2..] {
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        {
+            assert!(usage.complete);
+            assert_eq!(usage.usage, TokenUsageStats::new(372, 30));
+            assert_eq!(
+                message,
+                "the model's response held no answer and no tool call (it wrote only \
+                 reasoning; 30 output tokens). Nothing from this response ran; Ollama ended it \
+                 with done_reason \"stop\" and 2 tools offered"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// gpt-oss can call a tool of its own that nobody offered. Under a name
+/// every provider takes back in history (`search`) the call is returned, so
+/// the Agent answers it with a tool error; under harmony's own dotted names
+/// (`browser.search`) it cannot be, so the response is refused naming the
+/// call and the tools the model has, with its usage, and nothing runs.
+#[tokio::test]
+async fn an_unoffered_call_is_returned_or_refused_by_the_name_it_uses() {
+    let call = |name: &str| {
+        Some(
+            json!([{"id":"call_pm4nfeex","function":{"index":0,"name":name,
+            "arguments":{"query":"README"}}}]),
+        )
+    };
+    let events = gpt_oss_events(&gpt_oss_records(call("search"))).await;
+    let events: Vec<StreamEvent> = events.into_iter().map(Result::unwrap).collect();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        StreamEvent::ToolCallDelta { name: Some(name), .. } if name == "search"
+    )));
+
+    let events = gpt_oss_events(&gpt_oss_records(call("browser.search"))).await;
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::ToolCallDelta { .. } | StreamEvent::Done { .. })
+    )));
+    match &events[events.len() - 2..] {
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        {
+            assert_eq!(usage.usage, TokenUsageStats::new(372, 30));
+            assert_eq!(
+                message,
+                "the model called browser.search, a tool it does not have (it has read_file, \
+                 glob). Nothing from this response ran"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The m4-rust writer's last response (qwen3-coder:30b on Ollama 0.40.8,
+/// 289 output tokens in the run): prose ending in `<tool_call>` and nothing
+/// after it. Before 1.5.0's last round it was the final answer of a fix that
+/// changed nothing; now it is an unusable response after its text and usage.
+#[tokio::test]
+async fn an_answer_ending_in_a_bare_call_tag_is_unusable() {
+    let content = "This logic seems right, but let me create a test to verify what happens when \
+                   we have a case that might be problematic.<tool_call>";
+    let events = stream_events(
+        &[
+            record(content, false),
+            counted(record("", true), json!(2510), json!(97)),
+        ],
+        workbench_request(),
+    )
+    .await;
+    assert_eq!(shown_text(&events), content);
+    match &events[events.len() - 2..] {
+        [Ok(StreamEvent::UsageObservation(usage)), Err(ProviderError::UnusableResponse { message, .. })] =>
+        {
+            assert_eq!(usage.usage, TokenUsageStats::new(2510, 97));
+            assert!(
+                message.starts_with(
+                    "the model wrote a call to a tool as answer text that Axocoatl cannot run: \
+                     its answer ends with <tool_call> and nothing after it"
+                ) && message.ends_with("done_reason \"stop\" and 4 tools offered"),
+                "{message}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }

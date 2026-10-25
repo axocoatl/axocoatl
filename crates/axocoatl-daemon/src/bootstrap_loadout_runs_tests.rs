@@ -1389,7 +1389,15 @@ async fn receipts_child_body() {
     let run_id = manifest.run_id.clone();
     store.create(&manifest).unwrap();
     let outcome = ended_outcome(&manifest, "the environment failed".into(), Vec::new());
-    daemon.seal_loadout_run(&run_id, &outcome).await.unwrap();
+    // Its writer changed no file: the receipt covers none, and the driver,
+    // which runs the team, is given the plain warning; a run that ended
+    // before its team ran is not.
+    let sealed = daemon.seal_loadout_run(&run_id, &outcome).await.unwrap();
+    assert_eq!(
+        sealed.map(|warning| warning.code),
+        Some(crate::bootstrap::receipts::RUN_CHANGED_NOTHING.to_string())
+    );
+    assert_eq!(daemon.seal_or_warn(&run_id, &outcome).await, None);
     assert!(matches!(
         daemon.loadout_run_receipt(&run_id),
         Err(DaemonError::NotFound(message)) if message.contains("has not finished")

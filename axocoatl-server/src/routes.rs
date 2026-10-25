@@ -6267,10 +6267,10 @@ async fn dispatch_ws_command(
                                 // The abandoned attempt's text stays visible, so
                                 // mark where it ends in the text and the answer.
                                 axocoatl_actor::AgentStreamChunk::ProviderRetry { reason } => {
-                                    let note = "\n\n[The model provider ended this response \
-                                                early and the Agent retried it. The text \
-                                                before this note is from the abandoned \
-                                                attempt.]\n\n";
+                                    let note = "\n\n[The Agent called the model provider \
+                                                again: the response before ended early or \
+                                                could not be used. The text before this note \
+                                                is from that attempt.]\n\n";
                                     accumulated.lock().await.push_str(note);
                                     let _ =
                                         bus_for_chat.send(axocoatl_daemon::StreamFrame::Token {

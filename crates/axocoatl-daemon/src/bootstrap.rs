@@ -1235,10 +1235,12 @@ fn logical_tool_source_agent<'a>(source_agent: Option<&'a str>, outer_agent: &'a
         .unwrap_or(outer_agent)
 }
 
-/// Written into a legacy turn's partial output when a provider stream ended
-/// early and was retried; the text before it is the abandoned attempt's.
-const PROVIDER_RETRY_NOTE: &str = "\n\n[The model provider ended this response early and the \
-     Agent retried it. The text before this note is from the abandoned attempt.]\n\n";
+/// Written into a legacy turn's partial output when a provider call was made
+/// again (its stream ended early, or the model's response could not be
+/// used); the text before it is the attempt it replaced.
+const PROVIDER_RETRY_NOTE: &str = "\n\n[The Agent called the model provider again: the \
+     response before ended early or could not be used. The text before this note is from that \
+     attempt.]\n\n";
 
 /// The text a stream chunk adds to a legacy turn's partial output.
 fn partial_output_text(chunk: &axocoatl_actor::AgentStreamChunk) -> Option<&str> {

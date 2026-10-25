@@ -563,15 +563,41 @@ impl DefaultAgentBehavior {
         request: ChatRequest,
         provider_tool_names: ProviderToolNameMap,
     ) -> Result<StreamChatResult, AgentError> {
+        // A completed response the model's own output makes unusable is
+        // asked for once more ([`Self::ask_again_after_unusable`]); that call
+        // too is retried once when its stream ends early.
+        match self
+            .stream_chat_retrying(&request, &provider_tool_names)
+            .await
+        {
+            Err(AgentError::UnusableResponse(reason))
+                if !self
+                    .active_run_control
+                    .as_ref()
+                    .is_some_and(AgentRunControl::is_cancelled) =>
+            {
+                self.ask_again_after_unusable(request, provider_tool_names, reason)
+                    .await
+            }
+            other => other,
+        }
+    }
+
+    async fn stream_chat_retrying(
+        &self,
+        request: &ChatRequest,
+        provider_tool_names: &ProviderToolNameMap,
+    ) -> Result<StreamChatResult, AgentError> {
         // A stream that closed before its completion event released no tool
         // call, so nothing it proposed ran. Retry it once as a new, separately
         // admitted and budgeted provider call, with sampling nudged away from
         // an identical degenerate continuation. The first call stays recorded
         // with unknown usage.
-        let retry = request.clone();
-        let names = provider_tool_names.clone();
         let before = self.execution_usage.usage_snapshot();
-        match self.stream_chat_once(request, provider_tool_names).await {
+        match self
+            .stream_chat_once(request.clone(), provider_tool_names.clone())
+            .await
+        {
             Err(AgentError::IncompleteProviderStream(reason))
                 if !self
                     .active_run_control
@@ -579,7 +605,7 @@ impl DefaultAgentBehavior {
                     .is_some_and(AgentRunControl::is_cancelled) =>
             {
                 tracing::warn!(%reason, "provider stream ended early; retrying once");
-                let mut retry = retry;
+                let mut retry = request.clone();
                 // A failed attempt that reported nothing still consumed its
                 // input; charge an estimate so the retry cannot exceed the
                 // execution budget unnoticed.
@@ -612,8 +638,74 @@ impl DefaultAgentBehavior {
                 self.emit_stream(crate::behavior::AgentStreamChunk::ProviderRetry {
                     reason: reason.clone(),
                 })?;
-                self.stream_chat_once(retry, names).await
+                self.stream_chat_once(retry, provider_tool_names.clone())
+                    .await
             }
+            other => other,
+        }
+    }
+
+    /// Ask the model once more after a completed response it gave could not
+    /// be used: no answer and no tool call that can run (`reason` says what
+    /// it did). `request` goes again with a note from the host that says
+    /// so, as a new, separately admitted and budgeted provider call; the
+    /// refused response's usage is already recorded, and nothing from it
+    /// ran. When the note does not fit the model's context or the budget
+    /// cannot pay for the call, the refusal stands and says so. An unusable
+    /// answer to the note fails the activation, saying it was one.
+    async fn ask_again_after_unusable(
+        &self,
+        mut request: ChatRequest,
+        provider_tool_names: ProviderToolNameMap,
+        reason: String,
+    ) -> Result<StreamChatResult, AgentError> {
+        let what = reason
+            .split_once("returned a response that was refused: ")
+            .map_or(reason.as_str(), |(_, what)| what);
+        let what = what
+            .split(". Nothing from this response ran")
+            .next()
+            .unwrap_or(what);
+        tracing::warn!(reason = %what, "the model's response could not be used; asking it once more");
+        let next = if request.tools.is_empty() {
+            "Write your final answer now."
+        } else {
+            "Reply again now: call one of your tools as a tool call, with every value it \
+             needs, or write your final answer."
+        };
+        request.messages.push(ChatMessage::user(format!(
+            "[Note from the host: your last response could not be used, and nothing from it \
+             ran: {what}. {next}]"
+        )));
+        let first_max = request.max_tokens;
+        if self.sampling.max_tokens.is_none() {
+            request.max_tokens = None;
+        }
+        if let Err(error) = self
+            .ensure_request_fits_context(&request)
+            .and_then(|()| self.preflight_provider_spend(&mut request))
+        {
+            return Err(AgentError::UnusableResponse(format!(
+                "{reason}. The model was not asked again: {error}"
+            )));
+        }
+        if let (Some(first), Some(now)) = (first_max, request.max_tokens) {
+            request.max_tokens = Some(now.min(first));
+        }
+        self.emit_stream(crate::behavior::AgentStreamChunk::ProviderRetry {
+            reason: format!(
+                "the model's response could not be used ({what}); asking it once more with a \
+                 note, as a new, separately reserved call"
+            ),
+        })?;
+        match self
+            .stream_chat_retrying(&request, &provider_tool_names)
+            .await
+        {
+            Err(AgentError::UnusableResponse(again)) => Err(AgentError::UnusableResponse(format!(
+                "{again}. This was its answer when asked once more after a response that could \
+                 not be used either ({what})"
+            ))),
             other => other,
         }
     }
@@ -736,9 +828,15 @@ impl DefaultAgentBehavior {
                 Err(error) => {
                     // A provider that refused a response it had completed has
                     // reported that response's terminal usage.
-                    let refused =
-                        matches!(error, axocoatl_llm::ProviderError::RefusedResponse { .. });
+                    let refused = matches!(
+                        error,
+                        axocoatl_llm::ProviderError::RefusedResponse { .. }
+                            | axocoatl_llm::ProviderError::UnusableResponse { .. }
+                    );
                     let error = match error {
+                        axocoatl_llm::ProviderError::UnusableResponse { .. } => {
+                            AgentError::UnusableResponse(error.to_string())
+                        }
                         axocoatl_llm::ProviderError::IncompleteStream { .. } => {
                             if !saw_usage {
                                 self.abandoned_output_tokens.store(
@@ -4327,6 +4425,7 @@ mod tests {
     include!("default_behavior_context_fit_tests.rs");
     include!("default_behavior_repeat_tests.rs");
     include!("default_behavior_undeclared_tests.rs");
+    include!("default_behavior_unusable_tests.rs");
     use axocoatl_core::{AgentConfig, AgentId, OverflowPolicy, TokenBudget, TokenUsageStats};
     use axocoatl_llm::{
         ChatResponse, FinishReason, LlmProvider, ProviderCapabilities, ProviderError, StreamEvent,

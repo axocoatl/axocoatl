@@ -48,6 +48,15 @@ pub enum ProviderError {
     #[error("{provider} returned a response that was refused: {message}")]
     RefusedResponse { provider: String, message: String },
 
+    /// A [`Self::RefusedResponse`] whose cause is the model's own output: the
+    /// completed response holds no answer and no tool call that can run (it
+    /// is empty, calls a tool the request did not offer under a name that
+    /// cannot be answered, or writes a call as text that cannot run).
+    /// Nothing from it runs and its usage stands; `message` says what the
+    /// model did, so an Agent can ask the model once more with it.
+    #[error("{provider} returned a response that was refused: {message}")]
+    UnusableResponse { provider: String, message: String },
+
     #[error("Provider not found: {0}")]
     ProviderNotFound(String),
 

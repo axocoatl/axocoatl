@@ -16,9 +16,10 @@ pub enum ActivationStreamPayload {
     Text {
         delta: String,
     },
-    /// The provider response ended before its completion record and the
-    /// actor started one retry. Text observed before this marker belongs to
-    /// the abandoned attempt.
+    /// The actor made the provider call once more: the response ended before
+    /// its completion record, or the model's completed response could not be
+    /// used and the model was asked again with a note (1.5.0). Text observed
+    /// before this marker belongs to the abandoned attempt.
     ProviderRetry {
         reason: String,
     },

@@ -462,7 +462,9 @@ impl AxocoatlDaemon {
     /// error says why there is no receipt; it never changes the verdict.
     /// A receipt that does not cover every path the run changed lists the
     /// warning `receipt_incomplete` among its own, and returns it for the
-    /// Outcome to carry: it, too, never changes the verdict.
+    /// Outcome to carry: it, too, never changes the verdict. A complete one
+    /// that covers no path of a run with a writer returns the warning
+    /// `run_changed_nothing` ([`run_changed_nothing`]).
     pub async fn seal_loadout_run(
         &self,
         run_id: &str,
@@ -478,8 +480,18 @@ impl AxocoatlDaemon {
         }
         let mut statement = self.receipt_statement(&manifest, outcome).await?;
         let incomplete = (!statement.predicate.files.complete)
-            .then(|| receipt_incomplete(&statement.predicate.files.unattributed));
-        if let Some(warning) = &incomplete {
+            .then(|| receipt_incomplete(&statement.predicate.files.unattributed))
+            .or_else(|| {
+                unchanged_by_writers(
+                    &statement.predicate.files,
+                    statement.subject.len(),
+                    &statement.predicate.agents,
+                )
+            });
+        if let Some(warning) = incomplete
+            .as_ref()
+            .filter(|warning| warning.code == receipt::RECEIPT_INCOMPLETE)
+        {
             if !statement.predicate.warnings.contains(&warning.code) {
                 statement.predicate.warnings.push(warning.code.clone());
             }
@@ -504,16 +516,19 @@ impl AxocoatlDaemon {
         Ok(incomplete)
     }
 
-    /// [`Self::seal_loadout_run`], and the warning the Outcome carries: the
-    /// receipt's own when it does not cover every path the run changed, or,
-    /// when signing fails, the one that says there is no receipt.
+    /// [`Self::seal_loadout_run`] for a run that ended before or without its
+    /// team (at its environment, or at a daemon restart), and the warning the
+    /// Outcome carries: the receipt's own when it does not cover every path
+    /// the run changed, or, when signing fails, the one that says there is
+    /// no receipt. Such a run's writer never ran, so it is not said to have
+    /// changed nothing.
     pub async fn seal_or_warn(
         &self,
         run_id: &str,
         outcome: &RunOutcome,
     ) -> Option<axocoatl_session::run_outcome::RunWarning> {
         match self.seal_loadout_run(run_id, outcome).await {
-            Ok(incomplete) => incomplete,
+            Ok(incomplete) => incomplete.filter(|warning| warning.code != RUN_CHANGED_NOTHING),
             Err(reason) => {
                 tracing::warn!(run = %run_id, %reason, "a finished run could not be signed");
                 Some(receipt_unavailable(&reason))
@@ -629,6 +644,40 @@ pub fn receipt_incomplete(unattributed: &[String]) -> axocoatl_session::run_outc
     }
 }
 
+/// The code of the warning of a finished run whose writer changed no file.
+pub const RUN_CHANGED_NOTHING: &str = "run_changed_nothing";
+
+/// The warning of a finished run whose `writers` changed no file of the
+/// repository, said plainly: a check that failed ran on the repository as it
+/// was. It never changes the verdict.
+pub fn run_changed_nothing(writers: &[String]) -> axocoatl_session::run_outcome::RunWarning {
+    axocoatl_session::run_outcome::RunWarning {
+        code: RUN_CHANGED_NOTHING.into(),
+        message: format!(
+            "The run changed no file of the repository: its writer ({}) made no change that the \
+             result keeps. The verdict and exit code are unchanged.",
+            writers.join(", ")
+        ),
+    }
+}
+
+/// [`run_changed_nothing`] for a statement whose `files` and `subjects`
+/// cover every path the run changed, that is none, of a run whose `agents`
+/// include a writer.
+fn unchanged_by_writers(
+    files: &receipt::FileFacts,
+    subjects: usize,
+    agents: &[AgentFacts],
+) -> Option<axocoatl_session::run_outcome::RunWarning> {
+    let writers: Vec<String> = agents
+        .iter()
+        .filter(|agent| agent.role == "writer")
+        .map(|agent| agent.id.clone())
+        .collect();
+    (files.complete && subjects == 0 && files.removed.is_empty() && !writers.is_empty())
+        .then(|| run_changed_nothing(&writers))
+}
+
 /// The warning of a finished run without a receipt.
 pub fn receipt_unavailable(reason: &str) -> axocoatl_session::run_outcome::RunWarning {
     axocoatl_session::run_outcome::RunWarning {
@@ -643,6 +692,48 @@ pub fn receipt_unavailable(reason: &str) -> axocoatl_session::run_outcome::RunWa
 #[cfg(test)]
 mod program_version_tests {
     use super::*;
+
+    /// A run whose writer changed no file says so plainly (the 1.5.0
+    /// measurement's m4-rust fix ended so, and its check failed on the
+    /// repository as it was); a run that changed a file, whose receipt does
+    /// not cover every change, or that has no writer (an audit) does not.
+    #[test]
+    fn a_writer_run_that_changed_no_file_is_said_plainly() {
+        let files = |complete: bool, removed: &[&str]| receipt::FileFacts {
+            source: receipt::source::JUDGED_CAPTURE.into(),
+            tree_sha256: None,
+            links: Vec::new(),
+            removed: removed.iter().map(|path| path.to_string()).collect(),
+            read_at_finish: Vec::new(),
+            complete,
+            unattributed: Vec::new(),
+        };
+        let agent = |id: &str, role: &str| AgentFacts {
+            id: id.into(),
+            role: role.into(),
+            runtime: "native".into(),
+            program_version: None,
+            provider: "ollama".into(),
+            model: "qwen3-coder:30b".into(),
+            credential: None,
+        };
+        let fix = [agent("writer", "writer")];
+        let warning = unchanged_by_writers(&files(true, &[]), 0, &fix).unwrap();
+        assert_eq!(warning.code, RUN_CHANGED_NOTHING);
+        assert_eq!(
+            warning.message,
+            "The run changed no file of the repository: its writer (writer) made no change that \
+             the result keeps. The verdict and exit code are unchanged."
+        );
+        assert!(unchanged_by_writers(&files(true, &[]), 1, &fix).is_none());
+        assert!(unchanged_by_writers(&files(true, &["src/old.rs"]), 0, &fix).is_none());
+        assert!(unchanged_by_writers(&files(false, &[]), 0, &fix).is_none());
+        let audit = [
+            agent("planner", "planner"),
+            agent("integrator", "integrator"),
+        ];
+        assert!(unchanged_by_writers(&files(true, &[]), 0, &audit).is_none());
+    }
 
     /// The receipt names the Ollama that served each model; a newer minor,
     /// which served only after the contract probes passed, says so.
