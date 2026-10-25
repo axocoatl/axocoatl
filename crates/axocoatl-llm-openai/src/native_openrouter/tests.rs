@@ -1505,20 +1505,25 @@ async fn an_error_inside_the_stream_carries_its_status() {
 /// endpoint list.
 async fn serving_endpoints(model: &str, endpoints: &Value) -> MockServer {
     let server = MockServer::start().await;
+    mount_endpoints(&server, model, endpoints).await;
+    server
+}
+
+/// `server`'s catalog row of `model` and its endpoint list `endpoints`.
+async fn mount_endpoints(server: &MockServer, model: &str, endpoints: &Value) {
     Mock::given(method("GET"))
         .and(path("/models"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":[{
             "id":model,"architecture":{"input_modalities":["text"],"output_modalities":["text"]},
             "supported_parameters":["max_tokens","tools"]
         }]})))
-        .mount(&server)
+        .mount(server)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("/models/{model}/endpoints")))
         .respond_with(ResponseTemplate::new(200).set_body_json(endpoints))
-        .mount(&server)
+        .mount(server)
         .await;
-    server
 }
 
 /// qwen/qwen3-coder's public endpoint fields, captured 2026-10-23, with each
@@ -2469,4 +2474,121 @@ async fn a_refused_catalog_read_is_said_plainly_and_moves_nothing() {
         failover::catalog_refusal(502, r#"{"error":{"message":"Provider ret"#),
         "OpenRouter's model catalog could not be read (HTTP 502)"
     );
+}
+
+/// A Session's retained endpoint whose terms changed, that OpenRouter no
+/// longer lists, or that can no longer be used, while another endpoint can
+/// serve the model: `contract_change` says what changed from OpenRouter's
+/// metadata alone, and opening the provider refuses with that and the remedy
+/// (applying the Team again observes the endpoints again), before any
+/// inference. A profile that still serves, an endpoint that is only
+/// unavailable now, a model no endpoint can serve, and an OpenRouter that
+/// does not answer are not a change.
+#[tokio::test]
+async fn a_retained_endpoint_that_changed_is_named_with_the_remedy() {
+    let endpoint = |tag: &str, prompt: &str, output: usize, status: i64| {
+        json!({"model_id":MODEL,"provider_name":"FiniteProvider","tag":tag,"context_length":2048,
+            "max_completion_tokens":output,"supported_parameters":["max_tokens","tools"],
+            "pricing":{"prompt":prompt,"completion":"0.000002"},"status":status,
+            "supports_implicit_caching":false})
+    };
+    let list = |endpoints: Vec<Value>| json!({"data":{"id":MODEL,"endpoints":endpoints}});
+    let server = serving_endpoints(
+        MODEL,
+        &list(vec![endpoint("finite/exact", "0.000001", 128, 0)]),
+    )
+    .await;
+    let retained = observe_native_openrouter_profiles(&server.uri(), KEY, MODEL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(retained.contract_change(KEY).await.unwrap(), None);
+    let serve = |endpoints: Vec<Value>| {
+        let server = &server;
+        async move {
+            server.reset().await;
+            mount_endpoints(server, MODEL, &list(endpoints)).await;
+        }
+    };
+    let refusal = |retained: NativeOpenRouterObservation| async move {
+        match NativeOpenRouterProvider::connect_observed(retained, KEY, 32, 65536, None).await {
+            Ok(_) => panic!("a changed endpoint must not be opened"),
+            Err(error) => error.to_string(),
+        }
+    };
+    let remedy = format!(
+        "; review Team & budget again: applying the Team observes {MODEL}'s endpoints again"
+    );
+    for (endpoints, change) in [
+        // Its prices and limits changed.
+        (
+            vec![endpoint("finite/exact", "0.000002", 64, 0)],
+            format!(
+                "OpenRouter lists other terms for {MODEL}'s endpoint finite/exact than when \
+                 this Team was reviewed (input price $1/M, now $2/M; output limit 128 tokens, \
+                 now 64 tokens)"
+            ),
+        ),
+        // It is gone; another endpoint serves the model.
+        (
+            vec![endpoint("other/exact", "0.000001", 128, 0)],
+            format!(
+                "OpenRouter no longer lists {MODEL}'s endpoint finite/exact, which this Team \
+                 was reviewed with"
+            ),
+        ),
+        // It no longer accepts tools; another endpoint serves the model.
+        (
+            vec![
+                {
+                    let mut row = endpoint("finite/exact", "0.000001", 128, 0);
+                    row["supported_parameters"] = json!(["max_tokens"]);
+                    row
+                },
+                endpoint("other/exact", "0.000001", 128, 0),
+            ],
+            format!(
+                "{MODEL}'s endpoint finite/exact, which this Team was reviewed with, can no \
+                 longer be used: does not accept max_tokens and tools"
+            ),
+        ),
+    ] {
+        serve(endpoints).await;
+        assert_eq!(
+            retained.contract_change(KEY).await.unwrap().as_deref(),
+            Some(change.as_str())
+        );
+        let refused = refusal(retained.clone()).await;
+        assert!(refused.contains(&format!("{change}{remedy}")), "{refused}");
+        assert!(!server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.method.as_str() == "POST"));
+    }
+    // Its terms as observed, but unavailable right now: a request says so.
+    serve(vec![
+        endpoint("finite/exact", "0.000001", 128, -2),
+        endpoint("other/exact", "0.000001", 128, 0),
+    ])
+    .await;
+    assert_eq!(retained.contract_change(KEY).await.unwrap(), None);
+    assert!(refusal(retained.clone())
+        .await
+        .contains("as unavailable or degraded right now"));
+    // Changed, but no endpoint can serve the model now: a request says why,
+    // and observing the endpoints again could not help.
+    serve(vec![endpoint("finite/exact", "0.000002", 128, -2)]).await;
+    assert_eq!(retained.contract_change(KEY).await.unwrap(), None);
+    assert!(refusal(retained.clone()).await.contains(&format!(
+        "OpenRouter reports every endpoint that could serve {MODEL} as unavailable"
+    )));
+    // OpenRouter does not answer: an error, not a change.
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    assert!(retained.contract_change(KEY).await.is_err());
 }

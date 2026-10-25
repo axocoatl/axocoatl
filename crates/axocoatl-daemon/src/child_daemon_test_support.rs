@@ -60,8 +60,16 @@ esac
 /// `/api/chat` is the caller's to mount.
 pub(crate) async fn audited_ollama(models: &[&str]) -> MockServer {
     let server = MockServer::start().await;
-    crate::ollama_contract_test_support::mount_contract_probes(&server).await;
-    let digest = |index: usize| format!("{:064x}", index + 0x40_06);
+    serve_audited_ollama(&server, models, 0).await;
+    server
+}
+
+/// What [`audited_ollama`] serves, on `server`, after `pulls` pulls of every
+/// model: each pull gives the models other digests, as pulling a model again
+/// after it changed in the registry does.
+pub(crate) async fn serve_audited_ollama(server: &MockServer, models: &[&str], pulls: usize) {
+    crate::ollama_contract_test_support::mount_contract_probes(server).await;
+    let digest = |index: usize| format!("{pulls:02x}{:062x}", index + 0x40_06);
     for (verb, route, body) in [
         (
             "GET",
@@ -97,7 +105,7 @@ pub(crate) async fn audited_ollama(models: &[&str]) -> MockServer {
         Mock::given(method(verb))
             .and(path(route))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
-            .mount(&server)
+            .mount(server)
             .await;
     }
     Mock::given(method("POST"))
@@ -109,9 +117,25 @@ pub(crate) async fn audited_ollama(models: &[&str]) -> MockServer {
                 "response": "", "done": true, "done_reason": "load"
             }))
         })
-        .mount(&server)
+        .mount(server)
         .await;
-    server
+}
+
+/// `server`'s `/api/chat` answers every request with `content`, as a model
+/// that stops there.
+pub(crate) async fn answer_chats(server: &MockServer, content: &'static str) {
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().unwrap_or_default();
+            let record = serde_json::json!({"model": body["model"],
+                "created_at": "2026-10-23T00:00:00Z",
+                "message": {"role": "assistant", "content": content}, "done": true,
+                "done_reason": "stop", "prompt_eval_count": 20, "eval_count": 2});
+            ResponseTemplate::new(200).set_body_raw(format!("{record}\n"), "application/x-ndjson")
+        })
+        .mount(server)
+        .await;
 }
 
 /// Run `test` (its path in this crate, which `--exact` matches) again in a

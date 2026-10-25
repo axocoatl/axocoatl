@@ -52,6 +52,75 @@ impl NativeOllamaContextObservation {
         self.schema_version != OBSERVATION_SCHEMA_VERSION
             || ollama_version_refusal(&self.server_version).is_some()
     }
+
+    /// How the model this observation recorded differs from the one its
+    /// Ollama serves now: pulled again (another digest), listed under another
+    /// name, or reporting other tool or thinking capabilities. `None` when it
+    /// is the same model. A retained profile is refused once it differs, and
+    /// only observing the model again, as Team & budget's Apply does,
+    /// replaces it. An Ollama that does not answer, or no longer lists the
+    /// model, is an error, not a change.
+    pub async fn model_change(&self) -> Result<Option<String>, ProviderError> {
+        let client = local_client(&self.base_url)?;
+        let current = profile(&client, &self.base_url, &self.requested_model).await?;
+        let listed = identity(
+            &metadata_request(&client, &self.base_url, "api/tags", None).await?,
+            &self.requested_model,
+        )?;
+        Ok(self.change_from(current.tools, current.thinking, &listed))
+    }
+
+    /// What differs between this observation and the model Ollama lists as
+    /// `listed` with these capabilities now, in words.
+    fn change_from(&self, tools: bool, thinking: bool, listed: &ModelIdentity) -> Option<String> {
+        let model = shown_name(&self.requested_model);
+        let short = |digest: &str| digest.chars().take(12).collect::<String>();
+        if listed.digest != self.model_digest {
+            return Some(format!(
+                "{model} was pulled again since this Team was reviewed (digest {}, now {})",
+                short(&self.model_digest),
+                short(&listed.digest)
+            ));
+        }
+        if listed.name != self.resolved_model {
+            return Some(format!(
+                "Ollama lists {model} as {} since this Team was reviewed, not {}",
+                shown_name(&listed.name),
+                shown_name(&self.resolved_model)
+            ));
+        }
+        let yes_no = |value: bool| if value { "yes" } else { "no" };
+        let mut changed = Vec::new();
+        if tools != self.tools_supported {
+            changed.push(format!(
+                "tool calling {}, now {}",
+                yes_no(self.tools_supported),
+                yes_no(tools)
+            ));
+        }
+        if thinking != self.thinking_supported {
+            changed.push(format!(
+                "thinking {}, now {}",
+                yes_no(self.thinking_supported),
+                yes_no(thinking)
+            ));
+        }
+        (!changed.is_empty()).then(|| {
+            format!(
+                "{model} reports other capabilities since this Team was reviewed ({})",
+                changed.join("; ")
+            )
+        })
+    }
+}
+
+/// The refusal of a retained profile whose model changed on its Ollama
+/// (`change`, from [`NativeOllamaContextObservation::change_from`]), with
+/// what to do.
+fn changed_model_refusal(change: String) -> ProviderError {
+    invalid(format!(
+        "{change}; review Team & budget again: applying the Team observes the model again"
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -572,21 +641,14 @@ pub(super) async fn verify_identity(
         &observation.requested_model,
     )
     .await?;
-    if (current.tools, current.thinking)
-        != (observation.tools_supported, observation.thinking_supported)
-    {
-        return Err(invalid("observed local model capabilities changed"));
-    }
     let actual = identity(
         &provider.metadata("api/tags", None).await?,
         &observation.requested_model,
     )?;
-    if actual.name != observation.resolved_model || actual.digest != observation.model_digest {
-        return Err(invalid(
-            "observed local model identity changed; resolve a new execution profile",
-        ));
+    match observation.change_from(current.tools, current.thinking, &actual) {
+        Some(change) => Err(changed_model_refusal(change)),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 fn probe_key(observation: &NativeOllamaContextObservation, server_version: &str) -> ProbeKey {
@@ -685,11 +747,7 @@ impl NativeOllamaProvider {
             max_response_bytes,
         })
         .await?;
-        if provider.tools_supported != observation.tools_supported
-            || provider.thinking_supported != observation.thinking_supported
-        {
-            return Err(invalid("observed local model capabilities changed"));
-        }
+        // The model's digest, name and capabilities, as recorded.
         verify_identity(&provider, &observation).await?;
         ensure_probed(&provider, &observation, &live_version).await?;
         provider.observed_context = Some(observation);

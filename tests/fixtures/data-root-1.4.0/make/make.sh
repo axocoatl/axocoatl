@@ -4,9 +4,11 @@
 # AXOCOATL_1_4_0 is Axocoatl 1.4.0 (the released binary or one built from the
 # v1.4.0 tag); WORK_DIR is a new directory (the daemon's socket is ./axo.sock
 # in it). The data root records WORK_DIR's paths and the fixture is public, so
-# give it a neutral path that names no person, such as /tmp/axo140 (the test
-# does not use them; on macOS it must be under /private or the home folder,
-# which the Podman machine shares). Podman must answer, and python3 runs the
+# give it a neutral path that names no person, such as /tmp/axo140 (on macOS
+# it must be under /private or the home folder, which the Podman machine
+# shares). The test points the copy's Workspace and Sessions at a repository
+# of its own; if WORK_DIR or the Ollama port changes, so do RECORDED_REPO and
+# RECORDED_OLLAMA in the test. Podman must answer, and python3 runs the
 # stand-in for Ollama 0.20.6 (fake_ollama.py), whose writer delegates to its
 # helper or runs one bash command and whose reviewer approves. Ports 8373 and
 # 8374 must be free.

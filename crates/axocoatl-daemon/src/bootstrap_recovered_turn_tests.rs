@@ -10,18 +10,15 @@
 //! Each daemon runs in a child process (bootstrap reads `AXOCOATL_DATA_DIR`
 //! from the process environment) with a fake Podman, and the Session's Ready
 //! runtime runs nothing, so no container starts.
+use super::native_session_test_support::{native_session_with_team, ready, send};
 use super::*;
 use crate::child_daemon_test_support::{
-    audited_ollama, log_warnings_to_stderr, run_child, succeeded, AdmissionOnlySandbox,
+    answer_chats, audited_ollama, log_warnings_to_stderr, run_child, succeeded,
 };
 use crate::loadout::api::RunRequest;
-use axocoatl_session::control_authority::GrantLimits;
-use axocoatl_session::execution_ownership::DataRootFormatOwnership;
 use axocoatl_session::session_history::{HistoryVisibility, SessionHistoryEntry};
 use axocoatl_session::turn_contract::LogicalTurnState;
 use std::os::unix::fs::PermissionsExt;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, ResponseTemplate};
 
 const CHILD: &str = "AXOCOATL_RECOVERED_TURN_TEST_CHILD";
 const TEST: &str = "bootstrap::recovered_turn_tests::after_a_restart_a_turn_that_cannot_start_leaves_the_workspace_free";
@@ -47,75 +44,13 @@ budgets:
 prompt: "{task}"
 "#;
 
-/// The Session's Ready runtime, as a started container makes it.
-async fn ready(daemon: &AxocoatlDaemon, session: &Session) {
-    daemon
-        .session_store
-        .lock()
-        .await
-        .set_environment(
-            &session.id,
-            SessionEnvironmentState::Ready,
-            Some("recovered-turn-test".into()),
-            Some(SessionRuntimeIdentity {
-                backend: "podman".into(),
-                id: session.id.clone(),
-                remote_root: None,
-                control_plane: None,
-                data_plane_domain: None,
-                authority_fingerprint: None,
-                ownership_token: None,
-                cleanup_confirmed: false,
-            }),
-            vec![],
-            None,
-        )
-        .unwrap();
-    daemon.session_sandboxes.lock().await.insert(
-        session.id.clone(),
-        Arc::new(AdmissionOnlySandbox(session.working_dir.clone())),
-    );
-}
-
-/// A request to `session`, as the workbench and IPC send one.
-async fn send(daemon: &AxocoatlDaemon, session: &str) -> Result<AgentRunOutcome, DaemonError> {
-    let (sink, receiver) = tokio::sync::mpsc::unbounded_channel();
-    drop(receiver);
-    let turn = format!("turn-{}", uuid::Uuid::new_v4());
-    daemon
-        .execute_session_turn_streaming(
-            session,
-            &turn,
-            Some(turn.clone()),
-            None,
-            "Say done.",
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            sink,
-        )
-        .await
-}
-
 async fn phase_body(phase: &str) {
     // The parent reads what the daemon logs.
     log_warnings_to_stderr();
     // Each phase starts its own Ollama, on another port: the restarted
     // daemon's configured endpoint is not the one the Team was reviewed on.
     let server = audited_ollama(&[MODEL]).await;
-    Mock::given(method("POST"))
-        .and(path("/api/chat"))
-        .respond_with(|request: &wiremock::Request| {
-            let body: serde_json::Value = request.body_json().unwrap_or_default();
-            let record = serde_json::json!({"model": body["model"],
-                "created_at": "2026-10-23T00:00:00Z",
-                "message": {"role": "assistant", "content": "Done."}, "done": true,
-                "done_reason": "stop", "prompt_eval_count": 20, "eval_count": 2});
-            ResponseTemplate::new(200).set_body_raw(format!("{record}\n"), "application/x-ndjson")
-        })
-        .mount(&server)
-        .await;
+    answer_chats(&server, "Done.").await;
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("axocoatl.yaml");
     std::fs::write(
@@ -154,78 +89,8 @@ consolidation:
     if phase == "first" {
         // A workbench Session on Lead, its Team applied, and one turn that
         // completes: the Session is between turns when the daemon stops.
-        let workspace = daemon
-            .workspace_store
-            .lock()
-            .await
-            .register(&repo, Some("Recovered turn"))
-            .unwrap();
-        let DataRootFormatOwnership::Upgraded(ownership) = &daemon._data_dir_lease.ownership else {
-            panic!("fresh data roots use native ownership");
-        };
-        let (session, receipt) = daemon
-            .session_store
-            .lock()
-            .await
-            .create_native_with_environment(
-                ownership,
-                "Recovered turn",
-                &workspace.id,
-                &workspace.canonical_path,
-                SessionMode::SingleAgent {
-                    agent_id: "lead".into(),
-                },
-                vec![],
-                vec![],
-                None,
-                None,
-                false,
-                true,
-            )
-            .unwrap();
-        daemon
-            .session_dispatch_lifecycles
-            .retain_native_session(ownership.clone(), receipt)
-            .unwrap();
-        let view = daemon.session_team(&session.id).await.unwrap();
-        let budget = view.suggested_budget.clone().unwrap();
-        let expires_at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64
-            + budget.expires_in_ms;
-        let mut slots = view.slots.clone();
-        for slot in &mut slots {
-            slot.limits = Some(GrantLimits {
-                cost_microunits: 0,
-                ..budget.agent.clone()
-            });
-            slot.expires_at_ms = Some(expires_at_ms);
-        }
-        let edit = session_team::SessionTeamEdit {
-            command_id: "recovered-turn-team".into(),
-            expected_configuration_revision: view.configuration_revision,
-            slots,
-            dependencies: view.dependencies.clone(),
-            layout: view.layout.clone(),
-            required_checks: vec![],
-            required_review: None,
-            check_options: vec![],
-        };
-        let preview = daemon
-            .preview_session_team(&session.id, edit.clone())
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
-        daemon
-            .apply_session_team(
-                &session.id,
-                session_team::SessionTeamApply {
-                    edit,
-                    review_digest: preview.review_digest,
-                },
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
+        let session =
+            native_session_with_team(&daemon, &repo, "Recovered turn", "recovered-turn-team").await;
         ready(&daemon, &session).await;
         send(&daemon, &session.id)
             .await
@@ -252,7 +117,7 @@ consolidation:
         assert!(
             refused
                 .to_string()
-                .contains("configured Ollama endpoint differs from the admitted native profile"),
+                .contains("providers.ollama.base_url names"),
             "{refused}"
         );
         // The Workspace is free: a run on the repository is admitted.

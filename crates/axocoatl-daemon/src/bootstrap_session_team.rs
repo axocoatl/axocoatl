@@ -488,6 +488,20 @@ pub struct SessionTeamChange {
     pub kind: String,
     pub history: String,
 }
+/// An Agent, or a helper it delegates to, kept as it was whose model this
+/// Apply observes again, and why: its retained profile can no longer serve
+/// (an Ollama profile recorded on Ollama 0.20.6, at another endpoint, or of a
+/// model that changed since; an OpenRouter endpoint that lists other terms
+/// or can no longer be used). An Agent observed again starts a new
+/// conversation.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SessionTeamObservedAgain {
+    pub slot_id: String,
+    /// The helper's Worker template; absent for the slot's own Agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper: Option<String>,
+    pub reason: String,
+}
 #[derive(Serialize)]
 pub struct SessionTeamPreview {
     pub edit: SessionTeamEdit,
@@ -499,6 +513,10 @@ pub struct SessionTeamPreview {
     /// Slots whose definition lists no tools. In a native Session the list is
     /// exact, so the review says each can only answer from the conversation.
     pub toolless_slots: Vec<String>,
+    /// The Agents and helpers kept as they were whose models are observed
+    /// again, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub observed_again: Vec<SessionTeamObservedAgain>,
     #[serde(serialize_with = "coordinators_view")]
     coordinators: Vec<(String, ApprovedCoordinatorPolicy)>,
 }
@@ -1123,26 +1141,41 @@ impl AxocoatlDaemon {
             })
     }
 
-    /// Whether the retained provider profile of `definition` can no longer
-    /// serve a turn or delegated work: an Ollama profile Axocoatl 1.4
-    /// recorded on Ollama 0.20.6, whose turns say to review Team & budget
-    /// again. Applying the Team observes such an Agent or helper again even
-    /// when nothing else about it changed.
-    fn retained_profile_refused(
+    /// Why the retained provider profile of `definition` can no longer serve
+    /// a turn or delegated work, when observing its model again is the
+    /// remedy its turns name ("review Team & budget again"): an Ollama
+    /// profile recorded on Ollama 0.20.6 (by Axocoatl 1.4), at another
+    /// endpoint than `providers.ollama.base_url` names now, or of a model
+    /// pulled again or with other capabilities since; an OpenRouter profile
+    /// whose endpoint lists other terms or can no longer be used. Applying
+    /// the Team observes such an Agent or helper again even when nothing else
+    /// about it changed, and Preview says why.
+    async fn retained_profile_observation(
         &self,
         token: &super::session_dispatch::SessionTeamToken,
         definition: &DefinitionSnapshotRef,
-    ) -> Result<bool, DaemonError> {
-        self.session_dispatch_lifecycles
-            .with_session_team_stores(token, |canonical, content, _| {
-                Ok(matches!(
-                    content.resolve_provider_profile(canonical, &definition.snapshot),
-                    Ok(Some((_, profile)))
-                        if crate::session_dispatch::retained_profile_refused(
-                            profile.configuration()
-                        )
-                ))
-            })
+    ) -> Result<Option<String>, DaemonError> {
+        let configuration = self.session_dispatch_lifecycles.with_session_team_stores(
+            token,
+            |canonical, content, _| {
+                Ok(
+                    match content.resolve_provider_profile(canonical, &definition.snapshot) {
+                        Ok(Some((_, profile))) => Some(profile.configuration().to_owned()),
+                        _ => None,
+                    },
+                )
+            },
+        )?;
+        Ok(match configuration {
+            Some(configuration) => {
+                crate::session_dispatch::retained_profile_observation(
+                    &configuration,
+                    &self.configured_native_provider_credentials(),
+                )
+                .await
+            }
+            None => None,
+        })
     }
 
     async fn prepare_coordinator_approvals(
@@ -1151,6 +1184,7 @@ impl AxocoatlDaemon {
         edit: &SessionTeamEdit,
         previous: Option<&SessionTeamRevision>,
         token: &super::session_dispatch::SessionTeamToken,
+        observed_again: &mut Vec<SessionTeamObservedAgain>,
     ) -> Result<Vec<(String, ApprovedCoordinatorPolicy)>, DaemonError> {
         let session = self
             .get_session(session_id)
@@ -1274,15 +1308,28 @@ impl AxocoatlDaemon {
                     None
                 };
                 // A helper kept as it was keeps its definition, unless its
-                // retained profile can no longer serve delegated work (an
-                // Ollama profile Axocoatl 1.4 recorded on Ollama 0.20.6): the
-                // same definition is then prepared again, which observes its
-                // model on the Ollama that runs now.
+                // retained profile can no longer serve delegated work (see
+                // `retained_profile_observation`): the same definition is
+                // then prepared again, which observes its model on the Ollama
+                // configured now.
                 let (preserved, observe_again) = match preserved {
-                    Some(definition) if self.retained_profile_refused(token, &definition)? => {
-                        (None, Some(definition))
+                    Some(definition) => {
+                        match self
+                            .retained_profile_observation(token, &definition)
+                            .await?
+                        {
+                            Some(reason) => {
+                                observed_again.push(SessionTeamObservedAgain {
+                                    slot_id: slot.slot_id.clone(),
+                                    helper: Some(worker.template_id.clone()),
+                                    reason,
+                                });
+                                (None, Some(definition))
+                            }
+                            None => (Some(definition), None),
+                        }
                     }
-                    preserved => (preserved, None),
+                    None => (None, None),
                 };
                 let definition = if let Some(definition) = preserved {
                     definition
@@ -1531,6 +1578,7 @@ impl AxocoatlDaemon {
                         applies_to: "future_turns",
                         profiles,
                         toolless_slots,
+                        observed_again: Vec::new(),
                         coordinators: approval.coordinators,
                     }));
                 }
@@ -1606,8 +1654,15 @@ impl AxocoatlDaemon {
                 Ok((proposed.slot_id.clone(), template))
             })
             .collect::<Result<Vec<_>, DaemonError>>()?;
+        let mut observed_again = Vec::new();
         let coordinators = self
-            .prepare_coordinator_approvals(session_id, edit, previous.as_ref(), &token)
+            .prepare_coordinator_approvals(
+                session_id,
+                edit,
+                previous.as_ref(),
+                &token,
+                &mut observed_again,
+            )
             .await?;
         let review = self
             .prepare_review_approval(session_id, edit, &token)
@@ -1641,10 +1696,22 @@ impl AxocoatlDaemon {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|time| time.as_millis() as u64)
                 .unwrap_or(u64::MAX);
-            let expires_at_ms = proposed
-                .expires_at_ms
-                .filter(|value| *value > now_ms)
-                .ok_or_else(|| limit_error("Enter an explicit budget expiry for every Agent"))?;
+            // A Team applied again keeps no expiry that has passed: Team and
+            // budget's Edit fills in a new one, which Preview shows.
+            let expires_at_ms = match proposed.expires_at_ms {
+                None => {
+                    return Err(limit_error(
+                        "Enter an explicit budget expiry for every Agent",
+                    ))
+                }
+                Some(value) if value <= now_ms => {
+                    return Err(limit_error(format!(
+                        "{}'s budget expiry has passed; choose a time in the future",
+                        proposed.name
+                    )))
+                }
+                Some(value) => value,
+            };
             if expires_at_ms > now_ms.saturating_add(MAX_BUDGET_EXPIRY_MS) {
                 return Err(limit_error(format!(
                     "{}'s budget expiry is more than a year away; choose an expiry within a year",
@@ -1747,17 +1814,25 @@ impl AxocoatlDaemon {
                     serde_json::to_value(old).ok() == serde_json::to_value(&config).ok()
                 });
             // A slot kept as it was keeps its retained profile, unless that
-            // profile can no longer serve a turn (an Ollama profile Axocoatl
-            // 1.4 recorded on Ollama 0.20.6): its turns ask for this review,
+            // profile can no longer serve a turn (see
+            // `retained_profile_observation`): its turns ask for this review,
             // so it is observed again, as a changed Agent is, and starts a
-            // new conversation.
-            let refused_profile = match prior {
+            // new conversation. Preview says why.
+            let reason = match prior {
                 Some(slot) if unchanged => {
-                    self.retained_profile_refused(&token, &slot.definition)?
+                    self.retained_profile_observation(&token, &slot.definition)
+                        .await?
                 }
-                _ => false,
+                _ => None,
             };
-            let unchanged = unchanged && !refused_profile;
+            let unchanged = unchanged && reason.is_none();
+            if let Some(reason) = reason {
+                observed_again.push(SessionTeamObservedAgain {
+                    slot_id: proposed.slot_id.clone(),
+                    helper: None,
+                    reason,
+                });
+            }
             let identity = digest(&(session_id, &edit.command_id, &slot_id))?;
             let conversation_id = if unchanged {
                 prior
@@ -2076,6 +2151,7 @@ impl AxocoatlDaemon {
             applies_to: "future_turns",
             profiles,
             toolless_slots,
+            observed_again,
             coordinators,
         })
     }
@@ -2225,22 +2301,38 @@ impl AxocoatlDaemon {
     }
 }
 
+/// One provider profile of a Session's current Team, connected as a turn or
+/// a delegation connects it (tests).
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct ConnectedProfile {
+    pub(crate) slot_id: String,
+    /// The helper's Worker template; absent for the slot's own Agent.
+    pub(crate) helper: Option<String>,
+    pub(crate) definition: DefinitionSnapshotRef,
+    /// The Ollama version and endpoint the retained profile recorded.
+    pub(crate) server_version: String,
+    pub(crate) base_url: String,
+    pub(crate) connected: Result<(), String>,
+}
+
 #[cfg(test)]
 impl AxocoatlDaemon {
-    /// Each helper the current Team of `session_id` approved, by Worker
-    /// template, with its definition, the Ollama version its retained
-    /// provider profile recorded, and what connecting that profile with the
-    /// configured credentials gives, as the helper's activation connects it
-    /// when the lead delegates to it.
-    pub(crate) async fn connect_approved_helpers(
+    /// Each Agent of the current Team of `session_id` and each helper it
+    /// approved, with what connecting its retained provider profile gives:
+    /// the step at which a turn or a delegated helper refuses a profile it
+    /// can no longer use. The credentials are the configured ones, with
+    /// `endpoint` as `providers.ollama.base_url` when it is given.
+    pub(crate) async fn connect_team_profiles(
         &self,
         session_id: &str,
-    ) -> Vec<(String, DefinitionSnapshotRef, String, Result<(), String>)> {
+        endpoint: Option<&str>,
+    ) -> Vec<ConnectedProfile> {
         let token = self
             .session_dispatch_lifecycles
             .session_team_token(session_id)
             .unwrap();
-        let helpers = self
+        let profiles = self
             .session_dispatch_lifecycles
             .with_session_team_stores(&token, |canonical, content, _| {
                 let store = SessionTeamStore::open_owned(
@@ -2256,8 +2348,13 @@ impl AxocoatlDaemon {
                     .current()
                     .map_err(team_error)?
                     .ok_or_else(|| team_error("no Team is applied"))?;
-                let mut helpers = Vec::new();
+                let mut definitions = Vec::new();
                 for slot in &current.graph.slots {
+                    definitions.push((
+                        slot.slot_id.as_str().to_owned(),
+                        None,
+                        slot.definition.clone(),
+                    ));
                     let Some(approval) = approval_for_slot(content, slot)? else {
                         continue;
                     };
@@ -2266,34 +2363,56 @@ impl AxocoatlDaemon {
                             continue;
                         }
                         for worker in policy.workers {
-                            let (_, profile) = content
-                                .resolve_provider_profile(canonical, &worker.definition.snapshot)
-                                .map_err(team_error)?
-                                .ok_or_else(|| team_error("helper has no provider profile"))?;
-                            helpers.push((
-                                worker.template_id,
+                            definitions.push((
+                                id.clone(),
+                                Some(worker.template_id),
                                 worker.definition,
-                                profile.configuration().to_owned(),
                             ));
                         }
                     }
                 }
-                Ok(helpers)
+                let mut profiles = Vec::new();
+                for (slot_id, helper, definition) in definitions {
+                    let (_, profile) = content
+                        .resolve_provider_profile(canonical, &definition.snapshot)
+                        .map_err(team_error)?
+                        .ok_or_else(|| team_error("no provider profile"))?;
+                    profiles.push((
+                        slot_id,
+                        helper,
+                        definition,
+                        profile.configuration().to_owned(),
+                    ));
+                }
+                Ok(profiles)
             })
             .unwrap();
-        let credentials = self.configured_native_provider_credentials();
+        let mut credentials = self.configured_native_provider_credentials();
+        if let Some(endpoint) = endpoint {
+            credentials.ollama_base_url = Some(endpoint.to_owned());
+        }
         let mut connected = Vec::new();
-        for (template, definition, configuration) in helpers {
+        for (slot_id, helper, definition, configuration) in profiles {
             let recorded: serde_json::Value = serde_json::from_str(&configuration).unwrap();
-            let version = recorded["observation"]["server_version"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned();
-            let result =
-                crate::session_dispatch::connect_retained_profile(&configuration, &credentials)
-                    .await
-                    .map_err(|error| error.to_string());
-            connected.push((template, definition, version, result));
+            let field = |name: &str| {
+                recorded["observation"][name]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            connected.push(ConnectedProfile {
+                slot_id,
+                helper,
+                definition,
+                server_version: field("server_version"),
+                base_url: field("base_url"),
+                connected: crate::session_dispatch::connect_retained_profile(
+                    &configuration,
+                    &credentials,
+                )
+                .await
+                .map_err(|error| error.to_string()),
+            });
         }
         connected
     }

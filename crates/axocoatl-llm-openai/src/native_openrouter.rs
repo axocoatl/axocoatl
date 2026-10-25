@@ -42,7 +42,6 @@ mod observation;
 #[path = "native_openrouter/stream.rs"]
 mod stream;
 pub use failover::{NativeOpenRouterServed, ServedOpenRouterEndpoint};
-use observation::CallShape;
 pub use observation::{
     catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,
     CatalogCallFloor, NativeOpenRouterEfforts, NativeOpenRouterEndpoints,
@@ -50,6 +49,7 @@ pub use observation::{
     UnavailableOpenRouterEndpoint, MINIMUM_REASONING_ALLOWANCE, PROMPT_TEMPLATE_ALLOWANCE,
     STREAMED_BYTES_PER_RESPONSE_TOKEN,
 };
+use observation::{CallShape, Retained};
 
 const PROVIDER: &str = "openrouter";
 /// The exact reasoning blocks of a tool-calling response, as OpenRouter
@@ -291,21 +291,9 @@ impl NativeOpenRouterProvider {
         observation: &NativeOpenRouterObservation,
         live: &NativeOpenRouterEndpoints,
     ) -> Result<(), FailedCall> {
-        if live
-            .profiles
-            .iter()
-            .any(|profile| observation.same_contract(profile))
-        {
-            return Ok(());
-        }
-        // The endpoint is the same, but OpenRouter reports it unavailable
-        // or degraded right now: said as that, not as a changed contract.
-        if let Some(down) = live
-            .unavailable
-            .iter()
-            .find(|endpoint| observation.same_contract(&endpoint.profile))
-        {
-            return Err(failover::unsent(
+        match observation.compare(live) {
+            Retained::Serves => Ok(()),
+            Retained::Unavailable(down) => Err(failover::unsent(
                 ProviderError::ApiError {
                     provider: PROVIDER.into(),
                     status: 503,
@@ -320,35 +308,33 @@ impl NativeOpenRouterProvider {
                 },
                 true,
                 "reported unavailable or degraded right now",
-            ));
-        }
-        // No endpoint of the model can be used now: every other one would
-        // say the same.
-        if let Some(refusal) = live.refusal(&observation.model) {
-            let refusal = match &refusal {
-                ProviderError::ApiError { message, .. }
-                | ProviderError::InvalidRequest { message, .. }
-                    if message.contains(failover::NOTHING_SENT) =>
-                {
-                    refusal
-                }
-                _ => failover::with_words(refusal, &format!("; {}", failover::NOTHING_SENT)),
-            };
-            return Err(failover::unsent(refusal, false, ""));
-        }
-        Err(failover::unsent(
-            invalid(format!(
-                "the retained OpenRouter endpoint {} of {} {}: its capabilities, price ceiling \
-                 or token limits differ now; apply Team & budget again to review a new profile; \
-                 {}",
-                failover::describe(observation),
-                observation.model,
-                failover::CONTRACT_CHANGED,
-                failover::NOTHING_SENT
             )),
-            true,
-            "its contract changed since Team & budget reviewed it",
-        ))
+            Retained::NoEndpoint(refusal) => {
+                let refusal = match &refusal {
+                    ProviderError::ApiError { message, .. }
+                    | ProviderError::InvalidRequest { message, .. }
+                        if message.contains(failover::NOTHING_SENT) =>
+                    {
+                        refusal
+                    }
+                    _ => failover::with_words(refusal, &format!("; {}", failover::NOTHING_SENT)),
+                };
+                Err(failover::unsent(refusal, false, ""))
+            }
+            Retained::Changed(change) => Err(failover::unsent(
+                invalid(format!(
+                    "the retained OpenRouter endpoint {} of {} {}; {change}; review Team & \
+                     budget again: applying the Team observes {}'s endpoints again; {}",
+                    failover::describe(observation),
+                    observation.model,
+                    failover::CONTRACT_CHANGED,
+                    observation.model,
+                    failover::NOTHING_SENT
+                )),
+                true,
+                "its contract changed since Team & budget reviewed it",
+            )),
+        }
     }
     /// Check the current endpoint against the catalog before a call.
     async fn verify(&self, observation: &NativeOpenRouterObservation) -> Result<(), FailedCall> {

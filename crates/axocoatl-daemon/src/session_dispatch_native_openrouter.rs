@@ -32,9 +32,10 @@ impl NativeDefinitionPreparation {
             }
             "openrouter" => {
                 let key = credentials.openrouter_key()?;
+                let api = openrouter_api();
                 let profiles = with_provider_retry(|| {
                     axocoatl_llm_openai::observe_native_openrouter_profiles(
-                        "https://openrouter.ai/api/v1",
+                        &api,
                         key,
                         self.model(),
                     )
@@ -115,6 +116,23 @@ impl NativeDefinitionPreparation {
 /// activation adds every other one that fits then
 /// ([`NativeOpenRouterRuntimeConfiguration::connectable_endpoints`]).
 const OPENROUTER_FAILOVER_ENDPOINTS: usize = 3;
+/// Native OpenRouter's first-party API, where a profile is observed (in a
+/// test daemon, the stand-in [`use_openrouter_stand_in`] names).
+fn openrouter_api() -> String {
+    #[cfg(test)]
+    if let Some(api) = OPENROUTER_STAND_IN.get() {
+        return api.clone();
+    }
+    "https://openrouter.ai/api/v1".into()
+}
+#[cfg(test)]
+static OPENROUTER_STAND_IN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// Observe native OpenRouter profiles at `api`, a stand-in for OpenRouter,
+/// in this process: a test daemon that runs in a child process.
+#[cfg(test)]
+pub(crate) fn use_openrouter_stand_in(api: String) {
+    OPENROUTER_STAND_IN.set(api).unwrap();
+}
 
 /// Run one provider metadata request (an endpoint or model observation, no
 /// inference and no charge) under the transient-error policy of

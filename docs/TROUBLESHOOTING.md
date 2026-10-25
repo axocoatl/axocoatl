@@ -54,10 +54,33 @@ the `ollama` on PATH is newer than the server that answers, or 0.40.6 in place o
 version that is too new. A Team reviewed on Ollama 0.20.6 asks to be reviewed again
 ("Ollama was upgraded from 0.20.6 to 0.40.6; review Team & budget again"), in its
 turns and in each helper its lead delegates to: in Team & budget, select Edit, then
-Preview and Apply with nothing changed. Its Ollama Agents and their Ollama helpers are
-observed again, and the Agents start new conversations. With the Ollama app on macOS,
-download it again from https://ollama.com/download, then quit and reopen it so that the
-new version answers.
+Preview and Apply, typing nothing. Its Ollama Agents and their Ollama helpers are
+observed again, Preview says why, and the Agents start new conversations. When the
+Team's budget expiry has passed too, as it usually has after an upgrade, a request says
+that first (see "A budget expiry has passed" under Runtime). With the Ollama app on
+macOS, download it again from https://ollama.com/download, then quit and reopen it so
+that the new version answers.
+
+**A Team's model or Ollama changed since it was reviewed**
+A Team keeps the Ollama profile each of its Agents and helpers was reviewed with. A
+turn or a delegated helper is refused, with what to do, when the model was pulled
+again ("MODEL was pulled again since this Team was reviewed (digest …, now …); review
+Team & budget again"), reports other capabilities, or when `providers.ollama.base_url`
+names another Ollama than the one the Team was reviewed with ("providers.ollama.base_url
+names URL, but this Team was reviewed with the Ollama at URL"). In Team & budget, select
+Edit, then Preview and Apply with nothing changed: each such Agent and helper is
+observed again, Preview says why, and the Agents start new conversations. To keep a
+Team as it was reviewed, set `providers.ollama.base_url` back and restart Axocoatl.
+
+A Team's OpenRouter Agents and helpers keep the endpoint, and its prices and limits,
+that they were reviewed with. When OpenRouter changes that endpoint (a price, a limit,
+the parameters it accepts) or removes it while another endpoint serves the model, a turn
+or a delegated helper is refused before anything is sent to the model ("OpenRouter
+lists other terms for MODEL's endpoint TAG than when this Team was reviewed (…)", or
+that OpenRouter "no longer lists" the endpoint or that it "can no longer be used").
+Edit, Preview and Apply with nothing changed observe the model's endpoints again:
+Preview gives the reason with what changed, and the Agent continues, in a new
+conversation, on the cheapest endpoint that fits its budget.
 
 **A daemon older than this CLI**
 After an upgrade, a daemon started before it (the Always-On Service or an
@@ -223,6 +246,17 @@ its tokens, model and tool calls, or spending limit, as the message says. The
 Agent asks for its final answer without tools before this happens when it can;
 the message means even that call could not be admitted. Raise the limit, then
 continue, or finish with the partial result.
+
+**A budget expiry has passed**
+Every Team & budget approval has an expiry, and a Team is never applied with one that
+has passed. Team & budget suggests an expiry 24 hours ahead when it fills in an Agent,
+unless you choose another time; a run's Team, continued in the workbench, expires when
+the run's `wall_clock` ends (60 minutes for `fix`). After that, a request is refused
+before any model is asked ("NAME's budget expired before this request could start; open
+Team & budget and select Edit: it fills in a new expiry. Then Preview and Apply"), and
+Team & budget says when it expired. Select Edit: it fills in a new expiry, 24 hours from
+then, which Preview shows beside the approved one. Apply it; the Agents keep their
+conversations and limits.
 
 **`actor is likely terminated` after a budget abort**
 Expected: `abort` policy terminates the agent. Restart it

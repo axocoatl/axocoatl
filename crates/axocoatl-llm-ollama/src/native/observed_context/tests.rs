@@ -775,17 +775,96 @@ async fn retained_observation_rechecks_identity_before_connect_and_each_inferenc
     let provider = NativeOllamaProvider::connect_observed(observation.clone(), 32, 64 * 1024)
         .await
         .unwrap();
-    assert!(provider
+    // The model was pulled again: the refusal says so, and what to do.
+    let pulled = "test-model was pulled again since this Team was reviewed (digest \
+                  a80c4f17acd5, now b80c4f17acd5); review Team & budget again: applying the \
+                  Team observes the model again";
+    let refusal = provider
         .chat(ChatRequest::simple("must not reach inference"))
         .await
-        .is_err());
-    assert!(
-        NativeOllamaProvider::connect_observed(observation, 32, 64 * 1024)
-            .await
-            .is_err()
-    );
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refusal.contains(pulled), "{refusal}");
+    let refusal = NativeOllamaProvider::connect_observed(observation, 32, 64 * 1024)
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(refusal.contains(pulled), "{refusal}");
     assert_eq!(count(&server, "/api/chat").await, 0);
     assert_eq!(count(&server, "/api/generate").await, 0);
+}
+
+/// What changed about a retained observation's model, which Team & budget's
+/// Apply reads to decide to observe it again: its digest, its listed name,
+/// its tools or thinking. Nothing is loaded or generated to find out, and an
+/// Ollama that cannot say is an error, not a change.
+#[tokio::test]
+async fn a_changed_model_is_named_and_an_unanswered_check_is_not_a_change() {
+    let server = MockServer::start().await;
+    standard(&server).await;
+    let observation = observe_native_ollama_context(&server.uri(), "test-model")
+        .await
+        .unwrap();
+    assert_eq!(observation.model_change().await.unwrap(), None);
+    let tools_only = json!({"details":{"format":"gguf"}, "capabilities":["completion"]});
+    let renamed = json!({"models":[{"name":"test-model", "model":"test-model", "digest":DIGEST}]});
+    for (tags, show, change) in [
+        (
+            listed(OTHER_DIGEST),
+            shown(),
+            "test-model was pulled again since this Team was reviewed (digest a80c4f17acd5, \
+             now b80c4f17acd5)",
+        ),
+        (
+            renamed,
+            shown(),
+            "Ollama lists test-model as test-model since this Team was reviewed, not \
+             test-model:latest",
+        ),
+        (
+            listed(DIGEST),
+            tools_only,
+            "test-model reports other capabilities since this Team was reviewed (tool calling \
+             yes, now no)",
+        ),
+    ] {
+        server.reset().await;
+        profile(&server, AUDITED_OLLAMA_VERSION, true, show).await;
+        fixed(&server, "GET", "/api/tags", tags).await;
+        assert_eq!(
+            observation.model_change().await.unwrap().as_deref(),
+            Some(change)
+        );
+        // A connection is refused with the same words and the remedy.
+        let refusal = NativeOllamaProvider::connect_observed(observation.clone(), 32, 64 * 1024)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            refusal.contains(&format!(
+                "{change}; review Team & budget again: applying the Team observes the model again"
+            )),
+            "{refusal}"
+        );
+        assert_eq!(count(&server, "/api/generate").await, 0);
+        assert_eq!(count(&server, "/api/chat").await, 0);
+    }
+    // No longer listed, or not answering: an error, never a change.
+    server.reset().await;
+    profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
+    fixed(&server, "GET", "/api/tags", json!({"models":[]})).await;
+    assert!(observation.model_change().await.is_err());
+    let unreachable = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut moved = observation;
+    moved.base_url = format!("http://127.0.0.1:{unreachable}");
+    assert!(moved.model_change().await.is_err());
 }
 
 #[tokio::test]

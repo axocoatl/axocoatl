@@ -23916,6 +23916,18 @@ mod upgrade_from_1_4_tests;
 #[path = "bootstrap_recovered_turn_tests.rs"]
 mod recovered_turn_tests;
 
+#[cfg(all(test, unix))]
+#[path = "bootstrap_native_session_test_support.rs"]
+mod native_session_test_support;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_retained_profile_tests.rs"]
+mod retained_profile_tests;
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_expired_budget_tests.rs"]
+mod expired_budget_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
