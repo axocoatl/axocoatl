@@ -792,19 +792,30 @@ else
   fail "newuser-mac.sh refusal (exit $status): $out"
 fi
 # What the macOS gate runs, read from the script (it runs only in a gate
-# account): every C1 path by default, the questions the workbench path
+# account): every new-user C1 path by default, the separate browser path,
+# the questions the workbench path
 # asks, the strict verify-receipt workflow from the docs, and the Safari
 # driver the gate records answers from.
 (
   set -e
   mac="$script_dir/newuser-mac.sh"
   grep -qx '    paths=local,claude-code,codex,openrouter,service,workbench,workbench-chromium,recovery,real-repo' "$mac"
-  # Every C1 path the release requires is in that default list.
-  for required in $(node -e '
-      import(process.argv[1]).then((m) => {
-        const doc = require("fs").readFileSync(process.argv[2], "utf8");
+  # Every C1 path has its runner: interactive new-user paths belong in
+  # this list; the full WebKit suite has its own archive-bound script.
+  for required in $(EVIDENCE_JS="$script_dir/evidence.mjs" node -e '
+      import(process.env.EVIDENCE_JS).then((m) => {
+        const doc = require("fs").readFileSync(process.argv[1], "utf8");
         console.log(m.parseRequiredPaths(doc).filter((p) => p.name.startsWith("C1-")).map((p) => p.name.slice(3)).join(" "));
-      });' "$script_dir/evidence.mjs" "$repo_root/docs/RELEASE_GATE.md"); do
+      });' "$repo_root/docs/RELEASE_GATE.md"); do
+    if [ "$required" = browser-webkit ]; then
+      browser="$script_dir/browser-webkit-mac.sh"
+      grep -q 'label=C1-browser-webkit' "$browser"
+      grep -q 'AXO_BROWSER_ENGINE=webkit' "$browser"
+      grep -q 'AXO_BROWSER_BINARY="$binary"' "$browser"
+      grep -q 'AXOCOATL_E2E_REQUIRE_NODE_IMAGE=1' "$browser"
+      grep -q '"$gate_repo/scripts/verify-product-browser-gate.sh"' "$browser"
+      continue
+    fi
     # The default list, as the script has it ("workbench" is workbench-webkit).
     defaults=",$(sed -n 's/^    paths=\(local,claude-code.*\)$/\1/p' "$mac"),"
     defaults=${defaults//,workbench,/,workbench-webkit,}
@@ -838,7 +849,7 @@ fi
 )
 mac_status=$?
 if [ "$mac_status" = 0 ]; then
-  pass "newuser-mac.sh: every required C1 path by default, Last turn N >= 1 (and the driver alike), flushed transcripts, the driver's usage, the docs' strict verify-receipt workflow and the line the gate requires from the Action's log"
+  pass "C1 paths have their new-user or archive-bound WebKit runner; Last turn N >= 1 (and the driver alike), flushed transcripts, the driver's usage, the docs' strict verify-receipt workflow and the line the gate requires from the Action's log"
 else
   fail "newuser-mac.sh's paths, questions, driver and workflow"
 fi
