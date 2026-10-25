@@ -664,7 +664,18 @@ test('workspace selector exposes every named Workspace while the rail lists only
 // is typing in, not move to the dialog.
 test('the New Session picker keeps focus in Session name when agents and teams arrive together', async () => {
   const { alpha } = runtime.fixtures;
-  const { context, page, assertNoBrowserErrors } = await openSession(alpha.sessions[0]);
+  let releaseConfiguration;
+  const configuration = new Promise(resolve => { releaseConfiguration = resolve; });
+  const { context, page, assertNoBrowserErrors } = await openSession(
+    alpha.sessions[0], { width: 1280, height: 800 }, runtime, async ({ page }) => {
+      // loadAll applies agents and teams together after all configuration
+      // requests finish. Hold its real agents request until typing has begun.
+      await page.route('**/api/agents', async route => {
+        await configuration;
+        await route.continue();
+      });
+    },
+  );
   try {
     await page.evaluate((workspaceId) =>
       document.querySelector('ax-session-home')?.newSession(workspaceId), alpha.workspace.id);
@@ -672,21 +683,25 @@ test('the New Session picker keeps focus in Session name when agents and teams a
     await sessionName.waitFor({ state: 'visible' });
     await page.locator('ax-session-home label[for="session-name-input"]').click();
     await sessionName.fill('Typed before the configuration arrived');
-    await page.evaluate(() => {
-      const home = document.querySelector('ax-session-home');
-      const agents = home.agents;
-      const teams = home.teams;
-      home.agents = agents;
-      home.teams = teams;
-    });
+    releaseConfiguration();
+    await page.waitForFunction(() => document.querySelector('ax-session-home')?.agents.length > 0);
     await waitForTwoFrames(page);
-    assert.equal(await sessionName.evaluate((input) => input.getRootNode().activeElement === input), true);
-    assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived');
+    // Locator.evaluate first resolves an ElementHandle. A pending picker read
+    // can replace that input before its callback runs, making a detached
+    // handle appear unfocused while the replacement has focus. Read the current
+    // input and activeElement in the same browser task instead.
+    assert.deepEqual(await page.evaluate(() => {
+      const root = document.querySelector('ax-session-home').shadowRoot;
+      const input = root.querySelector('[data-field="session-name"]');
+      return { focused: root.activeElement === input, value: input.value };
+    }), { focused: true, value: 'Typed before the configuration arrived' });
     await page.keyboard.type(' and after');
     assert.equal(await sessionName.inputValue(), 'Typed before the configuration arrived and after');
     await page.locator('ax-session-home [data-action="picker-cancel"]').click();
     assertNoBrowserErrors();
   } finally {
+    releaseConfiguration();
+    await page.unrouteAll({ behavior: 'wait' });
     await context.close();
   }
 });
