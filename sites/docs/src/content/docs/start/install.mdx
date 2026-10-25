@@ -275,9 +275,12 @@ onboarding then offers to set `OLLAMA_CONTEXT_LENGTH=32768` for the Homebrew or
 systemd Ollama service and restart it (for the app or an `ollama serve` you run, it
 says what to set). Native
 Sessions run only GGUF models: on Apple silicon, Ollama pulls the MLX variant of some
-models, which Axocoatl refuses; `ollama rm MODEL && ollama pull --runner llamacpp MODEL`
-replaces it with the GGUF one (`--runner` is an undocumented Ollama flag, and a pull with it
-leaves a variant already installed in place, hence the `ollama rm`).
+models, which Axocoatl refuses. Replace it with its GGUF variant when ollama.com has one,
+with `ollama rm MODEL; ollama pull --runner llamacpp MODEL`, or choose another model.
+`--runner` is an undocumented Ollama flag that does not replace an installed variant,
+hence the removal first. The `;` lets the pull run if a previous attempt already removed
+the model. Removal happens even if the pull fails; a model you created yourself is
+removed for good.
 
 ## Windows through WSL2
 

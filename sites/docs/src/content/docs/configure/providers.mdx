@@ -362,11 +362,14 @@ contract. The broader Ollama adapter remains available for compatibility executi
 holds the context Axocoatl sends as a hard limit. On Apple silicon it runs some models
 with its MLX runner instead, and MLX's limit is the model's own maximum context, not
 `num_ctx`: Axocoatl refuses a model Ollama shows as non-GGUF or MLX, or loads with any
-runner but `llama-server`. When a tag on your Mac pulled its MLX variant,
-`ollama rm MODEL && ollama pull --runner llamacpp MODEL` replaces it with the GGUF one.
+runner but `llama-server`. When a tag on your Mac pulled its MLX variant, replace it
+with its GGUF variant when ollama.com has one, with
+`ollama rm MODEL; ollama pull --runner llamacpp MODEL`, or choose another model.
 Ollama does not document that flag, and a pull with it leaves a variant already installed
 in place (with the MLX `qwen3.5:0.8b` installed, Ollama 0.40.8 pulled nothing), hence the
-`ollama rm` first. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; they are the
+`ollama rm` first. The `;` lets the pull run if a previous attempt already removed the
+model. Removal happens even if the pull fails; a model you created yourself is removed
+for good. `qwen3-coder:30b` (19 GB) and `gpt-oss:20b` (14 GB) are GGUF; they are the
 Lead and Reviewer pair onboarding offers with 48 to 95 GB of memory when no installed
 pair fits (how well `gpt-oss:20b` reviews has not been measured). Axocoatl sets nothing that keeps both loaded or unloads either (no
 `keep_alive`): whether both stay in memory is up to Ollama.

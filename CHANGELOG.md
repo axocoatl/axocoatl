@@ -1725,9 +1725,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoints that served each Session. They are dropped when the Session is closed or
   deleted.
 - **The fix for an MLX model works.** Every refusal of a model that Ollama runs with MLX,
-  or that is not GGUF, now says `ollama rm MODEL && ollama pull --runner llamacpp MODEL`.
-  This is in doctor, Team & budget, a run's admission and onboarding's list of installed
-  models. On Ollama 0.40.8 with qwen3.5:0.8b, a pull with the undocumented
+  or that is not GGUF, now says `ollama rm MODEL; ollama pull --runner llamacpp MODEL`,
+  when ollama.com has a GGUF variant. The `;` lets the pull run if a previous attempt
+  already removed the model. The fix warns that removal happens even if the pull fails:
+  a model you created yourself is removed for good. It also offers choosing another
+  model. This is in doctor, Team & budget, a run's admission and onboarding's list of
+  installed models. On Ollama 0.40.8 with qwen3.5:0.8b, a pull with the undocumented
   `--runner llamacpp` flag gave the GGUF variant on a store without the model. With the
   MLX variant installed, the same pull pulled nothing and the tag stayed MLX. After
   `ollama rm` it gave the GGUF variant, which doctor accepted and whose contract probes

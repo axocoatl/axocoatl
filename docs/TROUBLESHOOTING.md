@@ -112,10 +112,12 @@ Linux) and restart it.
 **Model refused as not GGUF, or run with MLX**
 Native Sessions run only GGUF models, which Ollama runs in llama.cpp's `llama-server`.
 On Apple silicon Ollama pulls the MLX variant of some models, and MLX does not hold
-`num_ctx` as a hard limit. `ollama rm MODEL && ollama pull --runner llamacpp MODEL`
-replaces it with the GGUF variant (`--runner` is an undocumented Ollama flag, and a pull
-with it leaves a variant already installed in place, hence the `ollama rm`);
-`qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
+`num_ctx` as a hard limit. Replace it with its GGUF variant when ollama.com has one:
+`ollama rm MODEL; ollama pull --runner llamacpp MODEL`. `--runner` is an undocumented
+Ollama flag, and a pull with it leaves an installed variant in place, hence the removal
+first. The `;` lets the pull run if a previous attempt already removed the model.
+Removal happens even if the pull fails; a model you created yourself is removed for
+good. Or choose another model: `qwen3-coder:30b` and `gpt-oss:20b` are GGUF.
 
 **"Ollama unloaded MODEL each of the 3 times Axocoatl loaded it to read its context"**
 Another program on the same Ollama loaded a model (named in the message) right after
