@@ -163,7 +163,8 @@ async function refuseTheApi(context) {
  * second begins, all in that second, which is later than the sign-in's: a
  * flood that crossed into the next second put some small ones first and
  * left room for the token cookie (1 run in 20). Returns how many the
- * browser stored for `storedFor`.
+ * browser stored for `storedFor`. Read the cookie store before closing the
+ * page: Chromium can otherwise drop cookie writes still queued in its renderer.
  */
 async function fillCookieHeader(context, origin, cookiePath, attributes, storedFor) {
   const page = await context.newPage();
@@ -176,12 +177,15 @@ async function fillCookieHeader(context, origin, cookiePath, attributes, storedF
       [2048, 1024, 512, 256, 128, 64, 32, 16, 8].forEach((size, i) => {
         document.cookie = `a-fit-${i}=${'y'.repeat(size)}${suffix}`;
       });
+      // The getter waits for the queued writes, including cookies whose Path
+      // means they are not visible to this page. Do not close it before that.
+      return document.cookie.length;
     }, { cookiePath, attributes });
+    const stored = await context.cookies(`http://${storedFor}${cookiePath === '/' ? '' : cookiePath}/`);
+    return stored.filter((cookie) => cookie.path === cookiePath && /^a-fi(ll|t)-/.test(cookie.name)).length;
   } finally {
     await page.close();
   }
-  const stored = await context.cookies(`http://${storedFor}${cookiePath === '/' ? '' : cookiePath}/`);
-  return stored.filter((cookie) => cookie.path === cookiePath && /^a-fi(ll|t)-/.test(cookie.name)).length;
 }
 
 /** The flood from a page on a `*.localhost` address, for `Domain=localhost`. */
