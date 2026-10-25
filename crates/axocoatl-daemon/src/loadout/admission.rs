@@ -790,7 +790,7 @@ mod tests {
         );
         assert_eq!(
             problem
-                .matches("`ollama rm qwen3.5:0.8b && ollama pull --runner llamacpp qwen3.5:0.8b`")
+                .matches("`ollama rm qwen3.5:0.8b; ollama pull --runner llamacpp qwen3.5:0.8b`")
                 .count(),
             1,
             "{problem}"

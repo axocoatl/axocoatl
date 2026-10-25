@@ -384,9 +384,11 @@ async fn doctor_fails_an_mlx_model_and_names_the_gguf_pull() {
     );
     assert!(
         stdout.contains(
-            "by default: remove it and pull its GGUF variant with `ollama rm qwen3-coder:30b && \
-             ollama pull --runner llamacpp qwen3-coder:30b` (an undocumented Ollama flag, which \
-             does not replace a variant already installed), or choose another model.\n"
+            "by default: replace it with its GGUF variant when ollama.com has one, with \
+             `ollama rm qwen3-coder:30b; ollama pull --runner llamacpp qwen3-coder:30b` (an \
+             undocumented Ollama flag, which does not replace a variant already installed, \
+             hence the `ollama rm`; a model you created yourself is removed for good), \
+             or choose another model.\n"
         ),
         "{stdout}"
     );
