@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or has no machine. It replaces the Ollama-only toast that suggested `llama3.2`.
   `axocoatl dev` and `serve` log a warning at start when native Sessions will refuse
   the configured Ollama server; `/health` names the version.
+- **The workbench's readiness checks a loaded model's context.** For each pulled Ollama
+  model it reads, without loading it, the context Ollama has it loaded with. Below 16,384
+  tokens it fails, with how to give Ollama a 32,768-token context.
 - **Team & budget comes pre-filled.** A new Session's Agents (and helpers) start from the
   built-in `fix` loadout's budget: 4 activations, 400 invocations, 4,000,000 tokens, $0 on
   a local Ollama model, expiring in 24 hours. Until a team is applied, Send reads **Set
@@ -36,32 +39,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the repository.
 - **Broad Workspaces are refused.** Open workspace refuses the file system root, the home
   folder, the folders above it and any folder that contains Axocoatl's own directories
-  (`workspace_too_broad`, 409) until you type the folder's name, and never opens Axocoatl's
-  own directories (`workspace_protected`). The per-user configuration directory is hidden
-  from Sessions like the data root. The picker marks Git repositories, and **Remove from
-  list…** (`DELETE /api/workspaces/{id}`) forgets a Workspace that has no open Sessions,
-  never touching its folder.
+  (`workspace_too_broad`, 409) until you type the folder's name, and never opens
+  Axocoatl's own directories (`workspace_protected`). The per-user configuration
+  directory is hidden from Sessions like the data root. The picker marks Git
+  repositories, and **Remove from list…** (`DELETE /api/workspaces/{id}`) forgets a
+  Workspace that has no open Sessions, never touching its folder.
 - **A failed Create session leaves nothing behind.** Without a usable Podman, Create
   session saves no Session; a Session that never started preparing is closed and deleted
   without Podman, so Ctrl+C exits cleanly; a failed environment change leaves the Session
   as it was instead of "closing".
+- **Create session waits for the Podman check.** The New Session picker keeps Create
+  session disabled until its readiness read is back (at most 10 seconds, so a hung check
+  never blocks it for good), so it cannot be clicked before a missing Podman blocks it.
+- **New session works for a Workspace the Session browser has not read yet** (right after
+  the workbench opens, or one opened elsewhere since): the lists are read again and the
+  picker opens, instead of "Open a Workspace first".
 
 ### Changed
 - **Native Sessions run on Ollama 0.40.6 and later; Ollama 0.20.6 is refused.** Native
   execution accepted only an Ollama reporting exactly 0.20.6, while Homebrew and
-  ollama.com ship 0.40.6 and Ollama's registry refuses some models (gpt-oss,
-  gemma3) to 0.20.6 clients. The guarantees native execution relies on were audited
-  again in the Ollama 0.40.6 source, where every GGUF model runs in llama.cpp's
-  `llama-server`: a prompt longer than the context is refused before generation with
-  `truncate: false`, a positive `num_predict` stops generation, and `shift: false` never
-  slides the context. Native Sessions now accept `0.40.P` with `P` 6 or later
-  (`AUDITED_OLLAMA_VERSION` is 0.40.6) and later 0.x minor releases through the contract
-  probes (below), and refuse, each with what to do, pre-releases and local builds,
-  `0.0.0`, older releases (upgrade Ollama), a new major release and any release on a
-  compiled-in denylist (empty). Ollama 0.20.6 gets its own
-  message: its engine and model digests changed; install 0.40.6 or later, then review
-  Team & budget again. A Team reviewed on Ollama 0.20.6 by Axocoatl 1.4 says "Ollama was
-  upgraded from 0.20.6 to 0.40.6; review Team & budget again" instead of a generic error.
+  ollama.com ship 0.40.6 and Ollama's registry refuses some models (gpt-oss, gemma3) to
+  0.20.6 clients. The guarantees native execution relies on were audited again in the
+  Ollama 0.40.6 source, where every GGUF model runs in llama.cpp's `llama-server`: a
+  prompt longer than the context is refused before generation with `truncate: false`, a
+  positive `num_predict` stops generation, and `shift: false` never slides the context.
+  Native Sessions now accept `0.40.P` with `P` 6 or later (`AUDITED_OLLAMA_VERSION` is
+  0.40.6) and later 0.x minor releases through the contract probes (below), and refuse,
+  each with what to do, pre-releases and local builds, `0.0.0`, older releases (upgrade
+  Ollama), a new major release and any release on a compiled-in denylist (empty). Ollama
+  0.20.6 gets its own message: its engine and model digests changed; install 0.40.6 or
+  later, then review Team & budget again. A Team reviewed on Ollama 0.20.6 by Axocoatl
+  1.4 says "Ollama was upgraded from 0.20.6 to 0.40.8; review Team & budget again", with
+  the version that runs now. It says so in the workbench's "not sent" notice, in
+  `POST /api/sessions/{id}/execute` and in Team & budget, without Axocoatl's internal
+  "Provider setup failed: Session dispatch: Invalid request for ollama:" layers. This was
+  checked with the released Axocoatl 1.4.0, the official Ollama 0.20.6 release and the
+  Homebrew Ollama 0.40.8. While 0.20.6 still served, a send and execute gave the 0.20.6
+  message. After the upgrade they gave the upgrade message. After Team & budget was
+  applied again, the contract probes passed and a turn ran.
 - **GGUF only, MLX refused.** On Apple silicon, Ollama 0.40 runs some models with its MLX
   runner, whose limit is the model's own maximum context, not `num_ctx`. A model Ollama
   shows as non-GGUF or MLX, or loads (`/api/ps`) with any runner but `llama-server`, is
@@ -73,12 +88,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Newer Ollama minor releases are accepted through the contract probes.** Ollama ships
   a minor release every few weeks and Homebrew and the app serve only the latest, so a
   later 0.x release (0.41 or later) is no longer refused: a model on it serves only after
-  both contract probes pass for that model (they run before a Team or run uses a model,
-  and again whenever the server's version changes). `axocoatl doctor` and onboarding
-  warn that it is newer than the audited 0.40.6, and a run's receipt names it as
+  the contract probes pass for that model (they run before a Team or run uses a model,
+  and again whenever the server's version changes). `axocoatl doctor` and onboarding warn
+  that it is newer than the audited 0.40.6, and a run's receipt names it as
   `ollama 0.41.0 (unaudited, contract probes passed)`. A scheduled workflow
   (`ollama-watch`) runs the same probes against each new Ollama release and release
   candidate as they are published.
+- **Upgrading from 1.4.** A Team reviewed on Ollama 0.20.6 cannot run on 1.5. Each of its
+  Ollama Agents, and each Ollama helper they delegate to, refuses with the upgrade
+  message above. Applying the Team again in Team & budget with nothing changed now
+  observes them again on the Ollama that runs now. Preview names each one with the reason
+  ("this Team was reviewed on Ollama 0.20.6, which native Sessions no longer accept") and
+  shows each such Agent as replaced, with a new conversation. Applied unchanged, a Team
+  used to keep its 0.20.6 profiles, so every turn and every delegation kept asking for
+  the review. Measured with the released 1.4.0 and a release build of 1.5: after the
+  re-apply, the 1.4 Session's next turn delegated to its helper and completed. The
+  Upgrade page has an "Upgrading from 1.4" procedure: stop, then back up the data root,
+  the configuration and the Workspace repositories; install, then Ollama 0.40.6 or later
+  (for the Ollama app: download it again, then quit and reopen it); run
+  `axocoatl doctor`; then, in each continued Session's Team & budget, select Edit, then
+  Preview and Apply, typing nothing. A daemon test starts on a data root written by the
+  released Axocoatl 1.4.0 (`tests/fixtures/data-root-1.4.0`), with its Sessions'
+  Workspace folder in place. It checks the root's Sessions, History and run, that each
+  Agent's and helper's profile refuses to connect with the 0.20.6 message, and the
+  re-apply as Team & budget's Edit drafts it.
+- **Going back to 1.4 is the backup.** Axocoatl 1.5 records how each model response of a
+  native Session ended (`provider_response`, below) and records a change larger than 512
+  KiB by its digest. Axocoatl 1.4.0 reads neither, so it does not start on a data root on
+  which 1.5 ran a workbench Session turn or an `axocoatl run`, whatever the size of its
+  change: after one 1.5 `axocoatl run fix` that created a one-line file, 1.4.0 stopped
+  with "could not recover canonical history for Session '…': … unknown variant
+  `provider_response` …", and after a change larger than 512 KiB with "invalid checked
+  repository identity". No command converts these records. The way back is the backup
+  made before upgrading: start 1.5 on the restored copy once, then 1.4.0, which runs only
+  on Ollama 0.20.6. Restoring the data root does not change the repositories: each stays
+  as 1.5 left it unless its copy from the same backup is restored too. A large file a 1.5
+  run left uncommitted is a change 1.4.0 may not capture either, and its runs there end
+  needing attention until the file is committed or moved. This was measured with the
+  released 1.4.0 and is described in the Upgrade page's "Data written by 1.5".
 - **`axocoatl onboard` is the one setup command.** It detects what the computer has,
   asks who writes the code (Claude Code, Codex, a local Ollama model or OpenRouter), sets
   up the rootless Podman sandbox where it can (below), the writer and a different
@@ -120,16 +167,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     95 GB `gpt-oss:20b`, and below 48 GB onboarding asks first (below; with `--yes`, an
     explicit `--writer ollama` there needs the models named; it is never switched to
     OpenRouter). Pulls show their sizes and the free disk they need, check each exit
-    status and show Ollama's error; a model too large for this computer's memory is
-    named in the pull question and is not pulled on Enter, nor under
-    `--yes` without `--pull`, and its step left names `axocoatl onboard --replace --writer
-    ollama` (or the Claude Code or Codex writer; `--update` when no Agent in the
-    configuration runs that model), and with `--yes` a pull that does not fit the disk is
-    a step left; each model is loaded once to read its context; below 16384 tokens onboarding
-    sets `OLLAMA_CONTEXT_LENGTH=32768` for the service (Homebrew's `services/ollama.env`,
-    recognised from the real `brew services --help`, or a systemd drop-in) after asking.
-    Writing into an existing `server.json`, service environment file or drop-in defaults
-    to no.
+    status and show Ollama's error; a model too large for this computer's memory is named
+    in the pull question and is not pulled on Enter, nor under `--yes` without `--pull`,
+    and its step left names `axocoatl onboard --update --writer ollama` (or the Claude
+    Code or Codex writer), or `--replace` while an Agent that differs from what
+    onboarding writes runs that model, and with `--yes` a pull that does not fit the disk
+    is a step left; each model is loaded once to read its context; below 16384 tokens
+    onboarding sets `OLLAMA_CONTEXT_LENGTH=32768` for the service (Homebrew's
+    `services/ollama.env`, recognised from the real `brew services --help`, or a systemd
+    drop-in) after asking. Writing into an existing `server.json`, service environment
+    file or drop-in defaults to no.
   - Below 48 GB with no such pair installed, at a terminal, onboarding first offers
     OpenRouter for both models (the default), Claude Code or Codex as the writer, a local
     writer with OpenRouter reviewing, or local models for both. When Ollama is not
@@ -139,16 +186,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Claude Code and Codex: finds the CLI, states the subscription each needs, builds the
     recipe image and signs in through `axocoatl recipe build` and `axocoatl connect`
     after asking, sets up the reviewer alone on Ollama or OpenRouter, and names Codex's
-    credential (`codex-chatgpt` or `codex-openai`) on the run command instead of `auto`.
-  - OpenRouter: separate writer (default `qwen/qwen3-coder`) and reviewer (default
-    `openai/gpt-oss-120b`) models, the same model refused, the writer's output limit 4096
-    (it was 2048 for every Agent), and the key and both models checked before anything
-    is written. The key comes from a browser sign-in: at a terminal with no key yet,
-    onboarding offers **Sign in to OpenRouter in your browser (recommended)** first,
-    which runs `axocoatl connect openrouter`'s OAuth PKCE flow inline (the models checked
-    in OpenRouter's catalog, the sign-in page opened and its address printed, the
-    browser's return to a loopback port, which a Lima VM forwards to the host), stores
-    the key OpenRouter issues as the secret `openrouter` without showing it, and writes
+    credential on the run command instead of `auto`: `codex-chatgpt`, or `codex-openai`
+    only when the configuration already names it and that key is stored.
+  - OpenRouter: separate writer (default `qwen/qwen3-coder-30b-a3b-instruct`, below) and
+    reviewer (default `openai/gpt-oss-120b`) models, the same model refused, the writer's
+    output limit 4096 (it was 2048 for every Agent), and the key and both models checked
+    before anything is written. The key comes from a browser sign-in: at a terminal with
+    no key yet, onboarding offers **Sign in to OpenRouter in your browser (recommended)**
+    first, which runs `axocoatl connect openrouter`'s OAuth PKCE flow inline (the models
+    checked in OpenRouter's catalog, the sign-in page opened and its address printed, the
+    browser's return to a loopback port, which Lima forwards to the host unless the VM is
+    plain, and `ssh -L` forwards from a plain or cloud VM), stores the key OpenRouter
+    issues as the secret `openrouter` without showing it, and writes
     `api_key_secret: openrouter` and `openrouter_billing: credits`, never the key. A key
     connected before with `axocoatl connect openrouter` (the secret the configuration
     names in `api_key_secret`, or `openrouter` when it names no key), when the secret
@@ -158,23 +207,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     terminal) and a hidden prompt remain the other ways. Under `--yes` with no key,
     nothing is asked and the step left says to run `axocoatl connect openrouter`, then
     the same `axocoatl onboard` command. Without an OpenRouter key nothing is saved, and
-    the step left gives the full `axocoatl onboard` command again: the writer (`--writer
-    claude-code`, `--writer codex` or a local `--writer-model`), the reviewer and, when
-    one was named, `--openrouter-key-env VAR`.
+    the step left gives the full `axocoatl onboard` command again: the writer
+    (`--writer claude-code`, `--writer codex` or a local `--writer-model`), the reviewer
+    and, when one was named, `--openrouter-key-env VAR`.
   - The configuration holds `run.models`, the defaults `axocoatl run` uses for
     `writer_model` and `reviewer_model`, a `# Writer:` comment naming who writes (and
     Codex's credential), and the first free port from 8080 in `server.port`. An existing
     configuration is updated (backed up, shown as a diff with every secret hidden,
-    changed only where needed, keeping its writer, models, Codex credential and
-    OpenRouter key unless flags name others), replaced (only the new file is shown), or
-    left alone and checked.
+    keeping its writer, models and OpenRouter key unless flags name others, with the
+    Agents onboarding wrote moved to its models: below), replaced (only the new file is
+    shown), or left alone and checked.
   - The first run uses the daemon that runs, waiting for a service Step 6 just started,
     and never starts a second one beside it; it works in a new owner-only temporary
     directory. A daemon that started before the configuration changed (`--update` adding
     OpenRouter, say) would run the old one: onboarding asks to restart the Always-On
-    Service when it runs, or to stop the other daemon (`--yes` answers yes), waits for it
-    to exit and starts one for the run, or lets the service Step 6 started take the port. `/health` now names when a daemon started; one that does not say, from
-    before 1.5.0, counts as older. `--start dev` runs `axocoatl dev` as its own process.
+    Service when it runs, or to stop the other daemon (`--yes` answers yes), waits for
+    it to exit and starts one for the run, or lets the service Step 6 started take the
+    port. `/health` now names when a daemon started; one that does not say, from before
+    1.5.0, counts as older. `--start dev` runs `axocoatl dev` as its own process.
   - `--yes` with `--writer`, `--reviewer`, `--writer-model`, `--ollama-url`, `--podman`,
     `--machine-cpus`, `--machine-memory`, `--pull`, `--recipe-build`, `--connect`,
     `--openrouter-key-env`, `--port`, `--start`, `--smoke-test`, `--allow-sudo`,
@@ -184,45 +234,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     configuration and exit 0). It shows `axocoatl onboard --yes --writer WRITER`, with
     the writers named in words, and points to `axocoatl onboard --help` for the other
     flags; it used to print a synopsis whose `claude-code|codex|…` pasted as a pipeline.
-    `--help` says what `--podman create` does on a Mac and on Linux. `--install-daemon`
-    is now `--start service`.
+    `--help` says what `--podman create` does on a Mac and on Linux, and that it refuses
+    Ubuntu 22.04. `--install-daemon` is now `--start service`.
+- **OpenRouter: onboarding's default writer is `qwen/qwen3-coder-30b-a3b-instruct`.** It
+  is the model the local default `qwen3-coder:30b` runs, and two OpenRouter providers
+  serve it. On 2026-10-23 the previous default, `qwen/qwen3-coder`, had no healthy
+  endpoint for a time, and `z-ai/glm-4.6` and `deepseek/deepseek-chat-v3.1` were
+  rate-limited (HTTP 429) at their cheapest endpoints. Measured with Axocoatl that day on
+  the onboarding sample and the five new-user fixtures: the writer's change passed the
+  fixture's tests in all six runs, and no answer held a text tool call. The reviewer
+  (`openai/gpt-oss-120b`) approved the Rust run. In the other five runs its endpoint
+  answered HTTP 429 (rate-limited upstream) on the call and its retry, so those runs
+  ended needing attention; such a call now moves to another endpoint (Fixed, below).
+- **`onboard --update` rewrites the Agents onboarding wrote, with the models chosen and
+  this release's prompts.** Before, it kept every Agent and changed only `run.models`. A
+  new writer or reviewer therefore left Lead, Scout, the Reviewer and the Assistant on
+  the old models, which doctor then still checked. An Agent counts as onboarding's when
+  its id and fields are as onboarding writes them, its prompt is one this release or
+  1.1.0 to 1.4.0 wrote, and it runs the model onboarding gave it. Such an Agent is now
+  written as this release writes it, where it is in the file, and the change is shown in
+  Step 4's diff. This happens even when only the port changes. An Agent that differs from
+  what onboarding writes (one you edited) stays as it is, and so does one of your own.
+  Onboarding names the Agents of its team it kept on other models. Doctor's and
+  onboarding's fixes say `axocoatl onboard --update`, and say `--replace` only while such
+  a kept Agent runs the model. Tested with the configurations 1.4.0 wrote, byte for byte.
 - **`axocoatl doctor` says what is ready.** It reports Sandbox, Models, Writers and
   Daemon, each item OK, WARN or FAIL with its fix, then `Ready for: …` or the steps left,
   ending with `Ready: yes` or `Ready: no`; `--json` prints the same report. A missing
   Podman, a missing machine, a rootful runtime, Podman older than 4.3 and missing
-  subordinate ids now fail (they were warnings followed by "All required checks
-  passed"), rootless is always probed, and a stopped machine is OK because it starts on
-  first use. Doctor, and onboarding's own check, warn when Podman on macOS is a release
-  other than 6.1, the one Homebrew installs ("has not been tested with Axocoatl on macOS
-  yet (6.1 is)"), and when Podman on Linux is 4.3 to 4.8 ("(4.9 is)"); 1.4.0's doctor and
-  onboarding named no Podman release as tested. Each configured Ollama model shows its
-  size against memory and the context Ollama loads it with (below 16384 fails); the
-  Writers section shows built recipe images, stored credential names and the `claude`,
-  `codex` and `gh` CLIs, and fails the Claude Code or Codex writer a setup chose while its
-  image or sign-in is missing; the Daemon section compares the running daemon's version with the CLI's and names the
-  program the Always-On Service runs. Each loaded model shows how much of it is in GPU
+  subordinate ids now fail (they were warnings followed by "All required checks passed"),
+  rootless is always probed, and a stopped machine is OK because it starts on first use.
+  Doctor, and onboarding's own check, warn when Podman on macOS is a release other than
+  6.1, the one Homebrew installs ("has not been tested with Axocoatl on macOS yet (6.1
+  is)"), and when Podman on Linux is any release other than 4.9, such as Fedora's 5.x or
+  Arch's 6.x ("(4.9 is)"); 1.4.0's doctor and onboarding named no Podman release as
+  tested. Each configured Ollama model shows its size against memory and the context
+  Ollama loads it with (below 16384 fails); while a daemon runs, a model Ollama already
+  holds has its context read from `/api/ps` and is not loaded or probed again, since a
+  run may be using it; the Writers section shows built recipe images, stored credential
+  names and the `claude`, `codex` and `gh` CLIs, and fails the Claude Code or Codex
+  writer a setup chose while its image or sign-in is missing; the Daemon section compares
+  the running daemon's version with the CLI's and names the program the Always-On Service
+  runs. A daemon of another version, or one that closes the connection on the IPC
+  protocol's new version request (`{"type": "version"}`), as a daemon from before 1.5.0
+  still running after an upgrade does, is a warning with the restart
+  (`axocoatl service restart`, or stop `axocoatl dev` and start it again), where doctor
+  said "running (IPC reachable)". Each loaded model shows how much of it is in GPU
   memory. With `sandbox.backend: e2b`, `axocoatl run` still needs Podman. The Rust
-  toolchain warning is gone, and a missing configuration points to `axocoatl onboard`.
-  A writer path that is not set up and was not chosen is marked with a neutral `·`
-  instead of a failure. The fix for a configured Ollama model that is too large for this
-  computer, or whose context cannot be read, follows the model's role. It names the
-  writer the configuration records (`--writer …`), so onboarding neither asks again who
-  writes nor switches it. For a reviewer, the fix is OpenRouter for the reviewer
+  toolchain warning is gone, and a missing configuration points to `axocoatl onboard`. A
+  writer path that is not set up and was not chosen is marked with a neutral `·`, and an
+  optional writer that is only partly set up (its image without its sign-in, say) with
+  `!`, in doctor's summary and onboarding's Step 5, instead of a failure. The fix for a
+  configured Ollama model that is too large for this computer, or whose context cannot be
+  read, follows the model's role. It names the writer the configuration records
+  (`--writer …`), so onboarding neither asks again who writes nor switches it. For a
+  reviewer, the fix is OpenRouter for the reviewer
   (`--reviewer openrouter:openai/gpt-oss-120b`) or, unless OpenRouter writes, a smaller
-  reviewer. While an Agent runs the model, it is `axocoatl onboard --replace` with a
-  smaller model or OpenRouter (with an OpenRouter writer, OpenRouter only, keeping the
-  writer's model), since `--update` keeps the Agents and changes only `run.models`. For a
-  configuration that does not say who writes, it says to change the model in the file or
-  to write a new per-user configuration (onboarding has no `--config`) with `axocoatl
-  onboard --replace --writer WRITER`, with the writers
+  reviewer. The command is `axocoatl onboard --update`, which moves the Agents onboarding
+  wrote to the new model, or, while an Agent that differs from what onboarding writes
+  runs the model, `axocoatl onboard --replace` with a smaller model or OpenRouter (with
+  an OpenRouter writer, OpenRouter only, keeping the writer's model), since `--update`
+  keeps such an Agent as it is. When only a local reviewer's context is too small, the
+  fix keeps the local writer. For a configuration that does not say who writes, it says
+  to change the model in the file or to write a new per-user configuration (onboarding
+  has no `--config`) with `axocoatl onboard --replace --writer WRITER`, with the writers
   named in words (a `claude-code|codex|…` list pasted into a shell is a pipeline that
-  replaces the configuration). Without `providers.openrouter`, the fix is `axocoatl
-  connect openrouter`, which adds it and changes nothing else, and a key that sign-in
-  stored (`api_key_secret`) counts as present. That fix, and the one for a key secret
-  that is not stored, add `--config PATH` when doctor checks a configuration other than
-  the default one, so the key is stored for that configuration. A Claude Code or Codex
-  writer that is not set up names `axocoatl recipe build claude-code && axocoatl connect
-  claude-code` or `axocoatl connect codex`, which leave the configuration as it is.
+  replaces the configuration). The default configuration named another way (a relative
+  path, a link) counts as the default one, and a missing configuration given with
+  `--config` gets a `cp` command that copies the default one there. Without
+  `providers.openrouter`, the fix is `axocoatl connect openrouter`, which adds it and
+  changes nothing else, and a key that sign-in stored (`api_key_secret`) counts as
+  present. That fix, and the one for a key secret that is not stored, add `--config PATH`
+  when doctor checks a configuration other than the default one, so the key is stored for
+  that configuration. A Claude Code or Codex writer that is not set up names `axocoatl
+  recipe build claude-code && axocoatl connect claude-code` or `axocoatl connect codex`,
+  which leave the configuration as it is.
 - **One Podman preflight and machine size everywhere.** Onboarding, doctor, the daemon's
   start and Session cleanup, and the workbench's readiness report decide about Podman
   the same way: they ask Podman itself first (`podman info`), then why it did not
@@ -272,8 +358,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and configuration examples; `gpt-oss:120b` (65 GB) needs roughly 96 GB of memory or
   more. The measured results still name the gpt-oss 120B reviewer they used.
 - **The installer keeps `axocoatl` on PATH for new terminals.** On a stock Mac
-  `/usr/local/bin` is not writable, the installer used `~/.local/bin`, which macOS does not
-  put on PATH, and the `axocoatl onboard` it printed next failed with "command not
+  `/usr/local/bin` is not writable, the installer used `~/.local/bin`, which macOS does
+  not put on PATH, and the `axocoatl onboard` it printed next failed with "command not
   found". When the install directory is not on PATH, the installer now asks on the
   terminal before adding one marked line to the startup files your shell reads in a new
   terminal and a new login (`~/.zprofile` for zsh on macOS, `~/.zshrc` and `~/.zprofile`
@@ -291,48 +377,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   printed for you to add, fish's `fish_add_path` line, or the lines Debian's and
   Ubuntu's `~/.profile` use to add `~/.local/bin`: at the top level, not in a block or a
   function, not after a line that ends in `&&`, `||`, `|` or `\`, not inside a quote, and
-  not after `return`, `exit`, `exec` or a construct the installer cannot follow. It
-  cannot see `set -e` and a failing command, a sourced file that exits, a syntax error,
-  or a later line that takes the directory out of PATH again, and it can misread a valid
-  file in other ways, so in such a file a line can count although it does not run. A
+  not after `return`, `exit` or an `exec` that runs a command (also in quotes, as
+  `'return'` or `"exit"`) or a construct the installer cannot follow. It cannot see
+  `set -e` and a failing command, a sourced file that exits, a syntax error, or a later
+  line that takes the directory out of PATH again, and it can misread a valid file in
+  other ways, so in such a file a line can count although it does not run. A
   subdirectory, a line that removes the directory, a mention in a comment, or such an
   unmarked line behind an OS check do not count, so such a file gets the line too. Next
   to such a `~/.profile`, read directly or by a `~/.bash_profile` that sources it by the
-  same rule (`. ~/.profile`, `. "$HOME"/.profile`, its full path, or behind `[ -f … ] &&`
-  or an `if [ -f … ]` that ends with `fi` alone on its line), only `~/.bashrc` gets a
-  line, one that skips login shells. With Debian's and Ubuntu's own startup files, read
-  directly or through such a `~/.bash_profile`, a new login, an SSH login (`bash -il`)
-  and a new terminal each list `~/.local/bin` once. The line goes at the end of the file;
-  when `config.fish` can stop before its end in some shells (`status is-login || return`,
-  another return, exit or exec, or a line the installer cannot follow), the installer says
-  so and to move the line above that point, instead of saying new terminals find
-  axocoatl.
-  `AXOCOATL_MODIFY_PATH=yes` adds it without asking and `=no` never asks; end of input at
-  the question (Ctrl-D) counts as no. In a GitHub Actions step it adds the directory to
-  `$GITHUB_PATH` instead. The next commands are printed with the binary's full path
-  unless the shell already finds it, and an earlier `axocoatl` on PATH is named. Without
-  a `podman` command on PATH, the installer says what onboarding does about it, on every
-  platform, instead of an `apt-get` line on WSL alone: it installs Podman after asking,
-  with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux; on
-  an Apple-silicon Mac without Homebrew it points to the podman.io installer; elsewhere
-  it says what to do. (On a Mac where Podman is installed in `/opt/podman/bin`,
-  `/opt/homebrew/bin` or `/usr/local/bin` but that directory is not on PATH, onboarding
-  installs nothing and says to add it to PATH.) Its last lines say onboarding sets up a
-  writer and a reviewer, and Podman where it can.
+  same rule (`. ~/.profile`, `. "$HOME"/.profile`, its full path, or behind
+  `[ -f … ] &&` or an `if [ -f … ]` that ends with `fi` alone on its line or followed
+  only by redirections, as in `fi >/dev/null`), only `~/.bashrc` gets a line, one that
+  skips login shells. With Debian's and Ubuntu's own startup files, read directly or
+  through such a `~/.bash_profile`, a new login, an SSH login (`bash -il`) and a new
+  terminal each list `~/.local/bin` once. The line goes at the end of the file; when the
+  file can stop before its end in some shells, the installer says so and to move the
+  line above that point, instead of saying new terminals find axocoatl: in
+  `config.fish`, `status is-login || return` or another return, exit or exec (also after
+  assignments); in an sh, bash or zsh file, a `return`, `exit` or `exec` where a command
+  starts (also after `builtin`, `command`, `command -p` or assignments, as in
+  `SHELL=/usr/bin/fish exec fish`), outside a function or a `( )` subshell, other than
+  one that stops only shells that are not interactive (as Ubuntu's, Debian's, Arch's and
+  Gentoo's `~/.bashrc` do, also as `return 0` or a one-line `if`) and other than an
+  `exec` with only redirections (`exec 2>>log`, `exec {fd}>file`); or a line the
+  installer cannot follow. A quoted `#` is not taken for a comment, and `<( )` and
+  `>( )` are read as commands, as `$( )` is. `AXOCOATL_MODIFY_PATH=yes` adds it without
+  asking and `=no` never asks; end of input at the question (Ctrl-D) counts as no. In a
+  GitHub Actions step it adds the directory to `$GITHUB_PATH` instead. The next commands
+  are printed with the binary's full path unless the shell already finds it, and an
+  earlier `axocoatl` on PATH is named. Without a `podman` command on PATH, the installer
+  says what onboarding does about it, on every platform, instead of an `apt-get` line on
+  WSL alone: it installs Podman after asking, with Homebrew on an Apple-silicon Mac or
+  with apt, dnf, pacman or zypper on Linux; on an Apple-silicon Mac without Homebrew it
+  points to the podman.io installer; elsewhere it says what to do. (On a Mac where
+  Podman is installed in `/opt/podman/bin`, `/opt/homebrew/bin` or `/usr/local/bin` but
+  that directory is not on PATH, onboarding installs nothing and says to add it to
+  PATH.) Its last lines say onboarding sets up a writer and a reviewer, and Podman where
+  it can.
 - **The installer can install a given release from a given place.**
   `AXOCOATL_VERSION=v1.5.0` installs that release instead of the latest one, and
   `AXOCOATL_INSTALL_BASE_URL` (`https://` or `file://`, with `AXOCOATL_VERSION`) names the
   directory holding its archive and `.sha256` file, which is still required; both are
   checked before any download.
+- **The installer says what it replaces.** It names the Axocoatl it replaces at its
+  install path, including a pre-release such as 1.5.0-rc.1.
+  - Installing a newer minor or major release, it says to back up before Axocoatl starts
+    again, since the way back is that backup.
+  - Installing an older one, it says that this is going back and where the docs say how.
+  - It names each running `axocoatl serve` or `axocoatl dev`, run by name or by an
+    absolute or relative path, one with a space included. It reads where the path ends
+    from ps's argv[0] on macOS and from /proc on Linux, so another program or another
+    axocoatl command that names one in its arguments is not taken for a daemon. A daemon
+    of the replaced copy runs the new one after a restart; a daemon of another copy, such
+    as a build from source, is not changed by the install. For a daemon started by a
+    relative path, which copy it runs depends on the folder it was started in, and the
+    note says so and how to run the new release.
 - The Upgrade page's release installer is `curl -fsSL https://axocoatl.ai/install.sh |
   sh`, as on the install page. The page ran `scripts/install.sh` from the repository's
-  `main` branch, whose code may not be released yet. The site serves the `install.sh` of
-  the commit it deploys: the tagged commit when the release workflow publishes a release,
-  and otherwise `main`, after a push to `main` that touches the site's sources
-  (`scripts/install.sh` among them) or a manual run from `main`, but only while the
-  version in `axocoatl-cli/Cargo.toml` is a published release and GitHub's latest. That
-  check reads only the version, so an installer change merged to `main` before the
-  version moves is served before it is released.
+  `main` branch, whose code may not be released yet. The site serves `scripts/install.sh`
+  from the release tag of the CLI version it deploys (`vX.Y.Z`, fetched from the
+  repository by `scripts/served-installer.sh`), never the deploying commit's. An
+  installer change merged to `main` is therefore served only once a release ships it,
+  and a change to `scripts/install.sh` alone no longer deploys the site. A version with
+  no tag yet, or a tagged installer that does not parse, is refused. The /install page
+  links that served installer.
 - **Commands on the home page, /install, the README, `llms.txt` and the docs' first-run
   pages that did not run as written are fixed, and a lint checks their shape.** The
   receipt check is
@@ -343,22 +451,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `axocoatl validate`; and the quickstarts name the loadout that matches the writer chosen
   in onboarding (`fix` for a local or OpenRouter writer, `fix-claude-code` or `fix-codex`
   otherwise).
-- **The public pages say what the release gate verified, what is not yet verified and
-  what a run needs.** The README, `llms.txt`, the install pages and the security page
-  list what the 1.5.0 release gate ran on the release commit (see Verified, below), and
-  the README, the install pages, the onboarding page and `docs/CLAIMS.md` say that the
-  local pair (`qwen3-coder:30b` and `gpt-oss:20b`) ran end to end on a 48 GB Mac in it.
-  Intel Macs, Macs with less than 48 GB for local models, Ubuntu 22.04, Debian 12, Fedora
-  with SELinux and WSL2 are labelled "not yet verified", and the install command says it
-  runs in macOS, Linux or WSL2, not PowerShell. The pages name the prerequisites (a
-  Claude Pro or Max plan and the `claude` CLI for Claude Code, a reviewer model,
-  Podman), the memory from which onboarding offers the local pair when no installed pair
-  fits (48 GB; with less, it first offers OpenRouter for the reviewer or both, or Claude
-  Code or Codex as the writer), what gets downloaded (including the 87 MB embedding
-  model the first daemon start fetches from huggingface.co), how a run detects the
-  repository's language and installs its dependencies before the writer starts (for
-  `fix-claude-code` and `fix-codex` too), and that Docker is not supported (Podman can
-  run alongside it).
+- **Printed commands name values in capitals.** Many commands Axocoatl printed used
+  `<name>`-style placeholders, which a shell reads as redirections when pasted. Examples:
+  `axocoatl secret set NAME`, `axocoatl url --config CONFIG`,
+  `wsl --set-version DISTRO 2`, `podman volume rm NAME`, `axocoatl recipe build RECIPE`,
+  `--model writer=openrouter:VENDOR/MODEL`, `--check "COMMAND"`, `--setup "COMMAND"`,
+  `--toolchain LANGUAGE`, and the workbench's `axocoatl receipt verify FILE --keys
+  TRUSTED_KEYS --repo CHECKOUT` and `axocoatl loadouts validate FILE`. The paste-safety
+  tests now read the CLI's, the server's and the crates' sources and every string in the
+  workbench's scripts. They fail on an angle-bracket placeholder in a printed command or
+  flag value, including a quoted one of several words.
+- **The public pages say what the release gate requires, what is not yet verified and
+  what a run needs.** The README, `llms.txt`, the install pages, the security page and
+  the marketing home and changelog pages list the paths and steps the 1.5.0 release gate
+  requires on the release commit (see Verified, below). They name no memory, models or
+  Linux release as checked, since the gate's steps check none of these; its evidence
+  records them, and `docs/CLAIMS.md` says so. Intel Macs, Ubuntu 22.04, Debian 12,
+  Fedora with SELinux and WSL2 are labelled "not yet verified", the pages say that the
+  gate's runs verify local models only on the memory and models its evidence names, and
+  the install command says it runs in macOS, Linux or WSL2, not PowerShell. The pages
+  name the prerequisites (a Claude Pro or Max plan and the `claude` CLI for Claude Code,
+  a reviewer model, Podman), the memory from which onboarding offers the local pair when
+  no installed pair fits (48 GB; with less, it first offers OpenRouter for the reviewer
+  or both, or Claude Code or Codex as the writer), what gets downloaded (including the
+  87 MB embedding model the first daemon start fetches from huggingface.co), how a run
+  detects the repository's language and installs its dependencies before the writer
+  starts (for `fix-claude-code` and `fix-codex` too), and that Docker is not supported
+  (Podman can run alongside it).
 - **Claims withdrawn from the site and docs.** The default reviewer, `gpt-oss:20b`, is
   "a different reviewer", not a stronger one: it is smaller than its writer and has not
   been measured. The example run summary on the README and the home page, which 1.4.0
@@ -369,7 +488,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer says the executable keeps working if the project stops: a new major Ollama
   release needs a newer Axocoatl. `axocoatl run` is "from your shell", not "a shell or a
   CI job", and only `axocoatl run` gets a receipt, not every run. The Codex API-key route
-  (`connect codex --api-key`) is out of the quickstart and marked not yet tested live.
+  (`connect codex --api-key`) is out of the quickstart, and 1.5.0 refuses it (below).
 - **The verify-receipt workflow in the docs no longer fails every pull request without a
   receipt.** Its example sets `require-receipt: false`, so pull requests from people,
   Dependabot and the one that adds the workflow pass with a notice; a strict variant
@@ -388,6 +507,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left a `test_fix.go` of package `main` beside the package, so `go test ./...` failed
   with "found packages pages and main" and the run ended `checks_failed`. The three
   loadouts' digests change with their text.
+- **`axocoatl connect codex --api-key` and `--api-key-only` are refused.** Storing the
+  OpenAI API key that OpenAI issues with the browser sign-in was never tried with an
+  OpenAI Platform organization. 1.5.0 refuses both flags before anything runs (exit 3,
+  nothing run or stored; both are hidden from the help) and points to
+  `axocoatl connect codex` and `--param credential=codex-chatgpt`. Onboarding no longer
+  asks how to bill Codex: runs bill to the ChatGPT plan. A configuration that names
+  `codex-openai` keeps it only while that key is stored; otherwise it moves to
+  `codex-chatgpt` and says so. Doctor's fix for a missing `codex-openai` is
+  `axocoatl onboard --update --writer codex`. The daemon's and `secret set`'s messages
+  for a missing or rejected `codex-openai` lead with the ChatGPT sign-in, then
+  `axocoatl secret set codex-openai --from-env VAR` for automation. A key stored as
+  `codex-openai` by 1.3.1 to 1.4.x is still used.
+- **A Codex run says when it is billed at API rates.** When `credential: auto` takes
+  `codex-openai` while `codex-chatgpt` is also stored, the run's note adds two things:
+  the run is billed at OpenAI API rates to the key's organization, not to your ChatGPT
+  plan, and `--param credential=codex-chatgpt` uses the plan.
+- **While a version's films are pending, the site leaves out the showcase page.** The
+  page holds nothing but films and showed twelve "recording pending" notes. The
+  marketing validation refuses a pending build that has it, and the page returns with
+  the recordings.
+- The docs say that Keep as PR and the verify-receipt Action are for GitHub only (only
+  github.com has been tried), and what to do on another host: `--keep branch`, then
+  verify the receipt `--receipt` wrote, since Keep writes no description there. They
+  also say that a receipt block over 40,000 characters stays out of the pull request
+  description.
+- The install page has a section on proxies, VPNs and rate limits.
+- When the installer cannot resolve the latest release, its error now names GitHub's
+  limit of 60 requests an hour without a token and `AXOCOATL_VERSION`.
+- **A refusal is a 422 with its reason.** `POST /api/sessions/{id}/execute` and
+  `POST /api/agents/{id}/execute` answer a native provider check's refusal with 422 and
+  the check's own words. Before, they answered 500 with Axocoatl's internal error layers.
+  They also answer an invalid request with 422; conflicts stay 409 and other failures
+  500. Team & budget's preview and apply answer a provider refusal with 422 (they
+  answered 400). The workbench's "not sent" notice shows the same words.
+- **The daemon logs each HTTP request at debug.** Before, its default log had one line
+  per workbench poll. A server error (5xx) is still logged at `warn`.
+  `RUST_LOG=info,axocoatl_server=debug` shows the requests, with any sign-in token as
+  `REDACTED`.
+- Browser journeys now cover Full-page Preview cookies with WebKit's own Linux user
+  agent, Source Control's change in Monaco's diff editor, and the skill-automation and
+  Remove from list journeys without their readiness races; every WebKit page on Linux
+  settles before it reloads or navigates.
+- **CI runs every test that needs Podman, the internet or a live Ollama.** CI used to run
+  12 of the tests the workspace ignores by default. Now, on every push and pull request:
+  - four "Podman and live suites" jobs run every ignored test of axocoatl-isolation (with
+    sandbox-session), axocoatl-daemon, axocoatl-cli, and axocoatl-memory and
+    axocoatl-session, on rootless Podman 4.9.3, with images pinned by digest and the
+    recipe and browser images built from the commit;
+  - the execution supervisor suite runs in Alpine and Debian images, as root and not, on
+    x86_64 and aarch64;
+  - the live Ollama tests run against Ollama 0.40.6 with cloud models off and qwen3:0.6b.
+
+  A suite fails unless every test ran and passed, and CI fails when an ignored test is in
+  no suite. Ten tests are left out, each with its reason: four live E2B, two live
+  OpenRouter, four helpers. The daemon's live egress test now also covers the ubuntu and
+  github presets.
+- **The browser regressions run in WebKit on macOS, in CI and in the release workflow.**
+  There is a new macOS 26 WebKit leg; without Podman it leaves out the five Podman
+  journey files. `release.yml`'s browser gate, which ran Chromium on a debug build, now
+  runs CI's four legs on the release build, and a failing leg blocks the release. The
+  Linux legs pull `rust:bookworm`, so the coordination reference journey runs. A new
+  required gate path, `C1-browser-webkit`, runs every journey in WebKit on the gate Mac
+  with Podman against the candidate's macOS archive.
+- **A release takes its Tier A evidence only from a green CI run.** `collect-evidence.sh`
+  refuses a run whose conclusion is not success, and records the run in each path
+  (`ci-run.json`, which is signed). `check-evidence.mjs` and `release.yml` fail a Tier A
+  path without that record or from a red run.
+- **Release archives carry a build provenance attestation.** Each of the four archives is
+  attested and checked with `gh attestation verify`. The install page explains how to
+  check one, and says the macOS binaries are signed ad hoc and not notarized, so a
+  browser-downloaded archive is quarantined, while the installer's curl download is not.
+- **The new-user gate installs real dependencies through every package manager the setup
+  supports.** The rust and go fixtures have dependencies (`cargo fetch`,
+  `go mod download`). Seven new Tier A fixtures cover pnpm 10, Yarn 1, Yarn 4, Poetry,
+  uv, PDM and Hatch. `config.mdx` no longer calls the yarn, pypi, go, github and ubuntu
+  presets unverified.
+- **The workflows pin the Node 24 releases of their GitHub Actions** (checkout 5.1.0,
+  setup-node 6.5.0, setup-go 6.5.0, upload-artifact 7.0.2, download-artifact 8.0.2,
+  wrangler-action 4.1.3 with Wrangler 3.90.0 kept). So do the receipts page's examples.
+- CI pulls Docker Hub images through mirror.gcr.io.
+- The macOS plumbing CI gate's admission step uses a short `HOME` under `/tmp`, so the
+  daemon's socket path fits macOS's 104-byte limit.
+- **The tests pass under Ubuntu's login umask, whatever Podman connection the shell
+  names, and on a loaded computer.** About 730 Rust tests and every browser journey
+  failed under umask 002. The Podman tests no longer read `CONTAINER_HOST` or
+  `CONTAINER_CONNECTION`. Failed mount point, egress and workload fixtures leave nothing
+  behind. The OCR tests, the daemon's helper tests and onboarding's and doctor's tests
+  with a fake `podman` no longer fail on a loaded computer, and a test no longer reads a
+  half-written pid file.
 
 ### Added
 - **Runs get the repository's toolchain and dependencies, and a run whose check cannot
@@ -431,25 +639,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel with only ABI 1 the kernel still refuses them, and the probe ends the run with
   exit code 5, naming "Invalid cross-device link".
 - **`axocoatl connect openrouter`: OpenRouter through a browser sign-in, with no key to
-  paste.** It runs OpenRouter's OAuth PKCE flow: a loopback server on `127.0.0.1` (a
-  port the system picks), OpenRouter's sign-in page opened in the browser and printed
+  paste.** It runs OpenRouter's OAuth PKCE flow: a loopback server on `127.0.0.1` (a port
+  the system picks), OpenRouter's sign-in page opened in the browser and printed
   (`--no-browser` only prints it), the browser's return checked against the sign-in's
   state (any other request to the loopback server is ignored, so a stray or forged one
   cannot end the sign-in), and the code exchanged with a verifier that never leaves the
-  computer for a new key. The key is checked with `GET /api/v1/key` (its label, credit limit, usage
-  and free-tier status are shown, never the key), stored in the secret store as
-  `openrouter`, and the configuration gains `openrouter_billing: credits` and
+  computer for a new key. The key is checked with `GET /api/v1/key` (its label, credit
+  limit, usage and free-tier status are shown, never the key), stored in the secret store
+  as `openrouter`, and the configuration gains `openrouter_billing: credits` and
   `openrouter: {api_key_secret: openrouter}`, every other line kept; on a computer with
   no configuration yet it writes one with only those entries. Models named with
   `--writer` and `--reviewer` are checked in OpenRouter's public catalog before the
   sign-in, and must differ. It asks onboarding's BYOK question first; cancelling in the
-  browser, a 10-minute sign-in time (`--sign-in-timeout`) or Ctrl-C stores nothing.
-  `--status` shows the stored key's label and limits (it sends only an `sk-or-` value);
-  `--remove` deletes it and its line in the configuration, keeping the line while
-  Agents still use OpenRouter. It never stores into, sends or removes a secret another
-  command owns (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key).
-  Onboarding's OpenRouter step runs the same sign-in, which leaves signal handling to
-  the process; a failure there names the `axocoatl onboard` command to run again.
+  browser, Ctrl-C, or the end of the 10-minute sign-in time (`--sign-in-timeout`; at a
+  terminal it first asks whether to keep waiting, below) stores nothing. `--status` shows
+  the stored key's label and limits (it sends only an `sk-or-` value); `--remove` deletes
+  it and its line in the configuration, keeping the line while Agents still use
+  OpenRouter. It never stores into, sends or removes a secret another command owns
+  (`claude-code-oauth`, `codex-chatgpt`, `codex-openai`, the receipt key). Onboarding's
+  OpenRouter step runs the same sign-in, which leaves signal handling to the process; a
+  failure there names the `axocoatl onboard` command to run again.
 - **`api_key_secret` for hosted providers.** `providers.<name>.api_key_secret` names a
   secret in the data root's store in place of `api_key`, so the key is not in the
   configuration file; the daemon reads it when it starts and logs, without a value,
@@ -457,14 +666,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value there that reads as a key is refused and never repeated in a message, and a
   hosted provider block with neither `api_key` nor `api_key_secret` is refused, as a
   missing `api_key` was before.
-- **Contract probes.** When Team & budget (or a loadout run's admission) observes an
-  Ollama model's context, Axocoatl sends two small requests to the person's own server
-  with that context and the settings every call uses: a prompt about four times longer
-  than the context, which must be refused before any generation, and a one-token
-  request, which must stop after one token with a prompt count inside the context. A
-  model that fails either is refused, and the error names the guarantee. Passes are kept
-  per server, Ollama version, model digest and context; when Ollama is upgraded to
-  another accepted version, the probes run again before it serves an existing Team.
+- **Contract probes.** When Team & budget, or a loadout run's admission, observes an
+  Ollama model's context, Axocoatl sends a few small requests to the person's own server,
+  with that context and the settings every call uses.
+  - A prompt about four times longer than the context must be refused before any
+    generation.
+  - A one-token request must stop after one token, with a prompt count inside the
+    context.
+  - A request for hundreds of lines with an output limit of 64 tokens must stop by 64
+    generated tokens. It must report exactly 64 when the limit ended it, and stream no
+    more pieces of text than the tokens it reports. Speculative decoding, such as the
+    `-mtp` tags, could overshoot or undercount here.
+  - For a model that reports tool calling, a request to call the one tool it is offered,
+    within 1,024 tokens, must come back as a call of that tool with a call id and a
+    string argument, read the way a Session reads an answer. A call to a tool it was not
+    offered beside it is allowed, since a Session answers such a call with a tool error.
+  - Every probe samples with one fixed seed at the model's own settings. On Ollama
+    0.40.8, qwen3:0.6b, qwen3:4b, qwen3.5:0.8b, qwen3-coder:30b and gpt-oss:20b each gave
+    the same tool-call answer five runs out of five. Unseeded, they called the tool after
+    23 (qwen3-coder:30b) to 309 (qwen3:4b) tokens.
+  - A model that fails a probe is refused on that server for every Agent and run, and the
+    error names the guarantee.
+  - A probe Ollama does not answer refuses nothing: a failed request, an error status, or
+    an answer that ends before its final record, as Ollama 0.40.8 gave when a model
+    runner had run out of GPU memory. The error says the check did not run.
+  - Passes are kept per server, Ollama version, model digest, context and tool calling.
+    After an upgrade to another accepted version, the probes run again before it serves
+    an existing Team.
+  - The probes passed on Ollama 0.40.8 with the models above, with an MTP
+    speculative-decoding tag (qwen3.5:0.8b-mtp-q8_0), and with a GGUF model that has no
+    template of its own (llama-server's chat template). Ollama's renderer, Go-template
+    and Harmony paths were covered too.
+  - Images are not probed. Each call reserves the whole context plus its output limit,
+    and llama-server counts an image's tokens against the context. On Ollama 0.40.8, a
+    64x64 image counted 11 tokens: 4,090 tokens of text were generated from at a
+    4,096-token context, and the same text with the image (4,101 tokens) was refused.
 - **The Ollama version in the record and the receipt.** Each native Ollama provider
   records the version it checked right before each inference request. A loadout run's
   Outcome keeps them by model (`ollama_versions`), and its receipt names them in the
@@ -497,134 +733,368 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   claims, and WSL2, Fedora, Debian 12 or Ubuntu 22.04 named on an install page without
   "not yet verified". `--json` lists every block for a gate that runs them verbatim.
 - **`axocoatl service status` shows why the service last failed to start.** When the
-  service is installed but not running and its log's last start attempt failed, it
-  prints that `Failed to bootstrap daemon: …` line, read from the end of
-  `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user journal on Linux.
+  service's last start failed, it prints the line the daemon logged
+  (`Failed to bootstrap daemon: …`, including a configuration error or a port in use),
+  read from the end of `~/Library/Logs/Axocoatl/daemon.log` on macOS or of the user
+  journal on Linux. It does so also while launchd or systemd keeps starting a failing
+  service and status reads "running: yes". It says when systemd does not load the unit.
+  Run live with launchd on macOS and with systemd on Ubuntu 24.04.
 - **A clean-machine new-user gate blocks a release unless a logged override is used**
   (`docs/RELEASE_GATE.md`). The release workflow builds nothing until a signed evidence
-  bundle for the tagged commit
-  (`release-evidence/<version>/<commit>/`) passes every required path: a brand-new
-  user from the published install command to a passing, signed `axocoatl run fix` on
-  Linux x86_64 and ARM64 in CI, and live runs on a clean Mac account (local models,
-  Claude Code, Codex, OpenRouter, the workbench in Safari) and an Ubuntu 24.04 VM. The
-  bundle's manifest is signed with the gate account's receipt key
+  bundle for the tagged commit (`release-evidence/<version>/<commit>/`) passes every
+  required path: a brand-new user from the published install command to a passing, signed
+  `axocoatl run fix` on Linux x86_64 and ARM64 in CI, and live runs on a clean Mac
+  account (local models, Claude Code, Codex, OpenRouter, the workbench in Safari) and an
+  Ubuntu 24.04 VM. The bundle's manifest is signed with the gate account's receipt key
   (`axocoatl receipt sign-evidence`, hidden) and checked against `.axocoatl/gate-keys`;
   the release workflow also runs the Linux new-user flow again on its own archives. The
   only way past it is a manual run on the tag, started by a login listed in
   `.axocoatl/gate-override-actors`, with a typed override phrase, which is logged. CI
-  runs the Linux flow on every pull request against the commit's release archive, with
-  a scripted Ollama-compatible model server and fixture repositories in Node, Python,
-  Rust and Go (`tests/fixtures/newuser`), plus an Ubuntu 22.04 leg that must refuse
-  cleanly. It also checks a new Mac user's install, `doctor` and `onboard --plan`
-  against a Podman stand-in in each Podman state on macOS runners (arm64 and Intel).
-  The browser regressions now also run on WebKit (Safari's engine) and on aarch64,
-  against the release build. CI's browser legs and the release workflow's browser gate
-  now pull `node:20-slim` by digest and require the Preview cookie journey, which runs a
-  Session app behind the real Preview proxy; a missing image fails it instead of
-  skipping it.
+  runs the Linux flow on every pull request against the commit's release archive, with a
+  scripted Ollama-compatible model server and fixture repositories in Node, Python, Rust
+  and Go (`tests/fixtures/newuser`), plus an Ubuntu 22.04 leg that must refuse cleanly.
+  It also checks a new Mac user's install, `doctor` and `onboard --plan` against a Podman
+  stand-in in each Podman state on macOS runners (arm64 and Intel). The browser
+  regressions now also run on WebKit (Safari's engine) and on aarch64, against the
+  release build. CI's browser legs and the release workflow's browser gate now pull
+  `node:20-slim` by digest and require the Preview cookie journey, which runs a Session
+  app behind the real Preview proxy; a missing image fails it instead of skipping it. The
+  evidence check also requires, for each required path, the steps `docs/RELEASE_GATE.md`
+  lists as the evidence for each sentence of the Verified section below. A path that
+  skipped one or never recorded it fails, naming the step.
+  - The Mac run records first that the account has no Axocoatl, its data or stored
+    secrets, no Podman and no Ollama. After each setup it records what onboarding
+    installed with Homebrew, created and turned off.
+  - Each sign-in path records that its secret was not stored before its interactive
+    onboarding and was stored by it.
+  - New required live paths: the Always-On Service on the Mac (chosen in onboarding's
+    Step 6, restarted by Step 7 after `onboard --update` changes the configuration, a fix
+    through it, then `service status`, `stop` and `uninstall`), a run that starts a
+    stopped Podman machine, and timed runs on two real repositories.
+  - The Ubuntu VM run does the same with a systemd user unit. It removes the new user's
+    own range of subordinate ids first, so that onboarding must add one beside another
+    user's.
+  - The workbench path accepts "Last turn N" for any N of at least 1 that lists the
+    changed file. Its questions can be answered by a WebDriver driver in Safari
+    (`scripts/release-gate/safari-workbench.mjs`), whose answers and prompt are recorded
+    as its own.
+  - The person also checks, in Safari itself, that a Preview address typed into a tab,
+    reached by a redirect or Command-clicked gets Axocoatl's refusal page and never
+    reaches the app. They also check what a `Domain=localhost` cookie flood does to the
+    workbench and that Manage Website Data removes it.
+  - The `--keep pr` step requires the verify-receipt Action's log to say it verified that
+    run's receipt.
+  - Every fixture run fails the gate when an answer the run ended with, or a file it
+    changed, holds tool-call markup a model wrote as text (`<function=`, `</tool_call>`).
+  - Every request the gate makes to a daemon or stub is bounded, and a failed request is
+    no longer taken for a running daemon.
+  - Transcripts are written as they happen, with each question and answer also kept in
+    the evidence.
+  - Tier B checks against the Podman stand-in that a run's admission starts a stopped
+    machine.
+- **`axocoatl receipt verify --require-pass`** exits 6 (result `not-passed`, naming the
+  verdict) for a receipt that verifies but whose run's verdict is not `pass` (checks
+  failed, needs attention, interrupted or error). A bad signature (1), an untrusted key
+  (2) and files that differ (4) come first. Without the flag such a receipt still
+  verifies with exit 0: it says truthfully what the run did.
+- **`axocoatl recipe clear-cache [--repo DIR | --all]`** removes a repository's toolchain
+  cache volume, or every one of the data root, instead of `podman volume rm`. A cache
+  that a Session's container still uses is left, and the command names that Session and
+  exits 5.
+- **Provider answer timeouts are settings.** Every provider block (`ollama`,
+  `openrouter`, `openai`, `anthropic`, `gemini`, `mistral`) takes
+  `first_token_timeout_secs` and `idle_timeout_secs`.
+  - `first_token_timeout_secs` runs from the request to the first chunk: 600 s for
+    Ollama, 120 s for a hosted provider, 1 to 3600.
+  - `idle_timeout_secs` is the longest pause between chunks: 90 s, 1 to 900.
+  - Before, every provider waited 120 s for a streamed answer's headers and 90 s between
+    chunks, so a CPU-only or busy computer failed a long prompt.
+  - A streamed answer still ends 15 minutes after its first chunk at the latest
+    (`stream total timeout`). That limit now counts from the first chunk, not from the
+    response headers, so a first-token timeout longer than 15 minutes is usable with a
+    hosted provider too.
+  - Loading an Ollama model to read its context and the contract probes after it now take
+    `providers.ollama.first_token_timeout_secs` too, where they had 120 s. This happens
+    before a native Session's first call, in `axocoatl doctor`, and in
+    `axocoatl onboard`, which reads the setting from your configuration. The timeout is
+    600 s unless set, and never less than 120 s.
+  - The errors name the setting: `first-token timeout`, `stream idle timeout`,
+    `did not finish loading`.
+  - Giving up closes the connection. Measured with Ollama 0.40.8, Ollama then abandons
+    the answer ("aborting completion request due to client closing the connection") or
+    the model's load ("client connection closed before llama-server finished loading,
+    aborting load"; the model was not loaded 30 s later).
+- **Each container resource cap applies on its own, and what applied is recorded.**
+  - Before, Session, browser, service-forwarder, egress-sidecar and SearXNG containers
+    asked for memory, CPU and process caps together. One cgroup controller missing from
+    rootless Podman's delegation dropped all three, with only a log line.
+  - Each container now gets every cap whose controller `podman info` lists, and each kind
+    of container logs once at `warn` which caps it runs without.
+  - With `sandbox.require_resource_limits: true`, none of these containers starts without
+    every cap: the start is refused, naming what is missing.
+  - The Session's record (`environment.resource_limits`), a run's notes and its receipt
+    (`sandbox.limits`, which `axocoatl receipt verify` prints) say which caps the Session
+    container got and which it did not. Measured on a Podman machine (Podman 6.1.4): the
+    record matched what `podman container inspect` shows (2 GiB, 2 CPUs, 512 processes).
+  - `axocoatl doctor` warns and prints how to delegate the missing controllers, on Linux
+    and inside a Podman machine. The workbench's first screen shows a Resource caps
+    warning, or a failure that blocks Create session when the caps are required.
+- **Sessions on a Linux computer with SELinux.**
+  - Where Podman reports SELinux enabled, Session and browser containers run with
+    `--security-opt label=disable`, as Toolbox does, instead of relabelling your files.
+    Under the default `container_t` label, SELinux refused them the bind-mounted
+    repository and the execution supervisor.
+  - The user namespace, dropped capabilities, seccomp, `no-new-privileges` and the
+    supervisor's Landlock filter stay.
+  - Measured with a Linux build on Fedora CoreOS 44, Podman 6.1.4, SELinux enforcing: a
+    plain Session, a hardened-workload Session, a Node-dependency Session and the browser
+    container (reaching exposed ports, and declared hosts through the egress proxy)
+    passed. Their containers ran with `label=disable` and all three caps.
+  - A live test, `the_browser_reaches_the_sessions_app_within_its_limits`, starts the
+    browser container as a Session's browser tools do and drives Chromium to the
+    Session's app. In that Podman machine (kernel 7.2.5), a Linux build passed it with
+    `label=disable`, and the browser ran with no process label. The container's cgroup
+    held the 2 GiB memory, 512-process and 2-CPU caps, and Chromium ran in it (75
+    processes and 202 MiB at peak).
+- **Docs: open the workbench from another computer** with an SSH port forward
+  (`ssh -N -L 8080:127.0.0.1:8080`).
+- **Doctor names what this platform and login cannot do.**
+  - A `Platform` line is OK on macOS on Apple silicon and on Ubuntu 24.04, where the
+    release gate's runs are made. It warns that Axocoatl has not been verified yet on an
+    Intel Mac, another Linux release, WSL2 (keep repositories off `/mnt/c`), SELinux
+    enforcing, and local models below 48 GB of memory.
+  - Doctor checks `git`, which the daemon runs on every repository. On macOS it checks
+    the Command Line Tools first, since `/usr/bin/git` without them opens Apple's
+    installer; the fix is `xcode-select --install`.
+  - On Linux, doctor checks the systemd user session the Always-On Service needs. A login
+    reached with `su -` or `sudo -iu` has none. The fix is to log in directly and, unless
+    linger is already on, to run `loginctl enable-linger USER` there to keep the service
+    running after logout. For an installed service, doctor also checks linger, read from
+    `loginctl` or `/var/lib/systemd/linger`.
+  - It warns when `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` is set, naming the variable
+    and never its value: a Session's network connects directly and its containers do not
+    get the variables. Requests to this computer and to Ollama never use a proxy;
+    Axocoatl's other requests (hosted model providers, onboarding's OpenRouter checks,
+    webhooks and MCP servers on other computers) follow them.
+  - It warns that a configured `hooks:` section is checked but never run.
+  - On Landlock ABI 1 it says that Rust builds fail with "Invalid cross-device link".
+    With `sandbox.backend: e2b` it says that `axocoatl run` still runs in Podman.
+  - Onboarding gives the platform and proxy notes at Step 0, and does not offer the
+    Always-On Service in a login without a systemd user session.
+- **Onboarding checks each OpenRouter model's endpoints before it writes the setup,
+  reading them as a run does.**
+  - When OpenRouter reports every usable endpoint of a model as unavailable or degraded
+    right now, onboarding names each endpoint's status and success rate, and says to try
+    again later or to choose another model.
+  - When no endpoint fits native Sessions, or the model is not in OpenRouter's catalog,
+    it says why and asks for another model.
+  - At a terminal another model can be named: Enter takes the first of
+    `qwen/qwen3-coder-30b-a3b-instruct`, `z-ai/glm-4.6`, `deepseek/deepseek-chat-v3.1`,
+    `qwen/qwen3-coder` and `openai/gpt-oss-120b` that OpenRouter reports healthy. With
+    `--yes` it is a step left that names that model, and nothing is saved.
+  - Before, onboarding approved such a setup and its first run failed with exit code 5.
+    On 2026-10-23, with every `qwen/qwen3-coder` endpoint at status -5 or -2, onboarding
+    stopped at Step 3 with that message and wrote nothing.
+- **OpenRouter sign-ins can wait longer, and are logged.**
+  - At a terminal, when the sign-in time (10 minutes) ends without a sign-in, onboarding
+    and `axocoatl connect openrouter` ask whether to keep waiting instead of failing.
+    Without a terminal the time stays the limit.
+  - Each connection to the sign-in's loopback address is logged with its method, path and
+    `Host`, never the code. A connection that sent no request is logged as what it did:
+    closed early, sent no HTTP/1 request, sent too much, or sent nothing in 5 seconds.
+  - Onboarding writes these lines to its own log. `connect` writes them to
+    `connect-openrouter-<time>.log` beside it; the first connection creates that log, and
+    a failed sign-in names it. A sign-in that ends with nothing having come back says so.
+  - In WSL the sign-in pages (OpenRouter's and Codex's) open with `wslview`, in Windows'
+    browser.
+- **`axocoatl session record-location`** records a copied or moved data root's new
+  location while Axocoatl is stopped and changes nothing else, so Axocoatl 1.1.0 to 1.4.0
+  start on a restored backup. Measured with 1.1.2, 1.2.0, 1.3.2 and 1.4.0, each on a
+  restored backup holding a Session and on a copy at another path. Starting 1.5.0 on the
+  restored root instead converts the journals of Sessions written by 1.2 and earlier,
+  which 1.1 and 1.2 then refuse. With `--original-deleted` it also records that the data
+  root it was copied from was deleted, so the next start removes the volumes that one's
+  Sessions left.
 
 ### Fixed
-- **A change whose patch is too large for one repository capture to print no longer
-  stops the turn, up to a patch of 64 MiB.** A writer that left two compiled test
-  programs (4.6 MB each) in the repository root, seen in the release gate on the Rust
-  fixture with `qwen3-coder:30b`, made the capture after it fail with "repository command
-  output is incomplete or exceeds its capture bound; partial bytes cannot become file
-  input": the capture printed the whole patch against `HEAD`, every untracked file
-  included, where its output may take 1 MiB (768 KiB around the checks). The turn
-  paused, the required checks and the review never ran, and the run ended needing
-  attention, saying only "A turn ended needing attention". A capture now prints a patch
-  whole up to 512 KiB, the most the host records, and a larger one as its SHA-256, its
-  size and its first 12 KiB, so its whole output stays under 768 KiB whatever the
-  change; that prefix is kept only as text to show, never as a patch anything applies or
-  reads files from. Such a change's checks and review run as any change's do, as long as
-  its patch fits the 64 MiB a capture may write to its temporary files: about 49 MiB of
-  new binary file data, which Git's binary patch writes in base85 (more when it
-  compresses). The reviewer is told the change is too large to show in full and how
-  large its patch is, and given at most 200 of the paths the turn changed in 8 KiB,
-  files `HEAD` has first, the rest counted by directory, each name quoted as Git quotes
-  one so none adds a line, then at most 6 KiB of the patch's beginning with the data of
-  binary files left out. That is a few thousand tokens, so a reviewer with a
-  32,768-token context starts: 3,072 generated files listed whole had taken about 22,000
-  tokens. When the capture taken as the turn began did not list its changed paths, the
-  reviewer is given the paths that differ from `HEAD` and told they may include earlier
-  changes. Keep, Source Control's Last turn and receipts attribute such a change from the
-  lines of the changed paths each capture records, compared on the same `HEAD`, when
-  neither the manifest nor the patch fits, and a receipt names each file with its digest
-  as before. A capture records those lines for at most 10,000 paths, and only when they
-  fit its output: a change of more paths (12,288 small files, say) is still checked and
-  reviewed, but what it changed cannot be attributed, so its receipt does not cover it.
-  Such a run, passing or not, now carries the new warning `receipt_incomplete`, which
-  says why, in its summary, JUnit file and record, and the receipt lists it among its
-  own warnings; `axocoatl run --receipt` adds that the receipt does not cover every path
-  the run changed. A write-scope comparison listing more changed paths than the 512 KiB
-  the host accepts is refused by the capture itself, as the host refused it. Turns
-  admitted with the earlier capture keep it for their checks. A patch past 64 MiB (an
-  80 MiB untracked file, for example) still cannot be captured, and the turn needs
-  attention; it now says so: "A turn ended needing attention: The repository could not
-  be captured around the checks, so they establish nothing: its state could not be
-  recorded (The change is larger than Axocoatl records: its patch against HEAD passes
-  the 64 MiB a capture may write, about 49 MiB of new binary file data)." Any capture
-  around the checks that cannot record the repository is named the same way, with its
-  reason, in the checks' readiness in the workbench and the run's Needs attention line.
+- **A change whose patch is too large for a repository capture to print no longer stops
+  the turn: the capture records it by its digest and size, and reads a repository of tens
+  of thousands of files within its time.**
+  - A writer left two compiled test programs (4.6 MB each) in the repository root, seen
+    in the release gate on the Rust fixture with `qwen3-coder:30b`. The capture after it
+    failed with "repository command output is incomplete or exceeds its capture bound;
+    partial bytes cannot become file input": it printed the whole patch against `HEAD`,
+    every untracked file included, where its output may take 1 MiB (768 KiB around the
+    checks). The turn paused, and the required checks and the review never ran. The run
+    ended needing attention without saying why: its summary said the check did not run
+    and the review did not pass, and the turn's own reason was only "A turn ended needing
+    attention".
+  - A capture now reads the patch once, as Git writes it, taking its SHA-256 and size as
+    it passes. It keeps only what it prints: the whole patch up to 512 KiB, the most the
+    host records, and of a larger one its first 12 KiB, so its output stays under 768 KiB
+    whatever the change. That prefix is kept only as text to show, never as a patch
+    anything applies or reads files from. No patch is too large to capture:
+    `axocoatl run fix` with a writer that adds an 80 MiB random file (a 108,117,524-byte
+    patch) passes on macOS with Podman, and its checks and review run. What a capture's
+    commands write to standard error is kept to its first and last 8 KiB, so Git warning
+    once per file cannot fail it.
+  - A capture read each file of the repository with six processes, twice. On a 6-CPU
+    Podman machine 12,288 tracked files took 55 seconds a capture, so a repository of
+    about 40,000 files passed the 180 seconds a capture has. It now reads each batch of
+    files with one `sha256sum` and one `stat`: 50,000 tracked files take 12 seconds and
+    12,288 new files 16. The output is the same as before, checked side by side under
+    dash, bash and busybox. Each of a capture's file listings may take 64 MiB: with
+    160,000 committed files whose paths are about 230 bytes long, a capture passed that
+    after 15 seconds and failed as "Repository capture failed or its result was
+    truncated; the candidate is not verified".
+  - A capture that still runs past its 180 seconds says so around the checks and in the
+    `receipt_incomplete` warning: "The repository capture did not finish within its 180
+    seconds: it reads every file in the repository, so a very large repository or change
+    (hundreds of thousands of files), or a busy computer, can take longer". Before, it
+    said "repository command did not complete normally: TimedOut; observed
+    primary_exit=…".
+  - A file named `-` is recorded with its own mode (the capture recorded its standard
+    input's, 666) and shown with its content in the patch. A submodule or nested checkout
+    no longer costs the files after it in its batch, as many as a thousand, their
+    records.
+  - The reviewer of a change too large to record is told so and how large its patch is.
+    It is given at most 200 of the paths the turn changed in 8 KiB, files `HEAD` has
+    first, the rest counted by directory, each name quoted as Git quotes one so none adds
+    a line. Then it gets at most 6 KiB of the patch's beginning with the data of binary
+    files left out, cut after a whole line to fit its model's context. When the capture
+    taken as the turn began listed no paths but recorded its whole patch, the reviewer is
+    told which paths the turn changed apart from those that already had uncommitted
+    changes. When that capture recorded neither, or `HEAD` moved during the turn, the
+    reviewer is given the paths that differ from `HEAD`, told they may include earlier
+    changes, and why.
+  - Keep, Source Control's Last turn and receipts attribute such a change from the lines
+    of the changed paths each capture records, compared on the same `HEAD`, when neither
+    the manifest nor the patch fits. A receipt names each file with its digest as before.
+    A capture records those lines for at most 10,000 paths, and only when they fit its
+    output: a change of more paths (12,288 small files, say) is still checked and
+    reviewed, but what it changed cannot be attributed, so its receipt does not cover it.
+  - Such a run, passing or not, now carries the new warning `receipt_incomplete` in its
+    summary, JUnit file and record. The warning says why: the capture that lists none of
+    the paths, with its 10,000-path limit and the 512 KiB of a patch a capture records
+    whole. The receipt lists it among its own warnings, and `axocoatl run --receipt` adds
+    that the receipt does not cover every path the run changed.
+  - A write-scope comparison listing more changed paths than the 512 KiB the host accepts
+    is refused by the capture itself, as the host refused it. Turns admitted with an
+    earlier release's capture keep it for their checks. A capture around the checks that
+    cannot record the repository is named, with its reason, in the checks' readiness in
+    the workbench and on the run's Needs attention line.
+- **The reviewer is no longer shown a change's binary data, and what it is shown of a
+  change fits its model's context.**
+  - Since 1.1.0 the reviewer was shown up to 48 KiB of the patch as Git prints it, the
+    base85 data of binary files included. One untracked 24 KiB binary file left beside
+    the fix made the reviewer's request need 34,344 tokens, where `gpt-oss:20b` with a
+    32,768-token context holds 27,852 with its output allowance. The reviewer failed with
+    "Current request needs 34344 context tokens, exceeding limit 27852" and the run ended
+    `needs_attention` (exit 2) with its checks passed. A 200 KiB binary needed 47,533
+    tokens and 400 KB of base64 text 45,115.
+  - Each binary file is now named with its size and its data left out, as for a change
+    too large to record. The rest of the change is shown whole when it fits three
+    quarters of what one request to the reviewer's model may hold beside its output
+    allowance (85% of the context), less the rest of the request: the task, the answers,
+    the reviewer's instructions and attachments, and the room kept to show a previous
+    answer when it is asked again. It is counted as the host counts a request. For
+    `axocoatl run fix` with a 32,768-token reviewer and an 8,192-token output allowance
+    that is about 10,700 tokens, enough for 30 KiB of Rust.
+  - A larger change is shown source first, then generated and dense text (lock files,
+    base64, minified code), then binary files, each file whole when it fits and else cut
+    at a hunk boundary; a file of one hunk that does not fit, such as a new file, is left
+    out. The reviewer is told first that not all of the change is shown and how much is
+    not. Each cut says what of its file was left out, and the files left out are listed
+    with their bytes. Its prompt says it has not seen that part, should read those files
+    before judging them and must not approve code it has not read.
+  - The context is the one the reviewer's model was observed with when its team was
+    applied. Without one, the change is fitted to 16,384 tokens, the smallest context
+    onboarding sets up.
+  - A previous answer without a verdict is shown again only when it fits a sixteenth of
+    what a request may hold beside its output allowance: 1,228 tokens for a 32,768-token
+    reviewer, at most 2,048. A longer one is not shown again, and the reviewer is told
+    so.
+  - Measured with `gpt-oss:20b` reviewing: `axocoatl run fix` on the Node fixture passes
+    beside a 24 KiB binary, a 200 KiB binary, 400 KB of base64 text and an 80 MiB file.
+    The 1.5.0 candidate ended `needs_attention` for the first three.
 - **Onboarding and doctor read the user's subordinate ids from `/etc/subuid` and
   `/etc/subgid`.** They judged the range only from `podman info`, which reports the user
-  namespace Podman's pause process already holds. After a user's range was removed
-  (seen in the release gate's CI case), that namespace kept the old range, so doctor
-  said OK and exited 0 while every `keep-id` container, which Podman maps from the
-  files, failed in crun with "write to `/proc/sys/net/ipv4/ping_group_range`: Invalid
-  argument", and onboarding showed only that message. On Linux, when Podman runs on this
-  computer, both now read the files (by user name or uid, as Podman does): no range, or
-  fewer than 65536 ids, is a FAIL ("User ID ranges", so doctor exits 1) whose fix is
-  `sudo usermod --add-subuids <first>-<last> --add-subgids <first>-<last> <user> &&
-  podman system migrate`, with the first 65536 ids from 100000 up that no line of either
-  file uses (100000-165535 whenever no line uses those, for example when the files are
-  empty). When only one file is short, the finding names that file and usermod adds a
-  range to it alone. When the files leave no free range from 100000 up, no range is
-  named: the fix says to choose one, with only the short file's `usermod` option.
-  Onboarding asks before running it and, under `--yes`, runs it only with
-  `--allow-sudo`. A range in the files that Podman has not picked up yet fails with
-  `podman system migrate` alone (no sudo; it stops running containers). Rootless Podman
-  maps a range with `newuidmap` and `newgidmap`, which it looks up on `PATH` only; doctor
-  now looks there too. When one is missing, or is neither setuid nor given file
-  capabilities, `podman info` maps only the user's own id (a pause process started before
-  the range was added). Usually, with a range in the files, it fails instead: `command
-  required for rootless mode with multiple IDs: exec: "newuidmap": executable file not
-  found in $PATH`; once a pause process has run, Podman logs the same failure with its
-  quotes escaped and a suggestion to try `podman system migrate`, and both forms are
-  recognized. Doctor's Podman line now names the package that ships them, where it said
-  to run `podman info`. Onboarding offers it after asking, like the Podman install
-  (under `--yes` only with `--allow-sudo`): `sudo apt-get install -y uidmap && podman
-  system migrate` on Debian and Ubuntu (Podman only recommends `uidmap`). An install
-  does nothing for a package that is installed (shadow-utils always is on Fedora and
-  RHEL), even when a helper's file is gone or lost its setuid bit or file capabilities.
-  So doctor and onboarding ask the package manager (`dpkg-query`, `rpm`, `pacman`) and
-  then offer its reinstall: `sudo apt-get install --reinstall -y uidmap`, `sudo dnf
-  reinstall -y shadow-utils`, or `sudo pacman -S --noconfirm shadow` on Arch. Such a
-  helper is reported as missing though its package is installed, not as not installed.
-  A helper in `/usr/bin` while `/usr/bin` is not on `PATH` is reported as that. A copy
-  earlier on `PATH` that the package does not own is to be deleted. No install is
-  offered for either. When an install or reinstall runs and the helpers still cannot
-  map, onboarding says so, runs nothing after it, and does not offer it again in that
-  run (doctor still names it, and a later onboarding offers it again). When the install
-  or reinstall itself fails, the step says why: a build dnf no longer has (dnf5's and
-  dnf4's wording; `sudo dnf upgrade -y shadow-utils` instead), apt's out-of-date lists
-  (`sudo apt-get update` first), or otherwise what the command reported, to fix before
-  running it again. On other
-  distributions the fix says what to install or reinstall. The workbench's readiness
-  item, a loadout run refused for this, and every command that first makes Podman ready
-  (Session start, `axocoatl run`, `recipe build`, `connect codex`, the browser
-  containers and SearXNG) name the packages too; the latter said only `podman readiness
-  check did not complete safely` with Podman's error. A sandbox check container that
-  still fails on `ping_group_range` names the same fix. The files are not judged when
-  ranges come from SSSD (`nsswitch.conf`), or when Podman is reached through
-  `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection: that Podman's own
-  `podman info` decides, as before. If it maps one id, the fix says to add the range
-  where that Podman runs, then, as that Podman's user there, to run `podman system
-  migrate` and then restart its API service (either one alone keeps one id mapped).
-  For a macOS machine, that is inside it with `podman machine ssh`, then restart the
-  machine. On Linux a `unix://` socket may be another user's Podman on this computer;
-  on a Mac it is usually a machine's API socket. Onboarding runs nothing for it (no
-  usermod, and no `podman system migrate` here, which the remote client refuses).
+  namespace Podman's pause process already holds. After a user's range was removed (seen
+  in the release gate's CI case), that namespace kept the old range, so doctor said OK
+  and exited 0 while every `keep-id` container, which Podman maps from the files, failed
+  in crun with "write to `/proc/sys/net/ipv4/ping_group_range`: Invalid argument", and
+  onboarding showed only that message. On Linux, when Podman runs on this computer, both
+  now read the files (by user name or uid, as Podman does): no range, or fewer than 65536
+  ids, is a FAIL ("User ID ranges", so doctor exits 1) whose fix is `sudo usermod
+  --add-subuids <first>-<last> --add-subgids <first>-<last> <user> && podman system
+  migrate`, with the first 65536 ids from 100000 up that no line of either file uses
+  (100000-165535 whenever no line uses those, for example when the files are empty). When
+  only one file is short, the finding names that file and usermod adds a range to it
+  alone. When the files leave no free range from 100000 up, no range is named: the fix
+  says to choose one, with only the short file's `usermod` option. Onboarding asks before
+  running it and, under `--yes`, runs it only with `--allow-sudo`. A range in the files
+  that Podman has not picked up yet fails with `podman system migrate` alone (no sudo; it
+  stops running containers). Rootless Podman maps a range with `newuidmap` and
+  `newgidmap`, which it looks up on `PATH` only; doctor now looks there too. When one is
+  missing, or is neither setuid nor given file capabilities, `podman info` maps only the
+  user's own id (a pause process started before the range was added). Usually, with a
+  range in the files, it fails instead: `command required for rootless mode with multiple
+  IDs: exec: "newuidmap": executable file not found in $PATH`; once a pause process has
+  run, Podman logs the same failure with its quotes escaped and a suggestion to try
+  `podman system migrate`, and both forms are recognized. Doctor's Podman line now names
+  the package that ships them, where it said to run `podman info`. Onboarding offers it
+  after asking, like the Podman install (under `--yes` only with `--allow-sudo`):
+  `sudo apt-get install -y uidmap && podman system migrate` on Debian and Ubuntu (Podman
+  only recommends `uidmap`). An install does nothing for a package that is installed
+  (shadow-utils always is on Fedora and RHEL), even when a helper's file is gone or lost
+  its setuid bit or file capabilities. So doctor and onboarding ask the package manager
+  (`dpkg-query`, `rpm`, `pacman`) and then offer its reinstall:
+  `sudo apt-get install --reinstall -y uidmap`, `sudo dnf reinstall -y shadow-utils`, or
+  `sudo pacman -S --noconfirm shadow` on Arch. Such a helper is reported as missing
+  though its package is installed, not as not installed. A helper in `/usr/bin` while
+  `/usr/bin` is not on `PATH` is reported as that. A copy earlier on `PATH` that the
+  package does not own is to be deleted. No install is offered for either. When an
+  install or reinstall runs and the helpers still cannot map, onboarding says so and runs
+  nothing after it, and neither doctor nor a later onboarding offers the same command
+  again (next entry). When the install or reinstall itself fails, the step says why: a
+  build dnf no longer has (dnf5's and dnf4's wording; `sudo dnf upgrade -y shadow-utils`
+  instead), apt's out-of-date lists (`sudo apt-get update` first), or otherwise what the
+  command reported, to fix before running it again. On other distributions the fix says
+  what to install or reinstall. The workbench's readiness item, a loadout run refused for
+  this, and every command that first makes Podman ready (Session start, `axocoatl run`,
+  `recipe build`, `connect codex`, the browser containers and SearXNG) name the packages
+  too; the latter said only `podman readiness check did not complete safely` with
+  Podman's error. A sandbox check container that still fails on `ping_group_range` names
+  the same fix. The files are not judged when ranges come from SSSD (`nsswitch.conf`), or
+  when Podman is reached through `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote
+  connection: that Podman's own `podman info` decides, as before. If it maps one id, the
+  fix says to add the range where that Podman runs, then, as that Podman's user there, to
+  run `podman system migrate` and then restart its API service (either one alone keeps
+  one id mapped). For a macOS machine, that is inside it with `podman machine ssh`, then
+  restart the machine. On Linux a `unix://` socket may be another user's Podman on this
+  computer; on a Mac it is usually a machine's API socket. Onboarding runs nothing for it
+  (no usermod, and no `podman system migrate` here, which the remote client refuses).
+- **A reinstall of the id-map helpers that did not help is remembered.**
+  - Onboarding may install or reinstall the package of newuidmap/newgidmap. When that ran
+    and left them unable to map, it is kept in `onboarding/id-map-attempt.json` in your
+    Axocoatl data directory. The same happens when it failed in a way the same command
+    cannot get past: dnf cannot reinstall a build no enabled repository has, or apt's
+    lists do not have the package.
+  - A failure the network or a repository may have caused (for example
+    `Curl error (6): Could not resolve host`) is not kept, and the next run offers the
+    command again.
+  - `axocoatl doctor` and later onboarding runs say it, with its date, and do not offer
+    the same command while the helpers are the same files.
+  - Onboarding makes that directory, and the data directory above it when it is the first
+    to, owner-only whatever the umask. Under `umask 002` (Ubuntu 24.04's default) they
+    would otherwise be group-writable, which the daemon refuses.
+  - On Arch, doctor reads pacman's file list and pacman.conf's `NoExtract` and
+    `NoUpgrade`. Measured with pacman 7.1: `NoExtract` makes a reinstall remove the
+    helper and write none, and `NoUpgrade` writes it as `.pacnew`.
+  - dpkg's reasons are said once for both helpers ("remove that line" when one
+    `path-exclude` line leaves out both). A `HOME` of `/` no longer marks every helper as
+    foreign. Commands to run are in backticks.
+  - Run in Arch Linux ARM and ubi9 containers.
 - **Hardened commands can rename files into other directories.** From Landlock ABI 2
   (Linux 5.19), a Landlock domain that does not handle `REFER` refuses every rename or
   link into another directory. The hardened supervisor's domain handled only creating
@@ -634,54 +1104,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do outside it; creating block devices stays refused. Landlock ABI 1 cannot handle
   `REFER`, so on Linux 5.13 to 5.18 such renames are still refused, and the probe names
   them. The embedded execution supervisors were rebuilt with this change.
-- **One upstream error from the reviewer's model no longer ends a run.** When a required
-  reviewer's model call failed after its response had started (an HTTP 502 from
-  OpenRouter, seen live), the provider retry did not apply, the review recorded "The
-  reviewer did not finish" and the run ended needing attention. When the reviewer's
-  call fails with a transient error (a 429, a 5xx, a timeout or a reset connection,
-  the same policy as provider retries), the host now runs that review round again,
-  once per round in an epoch, with the same prompt about the same result. The run
-  takes a round, as asking again for a verdict does, so it happens only while a round
-  remains. A second transient failure, a 400, 401, 402 or 403, a refusal, a safety stop
-  or a failure whose cause is not recorded ends the review as before. The run record
-  lists the retry as a provider retry of the reviewer with its HTTP status, and the
-  Outcome counts it.
-- **A run leaves no `node_modules` in a repository that had none.** A Node project's
-  Session container mounts its own dependency volume over the repository's
-  `node_modules`. When the repository had none, the OCI runtime made that directory in
-  the person's tree as the container's root: on Linux, under rootless Podman with the
-  hardened workload every loadout run uses, a subordinate uid with mode `drwxr-xr-t`, so
-  the person's own `npm install` or `npm ci` then failed with `EACCES: permission denied,
-  mkdir 'node_modules/…'` until they removed it; on macOS it was the person's but stayed
-  behind after every run. Axocoatl now makes that directory as the person before the
-  container starts and marks it with a random value in the extended attribute
-  `user.axocoatl.mountpoint`. It removes it again, if it is still empty, still carries
-  that value, and no container Podman lists has a mount on it: when it removes a
-  Session's container (at Close, when `axocoatl dev` stops, or, after a daemon was
-  killed, when the next daemon removes the containers it left, at that daemon's start or
-  at its first Session when the Podman machine was stopped then; if Podman cannot list
-  those containers at that point, the directory stays), before it starts one, and once a
-  start that mounts it has its container. A repository's own `node_modules`, one the
-  person makes in its place (even when ext4 gives it the same inode number), and what
-  the person installs into it stay theirs; on a filesystem without user extended
-  attributes, Axocoatl compares device, inode and birth time instead, which a directory
-  made again at once can match. A container of the person's own keeps the directory
-  while that container exists when it bind-mounts the directory, mounts an overlay
-  volume of it (`-v …:O`) or a `local` volume made with `o=bind` and the directory as
-  its device (a Compose bind volume), or bind-mounts a directory above it and mounts a
-  volume, a bind or a tmpfs where the directory is (a development container). Axocoatl
-  compares those paths as Podman reports them and, when that settles nothing, as they
-  resolve on the host at that moment, on threads of their own and for at most 5 seconds
-  each time it checks. When resolving a path fails other than by finding nothing there,
-  or does not finish in time (as on a stale NFS, SMB or sshfs mount), the directory
-  stays. When Podman cannot say which containers mount it, it stays too. Removing a
-  container of the person's own runs nothing, so the directory goes at Axocoatl's next
-  such start or removal, and stays if the daemon stops first. Among the mounts Axocoatl
-  does not see are those of the containers of Docker, of rootful `sudo podman` or of
-  another Podman connection or machine; a bind through a link removed or changed since
-  its container started; the tmpfs Podman mounts for an image's `VOLUME` under
-  `--image-volume=tmpfs`; an overlay volume of a container that has never started; and a
-  volume plugin's volume. Removing the directory breaks such mounts.
+- **One upstream error, or a reviewer model that loops or answers nothing, no longer ends
+  a run.**
+  - When a required reviewer's model call failed after its response had started (an HTTP
+    502 from OpenRouter, seen live), the provider retry did not apply. The review
+    recorded "The reviewer did not finish" and the run ended needing attention.
+  - When the reviewer's call fails with a transient error (a 429, a 5xx, a timeout or a
+    reset connection, the same policy as provider retries), the host now runs that review
+    round again, once per round in an epoch, with the same prompt about the same result.
+    It first waits for the provider's `Retry-After` (at most 30 seconds), or else 4
+    seconds, doubled for each round the turn already ran again, at most 30. A
+    `Retry-After` over 30 seconds is not waited for. While it waits, the workbench shows
+    the review as under way, and Stop ends the wait.
+  - These model failures now run the round again at once, in a fresh conversation:
+    - the model kept calling tools and gave no answer even when asked for its final
+      answer without tools (the local `gpt-oss:20b` did so on the python-pytest fixture
+      in the release gate, after the checks passed);
+    - the model gave no answer and called no tool it was offered (`gpt-oss:20b` called a
+      `search` tool, which Ollama dropped);
+    - the reviewer used every tool round of its activation, or reached its token limit
+      for the activation.
+  - The run again takes a round, as asking again for a verdict does, so it happens only
+    while a round remains. The review ends as before on a second failure, a 400, 401, 402
+    or 403, a refusal, a safety stop, a request larger than the model's context, or a
+    failure whose cause is not recorded. The review's reason and the run's Needs
+    attention line now say why in the reviewer's own words. For a request larger than its
+    model takes, that is "its request needed 34,440 tokens of its model's context, more
+    than the 27,852 one request may take with its output allowance, …".
+  - The run record lists a transient retry as a provider retry of the reviewer with its
+    HTTP status, and the Outcome counts it. The control plane shows any other run again
+    as `review_rerun` evidence with its cause.
+- **A run no longer leaves a `node_modules` the person cannot write in a repository that
+  had none.** A Node project's Session container mounts its own dependency volume over
+  the repository's `node_modules`. When the repository had none, the OCI runtime made
+  that directory in the person's tree as the container's root: on Linux, under rootless
+  Podman with the hardened workload every loadout run uses, a subordinate uid with mode
+  `drwxr-xr-t`, so the person's own `npm install` or `npm ci` then failed with
+  `EACCES: permission denied, mkdir 'node_modules/…'` until they removed it; on macOS it
+  was the person's but stayed behind after every run. Axocoatl now makes that directory
+  as the person before the container starts and marks it with a random value in the
+  extended attribute `user.axocoatl.mountpoint`. It removes it again, if it is still
+  empty, still carries that value, and no container Podman lists has a mount on it: when
+  it removes a Session's container (at Close, when `axocoatl dev` stops, or, after a
+  daemon was killed, when the next daemon removes the containers it left, at that
+  daemon's start or at its first Session when the Podman machine was stopped then; if
+  Podman cannot list those containers at that point, the directory stays), before it
+  starts one, and once a start that mounts it has its container. A repository's own
+  `node_modules`, one the person makes in its place (even when ext4 gives it the same
+  inode number), and what the person installs into it stay theirs; on a filesystem
+  without user extended attributes, Axocoatl compares device, inode and birth time
+  instead, which a directory made again at once can match. A container of the person's
+  own keeps the directory while that container exists when it bind-mounts the directory,
+  mounts an overlay volume of it (`-v …:O`) or a `local` volume made with `o=bind` and
+  the directory as its device (a Compose bind volume), or bind-mounts a directory above
+  it and mounts a volume, a bind or a tmpfs where the directory is (a development
+  container). Axocoatl compares those paths as Podman reports them and, when that settles
+  nothing, as they resolve on the host at that moment, on threads of their own and for at
+  most 5 seconds each time it checks. When resolving a path fails other than by finding
+  nothing there, or does not finish in time (as on a stale NFS, SMB or sshfs mount), the
+  directory stays. When Podman cannot say which containers mount it, it stays too.
+  Removing a container of the person's own runs nothing, so the directory goes at
+  Axocoatl's next such start or removal, and stays if the daemon stops first. Axocoatl
+  removes nothing while a container it cannot list could hold the directory: when Docker
+  is installed (a `docker` that is not Podman's own, `DOCKER_HOST`, or a Docker socket),
+  when Podman lists another connection (every Podman machine on macOS has a rootful one),
+  when rootful Podman is installed on Linux (`/run/podman` exists, which the podman
+  packages of Fedora and Ubuntu make at every boot, whether or not rootful Podman's API
+  is enabled), or when `podman ps --external` lists a container. On a Mac, and on Fedora
+  and Ubuntu with their podman packages, the directory therefore stays, empty and the
+  person's, and the daemon logs why once per mount point and reason. A container that has
+  never started, or that mounts a volume plugin's volume, keeps every such directory
+  until it starts or is removed. A container run `--privileged`, with `CAP_SYS_ADMIN`, or
+  confined by neither SELinux (`container_t`, enforcing) nor AppArmor
+  (`containers-default`, which rootless Podman does not apply) can mount in a user
+  namespace of its own (measured with Podman 6.1.4 and `label=disable`, and with rootless
+  Podman 4.9.3 on Ubuntu 24.04). Such a container keeps the directory when it takes a
+  directory above it, a `--rootfs` counts as such a directory, and the daemon logs which
+  container once. When one container has a mount on the directory and another only could,
+  the first is the one named. Among the mounts Axocoatl still does not see are those of
+  rootful `sudo podman` on a Linux computer without `/run/podman` (a Podman not installed
+  from such a package), and of other engines (nerdctl, LXC); a bind through a link
+  removed or changed since its container started; a mount that reaches the directory
+  through another mount of it; and the tmpfs Podman mounts for an image's `VOLUME` under
+  `--image-volume=tmpfs`. Removing the directory breaks such mounts.
 - A run that ended at admission (a failed environment or setup) reported "0 recorded
   events" in its network summary; it now counts what the Session's record holds.
 - The `sandbox.egress` warning under `sandbox.network: bridge` said `allow` was
@@ -704,10 +1209,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lock file `.axocoatl-daemon.lock.v1`. A copy usually has new inodes (an in-place
   `rm -rf` and `cp -a` on ext4 can get the same ones back, and such a restore was not
   refused) and a moved directory a new path, so 1.1.0 through 1.4.0 refused a data root
-  that was restored from a cold backup with `cp -a` (as [Data and backup](https://docs.axocoatl.ai/operate/data-backup/)
-  says to make one), brought to a new Mac by Migration Assistant or Time Machine, or moved:
-  `Failed to bootstrap daemon: … failed data-directory format ownership admission: invalid
-  or ambiguous format ownership: unsupported, incomplete, or differently owned manifest`.
+  that was restored from a cold backup with `cp -a` (as
+  [Data and backup](https://docs.axocoatl.ai/operate/data-backup/) says to make one),
+  brought to a new Mac by Migration Assistant or Time Machine, or moved: `Failed to
+  bootstrap daemon: … failed data-directory format ownership admission: invalid or
+  ambiguous format ownership: unsupported, incomplete, or differently owned manifest`.
   An installed service restarted and failed every 10 seconds without end, while
   `axocoatl doctor` passed. When only those identities differ and every other field and
   the shape of the record are exact, the daemon now records the directory's new location
@@ -722,6 +1228,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, and leaves the directory unchanged. The lock path stays a directory, so 1.0.0
   still refuses the root. After a 1.5.0 start has recorded a copied root, 1.4.0 starts on
   it too.
+- **Copied and moved data roots.** A data root copied while a 1.0 Session storage upgrade
+  was interrupted refused to start. The upgrade now finishes at the new location when it
+  had not started converting a Session. A copy taken after a conversion started is
+  refused with what to do, and `axocoatl doctor` says which case applies. A data root
+  moved to another path now removes, as its own, the Podman volumes its closed and
+  deleted Sessions left at the old path. Those volumes carried the old path's runtime
+  authority and were never removed. It also removes the SearXNG container a daemon killed
+  at the old path left, once it has exited or while no daemon runs at that path. A copy
+  (moved to another volume, or a backup restored at another path) never takes its
+  original's volumes for its own, even though they are named after the same Sessions, and
+  even when its first start was cut short. `axocoatl doctor` counts those volumes. Once
+  the original is deleted, `axocoatl session record-location --original-deleted` lets the
+  copy's next start remove them as a moved root's. The docs show how to remove the
+  volumes of a data directory that was deleted.
 - **A Session keeps working in a repository restored or copied at the same path.** After a
   restart, the first turn sent to an existing Session checks that its repository is the
   one its last turn recorded, by path and by the folder's device and inode. A repository
@@ -731,37 +1251,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The folder's inode may now differ; its path, the Session, the Workspace, the
   environment and the runtime must still be the same. A Session whose folder is gone or
   moved is still refused, naming the folder, as in 1.3.2.
-- **Safari opens the workbench from a `127.0.0.1` bookmark or sign-in link.** The
-  workbench moves `127.0.0.1` to `localhost`, a different site, and Safari leaves the
-  SameSite=Strict sign-in cookie off a navigation redirected from another site, and off
-  its reloads: since the per-daemon token (1.1.2), Safari showed "Sign in to Axocoatl"
-  there while Chromium opened the workbench. A sign-in now also sets
-  `axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, no secret, never a
-  credential). When a navigation you started yourself (`Sec-Fetch-Site: none`) reaches
-  `/` with it but without the token cookie, the daemon answers with a page that opens the
-  same address again from `localhost` itself, which sends the token cookie, and clears
-  the signed-in cookie so this happens at most once. The token cookie is unchanged, and a
-  link from another site still gets the sign-in page.
+- **Safari opens the workbench from a bookmark at `127.0.0.1` or `localhost`.**
+  - Since the per-daemon token (1.1.2) the workbench moved `127.0.0.1` to `localhost`, a
+    different site. Safari leaves the SameSite=Strict sign-in cookie off a navigation
+    redirected from another site, and off its reloads, so Safari showed "Sign in to
+    Axocoatl" there while Chromium opened the workbench.
+  - The workbench is now served at `127.0.0.1` (see Security), and a `localhost` bookmark
+    is moved there.
+  - A sign-in also sets `axocoatl-token-<port>-signed-in=1` (HttpOnly, SameSite=Lax, no
+    secret, never a credential).
+  - When a navigation you started yourself (`Sec-Fetch-Site: none`) reaches `/` with that
+    cookie but without the token cookie, the daemon answers with a page that opens the
+    same address again from `127.0.0.1` itself, which sends the token cookie. That page
+    clears the signed-in cookie, so this happens at most once.
+  - A link from another site still gets the sign-in page.
 - **Preview WebSockets stay open beside a cookie that is not ASCII.** The Preview proxy's
   WebSocket handshake to the app could not carry such a cookie and failed. So in Safari,
   one Preview page that set `junk=é; Domain=localhost` stopped the live reload of every
   Session's Preview. The handshake now forwards only the cookies that are visible ASCII;
   plain HTTP requests still forward every cookie but Axocoatl's.
 - **The workbench no longer reloads itself without end when its API answers 401 but `/`
-  does not.** The page replaced itself with `/` on every API 401, because `/` then
-  serves the sign-in page. In Safari on macOS a page can make `/` keep serving the
-  workbench while the API answers 401. Safari sends at most about 200 KB of cookies with
-  a request, longest path first, and skips each one that no longer fits. So cookies a
-  page sets for `localhost` with `Path=/api`, 51 of 4,000 bytes and then smaller ones that
-  fill what is left, leave the sign-in cookie off API requests (the 51 large ones alone
-  still leave room for it). Script on a page of a `*.localhost` address that runs in a
-  tab of its own can set them (in Safari that is no longer ever a Preview: see
-  Security). The page then
-  reloaded without end (167 times in 20 seconds in Playwright WebKit 26.4). It now
-  reloads at most once a minute, and only when it can record that in the tab's session
-  storage. Otherwise it shows "This browser is signed out" over the page, with how to
-  sign in again. For Safari it says to remove localhost's data in Safari >
-  Settings > Privacy > Manage Website Data and open the sign-in link again.
+  does not.**
+  - The page replaced itself with `/` on every API 401, because `/` then serves the
+    sign-in page.
+  - In Safari on macOS a page can make `/` keep serving the workbench while the API
+    answers 401. Safari sends at most about 200 KB of cookies with a request: longest
+    path first and, among cookies of one path, those set in a later second first, then by
+    name. It skips each one that no longer fits.
+  - So cookies that a page on another `127.0.0.1` port sets with `Path=/api`, 51 of 4,000
+    bytes and then smaller ones that fill what is left, leave the sign-in cookie off API
+    requests. The 51 large ones alone still leave room for it.
+  - The page then reloaded without end: 167 times in 20 seconds in Playwright WebKit
+    26.4.
+  - It now reloads at most once a minute, and only when it can record that in the tab's
+    session storage. A journey with a fake clock pins the minute.
+  - Otherwise it shows "This browser is signed out" over the page, with how to sign in
+    again: close the page that set the cookies, remove this browser's website data for
+    `127.0.0.1` (in Safari > Settings > Privacy > Manage Website Data it is one record
+    whose removal removes those cookies, measured with the system's WebKit on macOS
+    26.6), and open the sign-in link again.
+  - The message now closes any open modal dialog and keeps another from opening over it.
+    Before, it sat hidden under one.
+  - The same cookies with `Path=/ws` left the live connection reconnecting, with nothing
+    else said. After three failed attempts in a row the workbench now asks `/ws` with an
+    ordinary request, and that request's 401 shows the same message.
+  - With `Path=/` the cookies keep the sign-in cookie off `/` as well. The sign-in page
+    now names that cause and the same remedy.
 - **A theme change while the file editor loads no longer takes its suggestions away.**
   The vendored Monaco sets `window.monaco` before the chunk that registers the services
   of suggestions, code actions, code lenses, inlay hints and drop into editor has
@@ -770,14 +1305,435 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   started Monaco's services without them, and every editor of the page lacked those
   features until the page was reloaded. The workbench now gives Monaco a theme only
   once Monaco has loaded; Monaco takes the page's theme when it finishes.
+- **A workbench terminal closed while xterm.js still had work queued no longer throws.**
+  - xterm.js 5.3.0 queues viewport work it never cancels: a timer after the terminal
+    opens, and a frame after `reset()`. That work reads the renderer that `dispose()`
+    removed.
+  - A terminal disposed with that work pending threw "undefined is not an object
+    (evaluating 'this._renderer.value.dimensions')" in WebKit as an uncaught page error.
+    After a cross-tab Close this turned CI's WebKit leg red (push run 39911558815).
+  - The workbench now detaches the terminal at once, and disposes it after its written
+    output is parsed, a timer turn and two frames.
+  - A journey destroys a real terminal right after it opens, right after its socket
+    drops, and mid-resize. It failed with the old code in Chromium and WebKit and passes
+    with the new.
+- **Knowledge offers New note and Import Markdown only once it has read the notes.** A
+  click before the first read came back threw in WebKit and showed nothing.
 - **Workbench and loadout turns on Ollama no longer end "done" when Qwen3-Coder writes a
-  tool call as text.** `qwen3-coder:30b` on Ollama 0.40.8 sometimes writes a call
-  without its opening `<tool_call>` tag. Ollama returns such a call as the answer, so
-  the turn ended "done" without running it. The native Ollama provider now recovers
-  such calls instead of taking them as the final answer, when they end the answer in
-  Qwen3-Coder's own format, each starting a line, and every one names a tool the turn
-  offered. A call quoted in an answer (fenced, indented, inline, inside another call's
-  value, or with prose after it) stays text, and the provider recovers no JSON.
+  tool call as text.** `qwen3-coder:30b` on Ollama 0.40.8 sometimes writes a call without
+  its opening `<tool_call>` tag, and Ollama returns it as the answer, so the turn ended
+  "done" without running it. Both Ollama providers, native and OpenAI-compatible, now
+  read such calls the same way: a run of complete calls in Qwen3-Coder's own
+  `<function=…>` format that ends the answer runs when it starts at the first line that
+  begins with a call tag outside a code fence or an HTML block (`<pre>`, `<!--`,
+  `<script>` …), every call names a tool the turn offered and its values fit that tool's
+  parameters (types, required parameters, `enum`). An unfenced example of that format
+  that ends an answer therefore runs. Markup in a fence, an HTML block or indented code,
+  a call tag after other text in inline code or mentioned in a sentence, markup inside
+  another call's value, and markup that names only tools the turn did not offer stay
+  text. An answer that calls an offered tool in a way that cannot run is refused: a line
+  that starts a call but no runnable run (prose after the calls, a malformed block, an
+  unoffered tool next to an offered one, values that do not fit, an answer cut at its
+  output limit inside a call), a call block written after other text on its line
+  (`Looking.<function=glob>` and its parameters), or a call written as JSON that ends the
+  answer. Nothing from it runs; the model is asked once more (below), and when that
+  answer cannot run either, the activation fails with the reason, Ollama's done reason
+  and the number of tools offered. The workbench says "The model wrote a tool call as
+  answer text that Axocoatl cannot run", the turn needs attention instead of ending
+  "done" with nothing run, and the Outcome of `axocoatl run` lists it as
+  `unrunnable_tool_call`, not as a provider failure. Text from a line that starts a call
+  appears only when the response completes, and a `<tool_call>` that ends the prose stays
+  hidden until the next line shows whether it opens a call, also when Ollama streams it
+  token by token; a call tag mentioned inside a line no longer holds back the rest of the
+  answer. When a response also has a call Ollama returned as a tool call, only those
+  calls run and the markup stays text. Nothing is read from the text when the request set
+  stop sequences or asked for JSON. Numbers in such calls are typed only from exact JSON
+  literals (`0755` stays text, as does an integer beyond 64 bits).
+- **No JSON in an Ollama answer runs as a tool call.** The OpenAI-compatible Ollama
+  provider ran `{"name": …, "arguments": …}` objects and `<tool_call>{…}</tool_call>`
+  blocks found anywhere in an answer, a fenced example too, and the actor ran any
+  `{"tool": {…}}` object in an answer from either Ollama provider. The actor's ids for
+  those (`Axo000000`, …) started again in every response, so a second such call in a
+  native Session made every later request fail ("invalid or duplicated native history
+  tool call"). A JSON call to an offered tool that ends the answer (the whole answer, its
+  last lines, or a `<tool_call>` block; its arguments an object or a string holding one)
+  is now refused as above; JSON in a code fence or followed by more text stays the
+  answer. A call read from text gets an id that is unique in the Session
+  (`call_text_<16 hex digits>_<n>`), also after a round was dropped to fit the context.
+  This changes what Qwen2.5-Coder can do: `qwen2.5-coder:14b` wrote its calls as a bare
+  JSON object in Axocoatl's tests in July 2026, which 1.0.0 through 1.4.0 ran through the
+  OpenAI-compatible provider; 1.5.0 refuses them. Onboarding no longer suggests it, nor a
+  model whose Ollama `capabilities` lack `tools`, and says why; `axocoatl doctor` warns
+  about it for an Agent that lists tools; the docs' examples use `qwen3-coder:30b`.
+- **A native Ollama response that cannot be used is asked again once.** A completed
+  response with no answer and no tool call (`gpt-oss:20b` can end one with only
+  reasoning, and an Ollama runner that ran out of GPU memory answers so too), a call to a
+  tool nobody offered under a name that cannot be answered as a tool error (Harmony's
+  `browser.search`), or a tool call written as text that cannot run (now also an answer
+  that ends with a bare `<tool_call>`) is refused, with its usage settled. The model is
+  then asked once more within the activation, with a note that says what the response
+  held, as a call admitted and budgeted on its own and recorded as a provider retry; the
+  note is not kept. A second such response, or one the budget cannot ask again, fails the
+  activation: a text call as `unrunnable_tool_call`, as before, anything else as the new
+  `no_answer` ("The model gave no answer and no tool call Axocoatl could run"), not as a
+  provider failure. A required reviewer's round still runs again once after that.
+- **An Ollama model that another program unloads while Axocoatl reads its context is
+  loaded again.** To read a native Ollama model's context, Axocoatl loads it and reads
+  `/api/ps`. When another program on the same Ollama loaded a model in between, Ollama
+  unloaded this one, and a run was refused (exit code 3) or Team & budget's Apply failed
+  with "the exact local model was not listed". The model is now loaded again, three loads
+  in all. Past that the refusal says "Ollama unloaded MODEL each of the 3 times Axocoatl
+  loaded it to read its context", names what `/api/ps` lists instead (or that nothing is
+  loaded, with the keep-alive setting) and what to do, and a run's admission classes it
+  as infrastructure (exit code 5).
+- A run of a loadout whose writer changed no file of the repository has the new warning
+  `run_changed_nothing` ("The run changed no file of the repository: its writer (writer)
+  made no change that the result keeps"), so a check that failed is seen to have run on
+  the repository as it was. It never changes the verdict.
+- **How each model response ended is recorded.** Every completed model response of a
+  native Session activation adds a `provider_response` event to the activation's stream:
+  how it ended (`stop`, `tool_use`, `max_tokens`, `content_filter` or `error`), how many
+  tools its request offered and how many calls it returned. History, its JSON and
+  Markdown export, the run's record bundle and the workbench's observed route show it ("1
+  tool offered · 1 call"). Axocoatl 1.4.0 does not read these records: see "Going back to
+  1.4 is the backup" under Changed.
+- Native Ollama requests no longer send an empty `stop` list, which replaced the stop
+  strings of the model's Modelfile (`qwen3-coder:30b` has `<|im_start|>`, `<|im_end|>`
+  and `<|endoftext|>`).
+- **The default Lead prompt asks for tool calls first.** After a sentence that announces
+  a call, `qwen3-coder:30b` samples a plain `<` about as often as its `<tool_call>` token
+  and then writes the call as text. In 96 replays of a workbench Lead's first request on
+  Ollama 0.40.8, the numbered prompt that onboarding and `axocoatl init` wrote led to a
+  call written as text 12 times; the new prompt ("Answer only with tool calls until the
+  change is made and checked; then write a short summary of what you changed. You own
+  this change: …", every earlier step kept) did so none of the times. Onboarding,
+  `axocoatl init`, the example configurations and the docs use it, and
+  `axocoatl onboard --update` writes it into a Lead that onboarding wrote; a Lead you
+  edited keeps its prompt.
+- The opt-in live Ollama tools test (`AXOCOATL_TEST_OLLAMA_TOOLS=1`) accepts a model that
+  calls the tool more than once (`qwen3-coder:30b` did in 1 of 4 runs). It checks for a
+  call with the requested value, one model call per tool round plus the answer, and the
+  answer.
+- **Requests to this computer never go through a proxy.** reqwest, the HTTP library of
+  every Axocoatl client (rmcp's for MCP servers over HTTP too), sends requests through
+  `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`, even to `127.0.0.1` and `localhost`,
+  unless `NO_PROXY` names the host. So with `HTTP_PROXY` set, `axocoatl run` and
+  `connect codex --refresh` sent their requests to the local daemon, with its API token,
+  to the proxy in plain text, and failed, and so did doctor's and onboarding's daemon
+  checks, the Ollama probes and model listing, the OpenAI-compatible Ollama provider,
+  the workbench's Preview proxy, and a provider, webhook or MCP server at a `localhost`
+  address (such as LM Studio's `base_url`). When a proxy variable is set, `axocoatl` now
+  adds `localhost`, `127.0.0.0/8` and `::1` to `NO_PROXY` and `no_proxy` for itself,
+  after what they list, before anything else runs; the daemon client, the health checks,
+  the Ollama clients and the Preview proxy also ignore the proxy variables themselves.
+  Requests to Ollama never use a proxy, wherever it runs; requests to other hosts still
+  follow the variables. Sessions and runs do not support a proxy: the egress broker
+  connects directly.
+- **`axocoatl connect codex` says when its sign-in time ran out on Podman 6.1.** For a
+  few seconds after the login container's `--timeout`, Podman 6.1.4 still lists the
+  container while `container inspect` no longer finds it. The command said
+  `Codex's auth.json could not be read from the login container (exit status: 125)` and
+  exited 5. It now waits up to 10 seconds for Podman to remove the container, then says
+  the sign-in was not completed within the time, with exit 2.
+- **A run stops its Session's containers when it ends.** A finished run, a run that ended
+  at its environment and a run whose driver failed left the Session's container and
+  egress sidecar running until the daemon stopped. An error after admission made the
+  Session left the Session open. Now the runtime stops at the end of every run, before
+  the network summary, the receipt and the Outcome. The Session stays open for Keep, the
+  record bundle and the workbench, which starts the container again when it needs it. A
+  stop that fails is the warning `session_runtime_not_stopped`, and a run refused after
+  its Session was made closes that Session.
+- **Ctrl-C while the daemon is still admitting a run no longer leaves its Session
+  running.** Interrupting `axocoatl run` during the Session's setup or the check probe
+  dropped the admission with the request. The Session's container and egress sidecar then
+  ran until the daemon stopped, no run was recorded, and a retry with the same request id
+  was refused as "being admitted" until a restart. The daemon now finishes the admission
+  without its client: a refused run is cleaned up, and an admitted one stops before its
+  first turn as interrupted, with its containers stopped. `axocoatl run` exits at once
+  with code 6 and says what the daemon does. Checked on Podman by interrupting a run
+  during its setup and during its check probe. A run whose record was made before a later
+  admission write failed now ends in the record as failed, instead of being listed as
+  preparing until a restart.
+- **`axocoatl run` checks a run before it builds a toolchain image.** A run that could
+  not start, such as `fix-claude-code` without `axocoatl connect claude-code`, first
+  built its image (the claude-code and Python image is 894 MB) and was then refused with
+  exit code 3. The command now asks the daemon's dry run first, without loading a model,
+  and refuses such a run with nothing built.
+- **A run said "model identity or endpoint availability differs" when OpenRouter reported
+  every endpoint of the model down.** On 2026-10-23 `qwen/qwen3-coder` had no healthy
+  endpoint (status -5 and -2, 0 to 93% of requests succeeding over 30 minutes), and runs
+  failed with that message. An endpoint that fits but has a status other than 0 is now
+  told apart. When every such endpoint is unavailable or degraded, the run stops before
+  any model call (exit code 5). It names each endpoint's status and success rate, says
+  this is OpenRouter's status and not the setup, and says to try later or choose another
+  model. An endpoint under another model id is said as that. A degraded endpoint is never
+  used, even when no endpoint is healthy: it fails part of its calls, some part way and
+  after they cost credits. When a Session's endpoint is reported degraded later, its
+  calls move to another endpoint (below), where the Session said "review a new profile".
+- **OpenRouter key problems at a terminal no longer end onboarding's Step 3.** If
+  OpenRouter refuses a key you connected, or a stored secret holds no OpenRouter key,
+  onboarding now offers its own browser sign-in instead. Before, it left a step telling
+  you to run `axocoatl connect openrouter` and onboarding again. When the sign-in
+  replaces a key written in the configuration, the backup leaves that key out (onboarding
+  says so), and the file's comment says the key is in the secret store. `--plan` no
+  longer makes the secret store's directory owner-only while it reads it.
+- **Below 48 GB, a Mac whose Ollama answered at first but was not ready after setup** was
+  offered the built-in pair "not tested at this memory size", and told to pull models it
+  already had. It is now offered the pair it has.
+- **Long questions and menus no longer leave stale lines.** Questions wider than the
+  terminal, in onboarding and in `axocoatl connect openrouter`, no longer print their
+  first line twice. A menu item wider than the terminal no longer leaves stale lines when
+  the menu redraws: each item is listed whole above a menu cut to the terminal's width,
+  and the answer is shown whole.
+- **A Podman machine Axocoatl starts outlives what started it.** Onboarding,
+  `axocoatl dev`, runs, `recipe build`, `connect codex` and the Always-On Service run
+  `podman machine start` in a session of its own. A Ctrl-C, a closed terminal, or
+  stopping or restarting the service no longer kills the VM. On macOS, vfkit and gvproxy
+  kept the starter's process group, and launchd ends a stopped job's group. Before a
+  start, Axocoatl removes the API socket a killed VM left behind when nothing listens on
+  it. That socket made the next `podman machine start` fail with exit 125 ("bind: address
+  already in use"). Onboarding says when it removed one. A daemon that shuts down while
+  it starts the machine no longer ends the start half-way.
+- **`axocoatl service` start, stop and restart.** On macOS, `service start` failed on a
+  loaded agent ("Bootstrap failed: 5: Input/output error"). Choosing the Always-On
+  Service at onboarding Step 6 while it ran therefore ended not ready. `service start`
+  now leaves a running service running and loads again one that is loaded but does not
+  run. `service stop` and `service uninstall` return once the daemon has exited. New
+  `axocoatl service restart` loads the installed definition (on systemd it runs
+  `restart`). Step 6 installs the service and restarts it, asking first when one runs.
+  Doctor, `axocoatl run`, the installer, onboarding and the troubleshooting pages give
+  `axocoatl service restart` where they said to run `service stop` and `service start`.
+- **`service start` and `service restart` say whether the daemon started.** They said
+  "started" and exited 0 while the daemon failed at bootstrap and launchd or systemd
+  started it again and again. They now wait up to 60 seconds for the daemon to say it
+  started. They exit 1 with the line it logged when its start fails (a data directory it
+  refuses, an invalid configuration, a port or the IPC socket in use), or when it exits
+  without saying why. Onboarding's Step 6 shows that line. On Linux they first clear
+  systemd's count of recent failed starts, which refused a start after five within 10
+  seconds, so a restart right after fixing the cause starts the daemon. Run live with
+  launchd on macOS 26.6 and with systemd 255 on Ubuntu 24.04.
+- **A stopped service gets time to end its Sessions.** launchd killed the daemon 5
+  seconds after asking it to stop, because the LaunchAgent set no `ExitTimeOut`. The
+  LaunchAgent now sets 60 seconds, the most launchd allows: on macOS 26.6 a larger value
+  is listed and applied as 60. systemd gives 90 seconds, its default. A daemon killed
+  after that leaves Session containers, which its next start removes.
+- **The Always-On Service starts on Linux.** The systemd unit quoted its
+  `WorkingDirectory=`, which systemd refuses ("path is not absolute"), so the service
+  never started (Ubuntu 24.04, systemd 255). `service start` still said it had, because
+  `systemctl enable --now` exits 0 when the start fails. Now the path is written as
+  systemd reads it, and `service start` fails when systemd cannot start the unit. Install
+  refuses a configuration directory whose path ends with a backslash, which would join
+  the next unit line to it. `service stop` leaves a unit that does not run as it is. A
+  unit written by an earlier release needs `axocoatl service install` and
+  `axocoatl service restart` once.
+- **The first run does not use an older daemon.** Every release before 1.5.0 answers
+  `/health` without a version. Onboarding's first-run handoff took such a daemon for
+  another program and used it, so a service or `axocoatl dev` still running an older
+  axocoatl got the first run. Onboarding now asks to restart the service, or to stop that
+  daemon. It first installs the service again from this axocoatl when the service runs
+  another program. It uses the daemon only once it answers as this version and started
+  after the configuration changed. When the daemon's process is not visible, it waits on
+  the port. It waits 10 seconds for a daemon's `/health` (it was 3), so a slow daemon on
+  a loaded computer is not taken for another program.
+- **A socket path too long for the daemon says so, with the fix.** The daemon's IPC
+  socket is at `~/.axocoatl/run/axocoatl.sock`, or at
+  `$XDG_RUNTIME_DIR/axocoatl/axocoatl.sock`. When that path is longer than a Unix socket
+  path may be (103 bytes on macOS, 107 on Linux; a long home directory does this),
+  `axocoatl dev` and `serve` stopped with "path must be shorter than SUN_LEN" and
+  "Another Axocoatl daemon may already be running." Now:
+  - They say the path is too long, give its length and the limit, and say to set
+    `AXOCOATL_SOCKET_PATH` to a shorter path (or use a shorter home directory or
+    `XDG_RUNTIME_DIR`).
+  - They make no directory for that path.
+  - They say another daemon runs only when one answers on the socket.
+  - `axocoatl doctor` fails its Daemon line with the same reason instead of saying to
+    start a daemon.
+  - Onboarding starts no first-run daemon and installs no Always-On Service that could
+    not listen. When a first-run daemon stops at once, the step left quotes the line it
+    logged when that line is a failed bootstrap or a failed reservation of the IPC
+    socket.
+  - `axocoatl service install` records an absolute `AXOCOATL_SOCKET_PATH`, and warns when
+    the service's daemon could not listen. `axocoatl service status` shows that failure
+    as the last start failure.
+- **A slow Podman no longer stops the daemon's start.** Before it starts, the daemon asks
+  Podman which Session containers an earlier start left, and it still does not start
+  without an answer.
+  - Before: a `podman ps` slower than its 10 s bound (seen in a loaded Ubuntu VM) ended
+    the start with "early bootstrap could not prove containers exposing control-plane
+    root '…' absent: Tool execution timed out after 10s".
+  - Now: each Podman command keeps its bound. A command that does not answer within it is
+    asked again, for up to 3 minutes in all. Any other Podman error still stops the start
+    at once.
+  - When Podman never answers, the start says how long it waited, which command did not
+    answer, that Podman may still be starting or be held by another Podman command, and
+    to check that `podman ps` answers.
+  - Measured: Podman 4.9.3 (Ubuntu 24.04) held `podman ps` for 69 s while another
+    `podman rm` deleted a container with 600,000 files. Podman 6.1.4 in a Mac's Podman
+    machine answered within 4.4 s while an image loaded and containers came and went.
+  - A Podman readiness probe that times out now says "Podman did not answer `podman info`
+    within 15 s" instead of "Tool execution timed out after 15s".
+- **Tool-call numbers reach the tool exactly.** serde_json's default float parser landed
+  1 ULP off for about a third of random f64 values. `float_roundtrip` is now on. A native
+  Ollama test of 2,048 values (576 changed before) and a property test pass. The embedded
+  execution supervisors were rebuilt with it; three builds in different directories gave
+  byte-identical payloads (`docs/EXEC_SUPERVISOR_BUILD.md`).
+- **The installer works with the curl snap.** On Ubuntu 24.04 without curl, the shell
+  suggests a snap (curl 8.22.0). With it, the installer failed with "client returned
+  ERROR on write", because the snap has its own `/tmp`. The installer now writes what
+  curl downloads itself. Measured in an Ubuntu 24.04 VM with only the snap.
+- **An expired budget says how to renew it, and Edit renews it.** Every budget has an
+  expiry. Team & budget suggests 24 hours ahead when it fills in an Agent, and a run's
+  Team continued in the workbench expires when the run's `wall_clock` ends (60 minutes
+  for `fix`). A request after that used to fail with "approved Session grant expired
+  before Begin; review the team budget", and Team & budget then refused the Team as it
+  was ("NAME's budget expiry has passed; choose a time in the future") until a new time
+  was typed for each Agent. Now:
+  - The request is refused before any model is asked and says "NAME's budget expired
+    before this request could start; open Team & budget and select Edit: it fills in a
+    new expiry. Then Preview and Apply".
+  - Team & budget says when the budget expired. Edit fills in a new expiry, 24 hours from
+    then, and says so. Preview shows it beside the approved one before Apply approves it.
+    The limits and the Agents' conversations are kept.
+
+  After an upgrade from 1.4 the budget has usually passed, so this message comes before
+  the 0.20.6 one. The daemon's refusal of a passed expiry names the Agent, where it said
+  "Enter an explicit budget expiry for every Agent". A daemon test lets a budget expire,
+  checks the refusal and that no model is asked, renews it as Edit does, and runs the
+  next turn. A browser journey renews an expired budget through Edit, Preview and Apply,
+  in Chromium and WebKit.
+- **A Team whose model, Ollama or OpenRouter endpoint changed is observed again when
+  applied.** A Team keeps the provider profile each Agent and helper was reviewed with.
+  Its turns used to fail, and kept failing after an unchanged Apply:
+  - "observed local model identity changed; resolve a new execution profile" or "observed
+    local model capabilities changed": the Ollama model was pulled again (another
+    digest), is listed under another name, or reports other tool-calling or thinking
+    support.
+  - "configured Ollama endpoint differs from the admitted native profile":
+    `providers.ollama.base_url` names another Ollama.
+  - "the retained OpenRouter endpoint, capabilities, price ceiling or token limits
+    changed; review a new profile": OpenRouter changed the endpoint (a price, a limit,
+    its parameters) or removed it.
+
+  Each refusal now says what changed and what to do:
+  - "MODEL was pulled again since this Team was reviewed (digest …, now …); review Team &
+    budget again: applying the Team observes the model again". A model listed under
+    another name or reporting other capabilities is said the same way.
+  - "providers.ollama.base_url names URL, but this Team was reviewed with the Ollama at
+    URL; review Team & budget again: applying the Team observes the model at the endpoint
+    configured now (or set providers.ollama.base_url back and restart Axocoatl)".
+  - "OpenRouter lists other terms for MODEL's endpoint TAG than when this Team was
+    reviewed (input price $1/M, now $2/M); review Team & budget again: applying the Team
+    observes MODEL's endpoints again". Also when OpenRouter no longer lists the endpoint,
+    or it can no longer be used.
+
+  An unchanged Apply observes such an Agent or helper again, and Preview gives the reason
+  (`observed_again` in `POST /api/sessions/{id}/team/preview`). An OpenRouter Agent
+  continues on the cheapest endpoint that fits its budget. To find out, Preview reads
+  only the provider's metadata: nothing is loaded or sent to a model, and a provider that
+  has not answered within 15 seconds is not taken for a change. An OpenRouter endpoint
+  that is only unavailable right now, or a model that no endpoint can serve, is reported
+  as before and not observed again.
+
+  Of the changes during an Agent's work, only a change in vision support now says "Ollama
+  reports other capabilities for MODEL than when this Agent's work started; send the
+  request again"; a change in tool calling or thinking gets the refusal above. All three
+  used to say "local model capabilities changed; reconnect the execution profile". Daemon
+  tests restart the daemon on another Ollama endpoint, pull the model again, and change
+  an OpenRouter endpoint's price, then check each refusal, the re-apply and the next
+  turn.
+- **A Session's next request after a restart no longer holds its Workspace when it cannot
+  start.** After a daemon restart, a Session whose last turn had ended held its Workspace
+  from its next request until that turn ended. When the request then failed to start, for
+  example on a provider refusal such as the 0.20.6 message, every later `axocoatl run`
+  and other Session in that repository was refused as busy until the Session was closed
+  or the daemon restarted. The Session is now between turns, as after a turn that ended
+  in the running daemon. A daemon test restarts the daemon and checks this.
+- **A rate-limited or failing OpenRouter endpoint no longer ends the call while another
+  endpoint of the model can take it.** Native OpenRouter Sessions pinned the cheapest
+  endpoint that fits an Agent and retried a failure once after 2 s. On 2026-10-23, 5 of 6
+  runs of the default OpenRouter setup ended needing attention because the reviewer's
+  endpoint (`openai/gpt-oss-120b` on Near AI) answered HTTP 429 "rate-limited upstream"
+  to the call and its retry. OpenRouter's catalog, read about an hour later, listed 20
+  other endpoints of the model as healthy.
+  - Team & budget retains, cheapest first, up to three more healthy endpoints of the
+    model that can take over each call: at least the selected endpoint's context and
+    prompt limit, the same output limit and reasoning setting, and the smallest call
+    within the approved budget. Each activation adds, as it opens, every other endpoint
+    OpenRouter lists healthy then that passes the same checks.
+  - A call an endpoint fails before producing anything is sent at once to the next
+    endpoint that can carry it and that the grant can pay for: an upstream 429, a 408 or
+    5xx, a timeout or closed connection, a 429, 408 or 5xx reported inside an answer that
+    had produced nothing, an endpoint OpenRouter reports degraded now, or one whose
+    contract changed. The moved call is a new call reserved at that endpoint's own
+    prices, and that endpoint is checked against the catalog before the call is sent.
+    Each request still pins one endpoint with OpenRouter's fallbacks off, and an answer
+    that names another provider is refused.
+  - Budgets are never raised. A move the grant cannot pay for is not made, and the call
+    falls back to the retry on its own endpoint. A later call the grant cannot pay for on
+    the endpoint calls moved to goes to the endpoint that reserves least.
+  - OpenRouter's limit on the account (a 429 that names no upstream) is waited out on the
+    same endpoint. When no endpoint is left, the Session waits once for the longest
+    `Retry-After` the endpoints that failed the call stated (at most 30 s; 2 s without
+    one). It then tries them again, starting on the last one. An endpoint that asked to
+    wait longer than 30 s is not sent to again for that call.
+  - When every endpoint fails, the error says that OpenRouter reports every endpoint of
+    the model that the Agent may use as rate-limited or unavailable right now. It names
+    each endpoint with its failure, says this is a provider outage and not the setup, and
+    says to try again later or choose another model. It never quotes OpenRouter's raw
+    JSON, its hint to add a provider key (BYOK, which native Sessions refuse), or an
+    error page that is not OpenRouter's JSON.
+  - The run record shows each move as a provider retry that names both endpoints. The
+    run's notes, the Outcome's new `openrouter_endpoints` and the receipt's
+    `program_version` (`openrouter endpoint deepinfra/bf16 (DeepInfra)`) name the
+    endpoints that answered each model and the calls moved away from each.
+  - Profiles retained by 1.4.0 and by earlier 1.5.0 builds load byte for byte, and their
+    activations fail over too.
+  - Tested with the real provider and Session boundary against a stub OpenRouter server:
+    a move at once on a 429; every endpoint limited, in refusals and inside answers; the
+    account limit; a fallback whose price changed; a fallback answering as another
+    provider; a move the grant cannot pay for; the longest `Retry-After` of a round; and
+    an endpoint asking for 60 s.
+- **OpenRouter usage is exact when OpenRouter reports it.** Every measured OpenRouter run
+  said "cost unknown (reserved up to $X) ... (known subtotal: some usage was not
+  reported)", including runs whose answers all completed. In the records of the
+  2026-10-23 runs, the writer's usage was complete and the reviewer's was unknown. Each
+  call OpenRouter refused with HTTP 429 had kept its whole reservation as unknown spend.
+  - A call OpenRouter refused with an HTTP status before generating anything, or one
+    never sent, now settles at zero tokens and $0 and gives its reservation back.
+    OpenRouter bills the tokens a provider processed, and such a call processed none.
+  - The provider states this where the failure happens. An error inside an answer is
+    never taken as free, whatever its message says, since the endpoint may already have
+    billed reasoning.
+  - Where usage truly was not reported, the usage line names the Agent, the generation
+    and how many of its calls (`known subtotal: usage or cost not reported for
+    required-review (generation 1): 1 of 4 model calls`). The Outcome's new
+    `usage.unreported`, the workbench's run view and the JUnit report say the same. One
+    retry now reads "1 provider retry".
+- The daemon no longer keeps, for its whole life, the Ollama versions and OpenRouter
+  endpoints that served each Session. They are dropped when the Session is closed or
+  deleted.
+- **The fix for an MLX model works.** Every refusal of a model that Ollama runs with MLX,
+  or that is not GGUF, now says `ollama rm MODEL && ollama pull --runner llamacpp MODEL`.
+  This is in doctor, Team & budget, a run's admission and onboarding's list of installed
+  models. On Ollama 0.40.8 with qwen3.5:0.8b, a pull with the undocumented
+  `--runner llamacpp` flag gave the GGUF variant on a store without the model. With the
+  MLX variant installed, the same pull pulled nothing and the tag stayed MLX. After
+  `ollama rm` it gave the GGUF variant, which doctor accepted and whose contract probes
+  passed. Onboarding, when its own pull brings an MLX variant, now removes it and pulls
+  the GGUF one after asking; its repair used to leave the MLX variant in place. Doctor
+  and run admission no longer suggest a GGUF pull for an embedding, image-generation or
+  cloud model.
+- **Git sends its egress proxy credential with its first request**
+  (`GIT_HTTP_PROXY_AUTHMETHOD=basic`). Before, each Git connection was first refused with
+  `no_credential` and recorded as a refusal.
+- **The e2e recipe image builds with Ubuntu 24.04's Podman.** Podman 4.9.3's builder read
+  the recipe's heredocs as instructions ("Unknown instruction: SET"). The recipe now
+  writes its package files with printf; the lockfile and steps are unchanged. Its image
+  name changes, so an e2e image built by 1.4 is built again once.
+- **The Ollama watch reports on every release again.** On 22 and 23 October, Ollama's
+  installer started no server because it found no systemd, so the watch could not report
+  on 0.40.9-rc1 and 0.40.8. The watch now starts `ollama serve` itself, and fails when no
+  server of the version under test answers.
 
 ### Security
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its
@@ -792,12 +1748,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A local copy of a cloud model (`ollama cp gpt-oss:20b-cloud mygpt`) keeps its cloud
   host under a name no request check can recognize. A Session now opens the route only
   when Ollama on its port reports its cloud features disabled (`GET /api/status`), and
-  `axocoatl network reload` refuses to turn the route on otherwise.
+  `axocoatl network reload` refuses to turn the route on otherwise. The route also asks
+  `GET /api/status` before every request it sends: it asked only when a Session's network
+  opened or reloaded, so cloud features turned on later let such a copy reach ollama.com
+  while the Session stayed open. While Ollama does not report its cloud features off, the
+  route refuses the request with `ollama_cloud_not_off` (403, or 502 when Ollama does not
+  answer), and nothing is sent. Checked from inside a Podman container with a stand-in
+  Ollama whose status flips, and against Ollama 0.40.8 with its cloud features off and
+  on.
+- **`axocoatl run --repo` keeps to the Workspace scope rules.** A run's Session mounts
+  its repository read-write, and run admission did not check the folder. So `--repo ~`,
+  `--repo /` or a folder inside Axocoatl's data or configuration directory was accepted.
+  Admission now refuses a repository inside one of Axocoatl's own directories
+  (`workspace_protected`). It also refuses the file system root, the home folder, the
+  folders above it and a folder that contains Axocoatl's directories
+  (`workspace_too_broad`), unless you opened that folder with Open workspace… and
+  confirmed it. Both are usage problems (exit code 3), for runs and dry runs alike,
+  reported before anything is created.
+- **A broad folder's confirmation is recorded on its Workspace.** Being registered as a
+  Workspace counted as the confirmation, but 1.4 registered broad folders without asking:
+  Open workspace… had no check, and `axocoatl run --repo ~` registered the home folder.
+  Open workspace… now records the confirmation (`broad_confirmed_at`), and new Sessions
+  and runs on a broad folder need it. A broad folder that 1.4 registered is refused with
+  `workspace_too_broad` until you open it again with Open workspace… and confirm it.
 - Dependencies move to zip 9 (calamine 0.37) for RUSTSEC-2026-0367, -0368 and -0369, flaws
   in zip's `extract()`. candle-core 0.8, used for local embeddings, still depends on zip
   1.1.4; it opens `.npz` and `.pth` archives entry by entry and never calls `extract()`,
   and Axocoatl loads its embedding model from safetensors, so `.cargo/audit.toml` records
-  those three IDs as not reachable until candle-core moves to zip 9.
+  those three IDs as not reachable until candle-core moves to zip 9 (candle-core 0.11.0,
+  the newest, still requires zip 8.6). A test in axocoatl-memory fails if any file but
+  `neural.rs` uses Candle or names its `.npz` or `.pth` readers.
 - rustls-webpki moves to 0.103.16 for RUSTSEC-2026-0382 (certificate verification could
   accept distrusted intermediates), and webpki-roots and webpki-root-certs to 1.0.10 for
   RUSTSEC-2026-0381 and -0383 (bundled roots trusted distrusted emSign intermediates).
@@ -806,22 +1786,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The workbench's vendored Monaco editor is rebuilt with DOMPurify 3.4.17 for
   GHSA-cg2g-xh64-v4q7, GHSA-mrv2-3pqr-j5jr and GHSA-c6gr-qvv4-5v3f. Monaco's sanitizer
   sets none of the affected `SAFE_FOR_TEMPLATES`, `IN_PLACE` or XHTML parser options.
+  The Monaco build record lists all three, and the 35 npm advisories of the Monaco
+  source tree's build tooling (1 low, 13 moderate, 21 high, on 2026-10-23), none of
+  whose code is in the 151 shipped files.
 - The documentation site's build moves to vite 8.3.4 for GHSA-587h-7wmj-h5pm (its
   development server's editor launch on Windows). Nothing of the site's build ships in
   Axocoatl.
+- **The workbench is served at `127.0.0.1`, which no `Domain=localhost` cookie reaches.**
+  - Safari on macOS lets a page on a `*.localhost` address that runs in a tab of its own
+    set a cookie for `Domain=localhost` from script. Safari then sends it to `localhost`
+    on every port, where the workbench was.
+  - Enough such cookies with `Path=/api`, `Path=/` or `Path=/ws` signed Safari out of the
+    workbench's API, or out of the whole workbench, or kept its live connection from
+    opening. A forged "signed in" cookie sent each navigation through the retry page.
+  - The sign-in link now names `127.0.0.1`: `axocoatl url`, and what `axocoatl dev` and
+    `axocoatl serve` print.
+  - With the local API token, the workbench opened at `localhost` or `[::1]` answers
+    `307` to `127.0.0.1` on the same port, query included. From `localhost` the redirect
+    also removes this daemon's two sign-in cookies there.
+  - A cookie for a domain never matches an IP address. Measured in Playwright's Chromium
+    and WebKit on macOS: the same floods set for `Domain=localhost`, with each path, left
+    the workbench signed in, its API answering and its live connection open.
+  - Previews keep their `<session>-p<port>.localhost` origins.
+  - A loopback listener needs `127.0.0.1` and does not start without it.
+  - With the local API token, `axocoatl dev`, `axocoatl serve` and the server refuse a
+    `server.host` on another IPv4 loopback address, such as `127.0.0.2`, where the link
+    would reach nothing.
+  - With configured credentials or `allow_unauthenticated` there is no sign-in cookie and
+    no redirect, so a proxy on the same host may send `Host: localhost`.
+- **A Session's app can no longer receive the workbench's sign-in cookie.**
+  - Podman published Session ports on `127.0.0.1`, which `localhost` reaches too, and
+    cookies ignore ports.
+  - With no click, a Preview's code could navigate its own frame to its app's published
+    port, or nest a frame there, and the browser sent the app the workbench's
+    SameSite=Strict token cookie. Chromium did so for the Preview's own frame; WebKit did
+    so for either, because it compares only with the top-level page. Measured in
+    Playwright 1.64.1's Chromium and WebKit on macOS.
+  - Such a frame could also set cookies the workbench receives.
+  - Session ports, the egress Preview container's included, are now published on `[::1]`
+    on macOS and on `127.0.0.2` on Linux.
+  - Measured: rootless and rootful Podman 6.1.4 on macOS, and Podman 4.9.3 on Ubuntu
+    24.04 (rootless with slirp4netns and with pasta, and rootful), served the app there
+    and nothing on `127.0.0.1`.
+  - A journey asserts in Chromium and WebKit that both kinds of frame get none of the
+    workbench's cookies. Its WebKit run fails with ports on `127.0.0.1`.
+  - Where the computer cannot listen on that address, Axocoatl publishes on `127.0.0.1`
+    and logs a warning.
+- **The first start of 1.5.0 replaces the local API token once.**
+  - Sign-in links before 1.5.0 named `localhost`. A browser that signed in then may still
+    hold the token in a cookie for `localhost` for up to 30 days, and every server on a
+    `localhost` port receives that cookie, including a Session's app on macOS.
+  - The daemon now writes the SHA-256 of the token it issued to `local-api-token.issued`,
+    and replaces, once, a token that file does not name.
+  - Open the new sign-in link (`axocoatl url`); every browser needs it after this upgrade
+    anyway. Give scripts that kept the old token the new one.
 - **In Safari a Preview never runs top-level.** Safari on macOS lets a page on a
   `*.localhost` address that runs in a tab of its own set a `Domain=localhost` cookie
-  from script, and then sends it to the workbench on every port and to every other
-  Session's Preview. Chromium and WebKit on Linux refuse such a cookie, and Safari gives
-  an embedded Preview no cookies at all. Before, a Preview did run top-level in Safari:
-  from **Open full preview**, from a window its code opened when you clicked in it, and
-  from its address opened in a tab. Now the daemon answers every request for a Preview
-  page that Safari would show in a tab or window of its own with `403` and a short page
-  that says why and links to the workbench, and never asks the app. That holds whatever
-  led there: a link, a redirect, Command-click on a link inside the Preview (Safari
-  opens a new tab whatever the frame's sandbox says), the context menu, or an address
-  typed or pasted. The page runs no script and sets no cookie. The Preview in the
-  workbench's pane (`Sec-Fetch-Dest: iframe`) works as before.
+  from script, and then sends it to `localhost` on every port, where the workbench was
+  before this release, and to every other Session's Preview. Chromium and WebKit on Linux
+  refuse such a cookie, and Safari gives an embedded Preview no cookies at all. Before, a
+  Preview did run top-level in Safari: from **Open full preview**, from a window its code
+  opened when you clicked in it, and from its address opened in a tab. Now the daemon
+  answers every request for a Preview page that Safari would show in a tab or window of
+  its own with `403` and a short page that says why and links to the workbench, and never
+  asks the app. That holds whatever led there: a link, a redirect, Command-click on a
+  link inside the Preview (Safari opens a new tab whatever the frame's sandbox says), the
+  context menu, or an address typed or pasted. The page runs no script and sets no
+  cookie. The Preview in the workbench's pane (`Sec-Fetch-Dest: iframe`) works as before.
   - The daemon recognizes Safari's engine by its user agent: `AppleWebKit` on a Mac
     without a Chromium or Firefox token, and every browser on iPhone and iPad. A Safari
     older than 16.4 does not say whether a page is for a frame or a tab, so it gets the
@@ -839,121 +1870,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Measured in Playwright WebKit 27.2 on macOS: a typed Preview address, a redirect from
   another site to one, and a real Command-click on a Preview link inside the Preview's
   frame and inside the Files view's frame each got the refusal page, and no cookie was
-  set. Not measured in Safari itself, or on iPhone or iPad. A page Axocoatl does not
-  serve that runs top-level on a `*.localhost` address in Safari can still set such
-  cookies: a development server you run yourself, a Session's app opened directly at the
-  loopback port it is published on (the workbench never shows it), or a service worker
-  a Preview registered while it ran top-level before this release (not measured). It no
-  longer reaches a Session's app, because Safari would send its cookies to a Preview
-  only with a top-level request. What it can do to the workbench ([Security: Safari
-  shares `Domain=localhost`
-  cookies](https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies);
-  measured in Playwright WebKit 26.4 on macOS):
-  - It cannot sign in, read the workbench's host-only HttpOnly cookies, or reach
-    `127.0.0.1`.
-  - It can sign the workbench out of its API. Such cookies with `Path=/api`, 51 of 4,000
-    bytes and then smaller ones that fill what is left of the about 200 KB Safari sends,
-    leave the sign-in cookie off API requests. The workbench then shows "This browser
-    is signed out" (see Fixed). Signing in again does not help until localhost's data is
-    removed in Safari > Settings > Privacy > Manage Website Data.
-  - The same cookies with `Path=/` sign that browser out of the workbench entirely: the
-    sign-in cookie stays off every request, so the workbench shows the sign-in page.
-    Signing in again works until the page's code writes the cookies again; remove
-    localhost's data in Safari's settings and close that page.
-  - The same cookies with `Path=/ws` keep the workbench's live connection from opening:
-    the status bar keeps saying it is reconnecting.
-  - A cookie that is not ASCII no longer signs the workbench out (see below). A forged
-    `axocoatl-token-<port>` beside the real one does not, as in 1.4.0, and 40 cookies of
-    1 KB do not.
-  - While a browser is signed out, a forged signed-in cookie sends each navigation
-    through the retry page once.
+  set. With Playwright's iPhone and iPad user agents, in Chromium and WebKit, a typed
+  Preview address got the refusal page and a framed one was served. Not measured in
+  Safari itself, on an iPhone or iPad, or in Safari before 16.4.
+
+  A page Axocoatl does not serve that runs top-level on a `*.localhost` address in Safari
+  can still set such cookies:
+  - a development server you run yourself;
+  - a Session's app opened directly at its published port through a `*.localhost` name
+    (on macOS its ports are on `[::1]`; the workbench never shows them);
+  - a service worker a Preview registered while it ran top-level before this release.
+    Measured once in Playwright's WebKit: it answers a later top-level navigation without
+    the server. Removing all website data, as History > Clear History does, removes it
+    (measured with the system's WebKit on macOS 26.6).
+
+  Those cookies reach other apps on `localhost` addresses. They never reach the workbench
+  at `127.0.0.1`, and they reach a Session's Preview only in a tab of its own, which the
+  daemon refuses in Safari.
+
+  A page on another `127.0.0.1` port, such as a development server you run there, still
+  sets cookies the workbench receives, in any browser ([Security: Pages on other 127.0.0.1
+  ports](https://docs.axocoatl.ai/operate/security/#pages-on-other-127001-ports);
+  measured in Playwright WebKit on macOS):
+  - It cannot sign in, or read the workbench's HttpOnly cookies.
+  - In Safari, 51 cookies of 4,000 bytes with `Path=/api`, then smaller ones that fill
+    what is left, sign that browser out of the API.
+  - The same cookies with `Path=/` sign it out of the whole workbench until the link is
+    opened again.
+  - With `Path=/ws` they keep the live connection from opening.
+  - The workbench and its sign-in page then say what to do: close that page, remove
+    `127.0.0.1`'s website data (Safari > Settings > Privacy > Manage Website Data, where
+    it is one record), and open the sign-in link again.
   - Like any page open in Safari, it can sign out a browser that signed in a few seconds
-    earlier and has no workbench page open, by writing about 1,000 cookies at once:
-    WebKit then drops every cookie it holds.
+    earlier and has no workbench page open, by writing about 1,000 cookies at once.
 - **The legacy Preview path no longer serves a browser a page, and forwards no app
   cookie.** `/api/sessions/{id}/proxy/{port}` reaches a Session's app from the
   workbench's own origin, behind its sign-in. A link to it, which the workbench's Safari
   guard does not refuse because it is not a `*.localhost` address, opened the app's page
-  there. The page ran with an opaque origin (the path sends `Content-Security-Policy:
-  sandbox` without `allow-same-origin`), so its script could not use the workbench's
-  API. But the app's `Set-Cookie` headers were stored for `localhost`, the workbench's
-  host, `Path=/api` included, and the app's redirect to its own Preview address opened
-  that Preview top-level, in Safari too. Measured in Playwright 1.64.1's Chromium and
-  WebKit on macOS. In every browser the path now answers only `fetch()` and
-  `XMLHttpRequest` (`Sec-Fetch-Dest: empty`) and programs that send no Fetch Metadata.
-  A page, frame, script, image or anything else a browser would show or run there gets
-  `403` and a line of text, and the app is not asked. The path forwards none of the
-  app's `Set-Cookie` headers.
+  there. The page ran with an opaque origin (the path sends
+  `Content-Security-Policy: sandbox` without `allow-same-origin`), so its script could
+  not use the workbench's API. But the app's `Set-Cookie` headers were stored for
+  `localhost`, then the workbench's host, `Path=/api` included, and the app's redirect to
+  its own Preview address opened that Preview top-level, in Safari too. Measured in
+  Playwright 1.64.1's Chromium and WebKit on macOS. In every browser the path now answers
+  only requests the browser marks `Sec-Fetch-Dest: empty` that are not navigations
+  (`fetch()`, `XMLHttpRequest`, `EventSource`, `navigator.sendBeacon`) and programs that
+  send no Fetch Metadata. A page, frame, embed, object, fenced frame, script, style
+  sheet, image, worker or anything else a browser would show, run or embed there gets
+  `403` and a line of text, and the app is not asked. The path forwards none of the app's
+  `Set-Cookie` headers.
 - **A cookie that is not ASCII no longer signs Safari out of the workbench.** The daemon
   read each `Cookie` header as text and skipped one that was not visible ASCII, token
-  cookie included. In Safari on macOS any top-level Preview page could set `junk=é;
-  Domain=localhost`, which Safari sends to the workbench as the byte 0xE9. The API then
-  answered 401 and the workbench showed "Sign in to Axocoatl". Opening a fresh sign-in
-  link did not help while the cookie stayed. The daemon now reads the header as bytes,
-  one cookie at a time. Neither such a cookie nor a forged `axocoatl-token-<port>`
-  beside the real one, in either order, hides the token cookie.
-- **A Preview app's server can no longer set a cookie for `localhost` through the
-  Preview proxies.** They remove the `Domain` attribute from an app's `Set-Cookie`
-  headers, so every browser keeps those cookies host-only on that Preview's origin.
-  Before, Safari on macOS accepted `Domain=localhost` from a top-level Preview's server
-  and sent the cookie to the workbench and to every other Preview. A cookie whose
+  cookie included. In Safari on macOS any top-level Preview page could set
+  `junk=é; Domain=localhost`, which Safari sent to the workbench, then at `localhost`, as
+  the byte 0xE9. The API then answered 401 and the workbench showed "Sign in to
+  Axocoatl". Opening a fresh sign-in link did not help while the cookie stayed. The
+  daemon now reads the header as bytes, one cookie at a time. Neither such a cookie nor a
+  forged `axocoatl-token-<port>` beside the real one, in either order, hides the token
+  cookie.
+- **A Preview app's server can no longer set a cookie for `localhost` through the Preview
+  proxies.** They remove the `Domain` attribute from an app's `Set-Cookie` headers, so
+  every browser keeps those cookies host-only on that Preview's origin. Before, Safari on
+  macOS accepted `Domain=localhost` from a top-level Preview's server and sent the cookie
+  to the workbench, then at `localhost`, and to every other Preview. A cookie whose
   `Domain` named another site, which browsers refused, is now kept host-only.
+- The documentation site's build moves to zod 4.6.7 for GHSA-mrhx-c7xc-m3w5 (memory
+  exhaustion validating oversized constrained collections), and to astro 7.4.1,
+  postcss-selector-parser 7.1.7, postcss-nested 7.0.2 and @expressive-code/core 0.44.3,
+  which also clear GHSA-mpr7-6m5w-76rw (CSS injection in View Transitions, which the
+  site does not use) and GHSA-rj75-hqrm-r3gf (quadratic selector parsing). Nothing of
+  the site's build ships in Axocoatl.
+- tokio moves to 1.53.3 for RUSTSEC-2026-0386 (`AsyncFd`'s safe constructors violate I/O
+  safety; Axocoatl does not call them). With tokio 1.53.1, `cargo audit -D warnings`
+  failed.
 
 ### Verified
-- **The release commit went from the published install command to passing, signed runs**
-  in the release gate (`docs/RELEASE_GATE.md`): for a new user on GitHub's Ubuntu
-  runners and in an Ubuntu 24.04 VM, and on a Mac reset for the gate, which kept its
-  downloaded models and its Homebrew. Each path's transcript, wall times and downloads,
-  and the versions of Podman, Ollama, Claude Code and Codex it ran, are in the evidence
-  bundle under `release-evidence/1.5.0/`, signed by a key in `.axocoatl/gate-keys`.
-  - In CI (a push run of `ci.yml` on `main`), on GitHub's ubuntu-24.04 (x86_64) and
-    ubuntu-24.04-arm runners: a brand-new `HOME` and the README's install command
-    against the release archive just built. Then, with Podman already on the runner
-    (the workflow installs it when the image lacks it), `axocoatl onboard` with no
-    terminal (`--yes`, no first-run sample) against a scripted model server standing in
-    for Ollama 0.40.6 with cloud models off, `axocoatl doctor`, `axocoatl dev`, and
-    `axocoatl run fix` on every fixture in `tests/fixtures/newuser` (`node-plain`,
-    `node-deps`, `python-pytest`, `rust` and `go`): the README's command, and on
-    `node-plain`, onboarding's first-run sample, the command that fixture's own README
-    gives. Each receipt and record verified. On the ubuntu-22.04 runner, onboarding
-    refused Podman 3.4.4. The macOS plumbing passed on arm64 and Intel runners, as did
-    the rest of CI: the native gate on Linux, the browser regressions in Chromium on
-    x86_64 and aarch64 and in WebKit on x86_64, the docs and marketing sites, and the
-    audits.
-  - On a Mac (Apple M5 Pro, 48 GB, macOS 26.6) with Axocoatl, its data, Podman and its
-    machines, and Ollama uninstalled (the downloaded models kept): the site's install
-    command as written, then `axocoatl onboard` with every prompt answered live and
-    recorded. With local models, onboarding installed Podman and Ollama with Homebrew
-    after asking, created the Podman machine, turned Ollama's cloud models off, chose
-    `qwen3-coder:30b` to write and `gpt-oss:20b` to review (already downloaded), and
-    passed its first-run sample fix. `axocoatl run fix` then passed on every fixture
-    (the README's command, and on `node-plain` its own README's), each receipt and record
-    verified. After each setup on the Mac, `axocoatl doctor` said ready.
-  - Claude Code, signed in through the browser (`axocoatl connect claude-code`): the home
-    page's `fix-claude-code` command passed on `node-deps` and `python-pytest`, each
-    receipt verified, and with `--keep pr` opened a pull request on a throwaway GitHub
-    repository, where the docs' verify-receipt Action, pinned to the release commit,
-    passed. A run with `anthropic:opus` as the reviewer was refused with exit 3 and left
-    no Session.
-  - Codex, billed to the ChatGPT plan (ChatGPT sign-in in the browser): the site's
-    `fix-codex` command passed on `node-deps` and `python-pytest`, each receipt verified.
-  - OpenRouter, connected through the browser from onboarding (its browser sign-in; no
-    key typed), with different writer and reviewer models: `axocoatl run fix` passed on
-    `node-deps` and `python-pytest`, and `fix-claude-code` with the OpenRouter reviewer
-    on `node-deps`, each receipt verified.
-  - The workbench in Safari, from the sign-in link to a commit: Open workspace refused
-    the home folder and accepted the repository, a new Session started, Team & budget
-    came pre-filled and Apply worked, one turn edited a file, Source Control showed
-    "Last turn 1", a commit was made with the account's Git identity, and Ctrl+C stopped
-    `axocoatl dev` with exit 0.
-  - On Ubuntu 24.04 (aarch64) in a Lima VM, as a new user made with `adduser`: onboarding,
-    answered live, installed Podman with apt and added a range of subordinate ids if the
-    user had none, each with `sudo` after asking, and connected OpenRouter through the
-    browser from onboarding (its browser sign-in; no key typed). It did not install
-    Ollama: it does that only when a local model is chosen. `axocoatl doctor` said
-    ready, and with the OpenRouter models onboarding configured, the README's command
-    without `--model` passed on every fixture (on `node-plain`, that fixture's own
-    README's command), each receipt and record verified.
+- **The release gate requires the release commit to go from the published install command
+  to passing, signed runs** (`docs/RELEASE_GATE.md`), starting without Axocoatl, on
+  GitHub's Ubuntu runners, on a Mac and on Linux. Its evidence check refuses the release
+  until the bundle under `release-evidence/1.5.0/`, signed by a key in
+  `.axocoatl/gate-keys`, holds every required path with each step the gate lists for it,
+  passed. The only way past it is an override that only the GitHub logins listed in
+  `.axocoatl/gate-override-actors` can start, and the release workflow logs it. Every run
+  on a fixture or a real repository, the `--keep pr` run and the workbench's turn also
+  fail their path when an answer they accepted, or a line they added to a file, holds
+  tool-call markup a model wrote as text (`<function=`, `</tool_call>`). Each path's
+  evidence holds its transcript, written as it happens, with each question, its answer
+  and who gave it; each step's time and downloads; the system, its memory and the
+  account; the versions of Podman, Ollama and Axocoatl it ran; and each run's receipt and
+  record, which name its models. The gate's steps check neither the Mac's memory, nor
+  which models onboarding chose, nor the Linux release, so this section names none of
+  them.
+  - On GitHub's ubuntu-24.04 (x86_64) and ubuntu-24.04-arm runners, in a push run of
+    `ci.yml` on the release commit, starting without `axocoatl` on PATH:
+    - the README's install command, against the release archive just built, installs that
+      archive's binary, and a new shell finds `axocoatl`;
+    - with Podman already on the runner, `axocoatl onboard --yes --writer ollama` with no
+      terminal, against a scripted model server standing in for Ollama 0.40.6 with cloud
+      models off, runs no `sudo` and no package manager and pulls nothing;
+    - `axocoatl doctor` says ready, with no failure in its sandbox, models, writers or
+      daemon sections, and `axocoatl dev` serves on its configured port;
+    - the README's `axocoatl run fix` command passes on every fixture in
+      `tests/fixtures/newuser` (on `node-plain`, the command that fixture's own README
+      gives), each receipt and record verified;
+    - a run whose check program is absent exits 3, refused before any model call, a run
+      with the reviewer `anthropic:x` exits 3, and the refused run leaves no Session,
+      container or model call;
+    - onboarding without Podman exits 1, doctor fails a missing range of subordinate ids
+      with the `usermod` fix, and the copy-paste lint passes.
+
+    The release workflow runs these steps again on its own archives.
+  - On a Mac, on an account that starts without Axocoatl, its data or stored secrets,
+    without Podman or a Podman machine, and without Ollama or its settings, with a person
+    answering onboarding live in the terminal. The published install command installs
+    Axocoatl, and a new shell finds it. Onboarding installs Podman and Ollama with
+    Homebrew, creates the Podman machine, which runs, turns Ollama's cloud models off and
+    ends ready with a passing first run. `axocoatl doctor` says ready, and the README's
+    command passes on every fixture, each receipt and record verified.
+  - Claude Code, with no sign-in stored before: onboarding, answered live, signs it in
+    through the browser, and `axocoatl doctor` says ready. The home page's
+    `fix-claude-code` command passes on `node-deps` and `python-pytest`. With `--keep pr`
+    it opens a pull request, and the docs' verify-receipt Action verifies the pull
+    request's receipt. A run with `anthropic:opus` as the reviewer is refused with exit 3
+    and leaves no Session.
+  - Codex, with no sign-in stored before: onboarding, answered live, says its runs bill
+    to the ChatGPT plan and signs in with ChatGPT in the browser, and `axocoatl doctor`
+    says ready. The site's `fix-codex` command passes on `node-deps` and `python-pytest`.
+  - OpenRouter, with no key stored before: onboarding, answered live, connects it through
+    the browser sign-in, leaves no key in `config.yaml` and asks for different writer and
+    reviewer models, and `axocoatl doctor` says ready. `axocoatl run fix` passes on
+    `node-deps` and `python-pytest` with the OpenRouter models, and `fix-claude-code`
+    with the OpenRouter reviewer passes on `node-deps`.
+  - The Always-On Service: onboarding, answered live, installs and starts it (Step 6) and
+    restarts it after the configuration changed (Step 7). A fix through it passes, its
+    receipt and record verified. Then `axocoatl service status` says it is installed and
+    running, `service stop` leaves it not running, and `service uninstall` removes it and
+    its unit.
+  - With the Podman machine stopped (`podman machine stop`), a run starts it and passes,
+    its receipt and record verified. A timed run on every pinned real repository ends
+    with a verdict, its receipt verified.
+  - The workbench in Safari: the sign-in link opens it; Open workspace refuses the home
+    folder and accepts the repository; a new Session starts; Team & budget comes
+    pre-filled and Apply works; one turn edits a file, and Source Control lists the
+    turn's change; a commit from the workbench succeeds, authored by the account's Git
+    identity; and Ctrl+C stops `axocoatl dev` with exit 0. The person, or a WebDriver
+    driver in Safari (`scripts/release-gate/safari-workbench.mjs`), answers the steps
+    from the sign-in link to the commit. The person then checks in Safari that the
+    Preview shows the Session's app in the workbench; that Open full preview is disabled
+    and the workbench says why; that a Preview address typed into a tab, reached by a
+    redirect from another site or Command-clicked inside the Preview gets Axocoatl's
+    refusal page; that a `Domain=localhost` cookie flood from another page leaves the
+    workbench as the docs say; and that Manage Website Data removes those cookies.
+  - On Linux, on an account that starts without Axocoatl, its data or stored secrets, or
+    Podman, whose own subordinate ids the gate removes first while another user's range
+    overlaps 100000-165535. Onboarding, answered live, installs Podman with apt, adds a
+    range of subordinate ids that no other user's overlaps and connects OpenRouter
+    through the browser sign-in, and it does not install Ollama. `axocoatl doctor` says
+    ready, with no failure in its sandbox, models, writers or daemon sections, and
+    `axocoatl dev` serves on its configured port. The README's command passes on every
+    fixture, each receipt and record verified. The login has a systemd user session, and
+    in it the Always-On Service goes through the same steps as on the Mac, from
+    onboarding's Step 6 to `service uninstall`.
 
 ## [1.4.0] - 2026-10-14
 
