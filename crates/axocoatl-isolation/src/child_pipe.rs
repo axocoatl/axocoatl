@@ -118,7 +118,9 @@ impl OutputEnd {
     ) -> io::Result<()> {
         match self {
             OutputEnd::Async(mut reader) => {
-                let mut buffer = [0_u8; 16 * 1024];
+                // Keep the buffer out of the future: callers can nest several
+                // process probes on a runtime worker's limited stack.
+                let mut buffer = vec![0_u8; 16 * 1024];
                 loop {
                     let read = reader.read(&mut buffer).await?;
                     if read == 0 || !chunk(&buffer[..read]) {
@@ -129,7 +131,7 @@ impl OutputEnd {
             #[cfg(target_os = "macos")]
             OutputEnd::Fifo(mut file) => {
                 use std::io::Read;
-                let mut buffer = [0_u8; 16 * 1024];
+                let mut buffer = vec![0_u8; 16 * 1024];
                 loop {
                     match file.read(&mut buffer) {
                         Ok(0) => return Ok(()),

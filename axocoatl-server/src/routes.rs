@@ -7442,10 +7442,8 @@ fn preview_unreachable(
          nothing on this computer accepts connections there. Axocoatl publishes Session ports \
          on {address}, never on 127.0.0.1, where the workbench keeps its sign-in cookie"
     );
-    let advice = format!(
-        "Check with `podman port` on the Session's container, and see Troubleshooting, \
-         \"Preview: nothing accepts connections at the Session's published address\""
-    );
+    let advice = "Check with `podman port` on the Session's container, and see Troubleshooting, \
+                  \"Preview: nothing accepts connections at the Session's published address\"";
     if !refused {
         return format!(
             "{detail}. Is a dev server running on port {logical_port} inside the Session sandbox?"
