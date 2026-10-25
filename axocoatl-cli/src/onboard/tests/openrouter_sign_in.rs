@@ -675,7 +675,7 @@ async fn a_typed_key_moved_to_the_sign_in_is_left_out_of_the_backup() {
         codex_credential: None,
     });
     assert!(old.contains("# OpenRouter uses your normal API key"));
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, &old).unwrap();
     let (browser, _) = signing_in();
     o.openrouter_sign_in = Some((browser, endpoints(&server)));

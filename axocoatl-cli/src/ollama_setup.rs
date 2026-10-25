@@ -1225,7 +1225,7 @@ mod tests {
             assert!(why.contains("MLX runner"), "{why}");
             assert!(
                 why.contains(&format!(
-                    "`ollama rm {name} && ollama pull --runner llamacpp {name}`"
+                    "`ollama rm {name}; ollama pull --runner llamacpp {name}`"
                 )),
                 "{why}"
             );
@@ -1267,9 +1267,11 @@ mod tests {
         );
         assert!(
             hint.ends_with(
-                "by default: remove it and pull its GGUF variant with `ollama rm qwen3.5:27b \
-                 && ollama pull --runner llamacpp qwen3.5:27b` (an undocumented Ollama flag, \
-                 which does not replace a variant already installed), or choose another model."
+                "by default: replace it with its GGUF variant when ollama.com has one, with \
+                 `ollama rm qwen3.5:27b; ollama pull --runner llamacpp qwen3.5:27b` (an \
+                 undocumented Ollama flag, which does not replace a variant already installed, \
+                 hence the `ollama rm`; a model you created yourself is removed for good), \
+                 or choose another model."
             ),
             "{hint}"
         );

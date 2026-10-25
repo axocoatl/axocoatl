@@ -1570,7 +1570,7 @@ esac"#,
 
 /// [`an_install_is_not_offered_again_when_podman_still_lacks_the_helpers`],
 /// where Podman answers something else once in between: right after
-/// `podman system migrate`, one `podman machine list` fails, so that
+/// `podman system migrate`, one readiness probe fails, so that
 /// re-inspection does not show the helpers' failure, and the next one does.
 /// Onboarding still offers no install of their package again, in either
 /// form. (One run of the suite on a loaded Mac took this path, when such a
@@ -1581,6 +1581,17 @@ async fn an_install_is_not_offered_again_after_podman_answered_something_else() 
     let shims = Shims::new();
     shims.id_map_tools(None);
     stale_podman(&shims);
+    // macOS checks the VM first; Linux checks the rootless service directly.
+    // Inject the transient failure into the probe this host actually makes.
+    let probe = if cfg!(target_os = "macos") {
+        "machine list --format json"
+    } else {
+        "info --format json"
+    };
+    let probe_case = format!("\"{probe}\")\n");
+    let failing_probe = format!(
+        "{probe_case}    if [ -f \"$D/migrated\" ] && [ ! -f \"$D/listed\" ]; then touch \"$D/listed\"; echo \"Cannot connect to Podman\" >&2; exit 125; fi\n"
+    );
     let script = std::fs::read_to_string(shims.dir.path().join("podman"))
         .unwrap()
         .replace(
@@ -1588,8 +1599,8 @@ async fn an_install_is_not_offered_again_after_podman_answered_something_else() 
             r#"elif { [ ! -e "$D/newuidmap" ] || [ -f "$D/other-path" ]; } && [ -f "$D/migrated" ]; then"#,
         )
         .replace(
-            "\"machine list --format json\")\n",
-            "\"machine list --format json\")\n    if [ -f \"$D/migrated\" ] && [ ! -f \"$D/listed\" ]; then touch \"$D/listed\"; echo \"Cannot connect to Podman\" >&2; exit 125; fi\n",
+            &probe_case,
+            &failing_probe,
         );
     assert!(script.contains("$D/listed"));
     shims.write_program("podman", &script);
@@ -3283,7 +3294,7 @@ esac"#
     assert!(
         output.contains(
             "Ollama pulled a variant native Sessions refuse. Remove it and pull its GGUF variant \
-             with `ollama rm gpt-oss:20b && ollama pull --runner llamacpp gpt-oss:20b` (an \
+             with `ollama rm gpt-oss:20b; ollama pull --runner llamacpp gpt-oss:20b` (an \
              undocumented Ollama flag)? yes (--yes)"
         ),
         "{output}"
@@ -3801,7 +3812,7 @@ async fn codex_bills_to_the_chatgpt_plan_unless_a_stored_api_key_is_kept() {
                     "codex-chatgpt"
                 }),
             });
-            std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+            create_private_dir(&o.paths.config_dir);
             std::fs::write(&o.paths.config_path, &old).unwrap();
         }
         if stored {
@@ -4619,7 +4630,7 @@ async fn update_moves_the_team_to_the_new_models_and_keeps_edited_agents() {
          \"Answer",
         "    tools: [read_file, grep]\n    writes: []\n    system_prompt: \"Answer",
     );
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, &old).unwrap();
     let code = run(&mut o).await;
     let output = o.ui.output();
@@ -4704,7 +4715,7 @@ async fn update_over_the_team_1_4_wrote_shows_todays_prompts_in_the_changes() {
             &format!("base_url: \"{}\"", ollama.url()),
         )
         .replace("  port: 8080\n", &format!("  port: {port}\n"));
-    std::fs::create_dir_all(&o.paths.config_dir).unwrap();
+    create_private_dir(&o.paths.config_dir);
     std::fs::write(&o.paths.config_path, &old).unwrap();
     let code = run(&mut o).await;
     let output = o.ui.output();
