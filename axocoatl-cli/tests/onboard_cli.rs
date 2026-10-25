@@ -2,7 +2,8 @@
 //! each in a fresh HOME with its own daemon socket: onboarding refuses to
 //! run without a terminal or `--yes` and changes nothing; `--plan` changes
 //! nothing; doctor fails without Podman and says so in JSON; `dev` says a
-//! port is taken before it says it runs.
+//! port is taken before it says it runs, and `dev`, `serve` and doctor say
+//! a socket path is too long.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -334,6 +335,101 @@ fn dev_says_a_port_is_taken_before_it_says_it_runs() {
     assert!(!stdout.contains("Axocoatl dev mode"), "{stdout}");
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
     drop(holder);
+}
+
+/// `dev` and `serve` in a home directory too long for the daemon's socket
+/// path (`$HOME/.axocoatl/run/axocoatl.sock`) say the path is too long, its
+/// limit and how to fix it, never that another daemon may be running, and
+/// make no socket directory; doctor says no daemon can run there. A shorter
+/// `AXOCOATL_SOCKET_PATH` is the fix.
+#[test]
+fn dev_and_serve_say_a_socket_path_is_too_long_and_how_to_fix_it() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("h".repeat(110));
+    std::fs::create_dir(&home).unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config = home.join("axocoatl.yaml");
+    std::fs::write(
+        &config,
+        format!("agents: []\nserver:\n  port: {port}\n  host: \"127.0.0.1\"\n"),
+    )
+    .unwrap();
+    let limit = if cfg!(target_os = "macos") { 103 } else { 107 };
+    let socket = home.join(".axocoatl/run/axocoatl.sock");
+    for command in ["dev", "serve"] {
+        let output = axocoatl(&home)
+            .args([command, "--config"])
+            .arg(&config)
+            .env_remove("AXOCOATL_SOCKET_PATH")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env("PATH", "/usr/bin:/bin")
+            .env("AXOCOATL_DATA_DIR", home.join("data"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{command}: {stdout}\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "Failed to reserve the CLI IPC socket: the IPC socket path {} is too long: {} \
+                 bytes, and a Unix socket path may have at most {limit} bytes on this system.",
+                socket.display(),
+                socket.as_os_str().len()
+            )),
+            "{command}: {stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "AXOCOATL_SOCKET_PATH set to a shorter path, or a shorter home directory"
+            ),
+            "{command}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("Another Axocoatl daemon"),
+            "{command}: {stderr}"
+        );
+        assert!(!stderr.contains("SUN_LEN"), "{command}: {stderr}");
+        assert!(
+            !stdout.contains("Axocoatl is running"),
+            "{command}: {stdout}"
+        );
+        assert!(!home.join(".axocoatl/run").exists(), "{command}");
+    }
+    // Doctor says no daemon can run there, and why, instead of saying to
+    // start one.
+    let output = axocoatl(&home)
+        .args(["doctor", "--json", "--config"])
+        .arg(&config)
+        .env_remove("AXOCOATL_SOCKET_PATH")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env("PATH", "/usr/bin:/bin")
+        .env("AXOCOATL_DATA_DIR", home.join("data"))
+        .output()
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stdout)));
+    let daemon = report["sections"]["daemon"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Daemon")
+        .unwrap_or_else(|| panic!("{report:#}"));
+    assert_eq!(daemon["status"], "fail", "{daemon:#}");
+    assert!(
+        daemon["detail"].as_str().unwrap().starts_with(&format!(
+            "no daemon can run here: the IPC socket path {} is too long",
+            socket.display()
+        )),
+        "{daemon:#}"
+    );
 }
 
 /// `recipe build` without Podman says what is missing and how to set it

@@ -3570,7 +3570,7 @@ impl SessionSandbox {
                 "Axocoatl runtime authority is not a full SHA-256 identity".to_string(),
             ));
         }
-        match podman::detect().await {
+        match podman::detect_answering().await? {
             podman::PodmanReadiness::Ready => {}
             podman::PodmanReadiness::NotInstalled
             | podman::PodmanReadiness::MachineMissing
@@ -3594,7 +3594,10 @@ impl SessionSandbox {
         list.args(Self::data_root_exposure_list_args());
         let listed = Self::run_bounded_command(list, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
         if listed.timed_out {
-            return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+            return Err(IsolationError::podman_not_answering(
+                "ps",
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+            ));
         }
         if !listed.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -3614,7 +3617,10 @@ impl SessionSandbox {
             let inspected =
                 Self::run_bounded_command(inspect, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
             if inspected.timed_out {
-                return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+                return Err(IsolationError::podman_not_answering(
+                    "inspect",
+                    NAMED_REMOVE_COMMAND_TIMEOUT,
+                ));
             }
             if inspected.status.success() {
                 break inspected;
@@ -3671,7 +3677,7 @@ impl SessionSandbox {
                 "Axocoatl runtime authority is not a full SHA-256 identity".to_string(),
             ));
         }
-        match podman::detect().await {
+        match podman::detect_answering().await? {
             podman::PodmanReadiness::Ready => {}
             podman::PodmanReadiness::NotInstalled
             | podman::PodmanReadiness::MachineMissing
@@ -3688,7 +3694,10 @@ impl SessionSandbox {
         list.args(Self::owned_container_list_args(runtime_authority));
         let listed = Self::run_bounded_command(list, NAMED_REMOVE_COMMAND_TIMEOUT).await?;
         if listed.timed_out {
-            return Err(IsolationError::Timeout(NAMED_REMOVE_COMMAND_TIMEOUT));
+            return Err(IsolationError::podman_not_answering(
+                "ps",
+                NAMED_REMOVE_COMMAND_TIMEOUT,
+            ));
         }
         if !listed.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -5112,10 +5121,7 @@ impl SessionSandbox {
         command.args(["ps", "-a", "--format", "{{.Names}}"]);
         let output = Self::run_bounded_command(command, timeout).await?;
         if output.timed_out {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "listing Podman containers timed out after {} seconds",
-                timeout.as_secs_f64()
-            )));
+            return Err(IsolationError::podman_not_answering("ps", timeout));
         }
         if !output.status.success() {
             return Err(IsolationError::OciContainerFailed(format!(
@@ -5243,10 +5249,10 @@ impl SessionSandbox {
         command.args(["container", "exists", container_id]);
         let output = Self::run_bounded_command(command, timeout).await?;
         if output.timed_out {
-            return Err(IsolationError::OciContainerFailed(format!(
-                "checking exact Podman container identity timed out after {} seconds",
-                timeout.as_secs_f64()
-            )));
+            return Err(IsolationError::podman_not_answering(
+                "container exists",
+                timeout,
+            ));
         }
         match output.status.code() {
             Some(0) => Ok(true),
@@ -6567,19 +6573,29 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// The pid the child wrote to `path`, once its whole line is there: the
-    /// shell makes the file before it writes the pid, so a file without its
-    /// newline yet is read again.
+    /// How long these tests wait for a child to record its pid or to be
+    /// gone: a hang guard (a loaded computer can take seconds to start a
+    /// shell), well within the child's own [`SLEEPING_CHILD_SECS`], so a
+    /// child that is never stopped is still seen alive.
+    #[cfg(unix)]
+    const CHILD_WAIT: Duration = Duration::from_secs(60);
+    /// How long [`sleeping_command`]'s child sleeps when nothing stops it.
+    #[cfg(unix)]
+    const SLEEPING_CHILD_SECS: u64 = 600;
+    /// The bound these tests give a child: long enough for its shell to
+    /// start and record its pid on a loaded computer before the bound kills
+    /// it (250 ms was not).
+    #[cfg(unix)]
+    const SLEEPING_CHILD_BOUND: Duration = Duration::from_secs(5);
+
     #[cfg(unix)]
     async fn wait_for_pid(path: &Path) -> u32 {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + CHILD_WAIT;
         loop {
-            if let Some(pid) = tokio::fs::read_to_string(path)
-                .await
-                .ok()
-                .and_then(|value| value.strip_suffix('\n')?.parse().ok())
-            {
-                return pid;
+            // The child writes its pid to another file and renames it, so a
+            // pid file is never read half written.
+            if let Ok(value) = tokio::fs::read_to_string(path).await {
+                return value.trim().parse().expect("child should record its pid");
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
@@ -6589,17 +6605,11 @@ mod tests {
         }
     }
 
-    /// The deadline of the bounded-command tests' children: long enough
-    /// for one to write its pid on a loaded machine, far shorter than its
-    /// 30-second sleep.
-    #[cfg(unix)]
-    const BOUNDED_TEST_DEADLINE: Duration = Duration::from_secs(5);
-
     /// Wait until `pid` is gone, at most until its deadline has passed and
     /// a few seconds more.
     #[cfg(unix)]
     async fn assert_process_stops(pid: u32) {
-        let deadline = tokio::time::Instant::now() + BOUNDED_TEST_DEADLINE + Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + CHILD_WAIT;
         while process_is_alive(pid) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -6610,8 +6620,13 @@ mod tests {
     fn sleeping_command(pid_file: &Path) -> Command {
         let mut command = Command::new("sh");
         command
-            .args(["-c", "printf '%s\\n' $$ > \"$1\"; exec sleep 30", "sh"])
-            .arg(pid_file);
+            .args([
+                "-c",
+                "printf %s $$ > \"$1.partial\" && mv \"$1.partial\" \"$1\"; exec sleep \"$2\"",
+                "sh",
+            ])
+            .arg(pid_file)
+            .arg(SLEEPING_CHILD_SECS.to_string());
         command
     }
 
@@ -6942,7 +6957,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
         let output =
-            SessionSandbox::run_bounded_command(sleeping_command(&pid_file), BOUNDED_TEST_DEADLINE)
+            SessionSandbox::run_bounded_command(sleeping_command(&pid_file), SLEEPING_CHILD_BOUND)
                 .await
                 .unwrap();
         let pid = wait_for_pid(&pid_file).await;
@@ -6955,11 +6970,11 @@ mod tests {
     async fn command_supervisor_reaps_child_after_caller_cancellation() {
         let directory = tempfile::tempdir().unwrap();
         let pid_file = directory.path().join("pid");
-        // The caller goes away before the deadline; the supervisor still
-        // kills the child at the deadline.
+        // Cancelling the caller only detaches it: the supervisor still kills
+        // and reaps the child at the bound.
         let caller = tokio::spawn(SessionSandbox::run_bounded_command(
             sleeping_command(&pid_file),
-            BOUNDED_TEST_DEADLINE,
+            SLEEPING_CHILD_BOUND,
         ));
         let pid = wait_for_pid(&pid_file).await;
         assert!(process_is_alive(pid));

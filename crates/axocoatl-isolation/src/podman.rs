@@ -23,7 +23,33 @@ use tokio::process::Command;
 use crate::error::IsolationError;
 use crate::session_sandbox::{BoundedCommandOutput, SessionSandbox};
 
+/// The bound on each read-only probe of Podman: `--version`, `info` and
+/// `machine list` here, and [`crate::podman_report`]'s.
 const READINESS_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+/// A longer bound for those probes, set only by the tests of crates that
+/// answer them with fake `podman` scripts ([`raise_probe_bound_for_tests`]).
+static TEST_PROBE_BOUND: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+
+/// The bound on a read-only probe of Podman: [`READINESS_COMMAND_TIMEOUT`],
+/// or the one tests set.
+pub(crate) fn probe_bound() -> Duration {
+    TEST_PROBE_BOUND
+        .get()
+        .copied()
+        .unwrap_or(READINESS_COMMAND_TIMEOUT)
+}
+
+/// Tests only (`test-support`): bound read-only probes of Podman by
+/// `bound` in this process, the first time it is called. A fake `podman`
+/// script answers at once on an idle computer but was seen to take more
+/// than the 15 s product bound on a loaded one (a build and other test
+/// suites beside it), which turned its answer into "did not answer"; a
+/// test's bound only has to stop a hang.
+#[cfg(any(test, feature = "test-support"))]
+pub fn raise_probe_bound_for_tests(bound: Duration) {
+    let _ = TEST_PROBE_BOUND.set(bound);
+}
+
 /// Starting an existing macOS VM is a bounded mutation but can take
 /// substantially longer than the read-only version, list, and info probes.
 const MACHINE_START_TIMEOUT: Duration = Duration::from_secs(120);
@@ -108,9 +134,12 @@ async fn has(bin: &str) -> Result<bool, IsolationError> {
     if !command_exists(bin) {
         return Ok(false);
     }
-    let output = bounded_output(bin, &["--version"], READINESS_COMMAND_TIMEOUT).await?;
+    let output = bounded_output(bin, &["--version"], probe_bound()).await?;
     if output.timed_out {
-        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+        return Err(IsolationError::podman_not_answering(
+            "--version",
+            probe_bound(),
+        ));
     }
     if output.status.success() {
         Ok(true)
@@ -152,14 +181,9 @@ fn validate_runtime_info(stdout: &[u8]) -> Result<(), IsolationError> {
 /// Prove that the Podman service can answer a bounded runtime request. A
 /// working client binary or a running machine entry alone is not enough.
 async fn runtime_available_with(program: &str) -> Result<(), IsolationError> {
-    let output = bounded_output(
-        program,
-        &["info", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
-    )
-    .await?;
+    let output = bounded_output(program, &["info", "--format", "json"], probe_bound()).await?;
     if output.timed_out {
-        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+        return Err(IsolationError::podman_not_answering("info", probe_bound()));
     }
     if !output.status.success() {
         return Err(IsolationError::OciSetupFailed(format!(
@@ -175,7 +199,7 @@ async fn machine_state_with(program: &str) -> Result<(bool, bool), IsolationErro
     let output = bounded_output(
         program,
         &["machine", "list", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
+        probe_bound(),
     )
     .await?;
     machine_state_from_output(&output)
@@ -185,7 +209,10 @@ fn machine_state_from_output(
     output: &BoundedCommandOutput,
 ) -> Result<(bool, bool), IsolationError> {
     if output.timed_out {
-        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+        return Err(IsolationError::podman_not_answering(
+            "machine list",
+            probe_bound(),
+        ));
     }
     if !output.status.success() {
         return Err(IsolationError::OciSetupFailed(format!(
@@ -308,21 +335,32 @@ pub async fn preflight_with(program: &str) -> PodmanReadiness {
 /// naming a machine that is stopped: that machine starts on first use like
 /// the default one.
 pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -> PodmanReadiness {
+    preflight_answering_through(program, connection)
+        .await
+        .unwrap_or_else(|error| {
+            PodmanReadiness::Unavailable(unavailable_through(connection, &error))
+        })
+}
+
+/// [`preflight_through`], except that a Podman that did not answer one of
+/// its bounded commands in time is that error
+/// ([`IsolationError::PodmanNotAnswering`]), not
+/// [`PodmanReadiness::Unavailable`]: Podman is slow, and may answer when
+/// asked again.
+async fn preflight_answering_through(
+    program: &str,
+    connection: &ConnectionOverride,
+) -> Result<PodmanReadiness, IsolationError> {
     if !command_exists(program) {
-        return PodmanReadiness::NotInstalled;
+        return Ok(PodmanReadiness::NotInstalled);
     }
     let error = match runtime_available_with(program).await {
-        Ok(()) => return PodmanReadiness::Ready,
+        Ok(()) => return Ok(PodmanReadiness::Ready),
         Err(error) => error,
-    };
-    let unavailable = |described: String| {
-        PodmanReadiness::Unavailable(format!(
-            "{described} is set, and Podman does not answer through it: {error}"
-        ))
     };
     match connection {
         ConnectionOverride::None => default_connection_unanswered(program, error).await,
-        ConnectionOverride::Host(_) => unavailable(connection.describe().unwrap_or_default()),
+        ConnectionOverride::Host(_) => unanswered(connection, error),
         ConnectionOverride::Connection(name) => {
             let stopped_machine = needs_machine()
                 && machine_list_with(program).await.is_ok_and(|machines| {
@@ -331,11 +369,37 @@ pub async fn preflight_through(program: &str, connection: &ConnectionOverride) -
                         .any(|machine| machine.name == *name && !machine.running)
                 });
             if stopped_machine {
-                PodmanReadiness::MachineStopped
+                Ok(PodmanReadiness::MachineStopped)
             } else {
-                unavailable(connection.describe().unwrap_or_default())
+                unanswered(connection, error)
             }
         }
+    }
+}
+
+/// [`PodmanReadiness::Unavailable`] for `error`, or `error` itself when
+/// Podman did not answer in time.
+fn unanswered(
+    connection: &ConnectionOverride,
+    error: IsolationError,
+) -> Result<PodmanReadiness, IsolationError> {
+    if error.is_podman_not_answering() {
+        return Err(error);
+    }
+    Ok(PodmanReadiness::Unavailable(unavailable_through(
+        connection, &error,
+    )))
+}
+
+/// What [`PodmanReadiness::Unavailable`] says of `error`: with the
+/// connection the environment selects, that Podman does not answer through
+/// it.
+fn unavailable_through(connection: &ConnectionOverride, error: &IsolationError) -> String {
+    match connection.describe() {
+        Some(described) => {
+            format!("{described} is set, and Podman does not answer through it: {error}")
+        }
+        None => error.to_string(),
     }
 }
 
@@ -346,11 +410,14 @@ async fn machine_list_with(
     let output = bounded_output(
         program,
         &["machine", "list", "--format", "json"],
-        READINESS_COMMAND_TIMEOUT,
+        probe_bound(),
     )
     .await?;
     if output.timed_out {
-        return Err(IsolationError::Timeout(READINESS_COMMAND_TIMEOUT));
+        return Err(IsolationError::podman_not_answering(
+            "machine list",
+            probe_bound(),
+        ));
     }
     if !output.status.success() {
         return Err(IsolationError::OciSetupFailed(format!(
@@ -416,28 +483,40 @@ pub async fn detect_with(program: &str) -> PodmanReadiness {
     preflight_with(program).await
 }
 
+/// [`detect`], except that a Podman that did not answer in time is
+/// [`IsolationError::PodmanNotAnswering`], so a caller that must have an
+/// answer (the daemon's start proving no earlier container exposes its
+/// data) can ask again.
+pub async fn detect_answering() -> Result<PodmanReadiness, IsolationError> {
+    preflight_answering_through(PODMAN, &ConnectionOverride::from_env()).await
+}
+
 /// Why Podman's default connection (neither `CONTAINER_HOST` nor
 /// `CONTAINER_CONNECTION` is set) did not answer `podman info`, which
 /// failed with `error`: Podman is not installed, it has no machine or a
 /// stopped one (macOS/Windows), or that error.
-async fn default_connection_unanswered(program: &str, error: IsolationError) -> PodmanReadiness {
+async fn default_connection_unanswered(
+    program: &str,
+    error: IsolationError,
+) -> Result<PodmanReadiness, IsolationError> {
+    let none = &ConnectionOverride::None;
     match has(program).await {
         Ok(true) => {}
-        Ok(false) => return PodmanReadiness::NotInstalled,
-        Err(error) => return PodmanReadiness::Unavailable(error.to_string()),
+        Ok(false) => return Ok(PodmanReadiness::NotInstalled),
+        Err(error) => return unanswered(none, error),
     }
     if !needs_machine() {
         // Linux / WSL — podman runs containers natively, no VM.
-        return PodmanReadiness::Unavailable(error.to_string());
+        return unanswered(none, error);
     }
     match machine_state_with(program).await {
-        Err(error) => PodmanReadiness::Unavailable(error.to_string()),
-        Ok((false, _)) => PodmanReadiness::MachineMissing,
-        Ok((true, false)) => PodmanReadiness::MachineStopped,
+        Err(error) => unanswered(none, error),
+        Ok((false, _)) => Ok(PodmanReadiness::MachineMissing),
+        Ok((true, false)) => Ok(PodmanReadiness::MachineStopped),
         // A machine runs: it may have finished starting since `error`.
         Ok((true, true)) => match runtime_available_with(program).await {
-            Ok(()) => PodmanReadiness::Ready,
-            Err(error) => PodmanReadiness::Unavailable(error.to_string()),
+            Ok(()) => Ok(PodmanReadiness::Ready),
+            Err(error) => unanswered(none, error),
         },
     }
 }
@@ -1915,6 +1994,45 @@ esac"#,
             .unwrap_err()
             .to_string();
         assert!(error.contains("podman machine list returned invalid JSON"));
+    }
+
+    /// A readiness probe that does not answer in time is "Podman did not
+    /// answer", which the daemon's start asks again
+    /// ([`detect_answering`]); [`preflight`] and [`detect`] report it as
+    /// unavailable, through the connection the environment selects, as
+    /// they report any other failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_probe_that_does_not_answer_in_time_is_not_answering_not_unavailable() {
+        let hung = bounded_output("sh", &["-c", "exec sleep 5"], Duration::from_millis(200))
+            .await
+            .unwrap();
+        assert!(hung.timed_out);
+        let error = machine_state_from_output(&hung).unwrap_err();
+        assert!(error.is_podman_not_answering(), "{error}");
+        assert_eq!(
+            error.to_string(),
+            "Podman did not answer `podman machine list` within 15 s"
+        );
+        let unanswered_error = unanswered(&ConnectionOverride::None, error).unwrap_err();
+        assert!(unanswered_error.is_podman_not_answering());
+        let host = ConnectionOverride::Host("ssh://core@127.0.0.1:1/run/podman.sock".into());
+        assert_eq!(
+            unavailable_through(&host, &unanswered_error),
+            format!(
+                "{} is set, and Podman does not answer through it: Podman did not answer \
+                 `podman machine list` within 15 s",
+                host.describe().unwrap()
+            )
+        );
+        // Any other failure is the readiness it always was.
+        let refused = IsolationError::OciSetupFailed("podman info failed: refused".into());
+        assert_eq!(
+            unanswered(&ConnectionOverride::None, refused).unwrap(),
+            PodmanReadiness::Unavailable(
+                "OCI container setup failed: podman info failed: refused".into()
+            )
+        );
     }
 
     #[cfg(unix)]

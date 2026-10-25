@@ -39,3 +39,7 @@ tempfile = "3.27"
 
 [features]
 default = []
+# Tests of other crates only: lets them raise the bound on read-only Podman
+# probes (`podman::raise_probe_bound_for_tests`) when fake `podman` scripts
+# answer them. Enabled, it changes nothing until a test calls that function.
+test-support = []

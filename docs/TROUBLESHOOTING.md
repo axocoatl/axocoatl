@@ -230,6 +230,21 @@ Session subcommands and `agents restart` need the persistent daemon. Start
 `axocoatl dev` or `axocoatl serve`; both expose IPC and HTTP. One-shot commands
 such as `chat` and workflow execution can fall back to an in-process daemon.
 
+**"Failed to reserve the CLI IPC socket: the IPC socket path … is too long"**
+The daemon's socket path (`~/.axocoatl/run/axocoatl.sock`, or
+`$XDG_RUNTIME_DIR/axocoatl/axocoatl.sock`) is longer than a Unix socket path
+may be: 103 bytes on macOS, 107 on Linux. A long home directory does this.
+Set `AXOCOATL_SOCKET_PATH` to a shorter absolute path, in a directory only you
+can write to, for every `axocoatl` command (in your shell profile), and run
+`axocoatl service install` again from that shell for the Always-On Service.
+`axocoatl doctor` and onboarding say when this applies.
+
+**"Podman did not answer for … s, and Axocoatl goes on only once Podman has said …"**
+Before it starts, the daemon asks Podman which Session containers exist, and it
+does not start without the answer. It asks again while Podman is only slow (a
+machine still starting, another Podman command removing a large container),
+for 3 minutes. Check that `podman ps` answers, then start Axocoatl again.
+
 **`axocoatl chat` connects in-process instead of via IPC**
 No daemon is running at the stable per-user socket, or the configured
 `AXOCOATL_SOCKET_PATH` differs between processes. Start `axocoatl dev` or

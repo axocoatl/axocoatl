@@ -149,10 +149,16 @@ pub(crate) fn health_url(host: &str, port: u16) -> String {
     )
 }
 
+/// How long one `GET /health` may take. A daemon answers it at once; a
+/// loaded computer was seen to take more than 3 s, which made a running
+/// Axocoatl look like another program. Tests answer from a mock that never
+/// hangs, so their bound only stops a hang.
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 300 } else { 10 });
+
 async fn healthy(url: &str) -> bool {
     // The daemon is on this computer: no proxy can reach it.
     let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(HEALTH_TIMEOUT)
         .no_proxy()
         .build()
     else {
@@ -245,7 +251,7 @@ struct DaemonHealth {
 /// the `{"status": "healthy", "agents": N}` every release answers with.
 async fn daemon_health(url: &str) -> Option<DaemonHealth> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(HEALTH_TIMEOUT)
         .no_proxy()
         .build()
         .ok()?;
@@ -692,6 +698,9 @@ pub(crate) async fn run(
             config.display()
         ));
         return false;
+    } else if let Some(error) = axocoatl_daemon::ipc::socket_path_too_long(&o.socket_path) {
+        o.step_left(format!("No daemon can start for the first run: {error}"));
+        return false;
     } else {
         o.ui.say(format!(
             "  Starting a daemon for this run (axocoatl serve on port {port}; its first start \
@@ -729,8 +738,14 @@ pub(crate) async fn run(
                 break;
             }
             if let Ok(Some(status)) = daemon.0.try_wait() {
+                // What it said as it stopped, when it said why.
+                let said = std::fs::read_to_string(base.join("daemon.log"))
+                    .ok()
+                    .and_then(|log| axocoatl_service::last_start_failure(&log))
+                    .map(|line| format!(": {line}"))
+                    .unwrap_or_default();
                 o.step_left(format!(
-                    "The daemon stopped ({status}) before the first run; see {}",
+                    "The daemon stopped ({status}) before the first run{said}; see {}",
                     base.join("daemon.log").display()
                 ));
                 return false;

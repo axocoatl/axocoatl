@@ -932,6 +932,9 @@ fn cmd_service_install(config: &std::path::Path) {
             for warning in environment.warnings() {
                 println!("⚠ {warning}");
             }
+            if let Some(warning) = service_socket_warning(&environment) {
+                println!("⚠ {warning}");
+            }
             if let Some(hint) = mgr.post_install_hint() {
                 println!("\n{hint}");
             }
@@ -1796,8 +1799,7 @@ async fn reserve_cli_ipc() -> CliIpcReservation {
     let listener = match axocoatl_daemon::ipc::bind_ipc_listener(&socket_path).await {
         Ok(listener) => listener,
         Err(error) => {
-            eprintln!("Failed to reserve the CLI IPC socket: {error}");
-            eprintln!("Another Axocoatl daemon may already be running.");
+            eprintln!("{}", ipc_reservation_failure(&error));
             std::process::exit(1);
         }
     };
@@ -1805,6 +1807,36 @@ async fn reserve_cli_ipc() -> CliIpcReservation {
         socket_path,
         listener,
     }
+}
+
+/// What `service install` says when the service's daemon could not listen
+/// on its IPC socket: the `AXOCOATL_SOCKET_PATH` install recorded, or else
+/// the default path, is too long for a Unix socket.
+fn service_socket_warning(environment: &axocoatl_service::ServiceEnvironment) -> Option<String> {
+    let recorded = environment
+        .variables()
+        .iter()
+        .find(|(name, _)| name == axocoatl_service::SOCKET_PATH_VARIABLE)
+        .map(|(_, value)| std::path::PathBuf::from(value));
+    let socket =
+        recorded.unwrap_or_else(axocoatl_daemon::ipc::default_socket_path_without_override);
+    axocoatl_daemon::ipc::socket_path_too_long(&socket)
+        .map(|error| format!("The service's daemon cannot start: {error}"))
+}
+
+/// What `dev` and `serve` print when they cannot reserve the IPC socket: the
+/// error (a path too long names itself and its fix), and, only when a daemon
+/// answers on the socket, that another one runs. The first line is the one
+/// `axocoatl service status` reports as the service's last start failure.
+fn ipc_reservation_failure(error: &std::io::Error) -> String {
+    let mut message = format!("{}{error}", axocoatl_service::IPC_RESERVATION_FAILED);
+    if error.kind() == std::io::ErrorKind::AddrInUse {
+        message.push_str(
+            "\nAnother Axocoatl daemon is already running: stop it (`axocoatl service stop`, or \
+             Ctrl+C where `axocoatl dev` runs) before starting this one.",
+        );
+    }
+    message
 }
 
 /// Attach initialized state to the socket reserved before bootstrap.
@@ -3487,6 +3519,70 @@ async fn cmd_benchmark(name: &str) {
 mod tests {
     use super::*;
     use clap::{CommandFactory, Parser};
+
+    /// Install says the service's daemon cannot start when the socket path
+    /// it recorded is too long, and nothing when it fits.
+    #[test]
+    fn service_install_warns_of_a_recorded_socket_path_too_long() {
+        let environment = |socket: &str| {
+            let socket = std::ffi::OsString::from(socket);
+            axocoatl_service::ServiceEnvironment::from_lookup(
+                |name| match name {
+                    "PATH" => Some("/usr/bin".into()),
+                    "AXOCOATL_SOCKET_PATH" => Some(socket.clone()),
+                    _ => None,
+                },
+                |path| path == std::path::Path::new("/usr/bin/podman"),
+            )
+        };
+        let long = format!(
+            "/{}",
+            "s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes())
+        );
+        let warning = service_socket_warning(&environment(&long)).unwrap();
+        assert!(
+            warning.starts_with(&format!(
+                "The service's daemon cannot start: the IPC socket path {long} is too long"
+            )),
+            "{warning}"
+        );
+        assert_eq!(service_socket_warning(&environment("/tmp/axo.sock")), None);
+    }
+
+    /// Only a daemon that answers on the socket is said to run already; a
+    /// path too long for a socket says only that, and the line starts with
+    /// what `service status` reports.
+    #[test]
+    fn the_ipc_reservation_failure_says_another_daemon_only_when_one_answers() {
+        let taken = ipc_reservation_failure(&std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            "an Axocoatl daemon is already listening at /h/axocoatl.sock",
+        ));
+        assert!(
+            taken.starts_with(axocoatl_service::IPC_RESERVATION_FAILED),
+            "{taken}"
+        );
+        assert!(
+            taken.contains("\nAnother Axocoatl daemon is already running: stop it"),
+            "{taken}"
+        );
+        let long = axocoatl_daemon::ipc::socket_path_too_long(&std::path::PathBuf::from(format!(
+            "/{}",
+            "s".repeat(axocoatl_daemon::ipc::max_socket_path_bytes())
+        )))
+        .unwrap();
+        let long = ipc_reservation_failure(&long);
+        assert!(
+            long.starts_with("Failed to reserve the CLI IPC socket: the IPC socket path /s"),
+            "{long}"
+        );
+        assert!(long.contains("is too long"), "{long}");
+        assert!(!long.contains("Another Axocoatl daemon"), "{long}");
+        assert_eq!(
+            axocoatl_service::last_start_failure(&format!("{long}\n")).as_deref(),
+            Some(long.as_str())
+        );
+    }
 
     #[cfg(unix)]
     #[test]

@@ -117,6 +117,18 @@ configuration file. These controls are automatic
 and have no YAML override. See [Data and backup](/operate/data-backup/) and
 [Security](/operate/security/).
 
+## Process IPC socket
+
+The CLI reaches the daemon (`axocoatl session`, `doctor`, onboarding) over a Unix
+socket, also process configuration: `AXOCOATL_SOCKET_PATH` when set, otherwise
+`$XDG_RUNTIME_DIR/axocoatl/axocoatl.sock`, otherwise
+`~/.axocoatl/run/axocoatl.sock`. A Unix socket path may have at most 103 bytes on
+macOS and 107 on Linux. When the path is longer (a long home directory), `dev`,
+`serve` and the Always-On Service stop at start and say so, `doctor` fails its
+Daemon line, and onboarding starts no daemon; set `AXOCOATL_SOCKET_PATH` to a
+shorter absolute path, in a directory only you can write to, for every
+`axocoatl` command. `axocoatl service install` records it for the service.
+
 ## Root keys
 
 | Key | Shape | Runtime role |

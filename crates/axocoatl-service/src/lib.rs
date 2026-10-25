@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 mod environment;
-pub use environment::{ServiceEnvironment, CARRIED_VARIABLES, SYSTEM_PATH};
+pub use environment::{ServiceEnvironment, CARRIED_VARIABLES, SOCKET_PATH_VARIABLE, SYSTEM_PATH};
 
 // Each backend's manager runs only on its own platform, but both definitions
 // are rendered and tested on every platform.
@@ -215,10 +215,12 @@ const EXITED_LOG_GRACE: Duration = Duration::from_millis(if cfg!(test) { 200 } e
 /// What `serve` prints, at the start of a line, when it exits before it
 /// starts: bootstrap failed, the configuration is invalid, another daemon
 /// holds the IPC socket, or the port cannot be listened on.
+pub const IPC_RESERVATION_FAILED: &str = "Failed to reserve the CLI IPC socket: ";
+
 const START_FAILURES: [&str; 5] = [
     "Failed to bootstrap daemon: ",
     "Configuration error:",
-    "Failed to reserve the CLI IPC socket: ",
+    IPC_RESERVATION_FAILED,
     "✗ Port ",
     "✗ Axocoatl cannot listen on ",
 ];
@@ -369,6 +371,15 @@ mod start_failure_tests {
         let recovered = format!("{log}Axocoatl server starting on 127.0.0.1:8080\n");
         assert_eq!(last_start_failure(&recovered), None);
         assert_eq!(last_start_failure("Axocoatl is running.\n"), None);
+        // A socket path too long for this system stops `serve` before
+        // bootstrap; the service reports that line too.
+        let socket = format!(
+            "{IPC_RESERVATION_FAILED}the IPC socket path /h/.axocoatl/run/axocoatl.sock is too long"
+        );
+        assert_eq!(
+            last_start_failure(&format!("{log}{socket}\n")).as_deref(),
+            Some(socket.as_str())
+        );
         assert_eq!(last_start_failure(""), None);
         let long = format!("{START_FAILED}{}", "x".repeat(5000));
         let shown = last_start_failure(&long).unwrap();

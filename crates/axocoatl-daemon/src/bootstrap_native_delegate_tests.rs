@@ -22,6 +22,18 @@ const LEAD_MARKER: &str = "lead-private-scratch-note";
 const TASK: &str = "List every public function in src/lib.rs and report only their names.";
 const SECOND_TASK: &str = "List every public struct in src/lib.rs and report only their names.";
 const LEAD_GRANT: &str = "lead-grant";
+/// How long a run these tests drive, or a wait inside one, may take before
+/// the test says it hung. A lead's run takes about a second on an idle
+/// computer; it took more than ten beside a build and the rest of the suite,
+/// and more than sixty when six copies ran starved of CPU (`taskpolicy -b`)
+/// at a load average of 60. This stops only a run that would never end; it
+/// is not a speed check.
+const HANG_GUARD: Duration = Duration::from_secs(600);
+/// How long a helper waits for the other one to arrive when two must run at
+/// the same time: far longer than a loaded computer takes to start the
+/// second, and within [`HANG_GUARD`], so helpers that run one after the
+/// other still fail with what went wrong.
+const MEETING_WAIT: Duration = Duration::from_secs(300);
 
 fn helper_limits() -> GrantLimits {
     GrantLimits {
@@ -578,8 +590,7 @@ impl LlmProvider for HelperProvider {
             let mut others = inside.subscribe();
             inside.send_modify(|count| *count += 1);
             let met =
-                tokio::time::timeout(Duration::from_secs(2), others.wait_for(|count| *count >= 2))
-                    .await;
+                tokio::time::timeout(MEETING_WAIT, others.wait_for(|count| *count >= 2)).await;
             if !matches!(met, Ok(Ok(_))) {
                 inside.send_modify(|count| *count -= 1);
                 return Ok(provider_failure("no other helper ran at the same time"));
@@ -758,7 +769,7 @@ fn start_lead_with(
 
 async fn run_lead(fixture: &NativeFixture, scenario: Arc<Scenario>, lose_return: bool) -> Run {
     let started = start_lead(fixture, scenario, lose_return);
-    let outcome = tokio::time::timeout(Duration::from_secs(10), started.prepared.run())
+    let outcome = tokio::time::timeout(HANG_GUARD, started.prepared.run())
         .await
         .unwrap()
         .map_err(|error| error.to_string());
@@ -1419,7 +1430,7 @@ async fn lost_delegate_return_reconciles_after_restart_without_rerunning_helper(
     // ownership before simulating process reconstruction in this same process.
     controller.close_registered_repository_admission().unwrap();
     controller
-        .wait_for_registered_executions(Duration::from_secs(5))
+        .wait_for_registered_executions(HANG_GUARD)
         .await
         .unwrap();
     let snapshot = controller.snapshot().unwrap();
@@ -1573,7 +1584,7 @@ async fn retried_lead_reattaches_to_accepted_helper() {
         )
         .unwrap()
         .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), driver.run())
+    let outcome = tokio::time::timeout(HANG_GUARD, driver.run())
         .await
         .unwrap()
         .unwrap();
@@ -1622,7 +1633,7 @@ async fn revoked_lead_at_helper_provider_return_fails_without_poisoning_history(
         panic!("native driver")
     };
     let revoke = async {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(HANG_GUARD, async {
             while scenario.helper_calls() != 1 {
                 tokio::task::yield_now().await;
             }
@@ -1642,11 +1653,10 @@ async fn revoked_lead_at_helper_provider_return_fails_without_poisoning_history(
         release.add_permits(1);
         helper
     };
-    let (result, helper) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(prepared.run(), revoke)
-    })
-    .await
-    .unwrap();
+    let (result, helper) =
+        tokio::time::timeout(HANG_GUARD, async { tokio::join!(prepared.run(), revoke) })
+            .await
+            .unwrap();
     let result = result.unwrap();
     assert_eq!(
         result.snapshot.contract().state(),
@@ -1817,7 +1827,7 @@ async fn stopped_helper_continues_once_without_replaying_accepted_sibling_or_for
         gate.release.notify_one();
         helper
     };
-    let (first, stopped) = tokio::time::timeout(Duration::from_secs(10), async {
+    let (first, stopped) = tokio::time::timeout(HANG_GUARD, async {
         tokio::join!(started.prepared.run(), stop)
     })
     .await
@@ -1889,7 +1899,7 @@ async fn stopped_helper_continues_once_without_replaying_accepted_sibling_or_for
         )
         .unwrap()
         .is_none());
-    let outcome = tokio::time::timeout(Duration::from_secs(10), driver.run())
+    let outcome = tokio::time::timeout(HANG_GUARD, driver.run())
         .await
         .unwrap()
         .unwrap();
@@ -2057,7 +2067,7 @@ async fn crash_in_helper_admission_then_continue(accepted: bool) {
     } = start_lead_with(&fixture, scenario.clone(), |controller| {
         controller.crash_delegate_admission_for_test(accepted)
     });
-    let first = tokio::time::timeout(Duration::from_secs(10), prepared.run())
+    let first = tokio::time::timeout(HANG_GUARD, prepared.run())
         .await
         .unwrap();
     assert!(first.is_err());
@@ -2066,7 +2076,7 @@ async fn crash_in_helper_admission_then_continue(accepted: bool) {
     assert!(before.final_evidence.is_none());
     controller.close_registered_repository_admission().unwrap();
     controller
-        .wait_for_registered_executions(Duration::from_secs(5))
+        .wait_for_registered_executions(HANG_GUARD)
         .await
         .unwrap();
     let turn = controller.snapshot().unwrap().turn_id().clone();
@@ -2168,7 +2178,7 @@ async fn crash_in_helper_admission_then_continue(accepted: bool) {
         )
         .unwrap()
         .unwrap();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), driver.run())
+    let outcome = tokio::time::timeout(HANG_GUARD, driver.run())
         .await
         .unwrap()
         .unwrap();

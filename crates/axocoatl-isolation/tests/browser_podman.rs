@@ -493,6 +493,159 @@ async fn browser_reaches_exposed_ports_and_nothing_else() {
     .await;
 }
 
+/// The browser container as a Session's browser tools start it (the
+/// daemon's launch: no required limits, this host's caps and SELinux
+/// labelling) reaches the Session's app, and the resource caps the host
+/// can apply are those the kernel enforces inside it. On a host where
+/// Podman reports SELinux, containers run with `label=disable`, so the
+/// supervisor bound from the data root can run; set
+/// `AXO_BROWSER_EXPECT_SELINUX=1` on such a host (Fedora, the Podman
+/// machine's Fedora CoreOS) so the run fails if that is not the path taken.
+#[tokio::test]
+#[ignore = "requires Podman and the browser image: CONTAINER_CONNECTION=<connection> cargo test -p axocoatl-isolation --test browser_podman -- --ignored --test-threads=1"]
+async fn the_browser_reaches_the_sessions_app_within_its_limits() {
+    let fixture = Arc::new(Fixture::new());
+    let body = fixture.clone();
+    with_cleanup(
+        async move {
+            let fixture = body;
+            let host = axocoatl_isolation::container_host::container_host()
+                .await
+                .expect("Podman says which caps and labels containers get");
+            if std::env::var_os("AXO_BROWSER_EXPECT_SELINUX").is_some() {
+                assert!(host.label_disable, "Podman does not report SELinux here");
+            }
+            fixture.start_session(SandboxNetwork::Bridge, &[8765]).await;
+            fixture.start_demo_app().await;
+            fixture.service_sockets(&[8765]).await;
+            let container = BrowserContainer::start(&fixture.launch(&[8765], false))
+                .await
+                .expect("the browser container starts");
+            let name = browser_container_name(&fixture.session_id);
+            assert_eq!(container.spec().with_limits, host.caps);
+            assert_eq!(container.spec().label_disable, host.label_disable);
+
+            // It reaches the app the Session serves.
+            let out = drive(
+                &container,
+                driver_input(
+                    "http://localhost:8765/",
+                    json!([{"action": "wait_for", "text": "ORD-2051"}]),
+                    None,
+                ),
+                "inv-limits",
+            )
+            .await;
+            assert_eq!(out["ok"], true, "{out:#}");
+            assert_eq!(out["status"], 200, "{out:#}");
+            assert!(
+                out["snapshot"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("ORD-2051"),
+                "{out:#}"
+            );
+
+            // Podman recorded the caps and the labelling...
+            let inspect: Value = serde_json::from_str(
+                &podman_ok(&[
+                    "container",
+                    "inspect",
+                    "--format",
+                    "{{json .HostConfig}}",
+                    &name,
+                ])
+                .await,
+            )
+            .unwrap();
+            let security = inspect["SecurityOpt"].to_string();
+            assert_eq!(
+                security.contains("label=disable"),
+                host.label_disable,
+                "{security}"
+            );
+            let caps = host.caps;
+            assert_eq!(
+                inspect["Memory"].as_i64() == Some(2 << 30),
+                caps.memory,
+                "{inspect}"
+            );
+            assert_eq!(
+                inspect["NanoCpus"].as_i64() == Some(2_000_000_000),
+                caps.cpus,
+                "{inspect}"
+            );
+            assert_eq!(
+                inspect["PidsLimit"].as_i64() == Some(512),
+                caps.pids,
+                "{inspect}"
+            );
+            if host.label_disable {
+                let label = podman_ok(&[
+                    "container",
+                    "inspect",
+                    "--format",
+                    "{{.ProcessLabel}}",
+                    &name,
+                ])
+                .await;
+                assert!(label.is_empty(), "the browser runs unlabelled: {label}");
+            }
+            // ...and the kernel applies them to the browser's processes.
+            let cgroup = |file: &'static str| {
+                let name = name.clone();
+                async move {
+                    podman_ok(&["exec", &name, "cat", &format!("/sys/fs/cgroup/{file}")]).await
+                }
+            };
+            if caps.memory {
+                assert_eq!(cgroup("memory.max").await, (2u64 << 30).to_string());
+            }
+            if caps.pids {
+                assert_eq!(cgroup("pids.max").await, "512");
+            }
+            if caps.cpus {
+                assert_eq!(cgroup("cpu.max").await, "200000 100000");
+            }
+            // Chromium ran in that cgroup: its peaks count Chromium's
+            // processes and memory, far more than the bridge (PID 1) and one
+            // `cat` (pids.peak from Linux 6.1, memory.peak from 5.19).
+            let peak = |file: &'static str| {
+                let name = name.clone();
+                async move {
+                    let output =
+                        podman(&["exec", &name, "cat", &format!("/sys/fs/cgroup/{file}")]).await;
+                    output
+                        .status
+                        .success()
+                        .then(|| {
+                            String::from_utf8_lossy(&output.stdout)
+                                .trim()
+                                .parse::<u64>()
+                        })
+                        .and_then(Result::ok)
+                }
+            };
+            let (pids_peak, memory_peak) = (peak("pids.peak").await, peak("memory.peak").await);
+            if caps.pids || caps.memory {
+                assert!(
+                    pids_peak.is_some_and(|peak| peak > 4)
+                        || memory_peak.is_some_and(|peak| peak > 64 << 20),
+                    "Chromium ran in the capped cgroup: pids.peak {pids_peak:?}, memory.peak \
+                     {memory_peak:?}"
+                );
+            }
+            eprintln!(
+                "browser container {name}: caps {caps:?} (controllers {:?}), label=disable {}, \
+                 security options {security}, pids.peak {pids_peak:?}, memory.peak {memory_peak:?}",
+                host.controllers, host.label_disable
+            );
+        },
+        async { fixture.cleanup().await },
+    )
+    .await;
+}
+
 /// A fake decision point: allows one address and port, refuses the rest,
 /// and keeps every request and close for assertions.
 #[derive(Debug, Default)]

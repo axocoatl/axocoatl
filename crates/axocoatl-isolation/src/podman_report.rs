@@ -25,7 +25,6 @@
 //! computer.
 
 use std::path::Path;
-use std::time::Duration;
 
 use serde_json::Value;
 use tokio::process::Command;
@@ -35,8 +34,6 @@ use crate::podman::{
     MACHINE_PROVIDER, MACHINE_START_COMMAND, MIN_MACHINE_MEMORY_MIB,
 };
 use crate::session_sandbox::SessionSandbox;
-
-const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The oldest Podman Axocoatl runs work with: `keep-id` with `uid=` and
 /// `gid=` arrived in Podman 4.3.
@@ -327,7 +324,7 @@ pub async fn inspect_through(program: &str, connection: ConnectionOverride) -> P
 async fn output(program: &str, args: &[&str]) -> Option<String> {
     let mut command = Command::new(program);
     command.args(args);
-    let output = SessionSandbox::run_bounded_command(command, PROBE_TIMEOUT)
+    let output = SessionSandbox::run_bounded_command(command, crate::podman::probe_bound())
         .await
         .ok()?;
     (!output.timed_out && output.status.success())

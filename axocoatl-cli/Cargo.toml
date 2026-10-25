@@ -79,6 +79,9 @@ axocoatl-llm-openai = { version = "1.5.0", path = "../crates/axocoatl-llm-openai
 # Test servers that stand in for Ollama answer the contract probes as Ollama
 # 0.40 does (`axocoatl_llm_ollama::ContractProbe`).
 axocoatl-llm-ollama = { version = "1.5.0", path = "../crates/axocoatl-llm-ollama", features = ["contract-probe-stand-in"] }
+# Onboarding's and doctor's tests answer Podman's probes with fake `podman`
+# scripts, which a loaded computer can run slower than the product bound.
+axocoatl-isolation = { version = "1.5.0", path = "../crates/axocoatl-isolation", features = ["test-support"] }
 # `connect codex --refresh`'s end-to-end test serves the daemon's API router
 # in the test process.
 axum = { workspace = true }

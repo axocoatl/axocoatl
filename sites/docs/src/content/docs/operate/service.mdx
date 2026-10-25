@@ -71,6 +71,12 @@ Podman in `/opt/homebrew/bin`. Install therefore writes into the definition:
 - `CONTAINER_CONNECTION` and `CONTAINER_HOST`, when they are set at install
   time, so the service uses the same Podman connection as your shell. A
   `CONTAINER_HOST` that contains a password is not recorded.
+- `AXOCOATL_SOCKET_PATH`, when it is set to an absolute path at install time,
+  so the service's daemon listens on the IPC socket your commands use. Set it
+  when the default socket path, `~/.axocoatl/run/axocoatl.sock` (or
+  `$XDG_RUNTIME_DIR/axocoatl/axocoatl.sock`), is longer than a Unix socket
+  path may be: 103 bytes on macOS, 107 on Linux. Install warns when the
+  service's daemon could not start for that reason.
 
 Install prints what it recorded and warns when it found no `podman`. It never
 writes provider keys or other secrets into the definition. Run
