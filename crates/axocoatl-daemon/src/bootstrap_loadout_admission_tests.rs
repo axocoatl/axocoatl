@@ -8,6 +8,7 @@
 //! call.
 use super::*;
 use axocoatl_config::loadout::ModelSpec;
+use sha2::{Digest, Sha256};
 use std::os::unix::fs::PermissionsExt;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -25,7 +26,6 @@ const MISSING: &str = "missing-model:latest";
 const UNLOADED: &str = "unloaded-model:latest";
 /// Ollama answers 503 (busy) for it, every time.
 const BUSY: &str = "busy-model:latest";
-const DIGEST: &str = "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72";
 
 /// An audited Ollama 0.40.6 with cloud models off: WRITER and REVIEWER
 /// load with 32768 tokens of context, SMALL with 4096, and MISSING is not
@@ -57,16 +57,19 @@ async fn ollama() -> MockServer {
         .mount(&server)
         .await;
     let models = [(WRITER, 32768), (REVIEWER, 32768), (SMALL, 4096)];
+    // These models have independent contents and load states. Sharing a
+    // manifest digest would make UNLOADED an alias of a loaded runner.
+    let digest = |name: &str| format!("{:x}", Sha256::digest(name.as_bytes()));
     let tags: Vec<_> = models
         .iter()
         .map(|(name, _)| *name)
         .chain([UNLOADED])
-        .map(|name| serde_json::json!({"name": name, "model": name, "digest": DIGEST}))
+        .map(|name| serde_json::json!({"name": name, "model": name, "digest": digest(name)}))
         .collect();
     let loaded: Vec<_> = models
         .iter()
         .map(|(name, context)| {
-            serde_json::json!({"name": name, "model": name, "digest": DIGEST,
+            serde_json::json!({"name": name, "model": name, "digest": digest(name),
                 "details": {"format": "gguf"}, "context_length": context, "runner": "llamacpp"})
         })
         .collect();

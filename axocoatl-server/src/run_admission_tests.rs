@@ -40,6 +40,7 @@ case "$*" in
   'info --format json') printf '{{}}\n' ;;
   'info --format {{{{.Host.Security.Rootless}}}}') printf 'true\n' ;;
   'ps '*) ;;
+  'volume ls '*) printf '[]\n' ;;
   'rm '*|'volume rm '*|'network rm '*) ;;
   *)
     if [ ! -e "$gate/held" ]; then
@@ -81,6 +82,10 @@ async fn interrupted_admission_body() {
     std::fs::write(config_dir.path().join("loadouts/folder.yaml"), LOADOUT).unwrap();
     let config = axocoatl_config::load_config(&config_path).await.unwrap();
     let daemon = AxocoatlDaemon::bootstrap_headless(config).await.unwrap();
+    assert!(
+        !gate.join("held").exists(),
+        "daemon startup consumed the Session preparation barrier"
+    );
     daemon.set_config_path(&config_path);
     let state: AppState = Arc::new(tokio::sync::RwLock::new(daemon));
     let router = build_router(
@@ -119,6 +124,10 @@ async fn interrupted_admission_body() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
+    assert!(
+        !request.is_finished(),
+        "admission completed before the client disconnected"
+    );
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
 

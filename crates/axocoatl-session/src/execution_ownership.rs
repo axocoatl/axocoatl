@@ -1004,7 +1004,7 @@ mod tests {
     /// held by neither while the other holds it.
     #[test]
     fn a_path_lease_is_held_only_while_no_daemon_runs_at_that_path() {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::private_tempdir_test_support::private_tempdir();
         let authority = root_authority(&SecureDir::open_existing_all(root.path()).unwrap());
         let daemon = LegacyFormatOwnership::acquire(root.path()).unwrap();
         assert!(PathLease::hold(&authority).unwrap().is_none());

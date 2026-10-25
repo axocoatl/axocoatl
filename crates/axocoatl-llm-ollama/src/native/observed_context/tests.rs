@@ -390,13 +390,16 @@ async fn count(server: &MockServer, endpoint: &str) -> usize {
 #[tokio::test]
 async fn observed_runner_context_becomes_explicit_request_without_inventing_a_default() {
     let server = MockServer::start().await;
-    standard(&server).await;
+    // MockServer reuses addresses; this model must not reuse another test's
+    // cached probe pass when verifying the probe requests themselves.
+    let digest = unique_digest(72);
+    standard_with(&server, AUDITED_OLLAMA_VERSION, &digest, Probes::Pass).await;
     let observation = observe_native_ollama_context(&server.uri(), "test-model")
         .await
         .unwrap();
     assert_eq!(observation.context_tokens, 4096);
     assert_ne!(observation.context_tokens, 131072);
-    assert_eq!(observation.model_digest, DIGEST);
+    assert_eq!(observation.model_digest, digest);
     assert_eq!(observation.requested_model, "test-model");
     assert_eq!(observation.resolved_model, "test-model:latest");
     assert!(observation.observed_at_ms > 0);
@@ -465,8 +468,8 @@ async fn observed_runner_context_becomes_explicit_request_without_inventing_a_de
     // request configuration. Connecting must not silently reload/re-resolve it.
     server.reset().await;
     profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
-    fixed(&server, "GET", "/api/tags", listed(DIGEST)).await;
-    fixed(&server, "GET", "/api/ps", loaded(json!(8192), DIGEST)).await;
+    fixed(&server, "GET", "/api/tags", listed(&digest)).await;
+    fixed(&server, "GET", "/api/ps", loaded(json!(8192), &digest)).await;
     fixed(
         &server,
         "POST",
@@ -680,7 +683,7 @@ async fn shared_ollama(server: &MockServer, digest: &str, evictions: usize, othe
 /// generated, and only once the context is known.
 #[tokio::test]
 async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named() {
-    for (seed, evictions) in [(20, 1), (21, 2)] {
+    for (seed, evictions) in [(80, 1), (81, 2)] {
         let server = MockServer::start().await;
         shared_ollama(&server, &unique_digest(seed), evictions, true).await;
         let observation = observe_native_ollama_context(&server.uri(), "test-model")
@@ -689,11 +692,11 @@ async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named(
         assert_eq!(observation.context_tokens, 4096);
         assert_eq!(count(&server, "/api/generate").await, evictions + 1);
         let (probe_bodies, other) = chats(&server).await;
-        assert_eq!((probe_bodies.len(), other), (2, 0));
+        assert_eq!((probe_bodies.len(), other), (PROBES, 0));
     }
 
     let server = MockServer::start().await;
-    shared_ollama(&server, &unique_digest(22), 3, true).await;
+    shared_ollama(&server, &unique_digest(82), 3, true).await;
     let refusal = observe_native_ollama_context(&server.uri(), "test-model")
         .await
         .unwrap_err();
@@ -711,7 +714,7 @@ async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named(
 
     // Unloaded with nothing loaded instead: a stop, or a keep-alive of 0.
     let server = MockServer::start().await;
-    shared_ollama(&server, &unique_digest(23), 3, false).await;
+    shared_ollama(&server, &unique_digest(83), 3, false).await;
     let refusal = observe_native_ollama_context(&server.uri(), "test-model")
         .await
         .unwrap_err();
@@ -723,7 +726,7 @@ async fn a_model_another_program_unloads_is_loaded_again_and_its_eviction_named(
 
     // Unloaded between the two reads of the context: loaded again too.
     let server = MockServer::start().await;
-    let digest = unique_digest(24);
+    let digest = unique_digest(84);
     profile(&server, AUDITED_OLLAMA_VERSION, true, shown()).await;
     fixed(&server, "GET", "/api/tags", listed(&digest)).await;
     fixed(&server, "POST", "/api/generate", acknowledgement()).await;
@@ -847,7 +850,8 @@ async fn a_model_ollama_serves_under_another_name_is_read_from_that_runner() {
     assert_eq!(observation.context_tokens, 8192);
     assert_eq!(observation.resolved_model, "test-model:latest");
     assert_eq!(count(&server, "/api/generate").await, 1);
-    assert_eq!(chats(&server).await.0.len(), 2);
+    let (probe_bodies, other) = chats(&server).await;
+    assert_eq!((probe_bodies.len(), other), (PROBES, 0));
 
     let digest = unique_digest(31);
     let server = MockServer::start().await;

@@ -222,9 +222,9 @@ fn uncertain_stream_acknowledgement_requires_reopen_and_keeps_immutable_event_id
 /// back after a reopen; an unknown ending or an impossible count is refused.
 #[test]
 fn provider_response_observations_record_how_each_response_ended() {
-    let root = tempfile::tempdir().unwrap();
+    let root = crate::private_tempdir_test_support::private_tempdir();
     let mut canonical = canonical(&root);
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::private_tempdir_test_support::private_tempdir();
     let identity = canonical.identity().unwrap();
     let mut content = store(dir.path(), identity.clone());
     let snapshot = streaming_fixture(&mut canonical, &mut content);
