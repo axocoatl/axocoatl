@@ -22,8 +22,13 @@ esac
 # Every capture is additionally owned by the existing 180-second supervisor.
 # Limit temporary artifact growth (512-byte blocks) independently from the
 # tool's output bound. The patch is never written whole (below), so this
-# limits only the listings, which grow with the number of paths.
-ulimit -f 131072
+# limits only the listings, which grow with the number of paths: 1 GiB, far
+# more than the listings of a repository the capture reads within its time.
+# A write past it fails rather than ending the process that writes, so the
+# capture fails, and says that a listing reached the limit (exit 69).
+trap '' XFSZ
+file_limit=2097152
+ulimit -f "$file_limit"
 scratch=$(mktemp -d)
 # What the commands below write to standard error is bounded as what the
 # capture prints is: Git can warn once for each file, and ten thousand such
@@ -35,10 +40,18 @@ mkfifo "$scratch/stderr"
 stderr_drain=$!
 exec 3>&2 2> "$scratch/stderr"
 finish() {
+  status=$?
   if [ -n "$stderr_drain" ]; then
     exec 2>&3 3>&-
     wait "$stderr_drain" || :
     stderr_drain=
+  fi
+  # A capture that failed with a listing at the size limit says so.
+  if [ "$status" -ne 0 ] && [ -d "$scratch" ] &&
+    [ -n "$(find "$scratch" -type f -size "+$((file_limit * 512 - 1))c")" ]; then
+    rm -rf -- "$scratch"
+    echo "a listing of the repository's files reached the 1 GiB a capture may write" >&2
+    exit 69
   fi
   rm -rf -- "$scratch"
 }
@@ -86,6 +99,8 @@ git_setting diff.srcPrefix a/
 git_setting diff.dstPrefix b/
 git_setting diff.relative false
 git_setting diff.orderFile /dev/null
+git_setting diff.submodule short
+git_setting submodule.recurse false
 # Line endings are still converted as configured; only the warning Git writes
 # for each file whose conversion would not round-trip is left out.
 git_setting core.safecrlf false
@@ -110,7 +125,8 @@ head_before=$(git rev-parse --verify HEAD 2>/dev/null || printf unborn)
 # Each NUL-terminated name on the input, as `od -An -v -tu1` prints its
 # bytes, in base64 on a line of its own, as base64 writes it unwrapped: one
 # od and one awk for every name, where base64 for each one took three
-# processes.
+# processes. With strip=1, a name's last "/" is left out: Git lists a nested
+# checkout as its directory, "name/", which is recorded as "name".
 cat > "$scratch/base64.awk" <<'EOF'
 BEGIN {
   digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -130,6 +146,7 @@ END {
   if (n > 0) emit()
 }
 function emit(  i, a, b, c, out) {
+  if (strip && n > 1 && bytes[n - 1] == 47) n--
   out = ""
   for (i = 0; i + 2 < n; i += 3) {
     a = bytes[i]; b = bytes[i + 1]; c = bytes[i + 2]
@@ -177,7 +194,7 @@ BEGIN {
     if (substr(digest, 1, 1) == "\\") digest = substr(digest, 2)
     digest = substr(digest, 1, 64)
     mode = next_of("modes")
-  } else if (kind == "alone" || kind == "link") {
+  } else if (kind == "alone" || kind == "link" || kind == "repository") {
     digest = next_of("alone")
     mode = next_of("modes")
     if (kind == "alone") kind = "file"
@@ -208,11 +225,12 @@ cat > "$scratch/dash.awk" <<'EOF'
 !body && $0 == "+++ b/./-" { $0 = "+++ b/-" }
 { print }
 EOF
-# One line per record: the path, then its mode, kind and content digest as
-# read from the working tree itself, then what the record is: the index
-# entry (flags, mode, object and stage) of a tracked path, "?" for an
-# untracked path, "!" for an ignore file Git reads although it is ignored
-# itself, and "git" for Git's own settings, hooks and exclude files.
+# The records of one batch of paths of one source, the arguments: one line
+# per record, the path, then its mode, kind and content digest as read from
+# the working tree itself, then what the record is: the index entry (flags,
+# mode, object and stage) of a tracked path, "?" for an untracked path, "!"
+# for an ignore file Git reads although it is ignored itself, and "git" for
+# Git's own settings, hooks and exclude files.
 #
 # Each batch of paths xargs passes is read with one sha256sum and one stat
 # for all of its files and its names encoded by one od and one awk, so a
@@ -221,118 +239,182 @@ EOF
 # whose name sha256sum would escape or split (a backslash or a newline in
 # it) is read alone, as a symbolic link's target is. Operands are paths
 # that start with "./" or "/", so no name is read as standard input or an
-# option.
-records() {
-  xargs -0 -r sh -c '
-    set -eu
-    tab=$(printf "\t")
-    newline="
+# option. A submodule or nested checkout is one record of kind "repository"
+# whose digest covers all of it (nested.sh). Anything it cannot read fails
+# it, and so the capture.
+cat > "$scratch/records.sh" <<'EOF'
+set -eu
+tab=$(printf "\t")
+newline="
 "
-    source=$1
-    shift
-    batch=$AXO_SNAPSHOT_SCRATCH/batch.$$
-    rm -rf -- "$batch"
-    mkdir "$batch"
-    for list in kinds names hash stat alone; do
-      : > "$batch/$list"
-    done
-    for record do
-      case $source in
-        index) meta=${record%%"$tab"*}; path=${record#*"$tab"}; name=$path ;;
-        untracked) meta="?"; path=$record; name=$path ;;
-        ignored)
-          case $record in
-            .gitignore | */.gitignore) ;;
-            *) continue ;;
-          esac
-          meta="!"; path=$record; name=$path ;;
-        git) meta=git; path=$AXO_GIT_BASE/$record; name=.git/$record ;;
+source=$1
+shift
+batch=$AXO_SNAPSHOT_SCRATCH/batch.$$
+rm -rf -- "$batch"
+mkdir "$batch"
+for list in kinds names hash stat alone; do
+  : > "$batch/$list"
+done
+for record do
+  case $source in
+    index) meta=${record%%"$tab"*}; path=${record#*"$tab"}; name=$path ;;
+    untracked) meta="?"; path=$record; name=${record%/} ;;
+    ignored)
+      case $record in
+        .gitignore | */.gitignore) ;;
+        *) continue ;;
       esac
-      case $path in
-        /*) operand=$path ;;
-        *) operand=./$path ;;
-      esac
-      if [ -L "$path" ]; then
-        readlink -n -- "$path" > "$AXO_SNAPSHOT_SCRATCH/link"
-        digest=$(sha256sum < "$AXO_SNAPSHOT_SCRATCH/link"); kind=link
+      meta="!"; path=$record; name=$path ;;
+    git) meta=git; path=$AXO_GIT_BASE/$record; name=.git/$record ;;
+  esac
+  case $path in
+    /*) operand=$path ;;
+    *) operand=./$path ;;
+  esac
+  if [ -L "$path" ]; then
+    readlink -n -- "$path" > "$batch/link"
+    digest=$(sha256sum < "$batch/link"); kind=link
+    printf "%s\n" "${digest%% *}" >> "$batch/alone"
+    printf "%s\0" "$operand" >> "$batch/stat"
+  elif [ -f "$path" ]; then
+    case $path in
+      *"$newline"* | *\\*)
+        digest=$(sha256sum < "$path"); kind=alone
         printf "%s\n" "${digest%% *}" >> "$batch/alone"
+        ;;
+      *)
+        kind=file
+        printf "%s\0" "$operand" >> "$batch/hash"
+        ;;
+    esac
+    printf "%s\0" "$operand" >> "$batch/stat"
+  elif [ ! -e "$path" ]; then
+    kind=deleted
+  elif [ -d "$path" ]; then
+    case $source:$meta in
+      # A nested checkout, which Git lists as its directory, or a
+      # submodule (a gitlink).
+      untracked:* | index:*" 160000 "*)
+        digest=$(sh "$AXO_SNAPSHOT_SCRATCH/nested.sh" "$operand"); kind=repository
+        printf "%s\n" "$digest" >> "$batch/alone"
         printf "%s\0" "$operand" >> "$batch/stat"
-      elif [ -f "$path" ]; then
-        case $path in
-          *"$newline"* | *\\*)
-            digest=$(sha256sum < "$path"); kind=alone
-            printf "%s\n" "${digest%% *}" >> "$batch/alone"
-            ;;
-          *)
-            kind=file
-            printf "%s\0" "$operand" >> "$batch/hash"
-            ;;
-        esac
-        printf "%s\0" "$operand" >> "$batch/stat"
-      elif [ ! -e "$path" ]; then
-        kind=deleted
-      else
-        # A submodule, a nested checkout or another special file has no
-        # content this capture reads, so it has no record. Every other path
-        # of the batch still has its own: one at a time, the records after
-        # it in its batch were lost, as many as a thousand.
-        continue
-      fi
-      printf "%s\0" "$name" >> "$batch/names"
-      printf "%s\t%s\n" "$kind" "$meta" >> "$batch/kinds"
-    done
-    xargs -0 -r sha256sum -- < "$batch/hash" > "$batch/digests"
-    xargs -0 -r stat -c %a -- < "$batch/stat" > "$batch/modes"
-    od -An -v -tu1 < "$batch/names" |
-      awk -f "$AXO_SNAPSHOT_SCRATCH/base64.awk" > "$batch/encoded"
-    awk -v batch="$batch" -f "$AXO_SNAPSHOT_SCRATCH/records.awk" < "$batch/kinds"
-    rm -rf -- "$batch"
-  ' sh "$1"
+        ;;
+      # A tracked file that is now a directory is gone; Git lists the
+      # directory's own files apart.
+      index:*) kind=deleted ;;
+      *) continue ;;
+    esac
+  elif [ "$source" = index ]; then
+    # A tracked file that is now a FIFO, a socket or a device, which hold
+    # no content Git tracks, is gone as a file.
+    kind=deleted
+  else
+    continue
+  fi
+  printf "%s\0" "$name" >> "$batch/names"
+  printf "%s\t%s\n" "$kind" "$meta" >> "$batch/kinds"
+done
+xargs -0 -r sha256sum -- < "$batch/hash" > "$batch/digests"
+xargs -0 -r stat -c %a -- < "$batch/stat" > "$batch/modes"
+od -An -v -tu1 < "$batch/names" > "$batch/bytes"
+awk -f "$AXO_SNAPSHOT_SCRATCH/base64.awk" < "$batch/bytes" > "$batch/encoded"
+awk -v batch="$batch" -f "$AXO_SNAPSHOT_SCRATCH/records.awk" < "$batch/kinds"
+rm -rf -- "$batch"
+EOF
+# Git's own settings, hooks and exclude files under the Git directory that
+# is the argument, each name NUL-terminated.
+cat > "$scratch/git-files.sh" <<'EOF'
+set -eu
+cd "$1"
+set --
+for item in config config.worktree hooks info; do
+  if [ -e "$item" ] || [ -L "$item" ]; then
+    set -- "$@" "$item"
+  fi
+done
+if [ "$#" -gt 0 ]; then
+  find "$@" ! -type d -print0
+fi
+EOF
+# The digest of the submodule or nested checkout at the argument, which Git
+# lists as one path and this capture records as one: its own records of
+# every file it tracks or does not ignore, by its own index and ignore files,
+# each read from its working tree as any file is, then its Git settings,
+# hooks and exclude files and the commit it has checked out. A directory at
+# a submodule's path that is no checkout of its own (one never initialized)
+# is read file by file. So a change to any of it changes the record. Git
+# lists files there and reads its HEAD; nothing it configures runs.
+cat > "$scratch/nested.sh" <<'EOF'
+set -eu
+cd "$1"
+dir=$(pwd -P)
+work=$(mktemp -d "$AXO_SNAPSHOT_SCRATCH/nested.XXXXXX")
+export "GIT_CONFIG_KEY_$GIT_CONFIG_COUNT=safe.directory" \
+  "GIT_CONFIG_VALUE_$GIT_CONFIG_COUNT=$dir"
+GIT_CONFIG_COUNT=$((GIT_CONFIG_COUNT + 1))
+export GIT_CONFIG_COUNT
+top=$(git rev-parse --show-toplevel 2> /dev/null) || top=
+if [ "$top" = "$dir" ]; then
+  head=$(git rev-parse --verify -q HEAD) || head=unborn
+  git ls-files -z --stage -v > "$work/index"
+  git ls-files -z --others --exclude-standard > "$work/others"
+  xargs -0 -r sh "$AXO_SNAPSHOT_SCRATCH/records.sh" index < "$work/index" > "$work/records"
+  xargs -0 -r sh "$AXO_SNAPSHOT_SCRATCH/records.sh" untracked < "$work/others" >> "$work/records"
+  git_dir=$(cd "$(git rev-parse --git-dir)" && pwd -P)
+  common_dir=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  for base in "$common_dir" "$git_dir"; do
+    sh "$AXO_SNAPSHOT_SCRATCH/git-files.sh" "$base" > "$work/git"
+    AXO_GIT_BASE=$base xargs -0 -r sh "$AXO_SNAPSHOT_SCRATCH/records.sh" git \
+      < "$work/git" >> "$work/records"
+    [ "$git_dir" != "$common_dir" ] || break
+  done
+  printf 'HEAD\t%s\n' "$head" >> "$work/records"
+else
+  find . -name .git -prune -o ! -type d -print0 > "$work/found"
+  xargs -0 -r sh "$AXO_SNAPSHOT_SCRATCH/records.sh" untracked < "$work/found" > "$work/records"
+fi
+sort -u "$work/records" > "$work/sorted"
+digest=$(sha256sum < "$work/sorted")
+rm -rf -- "$work"
+printf '%s\n' "${digest%% *}"
+EOF
+# The records of the paths of one source (index, untracked, ignored or git)
+# named on standard input. A file it cannot read fails the capture.
+records() {
+  xargs -0 -r sh "$scratch/records.sh" "$1" || {
+    echo "the capture could not read every file it records" >&2
+    exit 65
+  }
 }
 # Every tracked and untracked path, whatever the index's flags say about it.
 entries() {
   git ls-files -z --stage -v > "$scratch/index"
   git ls-files -z --others --exclude-standard > "$scratch/others"
-  {
-    records index < "$scratch/index"
-    records untracked < "$scratch/others"
-  } | sort -u
+  records index < "$scratch/index" > "$scratch/records"
+  records untracked < "$scratch/others" >> "$scratch/records"
+  sort -u "$scratch/records"
 }
 # The candidate's tree: each path's mode, kind and content digest.
 tree() {
-  cut -f 1-4 "$1" | sort -u
-}
-# Git's own settings, hooks and exclude files.
-git_files() {
-  base=$1
-  shift
-  set --
-  for item in config config.worktree hooks info; do
-    if [ -e "$base/$item" ] || [ -L "$base/$item" ]; then
-      set -- "$@" "$item"
-    fi
-  done
-  if [ "$#" -gt 0 ]; then
-    (cd "$base" && find "$@" ! -type d -print0)
-  fi
+  cut -f 1-4 "$1" > "$scratch/cut"
+  sort -u "$scratch/cut"
 }
 # What a write-scope judgement compares: every entry, each ignore file Git
 # reads, and Git's own files. Ignored paths themselves are left out.
 judged() {
   git ls-files -z --others --ignored --exclude-standard --directory > "$scratch/ignored"
-  git_files "$common_dir" > "$scratch/git-common"
-  {
-    cat "$1"
-    records ignored < "$scratch/ignored"
-    AXO_GIT_BASE=$common_dir
-    export AXO_GIT_BASE
-    records git < "$scratch/git-common"
-    if [ "$git_dir" != "$common_dir" ]; then
-      git_files "$git_dir" > "$scratch/git-worktree"
-      AXO_GIT_BASE=$git_dir
-      records git < "$scratch/git-worktree"
-    fi
-  } | sort -u
+  sh "$scratch/git-files.sh" "$common_dir" > "$scratch/git-common"
+  cp "$1" "$scratch/judged"
+  records ignored < "$scratch/ignored" >> "$scratch/judged"
+  AXO_GIT_BASE=$common_dir
+  export AXO_GIT_BASE
+  records git < "$scratch/git-common" >> "$scratch/judged"
+  if [ "$git_dir" != "$common_dir" ]; then
+    sh "$scratch/git-files.sh" "$git_dir" > "$scratch/git-worktree"
+    AXO_GIT_BASE=$git_dir
+    records git < "$scratch/git-worktree" >> "$scratch/judged"
+  fi
+  sort -u "$scratch/judged"
 }
 entries > "$scratch/entries-before"
 tree "$scratch/entries-before" > "$scratch/before"
@@ -340,7 +422,10 @@ if [ "$capture_mode" != observe ]; then
   judged "$scratch/entries-before" > "$scratch/judged-before"
 fi
 # The patch is taken against a fresh index of HEAD alone, so flags the
-# repository's own index sets on a path cannot hide its change.
+# repository's own index sets on a path cannot hide its change. A submodule
+# is in it as Git shows one when only the commit it has checked out is
+# compared: Git does not look inside it, where it would run what that
+# checkout configures. Its record covers the rest.
 if [ "$head_before" = unborn ]; then
   GIT_INDEX_FILE=$scratch/patch-index git read-tree --empty
 else
@@ -361,15 +446,21 @@ size_job=$!
   code=0
   if [ "$head_before" != unborn ]; then
     GIT_INDEX_FILE=$scratch/patch-index \
-      git diff --no-ext-diff --no-textconv --binary "$head_before" -- || code=$?
+      git diff --no-ext-diff --no-textconv --binary --ignore-submodules=dirty \
+      "$head_before" -- || code=$?
   fi
   # Preserve untracked additions in the protected patch too. Paths are
   # arguments, never shell source. Git reads a path "-" as its standard
   # input, so a file of that name at the root is diffed as "./-" and its
-  # section named as Git names any other file's (dash.awk).
+  # section named as Git names any other file's (dash.awk). A nested
+  # checkout, which Git lists as its directory, has no section: Git cannot
+  # diff a directory, and its record covers it.
   if [ "$code" -eq 0 ]; then
     xargs -0 -r sh -c '
       for path do
+        case $path in
+          */) continue ;;
+        esac
         if [ "$path" = - ]; then
           {
             code=0
@@ -392,36 +483,43 @@ size_job=$!
   tee "$scratch/patch-digest" "$scratch/patch-size" || code=$?
   echo "$code" > "$scratch/tee-status"
 } | {
-  head -c 524289 > "$scratch/patch"
+  code=0
+  head -c 524289 > "$scratch/patch" || code=$?
   cat > /dev/null
+  echo "$code" > "$scratch/head-status"
 }
 wait "$digest_job"
 wait "$size_job"
-# Git's status, then the copy's: a patch either did not write whole is not
-# recorded.
-for status in patch-status tee-status; do
+# Git's status, then the copies': a patch any of them did not write whole is
+# not recorded.
+for status in patch-status tee-status head-status; do
   read -r code < "$scratch/$status"
   [ "$code" -eq 0 ] || exit "$code"
 done
 # Every path whose state differs from HEAD, with its manifest line, whatever
 # the repository's size: what a run can have changed, as this capture saw it.
 # A path the differences name that the manifest does not hold is gone, and
-# is listed as deleted.
+# is listed as deleted. Every submodule and nested checkout is listed too,
+# changed or not: this capture compares none of their files with HEAD, so
+# only two captures' lines of one tell whether it changed between them.
 if [ "$head_before" = unborn ]; then
   : > "$scratch/differ"
 else
   GIT_INDEX_FILE=$scratch/patch-index \
-    git diff --no-ext-diff --no-textconv --no-renames --name-only -z "$head_before" -- \
-    > "$scratch/differ"
+    git diff --no-ext-diff --no-textconv --no-renames --ignore-submodules=dirty \
+    --name-only -z "$head_before" -- > "$scratch/differ"
 fi
 cat "$scratch/untracked" >> "$scratch/differ"
-od -An -v -tu1 < "$scratch/differ" | awk -f "$scratch/base64.awk" | sort -u > "$scratch/differ-names"
+od -An -v -tu1 < "$scratch/differ" > "$scratch/differ-bytes"
+awk -v strip=1 -f "$scratch/base64.awk" < "$scratch/differ-bytes" > "$scratch/differ-encoded"
+sort -u "$scratch/differ-encoded" > "$scratch/differ-names"
 tab=$(printf '\t')
 awk -F "$tab" -v OFS="$tab" -v names="$scratch/differ-names" '
   BEGIN { while ((getline name < names) > 0) wanted[name] = 1 }
-  ($1 in wanted) { print $1, $2, $3, $4; found[$1] = 1 }
+  ($1 in wanted) || $3 == "repository" { print $1, $2, $3, $4; found[$1] = 1 }
   END { for (name in wanted) if (!(name in found)) print name, "0", "deleted", "missing" }
-' "$scratch/before" | sort -u > "$scratch/differ-lines"
+' "$scratch/before" > "$scratch/differ-found"
+sort -u "$scratch/differ-found" > "$scratch/differ-lines"
 entries > "$scratch/entries-after"
 tree "$scratch/entries-after" > "$scratch/after"
 cmp "$scratch/before" "$scratch/after"
@@ -444,7 +542,10 @@ if [ "$capture_mode" = compare ]; then
     echo "the kept Before manifest differs from the one recorded" >&2
     exit 66
   fi
-  sort "$scratch/baseline" "$scratch/judged-before" | uniq -u | cut -f 1 | sort -u > "$scratch/changed"
+  sort "$scratch/baseline" "$scratch/judged-before" > "$scratch/both"
+  uniq -u "$scratch/both" > "$scratch/once"
+  cut -f 1 "$scratch/once" > "$scratch/once-names"
+  sort -u "$scratch/once-names" > "$scratch/changed"
 fi
 tree=$(sha256sum < "$scratch/before")
 patch=$(cat "$scratch/patch-sha256")

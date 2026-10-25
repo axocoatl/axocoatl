@@ -321,10 +321,15 @@ another timeout for it, from 1 second to 30 minutes (a [loadout](/configure/load
 `timeout`, or `check_options` in the [Team and budget API](/reference/http-api/#native-session-controls)),
 and keeps up to 768 KiB of output and 256 KiB of errors. Each repository capture may
 run for three minutes. It reads every file in the repository: on a 6-CPU Podman machine
-a repository of 50,000 files took 12 seconds, and 12,288 new files took 16. A very large
-repository or change (hundreds of thousands of files), or a busy computer, can take
-longer; the turn then needs attention and says that the capture did not finish within
-its 180 seconds.
+a capture of a repository of 200,000 files took 20 seconds and one of 500,000 files 53.
+A very large repository or change (a million files or more), or a busy computer, can
+take longer; the turn then needs attention and says that the capture did not finish
+within its 180 seconds. A capture also fails, and says why, when it cannot read a file
+it records (one in the repository or its `.git` directory that the Agents' user may not
+read), or when its listings of the repository's files pass the 1 GiB it may write, which
+takes millions of files. A submodule or nested Git checkout is one entry of a capture,
+whose digest covers its files, its Git settings and the commit it has checked out, so a
+change to a file inside one is a change to that path.
 
 If the checks cannot be paid for because the paying Agent's budget is spent, has
 expired or was revoked, the turn needs attention and says why, for example "Required
@@ -357,10 +362,14 @@ its attachments and the room kept for asking it again): three quarters of what o
 request to its model may hold beside the output allowance (85% of the context), and at
 most 48 KiB.
 A larger change is shown source first, then generated and dense text, then binary
-files, each file whole when it fits and else cut at a hunk boundary; a note first says
-that not all of it is shown, and the files left out are listed with their bytes. The
-reviewer is told it has not seen that part and is asked to read those files before it
-judges them. It is asked to start its answer with `VERDICT: APPROVE`
+files, each file whole when it fits and else cut at a hunk boundary, or, for a source
+file not one whole hunk of fits (a new file has only one), after its last whole line
+that does; a note first says that not all of it is shown, and the files left out are
+listed with their bytes. A submodule or nested Git checkout is one entry of the
+repository's captures, and the patch shows a submodule only by the commit it has checked
+out: those the turn changed are named after the change. The reviewer is told it has not
+seen those parts and is asked to read those files before it judges them, and to judge a
+binary file by its name and size. It is asked to start its answer with `VERDICT: APPROVE`
 or `VERDICT: CHANGES`, followed by findings, each on its own line, numbered `F1`, `F2`, …
 and written as `path:line: what to change`. A verdict
 line anywhere in the answer counts, ignoring case and Markdown emphasis, and the rest of

@@ -28,6 +28,18 @@ async fn review_fixture_with(
     lead_tools: &[&str],
     reviewer_tools: &[&str],
 ) -> NativeFixture {
+    review_fixture_instructed(max_rounds, checks, lead_tools, reviewer_tools, None).await
+}
+
+/// As [`review_fixture_with`], with the reviewer's own `instructions` (its
+/// system prompt).
+async fn review_fixture_instructed(
+    max_rounds: u32,
+    checks: &[Vec<String>],
+    lead_tools: &[&str],
+    reviewer_tools: &[&str],
+    instructions: Option<&str>,
+) -> NativeFixture {
     let mut fixture = native_fixture().await;
     let session_id = fixture.request.session_id.clone();
     let token = fixture
@@ -73,6 +85,9 @@ async fn review_fixture_with(
                         max_tokens: Some(128),
                         ..Default::default()
                     },
+                    system_prompt: instructions
+                        .filter(|_| name == "reviewer")
+                        .map(str::to_owned),
                     ..Default::default()
                 };
                 let profile = ExecutionProfile {
@@ -1423,11 +1438,12 @@ async fn actual_a_change_too_large_to_record_still_runs_the_checks_and_the_revie
             .iter()
             .map(|(name, _)| format!("{name}\\n"))
             .collect::<String>();
+        let count = match files.len() {
+            1 => "1 file".to_owned(),
+            count => format!("{count} files"),
+        };
         assert!(
-            prompt.contains(&format!(
-                "The {} files the turn changed:\\n{listed}",
-                files.len()
-            )),
+            prompt.contains(&format!("The {count} the turn changed:\\n{listed}")),
             "{prompt}"
         );
         assert!(!prompt.contains("notes.txt"), "{prompt}");
@@ -1451,6 +1467,144 @@ async fn actual_a_change_too_large_to_record_still_runs_the_checks_and_the_revie
         assert_eq!(receipt.subject, expected);
         assert!(receipt.facts.read_at_finish.is_empty());
     }
+}
+
+/// A submodule is one entry of the repository's captures, and the patch
+/// shows it only by its commit: a turn that changes a file inside one names
+/// it to the reviewer after the change, as part of the change it has not
+/// seen, and the captures record its entry with the paths that differ from
+/// HEAD.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
+    use super::super::activation_tests::actual_sandbox;
+    use axocoatl_session::execution_content::RepositorySnapshotPhase;
+    use base64::Engine as _;
+    let git = |root: &std::path::Path, args: &[&str]| {
+        assert!(std::process::Command::new("git")
+            .args(
+                [
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "-c",
+                    "protocol.file.allow=always",
+                ]
+                .iter()
+                .chain(args),
+            )
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap()
+            .success());
+    };
+    let upstream = tempfile::tempdir().unwrap();
+    git(upstream.path(), &["init", "--quiet"]);
+    std::fs::write(upstream.path().join("x"), "x\n").unwrap();
+    git(upstream.path(), &["add", "-A"]);
+    git(upstream.path(), &["commit", "--quiet", "-m", "sub"]);
+    let checks = vec![vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        "test -f notes.txt".to_owned(),
+    ]];
+    let mut fixture = review_fixture_with(1, &checks, &["bash"], &["read_file", "bash"]).await;
+    let sandbox = actual_sandbox(&mut fixture.repository).await;
+    let root = fixture.repository._workspace.path().to_path_buf();
+    git(&root, &["init", "--quiet"]);
+    std::fs::write(root.join("notes.txt"), "draft\n").unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "--quiet", "-m", "base"]);
+    git(
+        &root,
+        &[
+            "submodule",
+            "add",
+            "--quiet",
+            upstream.path().to_str().unwrap(),
+            "sub",
+        ],
+    );
+    git(&root, &["commit", "--quiet", "-m", "sub"]);
+    let scenario = Arc::new(Scenario {
+        lead_command: Some("echo fixed > sub/x && echo done >> notes.txt".into()),
+        ..Arc::into_inner(Scenario::new(&["VERDICT: APPROVE\nNothing must change."])).unwrap()
+    });
+    let run = run_turn_within(&fixture, scenario.clone(), Duration::from_secs(300)).await;
+    sandbox.stop_checked().await.unwrap();
+    let run = run.unwrap();
+    let contract = run.outcome.snapshot.contract();
+    let review = run
+        .controller
+        .control_plane()
+        .unwrap()
+        .required_review
+        .unwrap();
+    assert_eq!(
+        contract.state(),
+        Some(LogicalTurnState::Completed),
+        "review: {review:?}"
+    );
+    let lead = contract
+        .activations()
+        .iter()
+        .find(|item| item.activation.node_id.as_str() == "lead-node")
+        .unwrap()
+        .activation
+        .clone();
+    let captures = run
+        .controller
+        .with_team_stores(|_, content, _| {
+            Ok(content
+                .repository_snapshots(&run.outcome.snapshot, &lead)
+                .unwrap())
+        })
+        .unwrap();
+    let entry = |phase: RepositorySnapshotPhase| {
+        let capture = &captures
+            .iter()
+            .find(|capture| capture.content.phase == phase)
+            .unwrap()
+            .content;
+        assert_eq!(capture.unavailable, None, "{phase:?}");
+        capture
+            .changed_manifest
+            .as_deref()
+            .unwrap()
+            .lines()
+            .find(|line| {
+                line.starts_with(&format!(
+                    "{}\t",
+                    base64::engine::general_purpose::STANDARD.encode("sub")
+                ))
+            })
+            .map(str::to_owned)
+            .unwrap()
+    };
+    let (before, after) = (
+        entry(RepositorySnapshotPhase::Before),
+        entry(RepositorySnapshotPhase::After),
+    );
+    assert!(before.contains("\trepository\t"), "{before}");
+    assert_ne!(before, after);
+    let requests = scenario.reviewer_requests.lock().unwrap().clone();
+    let (_, prompt) = requests.last().unwrap();
+    // The reviewer reads its input as JSON, where a newline is `\n`.
+    assert!(
+        prompt.contains(
+            "[Not shown above: the turn changed files in 1 submodule or nested Git checkout, \
+             which the patch shows only by a submodule's commit. You have not seen those \
+             changes; read the files yourself:]\\nsub (a submodule or nested Git checkout)\\n"
+        ),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Not all of the change is shown below"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("+done"), "{prompt}");
 }
 
 /// A scenario whose reviewer's model calls fail as `failures` says, by
@@ -1890,6 +2044,52 @@ async fn a_stop_ends_the_wait_for_a_review_round_to_run_again() {
     assert_eq!(reviewer_started(&scenario).len(), 1);
     let review = controller.control_plane().unwrap().required_review.unwrap();
     assert_ne!(review.state, "running", "{review:?}");
+}
+
+/// The tokens the host counts beside the reviewer's prompt are the turn's
+/// request, with the context it captured, and the reviewer's own
+/// instructions, each as its JSON input carries it; the host's reviewer is
+/// admitted with no attachments, so none count.
+#[tokio::test]
+async fn the_reviewer_request_counts_the_turn_request_and_the_reviewer_instructions() {
+    let instructions = "Review the change against every edge case of the paging code. ".repeat(40);
+    let fixture = review_fixture_instructed(1, &[], &[], &["read_file"], Some(&instructions)).await;
+    let run = run_turn(&fixture, Scenario::new(&["VERDICT: APPROVE"])).await;
+    let contract = run.outcome.snapshot.contract();
+    assert_eq!(contract.state(), Some(LogicalTurnState::Completed));
+    let counter = axocoatl_token::ApproximateCounter::new().unwrap();
+    let tokens = |text: &str| {
+        use axocoatl_token::TokenCounter;
+        counter
+            .count_text(text)
+            .max(counter.count_text(&serde_json::to_string(text).unwrap()))
+    };
+    let turn = run.outcome.snapshot.turn_id().clone();
+    let (request, attachments) = run
+        .controller
+        .with_team_stores(|canonical, content, _| {
+            let (_, request) = content.retained_request(&turn).unwrap().unwrap();
+            let (_, admission) = content.turn_admission(canonical, &turn).unwrap().unwrap();
+            let reviewer = admission
+                .nodes
+                .iter()
+                .find(|node| node.node_id == reviewer_node())
+                .unwrap()
+                .attachments
+                .len();
+            Ok((request, reviewer))
+        })
+        .unwrap();
+    assert_eq!(attachments, 0);
+    let mut expected = tokens(&request.effective_input) + tokens(&instructions);
+    if !request.context.is_empty() {
+        expected += tokens(&serde_json::to_string(&request.context).unwrap());
+    }
+    assert!(tokens(&instructions) > 400);
+    assert_eq!(
+        run.controller.counted_review_request_tokens().unwrap(),
+        expected
+    );
 }
 
 /// A reviewer whose request does not fit its model's context does not run

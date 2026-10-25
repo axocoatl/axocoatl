@@ -1257,8 +1257,9 @@ async fn actual_shell_change_outside_scope_fails_the_activation() {
 }
 
 /// A read-only helper's shell writes configuration only to a scratch home of
-/// its own: the Session's shared home stays unwritable, so nothing the helper
-/// writes there reaches the host's captures or any later process.
+/// its own, under the temporary directory the supervisor gives that command:
+/// the Session's shared home stays unwritable, so nothing the helper writes
+/// there reaches the host's captures or any later process.
 #[tokio::test]
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
 async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
@@ -1269,7 +1270,7 @@ async fn actual_read_only_helper_shell_cannot_write_the_shared_home() {
     let r = run_scoped(&mut f, &["bash", "read_file"], &[]);
     let provider = Provider::new(vec![(
         "bash",
-        serde_json::json!({"command":"case $HOME in /tmp/axocoatl-home.*) echo scratch-home ;; esac; \
+        serde_json::json!({"command":"case $HOME in \"${TMPDIR:-/tmp}\"/axocoatl-home.*) echo scratch-home ;; esac; \
             printf '[core]\\n\\texcludesFile = /tmp/hide\\n' > \"$HOME/.gitconfig\" \
             && echo scratch-written; \
             for home in /root /home/*; do \

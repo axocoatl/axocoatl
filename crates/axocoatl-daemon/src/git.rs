@@ -940,10 +940,12 @@ pub fn one_hunk_patch(preamble: &str, hunk: &Hunk) -> String {
 /// Paths come from the turn's recorded actions, which are repo-relative, so they
 /// compare directly against status paths. A file the agent wrote and the user
 /// has since staged is still a file the agent wrote — the flags are independent
-/// facts, not a state machine.
+/// facts, not a state machine. A nested Git checkout, which status lists as its
+/// directory (`nested/`), is the path `nested` a capture records it as.
 pub fn mark_last_turn(status: &mut GitStatus, touched: &[String]) {
     for f in status.files.iter_mut() {
-        f.last_turn = touched.iter().any(|t| t == &f.path);
+        let path = f.path.strip_suffix('/').unwrap_or(&f.path);
+        f.last_turn = touched.iter().any(|t| t == path);
     }
 }
 
@@ -1215,6 +1217,16 @@ mod tests {
         // Independent facts: the agent wrote it *and* it is staged. Treating
         // these as one state would make either unrepresentable.
         assert!(f("agent.rs").staged && f("agent.rs").last_turn);
+    }
+
+    #[test]
+    fn a_nested_checkout_the_turn_made_is_marked_by_the_path_a_capture_records() {
+        let mut st = parse_status("## main\n?? nested/\n?? other/\n M a.rs\n");
+        mark_last_turn(&mut st, &["nested".to_string(), "a.rs".to_string()]);
+        let f = |p: &str| st.files.iter().find(|f| f.path == p).unwrap();
+        assert!(f("nested/").last_turn);
+        assert!(!f("other/").last_turn);
+        assert!(f("a.rs").last_turn);
     }
 
     #[test]
