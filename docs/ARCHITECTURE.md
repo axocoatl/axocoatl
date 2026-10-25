@@ -885,7 +885,8 @@ its digest matches the marker of the final recorded check run.
 **Receipts.** When the driver has a run's final Outcome, its host seals it
 (`bootstrap_receipts.rs`) before the `Ended` event and `outcome.json`: an in-toto
 Statement v1 (`axocoatl_session::receipt`, predicate type `https://axocoatl.ai/receipt/v1`)
-whose subjects are the run's changed files with their SHA-256, and whose predicate holds
+whose subjects are the run's changed files with their SHA-256 and changed submodules
+with their `gitCommit`, and whose predicate holds
 the run, repository (base commit, dirty paths, `origin` as `https://host/path`), loadout,
 Agents (runtime, pinned program version, provider and model, credential name), sandbox
 (backend, network, workload and the last recorded network policy of each scope: revision,
@@ -898,11 +899,13 @@ required checks' readiness review judged (`judged_capture`), else the last write
 activation's After capture (`after_capture`), else read on the host without following
 links (`workspace_at_finish`). A capture's digests are its whole manifest when that is
 complete (8 KiB) and hashes to its tree digest, else the manifest lines of the paths that
-differ from `HEAD`, which every capture (output format 2) records whatever the
+differ from `HEAD`, which every capture (output formats 2 and 3) records whatever the
 repository's size, up to 10,000 paths within the 768 KiB a check capture retains; a path
 those lines do not hold was as in `HEAD` and is read at the finish (`read_at_finish`).
-Removed paths, symbolic links and what cannot be attributed are listed apart; a submodule
-or nested checkout, one entry of the manifest, is one of those. The key is one Ed25519 key per data root (`receipt_key`, `ring`), stored as
+Removed paths, symbolic links and what cannot be attributed are listed apart. A submodule
+records its checked-out commit, or its index gitlink when HEAD cannot be read; its contents
+are not captured. Every nested checkout that is not a submodule is listed as not covered,
+even if its entry did not change. The key is one Ed25519 key per data root (`receipt_key`, `ring`), stored as
 the secret `receipt-signing-key` in a tagged JSON value that the egress broker refuses to
 send whatever a route calls it, and made on first use. Admission failures, driver errors
 and runs a restart ends are sealed the same way. Signing that fails adds the warning
@@ -1747,15 +1750,14 @@ restriction below and `write_file` and `edit_file` are withheld.
 - A writer's shell can still write outside its paths, so the activation's own Before and
   After repository captures decide: an equal tree digest means no change; otherwise
   complete manifests are compared exactly, or the retained patches against the same HEAD
-  file by file. A submodule or nested checkout is one entry of a manifest, named by its
-  path, whose digest covers its files (as its own index and ignore files list them),
-  its Git settings, hooks and exclude files and the commit it has checked out, so a change
-  inside one is a change to that path; the patch shows a submodule only by that commit,
-  read without Git looking inside it, so nothing its configuration names runs. If any
-  non-ignored file outside the scope changed, or the captures cannot establish the change
+  file by file. A submodule is one entry of a manifest, named by its path and its
+  checked-out commit (or its index gitlink when HEAD cannot be read). Its contents are
+  not captured. A nested checkout that is not a submodule is recorded as unread;
+  scope checking fails when it could hide a change outside the approved paths.
+  If any captured path outside the scope changed, or the captures cannot establish the change
   set (an exhausted invocation allowance, a HEAD moved by a commit, more changed paths than
   one capture lists in its 512 KiB, a file the capture cannot read, listings past the 1 GiB
-  a capture may write), the activation fails and its turn
+  a capture may write, or nested-checkout names past their 64 KiB encoded limit), the activation fails and its turn
   needs attention. The change is not reverted; it stays for the person to keep or undo.
   Ignored files are not judged. This is review evidence, not confinement. A writer
   stopped before its After capture (a Stop skips it) fails as stopped, saying that its

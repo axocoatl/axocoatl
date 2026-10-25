@@ -91,7 +91,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 // Statement
 
 /// One file the run changed that exists after it, with the SHA-256 of its
-/// content (of its target, for a symbolic link).
+/// content (of its target, for a symbolic link), or a submodule it changed
+/// with the commit the submodule holds (`gitCommit`, in-toto's name for it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subject {
     pub name: String,
@@ -106,11 +107,27 @@ impl Subject {
         }
     }
 
+    /// A submodule and the commit it holds ([`submodule_commit`]).
+    pub fn git_commit(name: impl Into<String>, commit: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            digest: BTreeMap::from([(GIT_COMMIT.to_string(), commit.into())]),
+        }
+    }
+
     /// The SHA-256 digest, when there is one.
     pub fn sha256_digest(&self) -> Option<&str> {
         self.digest.get("sha256").map(String::as_str)
     }
+
+    /// The commit of a submodule subject, when it is one.
+    pub fn git_commit_digest(&self) -> Option<&str> {
+        self.digest.get(GIT_COMMIT).map(String::as_str)
+    }
 }
+
+/// The digest name of a submodule subject's commit.
+pub const GIT_COMMIT: &str = "gitCommit";
 
 /// The in-toto statement a receipt signs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -853,9 +870,129 @@ pub enum PathState {
     File(String),
     /// A symbolic link and the SHA-256 of its target.
     Link(String),
+    /// A submodule and the commit it holds ([`submodule_commit`]).
+    Commit(String),
     Absent,
     /// Something a receipt cannot cover, and why.
     Other(String),
+}
+
+/// Why a receipt does not cover a nested Git checkout that is not a
+/// submodule: no repository capture reads its files.
+pub const NESTED_CHECKOUT_NOT_COVERED: &str = "a nested Git checkout (not a submodule), whose \
+     files Axocoatl's repository captures do not read, so a receipt does not cover it or \
+     anything inside it";
+
+/// The commit the submodule at `path` under the checkout `root` holds, as
+/// Axocoatl's repository captures record it and Git compares a submodule:
+/// the commit its own checkout has as HEAD, or, when it has none Git can
+/// read (it is not checked out, or its HEAD is unborn), the commit the
+/// index records for it. `Ok(None)` when the index has no submodule at
+/// `path`. Git reads the index and that HEAD; nothing either repository
+/// configures runs.
+pub fn submodule_commit(root: &Path, path: &str) -> Result<Option<String>, String> {
+    if !is_plain_path(path) {
+        return Ok(None);
+    }
+    let listed = read_git(
+        root,
+        &["ls-files", "-s", "-z", "--", &format!(":(literal){path}")],
+        None,
+    )?;
+    let recorded = listed.split('\0').find_map(|entry| {
+        let (head, name) = entry.split_once('\t')?;
+        let mut fields = head.split(' ');
+        match (fields.next(), fields.next(), fields.next(), fields.next()) {
+            (Some("160000"), Some(commit), Some("0"), None) if name == path => {
+                Some(commit.to_owned())
+            }
+            _ => None,
+        }
+    });
+    let Some(recorded) = recorded else {
+        return Ok(None);
+    };
+    let checkout = root.join(path);
+    let own = if std::fs::symlink_metadata(checkout.join(".git")).is_ok() {
+        // Git does not look above the submodule for a repository.
+        std::fs::canonicalize(&checkout).ok().and_then(|checkout| {
+            read_git(
+                &checkout,
+                &["rev-parse", "--verify", "-q", "HEAD"],
+                checkout.parent(),
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
+    Ok(Some(
+        own.map(|commit| commit.trim().to_owned())
+            .filter(|commit| is_commit(commit))
+            .unwrap_or(recorded),
+    ))
+}
+
+/// A Git commit id, SHA-1 or SHA-256, in lowercase hex.
+pub fn is_commit(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// What `git ARGS` prints in `dir`, with nothing a repository configures
+/// run (no file system monitor, no hooks) and no prompt, waiting at most 30
+/// seconds. `ceiling` keeps Git from looking above it for a repository.
+fn read_git(dir: &Path, args: &[&str], ceiling: Option<&Path>) -> Result<String, String> {
+    // Git trusts a repository another user owns only by its absolute path.
+    let dir = std::fs::canonicalize(dir).map_err(|error| format!("cannot be read: {error}"))?;
+    let mut command = std::process::Command::new("git");
+    command
+        .arg("-C")
+        .arg(&dir)
+        .arg("-c")
+        .arg(format!("safe.directory={}", dir.display()))
+        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    if let Some(ceiling) = ceiling {
+        command.env("GIT_CEILING_DIRECTORIES", ceiling);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("git could not start: {error}"))?;
+    let mut stdout = child.stdout.take().expect("piped");
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("git did not answer within 30 seconds".into());
+            }
+            Err(error) => return Err(format!("git could not be waited for: {error}")),
+        }
+    };
+    let bytes = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("git {} failed", args[0]));
+    }
+    String::from_utf8(bytes).map_err(|_| "git printed a name that is not UTF-8".into())
 }
 
 /// A repository-relative path a receipt can name: not empty, not absolute,
@@ -872,7 +1009,7 @@ pub fn is_plain_path(path: &str) -> bool {
 /// Read `path` under `root` without following a symbolic link anywhere on
 /// the way: a regular file's content digest, a link's target digest (as
 /// Axocoatl's repository captures record them, `sha256sum` of the bytes or
-/// of `readlink -n`), or why neither.
+/// of `readlink -n`), a submodule's commit, or why none.
 pub fn hash_repo_path(root: &Path, path: &str) -> PathState {
     if !is_plain_path(path) {
         return PathState::Other("not a plain repository path".into());
@@ -907,7 +1044,16 @@ pub fn hash_repo_path(root: &Path, path: &str) -> PathState {
         };
     }
     if metadata.is_dir() {
-        return PathState::Other("is a directory".into());
+        return match submodule_commit(root, path) {
+            Ok(Some(commit)) => PathState::Commit(commit),
+            Ok(None) if std::fs::symlink_metadata(current.join(".git")).is_ok() => {
+                PathState::Other(NESTED_CHECKOUT_NOT_COVERED.into())
+            }
+            Ok(None) => PathState::Other("is a directory".into()),
+            Err(error) => PathState::Other(format!(
+                "is a directory, and whether it is a submodule cannot be read ({error})"
+            )),
+        };
     }
     if !metadata.is_file() {
         return PathState::Other("is not a regular file".into());
@@ -967,8 +1113,8 @@ fn short(digest: &str) -> String {
 }
 
 /// Whether `path` in `root` is what `statement` says the run left: each
-/// subject a file (or, for one in `files.links`, a link) with its digest;
-/// each removed path absent.
+/// subject a file (or, for one in `files.links`, a link) with its digest, or
+/// a submodule holding its commit; each removed path absent.
 pub fn check_path(statement: &Statement, root: &Path, path: &str) -> Option<FileMismatch> {
     let mismatch = |problem: String| {
         Some(FileMismatch {
@@ -982,6 +1128,21 @@ pub fn check_path(statement: &Statement, root: &Path, path: &str) -> Option<File
         .iter()
         .find(|subject| subject.name == path)
     {
+        if let Some(expected) = subject.git_commit_digest() {
+            return match state {
+                PathState::Commit(found) if found == expected => None,
+                PathState::Commit(found) => mismatch(format!(
+                    "the submodule holds another commit (receipt {}…, found {}…)",
+                    short(expected),
+                    short(&found)
+                )),
+                PathState::Absent => mismatch("missing".into()),
+                PathState::Other(why) => mismatch(why),
+                PathState::File(_) | PathState::Link(_) => {
+                    mismatch("the receipt covers a submodule; this is not one".into())
+                }
+            };
+        }
         let Some(expected) = subject.sha256_digest() else {
             return mismatch("the receipt gives it no sha256 digest".into());
         };
@@ -1008,6 +1169,9 @@ pub fn check_path(statement: &Statement, root: &Path, path: &str) -> Option<File
             }
             (PathState::Link(_), false) => {
                 mismatch("the receipt covers a file; this is a symbolic link".into())
+            }
+            (PathState::Commit(_), _) => {
+                mismatch("the receipt covers a file; this is a submodule".into())
             }
             (PathState::Absent, _) => mismatch("missing".into()),
             (PathState::Other(why), _) => mismatch(why),
@@ -1187,6 +1351,10 @@ pub fn describe(statement: &Statement) -> Vec<String> {
         }
     ));
     for subject in &statement.subject {
+        if let Some(commit) = subject.git_commit_digest() {
+            lines.push(format!("  {}  commit {commit} (submodule)", subject.name));
+            continue;
+        }
         lines.push(format!(
             "  {}  sha256:{}{}",
             subject.name,
@@ -1821,6 +1989,125 @@ mod tests {
             .unwrap()
             .problem
             .contains("symbolic link"));
+    }
+
+    /// A submodule is covered by the commit it holds, as a repository
+    /// capture records it: the commit its checkout has as HEAD, or, not
+    /// checked out, the one the index records. A nested Git checkout that
+    /// is not a submodule is named as not covered, and a plain directory is
+    /// no subject. A receipt's submodule subject is checked by that commit
+    /// and shown with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_submodule_is_covered_by_its_commit() {
+        let git = |dir: &Path, args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "-c",
+                    "protocol.file.allow=always",
+                    "-c",
+                    "init.defaultBranch=main",
+                ])
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let upstream = tempfile::tempdir().unwrap();
+        git(upstream.path(), &["init", "--quiet"]);
+        for content in ["x\n", "y\n"] {
+            std::fs::write(upstream.path().join("x"), content).unwrap();
+            git(upstream.path(), &["add", "-A"]);
+            git(upstream.path(), &["commit", "--quiet", "-m", content]);
+        }
+        let newest = git(upstream.path(), &["rev-parse", "HEAD"]);
+        let older = git(upstream.path(), &["rev-parse", "HEAD~1"]);
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "--quiet"]);
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "--quiet", "-m", "a"]);
+        git(
+            root,
+            &[
+                "submodule",
+                "add",
+                "--quiet",
+                upstream.path().to_str().unwrap(),
+                "vendor/sub",
+            ],
+        );
+        git(root, &["commit", "--quiet", "-m", "sub"]);
+        assert_eq!(
+            hash_repo_path(root, "vendor/sub"),
+            PathState::Commit(newest.clone())
+        );
+        git(&root.join("vendor/sub"), &["checkout", "--quiet", &older]);
+        assert_eq!(
+            hash_repo_path(root, "vendor/sub"),
+            PathState::Commit(older.clone())
+        );
+
+        let key_pair = key(RFC8032_SEED);
+        let mut covered = statement(public_key_of(&key_pair).signer());
+        covered.subject = vec![Subject::git_commit("vendor/sub", older.clone())];
+        covered.predicate.files.removed.clear();
+        assert_eq!(check_files(&covered, root), Vec::new());
+        assert!(describe(&covered)
+            .iter()
+            .any(|line| line == &format!("  vendor/sub  commit {older} (submodule)")));
+        git(&root.join("vendor/sub"), &["checkout", "--quiet", &newest]);
+        let problems = check_files(&covered, root);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0]
+                .problem
+                .starts_with("the submodule holds another commit"),
+            "{problems:?}"
+        );
+        // Not checked out (as in a pull request's checkout without its
+        // submodules): the commit the index records.
+        git(root, &["submodule", "deinit", "--quiet", "--force", "vendor/sub"]);
+        assert_eq!(
+            hash_repo_path(root, "vendor/sub"),
+            PathState::Commit(newest.clone())
+        );
+        // A file subject at a submodule, a submodule subject at a file.
+        covered.subject = vec![
+            Subject::sha256("vendor/sub", "a".repeat(64)),
+            Subject::git_commit("a.txt", newest.clone()),
+        ];
+        let problems = check_files(&covered, root);
+        assert_eq!(
+            problems
+                .iter()
+                .map(|problem| problem.problem.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "the receipt covers a file; this is a submodule",
+                "the receipt covers a submodule; this is not one"
+            ]
+        );
+        // A nested checkout that is not a submodule, and a plain directory.
+        let nested = root.join("tools/nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "--quiet"]);
+        assert_eq!(
+            hash_repo_path(root, "tools/nested"),
+            PathState::Other(NESTED_CHECKOUT_NOT_COVERED.into())
+        );
+        assert_eq!(
+            hash_repo_path(root, "tools"),
+            PathState::Other("is a directory".into())
+        );
     }
 
     #[test]

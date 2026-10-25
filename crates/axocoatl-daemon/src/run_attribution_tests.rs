@@ -55,6 +55,7 @@ fn capture(phase: CapturePhase, manifest: Option<&str>) -> CaptureFacts {
         patch: None,
         changed: None,
         head: None,
+        unread: Vec::new(),
     }
 }
 
@@ -102,15 +103,20 @@ fn subjects_come_from_the_tree_the_checks_judged() {
     assert!(files.facts.unattributed[1].starts_with(".git/config: one of Git's own files"));
 }
 
-/// A submodule or nested Git checkout the turn changed is one entry of the
-/// capture: the receipt names it as one it does not cover, and why, in a
-/// whole manifest and in a large repository's changed lines alike.
+/// A submodule the run moved is a subject with the commit it holds, as a
+/// file is with its content's digest; a nested Git checkout (not a
+/// submodule), whose files no capture reads, is named as one the receipt
+/// does not cover, whether its own entry changed or not, so the receipt is
+/// incomplete and says why: in a whole manifest and in a large repository's
+/// changed lines alike.
 #[test]
-fn a_changed_submodule_makes_the_receipt_incomplete_and_says_why() {
+fn a_submodule_is_covered_by_its_commit_and_a_nested_checkout_is_named_as_not_covered() {
+    let commit = "5".repeat(40);
     let manifest = format!(
-        "{}{}",
+        "{}{}{}",
         line("a.txt", "file", &"1".repeat(64)),
-        line("vendor/sub", "repository", &"5".repeat(64)),
+        line("tools", SPECIAL_KIND, UNREAD_DIGEST),
+        line("vendor/sub", SPECIAL_KIND, &commit),
     );
     let whole = tree(&manifest);
     let lines = CapturedTree {
@@ -123,8 +129,9 @@ fn a_changed_submodule_makes_the_receipt_incomplete_and_says_why() {
         (lines, "c".repeat(64)),
     ] {
         let attribution = RunAttribution {
-            paths: paths(&["a.txt", "vendor/sub"]),
+            paths: paths(&["a.txt", "tools", "vendor/sub"]),
             checked: vec![judged],
+            unread: paths(&["old-clone", "tools"]),
             ..RunAttribution::default()
         };
         let files = receipt_files(
@@ -135,14 +142,20 @@ fn a_changed_submodule_makes_the_receipt_incomplete_and_says_why() {
         assert_eq!(files.facts.source, source::JUDGED_CAPTURE);
         assert_eq!(
             files.subject,
-            vec![Subject::sha256("a.txt", "1".repeat(64))]
+            vec![
+                Subject::sha256("a.txt", "1".repeat(64)),
+                Subject::git_commit("vendor/sub", commit.clone()),
+            ]
         );
         assert!(!files.facts.complete);
+        let not_covered = "a nested Git checkout (not a submodule), whose files Axocoatl's \
+                           repository captures do not read, so a receipt does not cover it or \
+                           anything inside it";
         assert_eq!(
             files.facts.unattributed,
             vec![
-                "vendor/sub: a submodule or nested Git checkout, which a capture records as one \
-                 entry; a receipt does not cover the files inside it"
+                format!("tools: {not_covered}"),
+                format!("old-clone: {not_covered}"),
             ]
         );
     }

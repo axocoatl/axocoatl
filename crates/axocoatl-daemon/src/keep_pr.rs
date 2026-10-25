@@ -8,7 +8,10 @@
 //! After of each activation), that differs from `HEAD` in the working tree.
 //! A path that had uncommitted changes before the run (the run manifest's
 //! `dirty_paths`) is refused rather than mixed in. Other changes in the
-//! working tree are reported as not committed.
+//! working tree are reported as not committed. A submodule the run moved is
+//! committed as the commit it holds, only as the run's receipt covers it; a
+//! run whose repository holds a nested Git checkout (not a submodule), whose
+//! files no capture reads, is refused.
 //!
 //! Host `git` and `gh` run with the person's own credentials; Axocoatl reads
 //! none. Nothing a repository can configure runs: see `git_host`.
@@ -1620,7 +1623,13 @@ fn porcelain_paths(stdout: &[u8]) -> BTreeSet<String> {
             continue;
         }
         let status = &entry[..2];
-        paths.insert(String::from_utf8_lossy(&entry[3..]).into_owned());
+        // Git lists an untracked repository inside the checkout (a
+        // submodule not yet committed) as its directory, `dir/`.
+        let path = String::from_utf8_lossy(&entry[3..]).into_owned();
+        paths.insert(match path.strip_suffix('/') {
+            Some(directory) => directory.to_owned(),
+            None => path,
+        });
         if status.contains(&b'R') || status.contains(&b'C') {
             if let Some(original) = entries.next() {
                 paths.insert(String::from_utf8_lossy(original).into_owned());
@@ -1687,7 +1696,9 @@ async fn build_commit(
                 "--porcelain=v1",
                 "-z",
                 "--untracked-files=all",
-                "--ignore-submodules=all",
+                // A submodule whose commit moved, never what is inside it:
+                // Git does not run status there.
+                "--ignore-submodules=dirty",
                 "--no-renames",
             ],
         ),
@@ -1719,6 +1730,27 @@ async fn build_commit(
             listed(&dirty)
         )));
     }
+    // A submodule the run moved is committed as the commit it holds (a
+    // gitlink), and only as the run's receipt covers it: its directory's
+    // times say nothing about which commit it holds.
+    let submodules: Vec<String> = run_paths
+        .iter()
+        .filter(|path| {
+            std::fs::symlink_metadata(repo.root.join(path)).is_ok_and(|meta| meta.is_dir())
+        })
+        .cloned()
+        .collect();
+    if !submodules.is_empty() && job.receipt.is_none() {
+        return Err(refused(format!(
+            "the run moved the {} {} to another commit, and without a receipt that covers {} \
+             Keep as PR cannot tell that {} the commit the run left; commit {} yourself",
+            if submodules.len() == 1 { "submodule" } else { "submodules" },
+            listed(&submodules),
+            if submodules.len() == 1 { "it" } else { "them" },
+            if submodules.len() == 1 { "it still holds" } else { "they still hold" },
+            if submodules.len() == 1 { "it" } else { "them" },
+        )));
+    }
     // With a receipt, each path's content must be the one it covers.
     if let Some(receipt) = job.receipt {
         check_against_receipt(receipt, &repo.root, &run_paths)?;
@@ -1728,7 +1760,7 @@ async fn build_commit(
     // time, which no process can set back) holds work they never saw, such
     // as an edit made by hand afterwards: it is refused, never committed.
     let mut later = Vec::new();
-    for path in &run_paths {
+    for path in run_paths.iter().filter(|path| !submodules.contains(path)) {
         let after_end = git_host::changed_since(&repo.root.join(path), job.outcome.finished_at_ms)
             .map_err(|error| KeepPrError::Git(format!("could not read {path}: {error}")))?;
         if after_end {
@@ -1924,6 +1956,15 @@ pub async fn keep(job: KeepJob<'_>) -> Result<KeepPrResponse, KeepPrError> {
         return Err(refused(format!(
             "the run's changes cannot be attributed exactly, so Keep as PR does not guess: {}",
             bounded(&job.attribution.unattributable.join("; "), 1200)
+        )));
+    }
+    if let Some(note) = crate::run_attribution::unread_note(&job.attribution.unread) {
+        return Err(refused(format!(
+            "{}, so Keep as PR does not guess; ignore {} in .gitignore, or make {} {}",
+            bounded(&note, 1200),
+            if job.attribution.unread.len() == 1 { "it" } else { "them" },
+            if job.attribution.unread.len() == 1 { "it" } else { "them" },
+            if job.attribution.unread.len() == 1 { "a submodule" } else { "submodules" },
         )));
     }
     let git_paths: Vec<String> = job

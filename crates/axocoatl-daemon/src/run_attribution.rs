@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use axocoatl_session::execution_content::{
-    ActivationRepositorySnapshot, ExecutionTurnView, RepositorySnapshotPhase,
+    ActivationRepositorySnapshot, ExecutionTurnView, RepositorySnapshotPhase, SPECIAL_KIND,
+    UNREAD_DIGEST,
 };
 use axocoatl_session::receipt::{self, sha256_hex, FileFacts, PathState, Subject};
 use axocoatl_session::run_outcome::CheckResult;
@@ -39,6 +40,11 @@ pub struct RunAttribution {
     /// The After capture of the last activation that changed a file, when
     /// one did and no activation whose changes are unknown came after it.
     pub last_writer_after: Option<CapturedTree>,
+    /// The nested Git checkouts (not submodules) in the captures of the
+    /// run's activations, whose files no capture reads: what an Agent
+    /// changed inside one is not known. Keep refuses rather than guess, and
+    /// a receipt names each as not covered.
+    pub unread: BTreeSet<String>,
 }
 
 /// One repository capture's tree: its digest; when the capture holds it
@@ -111,6 +117,7 @@ impl RunAttribution {
                     self.checked.push(tree);
                 }
             }
+            self.unread.extend(capture.unread.iter().cloned());
         }
         match attribute_activation(captures) {
             ActivationChanges::Changed(paths) => {
@@ -137,11 +144,15 @@ impl RunAttribution {
     /// it changed (such an activation is never read as having changed
     /// nothing).
     pub(crate) fn last_turn(self) -> (Vec<String>, Option<String>) {
-        let unattributed = (!self.unattributable.is_empty()).then(|| {
+        let mut unknown = self.unattributable.clone();
+        if let Some(note) = unread_note(&self.unread) {
+            unknown.push(note);
+        }
+        let unattributed = (!unknown.is_empty()).then(|| {
             format!(
                 "Axocoatl cannot tell which files part of the last turn changed: {}. Review All \
                  changes.",
-                self.unattributable.join("; ")
+                unknown.join("; ")
             )
         });
         (self.paths.into_iter().collect(), unattributed)
@@ -180,6 +191,9 @@ pub(crate) struct CaptureFacts {
     pub(crate) changed: Option<String>,
     /// The `HEAD` the capture saw; `None` for an unborn one.
     pub(crate) head: Option<String>,
+    /// The nested Git checkouts the capture named, whose files it did not
+    /// read.
+    pub(crate) unread: Vec<String>,
 }
 
 impl CaptureFacts {
@@ -219,6 +233,7 @@ impl CaptureFacts {
             patch,
             changed: snapshot.changed_manifest.clone(),
             head: snapshot.head.clone(),
+            unread: snapshot.unread_paths.clone(),
         }
     }
 
@@ -361,8 +376,28 @@ fn patch_not_whole() -> String {
     )
 }
 
+/// What the nested Git checkouts `unread` leave unknown, in words: `None`
+/// when there are none.
+pub(crate) fn unread_note(unread: &BTreeSet<String>) -> Option<String> {
+    if unread.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = unread.iter().map(String::as_str).collect();
+    let (are, them) = if names.len() == 1 {
+        ("is a nested Git checkout (not a submodule)", "it")
+    } else {
+        ("are nested Git checkouts (not submodules)", "them")
+    };
+    Some(format!(
+        "{} {are} whose files Axocoatl's repository captures do not read, so what an Agent \
+         changed inside {them} is not known",
+        names.join(", ")
+    ))
+}
+
 /// One entry of a capture manifest: the path as recorded (bytes), its mode,
-/// kind (`file`, `link` or `deleted`) and content digest.
+/// kind (`file`, `link`, `deleted`, or `special` for a submodule or nested
+/// Git checkout) and content digest (a submodule's commit, or `unread`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestEntry {
     pub path: Vec<u8>,
@@ -633,9 +668,11 @@ fn judged_tree<'a>(
 /// manifest, or, in a repository too large for that, from the lines of the
 /// paths that differ from `HEAD`; a path those lines do not hold was as in
 /// `HEAD` in that tree, and is read under `repo_root` now and listed in
-/// `read_at_finish`. Removed paths are listed apart; a path that is Git's
-/// own, not plain, or not a file or link, and every activation whose changes
-/// cannot be attributed, makes the list incomplete and says why.
+/// `read_at_finish`. A submodule is a subject with the commit it holds.
+/// Removed paths are listed apart; a path that is Git's own, not plain, or
+/// not a file, link or submodule, every nested Git checkout in the run's
+/// captures (whose files no capture reads), and every activation whose
+/// changes cannot be attributed, makes the list incomplete and says why.
 pub fn receipt_files(
     attribution: &RunAttribution,
     checks: &[CheckResult],
@@ -668,11 +705,12 @@ pub fn receipt_files(
             "file" => PathState::File(entry.digest.clone()),
             "link" => PathState::Link(entry.digest.clone()),
             "deleted" => PathState::Absent,
-            axocoatl_session::turn_review::REPOSITORY => PathState::Other(
-                "a submodule or nested Git checkout, which a capture records as one entry; a \
-                 receipt does not cover the files inside it"
-                    .into(),
-            ),
+            SPECIAL_KIND if entry.digest == UNREAD_DIGEST => {
+                PathState::Other(receipt::NESTED_CHECKOUT_NOT_COVERED.into())
+            }
+            SPECIAL_KIND if receipt::is_commit(&entry.digest) => {
+                PathState::Commit(entry.digest.clone())
+            }
             kind => PathState::Other(format!("recorded as {kind:?}")),
         }
     };
@@ -704,9 +742,15 @@ pub fn receipt_files(
                 subject.push(Subject::sha256(path.clone(), digest));
                 links.push(path.clone());
             }
+            PathState::Commit(commit) => subject.push(Subject::git_commit(path.clone(), commit)),
             PathState::Absent => removed.push(path.clone()),
             PathState::Other(why) => unattributed.push(format!("{path}: {why}")),
         }
+    }
+    // A nested checkout the run's Agents may have changed inside, though
+    // its own entry did not change.
+    for path in attribution.unread.difference(&attribution.paths) {
+        unattributed.push(format!("{path}: {}", receipt::NESTED_CHECKOUT_NOT_COVERED));
     }
     ReceiptFiles {
         subject,

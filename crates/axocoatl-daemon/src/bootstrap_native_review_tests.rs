@@ -1473,19 +1473,21 @@ async fn actual_a_change_too_large_to_record_still_runs_the_checks_and_the_revie
     }
 }
 
-/// A submodule is one entry of the repository's captures, and the patch
-/// shows it only by its commit: a turn that changes a file inside one names
-/// it to the reviewer after the change, as part of the change it has not
-/// seen, and the captures record its entry with the paths that differ from
-/// HEAD.
+/// A submodule is one entry of the repository's captures, recorded by the
+/// commit it has checked out, and a nested Git checkout one whose files no
+/// capture reads. A turn that moves a submodule to another commit and makes
+/// a nested checkout names both to the reviewer after the change, as part
+/// of the change it has not seen: the submodule with its new commit, the
+/// nested checkout as one whose files it must read itself. The captures
+/// record the submodule's commit and name the nested checkout.
 #[tokio::test]
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
-async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
+async fn actual_a_moved_submodule_and_a_nested_checkout_are_named_to_the_reviewer() {
     use super::super::activation_tests::actual_sandbox;
     use axocoatl_session::execution_content::RepositorySnapshotPhase;
     use base64::Engine as _;
     let git = |root: &std::path::Path, args: &[&str]| {
-        assert!(std::process::Command::new("git")
+        let output = std::process::Command::new("git")
             .args(
                 [
                     "-c",
@@ -1500,21 +1502,25 @@ async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
             )
             .current_dir(root)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .status()
-            .unwrap()
-            .success());
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
     };
     let upstream = tempfile::tempdir().unwrap();
     git(upstream.path(), &["init", "--quiet"]);
-    std::fs::write(upstream.path().join("x"), "x\n").unwrap();
-    git(upstream.path(), &["add", "-A"]);
-    git(upstream.path(), &["commit", "--quiet", "-m", "sub"]);
+    for content in ["x\n", "y\n"] {
+        std::fs::write(upstream.path().join("x"), content).unwrap();
+        git(upstream.path(), &["add", "-A"]);
+        git(upstream.path(), &["commit", "--quiet", "-m", content]);
+    }
+    let older = git(upstream.path(), &["rev-parse", "HEAD~1"]);
     let checks = vec![vec![
         "sh".to_owned(),
         "-c".to_owned(),
         "test -f notes.txt".to_owned(),
     ]];
-    let mut fixture = review_fixture_with(1, &checks, &["bash"], &["read_file", "bash"]).await;
+    let mut fixture = review_fixture_with(1, &checks, &["bash"], &["read_file"]).await;
     let sandbox = actual_sandbox(&mut fixture.repository).await;
     let root = fixture.repository._workspace.path().to_path_buf();
     git(&root, &["init", "--quiet"]);
@@ -1533,7 +1539,10 @@ async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
     );
     git(&root, &["commit", "--quiet", "-m", "sub"]);
     let scenario = Arc::new(Scenario {
-        lead_command: Some("echo fixed > sub/x && echo done >> notes.txt".into()),
+        lead_command: Some(format!(
+            "git -C sub checkout --quiet {older} && mkdir -p tools/nested && git -C tools/nested \
+             init --quiet && echo secret > tools/nested/payload.sh && echo done >> notes.txt"
+        )),
         ..Arc::into_inner(Scenario::new(&["VERDICT: APPROVE\nNothing must change."])).unwrap()
     });
     let run = run_turn_within(&fixture, scenario.clone(), Duration::from_secs(300)).await;
@@ -1566,13 +1575,22 @@ async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
                 .unwrap())
         })
         .unwrap();
-    let entry = |phase: RepositorySnapshotPhase| {
-        let capture = &captures
+    let capture = |phase: RepositorySnapshotPhase| {
+        let capture = captures
             .iter()
             .find(|capture| capture.content.phase == phase)
             .unwrap()
-            .content;
+            .content
+            .clone();
         assert_eq!(capture.unavailable, None, "{phase:?}");
+        capture
+    };
+    let (before, after) = (
+        capture(RepositorySnapshotPhase::Before),
+        capture(RepositorySnapshotPhase::After),
+    );
+    let line = |capture: &axocoatl_session::execution_content::ActivationRepositorySnapshot,
+                path: &str| {
         capture
             .changed_manifest
             .as_deref()
@@ -1581,34 +1599,44 @@ async fn actual_a_change_inside_a_submodule_is_named_to_the_reviewer() {
             .find(|line| {
                 line.starts_with(&format!(
                     "{}\t",
-                    base64::engine::general_purpose::STANDARD.encode("sub")
+                    base64::engine::general_purpose::STANDARD.encode(path)
                 ))
             })
             .map(str::to_owned)
-            .unwrap()
     };
-    let (before, after) = (
-        entry(RepositorySnapshotPhase::Before),
-        entry(RepositorySnapshotPhase::After),
+    // Unchanged before the turn, so not among the paths that differ from
+    // HEAD; then at the older commit.
+    assert_eq!(line(&before, "sub"), None);
+    assert!(
+        line(&after, "sub")
+            .unwrap()
+            .ends_with(&format!("\tspecial\t{older}")),
+        "{after:?}"
     );
-    assert!(before.contains("\trepository\t"), "{before}");
-    assert_ne!(before, after);
+    assert!(line(&after, "tools/nested")
+        .unwrap()
+        .ends_with("\tspecial\tunread"));
+    assert_eq!(before.unread_paths, Vec::<String>::new());
+    assert_eq!(after.unread_paths, vec!["tools/nested".to_owned()]);
     let requests = scenario.reviewer_requests.lock().unwrap().clone();
     let (_, prompt) = requests.last().unwrap();
     // The reviewer reads its input as JSON, where a newline is `\n`.
-    assert!(
-        prompt.contains(
-            "[Not shown above: the turn changed files in 1 submodule or nested Git checkout, \
-             which the patch shows only by a submodule's commit. You have not seen those \
-             changes; read the files yourself:]\\nsub (a submodule or nested Git checkout)\\n"
+    for said in [
+        format!(
+            "Submodules whose commit the turn changed, which the patch shows only by that \
+             commit, never their files:\\nsub (now at commit {older})\\n"
         ),
-        "{prompt}"
-    );
-    assert!(
-        prompt.contains("Not all of the change is shown below"),
-        "{prompt}"
-    );
-    assert!(prompt.contains("+done"), "{prompt}");
+        "[Not shown above: 1 nested Git checkout (not a submodule), whose files the \
+         repository captures do not read, so the turn may have changed files inside it that \
+         nothing here shows. You have not seen those; read them yourself:]\\ntools/nested\\n"
+            .to_owned(),
+        format!("+Subproject commit {older}"),
+        "Not all of the change is shown below".to_owned(),
+        "+done".to_owned(),
+    ] {
+        assert!(prompt.contains(&said), "{said}\n{prompt}");
+    }
+    assert!(!prompt.contains("payload.sh"), "{prompt}");
 }
 
 /// A scenario whose reviewer's model calls fail as `failures` says, by

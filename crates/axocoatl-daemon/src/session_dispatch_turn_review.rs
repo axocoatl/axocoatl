@@ -11,7 +11,7 @@ use axocoatl_session::execution_content::{ActivationRepositorySnapshot, Reposito
 use axocoatl_session::turn_checks::{group_of, CheckGroup};
 use axocoatl_session::turn_review::{
     binding_failure, bounded, describe_change, describe_partial_change, earlier_changes,
-    fit_description, nested_repositories, parse_verdict, review_condition_id, review_criterion,
+    fit_description, not_in_the_patch, parse_verdict, review_condition_id, review_criterion,
     review_node, ChangeBudget, DescribedChange, EarlierPaths, ReviewCriterion, ReviewProof,
     ReviewVerdict, MAX_ANSWER_BYTES,
 };
@@ -632,6 +632,35 @@ impl DispatchState {
                     .as_ref()
                     .is_some_and(|before| before.head != after.head);
                 let earlier = before.as_ref().filter(|_| !moved);
+                // The patch shows a submodule only by its commit, and a
+                // nested Git checkout's files not at all: the submodules the
+                // turn moved and every nested checkout are named after the
+                // change, to be read.
+                let mut unread: Vec<String> = before
+                    .iter()
+                    .chain([after])
+                    .flat_map(|capture| capture.unread_paths.iter().cloned())
+                    .collect();
+                unread.sort();
+                unread.dedup();
+                let unseen = fit_description(
+                    not_in_the_patch(
+                        earlier.and_then(|before| before.changed_manifest.as_deref()),
+                        after
+                            .patch_complete
+                            .then_some(after.changed_manifest.as_deref())
+                            .flatten(),
+                        &unread,
+                    ),
+                    ChangeBudget {
+                        tokens: budget.tokens / 4,
+                        count: &review_tokens,
+                    },
+                );
+                let budget = ChangeBudget {
+                    tokens: budget.tokens.saturating_sub(review_tokens(&unseen)),
+                    count: &review_tokens,
+                };
                 // A patch too large for one capture is never shown as if it
                 // were whole: the reviewer is told so, and given the files
                 // the turn changed and the first part of the patch.
@@ -639,26 +668,7 @@ impl DispatchState {
                     let Some(after_patch) = patch(after) else {
                         return Ok(Err(NOT_CAPTURED));
                     };
-                    // The patch shows a submodule only by its commit and a
-                    // nested checkout not at all: those the turn changed are
-                    // named after the change, to be read.
-                    let earlier_lines =
-                        earlier.and_then(|before| before.changed_manifest.as_deref());
-                    let nested = match after.changed_manifest.as_deref() {
-                        Some(lines) => fit_description(
-                            nested_repositories(earlier_lines, lines),
-                            ChangeBudget {
-                                tokens: budget.tokens / 4,
-                                count: &review_tokens,
-                            },
-                        ),
-                        None => String::new(),
-                    };
-                    let budget = ChangeBudget {
-                        tokens: budget.tokens.saturating_sub(review_tokens(&nested)),
-                        count: &review_tokens,
-                    };
-                    let mut change = match earlier.filter(|before| !before.patch_complete) {
+                    match earlier.filter(|before| !before.patch_complete) {
                         None => describe_change(
                             earlier.and_then(patch).as_deref(),
                             &after_patch,
@@ -699,12 +709,7 @@ impl DispatchState {
                             change.text = format!("{head}{}{earlier}", change.text);
                             change
                         }
-                    };
-                    if !nested.is_empty() {
-                        change.text.push_str(&nested);
-                        change.partial = true;
                     }
-                    change
                 } else {
                     let named = before
                         .as_ref()
@@ -740,6 +745,10 @@ impl DispatchState {
                         partial: true,
                     }
                 };
+                if !unseen.is_empty() {
+                    change.text.push_str(&unseen);
+                    change.partial = true;
+                }
                 if moved {
                     change.text = format!(
                         "HEAD moved during the turn, so this is every uncommitted change against \

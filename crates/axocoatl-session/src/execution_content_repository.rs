@@ -16,10 +16,13 @@ pub const REPOSITORY_CAPTURE_SCRIPT: &str =
 /// its size and its first [`MAX_PATCH_PREFIX_BYTES`], read as Git writes it
 /// and never stored whole, so a patch of any size is captured. What it writes
 /// to standard error is bounded too: its first and last 8 KiB. A submodule
-/// or nested checkout is one record (kind `repository`) whose digest covers
-/// its files, Git settings and checked-out commit. A file it cannot read
-/// fails it (exit 65), as does a listing that reaches the 1 GiB limit on its
-/// temporary files (exit 69).
+/// or nested checkout is one record of kind `special` whose files it does
+/// not read: a submodule's digest is the commit it has checked out (the one
+/// its index entry records when it has none Git can read), a nested
+/// checkout's is `unread`, and every capture names its nested checkouts
+/// (`unread`). A file it cannot read fails it (exit 65), as does a listing
+/// that reaches the 1 GiB limit on its temporary files (exit 69) and more
+/// nested checkouts than it names (exit 71).
 pub const REPOSITORY_SNAPSHOT_COMMAND: &str = concat!(
     "capture_mode=observe\n",
     include_str!("execution_content_repository_snapshot.sh")
@@ -121,7 +124,27 @@ pub struct ActivationRepositorySnapshot {
     /// or the lines did not fit its output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_manifest: Option<String>,
+    /// The nested Git checkouts (not submodules) in the tree this capture
+    /// saw, each a `special` record whose digest is `unread`: no capture
+    /// reads their files, so a change inside one is in neither the tree, the
+    /// manifest nor the patch. At most [`MAX_UNREAD_PATH_BYTES`] of names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unread_paths: Vec<String>,
 }
+
+/// The kind of a capture record for a submodule or a nested Git checkout,
+/// whose files no capture reads.
+pub const SPECIAL_KIND: &str = "special";
+
+/// The digest of a [`SPECIAL_KIND`] record for a nested Git checkout that is
+/// not a submodule: its files are not read. A submodule's digest is the
+/// commit it has checked out.
+pub const UNREAD_DIGEST: &str = "unread";
+
+/// Most bytes of nested checkouts' names one capture records
+/// ([`ActivationRepositorySnapshot::unread_paths`]); a capture with more
+/// fails.
+pub const MAX_UNREAD_PATH_BYTES: usize = 48 * 1024;
 
 /// Paths whose entries differ between a verified Before manifest and the
 /// After capture's own. Complete: a capture that could not list every path
@@ -361,8 +384,23 @@ fn validate_observation(
                 .sum::<usize>()
                 > MAX_COMPARED_PATH_BYTES
         })
+        || observation
+            .unread_paths
+            .iter()
+            .map(String::len)
+            .sum::<usize>()
+            > MAX_UNREAD_PATH_BYTES
     {
         return Err(ExecutionContentError::Capacity);
+    }
+    if observation
+        .unread_paths
+        .iter()
+        .any(|path| path.is_empty() || path.len() > 4096)
+    {
+        return Err(ExecutionContentError::Invalid(
+            "invalid nested checkout path in a repository capture",
+        ));
     }
     let judgement = observation.judged_sha256.is_some()
         || observation.baseline.is_some()
@@ -809,7 +847,8 @@ mod tests {
         let repo = sizeable_repository();
         let root = repo.path();
         let unchanged = capture(root, "capture_mode=observe\n").unwrap();
-        assert_eq!(field(&unchanged, "format"), "2");
+        assert_eq!(field(&unchanged, "format"), "3");
+        assert_eq!(field(&unchanged, "unread"), "");
         assert!(field(&unchanged, "manifest_bytes").parse::<u64>().unwrap() > 8192);
         assert_eq!(changed_lines(&unchanged), Some(Vec::new()));
 
@@ -917,7 +956,8 @@ mod tests {
     /// A repository of thousands of files, far more than one batch of records
     /// holds, is recorded whole: the manifest's size and tree digest are the
     /// ones its files' records give, computed here, each record once. A
-    /// submodule and a nested checkout are one record each and cost no other
+    /// submodule and a nested checkout are one special record each (the
+    /// submodule's commit, the nested checkout unread) and cost no other
     /// path its own: when records were read one at a time, a submodule first
     /// in its batch lost every record after it in that batch.
     #[test]
@@ -960,25 +1000,44 @@ mod tests {
         std::fs::create_dir(&nested).unwrap();
         git(&nested, &["init", "--quiet"]);
         let output = capture(root, "capture_mode=observe\n").unwrap();
-        // The two records every capture lists with the changed paths.
-        let nested: Vec<_> = changed_lines(&output)
-            .unwrap()
-            .into_iter()
-            .filter(|(_, _, kind, _)| kind == "repository")
-            .collect();
+        let commit = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&sub)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        let mode = |path: &std::path::Path| {
+            format!(
+                "{:o}",
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+            )
+        };
+        let special = |name: &str, mode: String, digest: &str| {
+            format!(
+                "{}\t{mode}\tspecial\t{digest}\n",
+                base64::engine::general_purpose::STANDARD.encode(name)
+            )
+        };
+        lines.push(special("0-sub", mode(&sub), commit.trim()));
+        lines.push(special("0-nested", mode(&nested), "unread"));
+        // The nested checkout, which Git lists as untracked, differs from
+        // HEAD; the submodule does not.
         assert_eq!(
-            nested
-                .iter()
-                .map(|(path, ..)| path.as_str())
-                .collect::<Vec<_>>(),
-            ["0-nested", "0-sub"]
+            changed_lines(&output).unwrap(),
+            [(
+                "0-nested".to_owned(),
+                mode(&nested),
+                "special".to_owned(),
+                "unread".to_owned()
+            )]
         );
-        for (path, mode, kind, digest) in &nested {
-            lines.push(format!(
-                "{}\t{mode}\t{kind}\t{digest}\n",
-                base64::engine::general_purpose::STANDARD.encode(path)
-            ));
-        }
+        assert_eq!(
+            field(&output, "unread"),
+            base64::engine::general_purpose::STANDARD.encode("0-nested")
+        );
         lines.sort();
         let manifest = lines.concat();
         assert_eq!(field(&output, "manifest_bytes"), manifest.len().to_string());
@@ -1050,25 +1109,33 @@ mod tests {
         assert!(capture(repo.path(), "capture_mode=observe\n").is_ok());
     }
 
-    /// A submodule and a nested checkout are each one record, as Git lists
-    /// them, whose digest covers all of each: a change to a file inside one
-    /// changes the tree, and a comparison names the submodule. Every capture
-    /// lists them with the paths that differ from HEAD. Git does not look
-    /// inside a submodule for the patch, so nothing it configures runs: a
-    /// clean filter its configuration named ran as the capture read it.
+    /// A submodule is one special record whose digest is the commit it has
+    /// checked out, in every mode: moving it to another commit changes the
+    /// tree and a comparison names it, and the patch shows it as Git does,
+    /// by its commits; a file changed inside it without a new commit is not
+    /// read and changes nothing. Git does not look inside it, so nothing it
+    /// configures runs (a clean filter its configuration named ran as the
+    /// capture read it, in 1.4.0 too). Not checked out, or with a `.git`
+    /// that names no repository, its record holds the commit the index
+    /// records, as Git compares it, and never the superproject's HEAD. A
+    /// nested checkout (not a submodule) is one special record whose digest
+    /// is `unread`, named in every capture's `unread`, never a deleted path
+    /// and never in the patch.
     #[test]
-    fn a_submodule_or_nested_checkout_is_one_record_that_any_change_inside_changes() {
+    fn a_submodule_is_recorded_by_its_commit_and_a_nested_checkout_as_unread() {
         use std::os::unix::fs::PermissionsExt;
         let committer = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
         let upstream = tempfile::tempdir().unwrap();
         git(upstream.path(), &["init", "--quiet"]);
-        std::fs::write(upstream.path().join("x"), "x\n").unwrap();
         std::fs::write(upstream.path().join(".gitattributes"), "* filter=evil\n").unwrap();
-        git(upstream.path(), &["add", "-A"]);
-        git(
-            upstream.path(),
-            &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
-        );
+        for content in ["x\n", "y\n"] {
+            std::fs::write(upstream.path().join("x"), content).unwrap();
+            git(upstream.path(), &["add", "-A"]);
+            git(
+                upstream.path(),
+                &[&committer[..], &["commit", "--quiet", "-m", content]].concat(),
+            );
+        }
         let repo = sizeable_repository();
         let root = repo.path();
         git(
@@ -1087,6 +1154,20 @@ mod tests {
             root,
             &[&committer[..], &["commit", "--quiet", "-m", "sub"]].concat(),
         );
+        let rev = |dir: &std::path::Path, name: &str| {
+            String::from_utf8(
+                std::process::Command::new("git")
+                    .args(["rev-parse", name])
+                    .current_dir(dir)
+                    .output()
+                    .unwrap()
+                    .stdout,
+            )
+            .unwrap()
+            .trim()
+            .to_owned()
+        };
+        let (newest, older) = (rev(upstream.path(), "HEAD"), rev(upstream.path(), "HEAD~1"));
         let markers = tempfile::tempdir().unwrap();
         let filter = markers.path().join("filter.sh");
         std::fs::write(
@@ -1102,21 +1183,41 @@ mod tests {
             &root.join("sub"),
             &["config", "filter.evil.clean", filter.to_str().unwrap()],
         );
+        // Unchanged: its commit, and no changed line.
+        let observed = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(changed_lines(&observed).unwrap(), []);
+        assert_eq!(field(&observed, "unread"), "");
         let kept = capture(root, "capture_mode=keep\n").unwrap();
         let baseline = field(&kept, "baseline").to_owned();
         let expected = field(&kept, "judged").to_owned();
-        let repository = |output: &str, path: &str| {
-            changed_lines(output)
-                .unwrap()
-                .into_iter()
-                .find(|(listed, ..)| listed == path)
-                .map(|(_, mode, kind, digest)| (mode, kind, digest))
-        };
-        let (_, kind, before) = repository(&kept, "sub").unwrap();
-        assert_eq!(kind, "repository");
-        // The same size, a second later: Git would read it again to tell.
+        let kept_manifest = std::fs::read_to_string(format!("{baseline}/manifest")).unwrap();
+        let sub_line = kept_manifest
+            .lines()
+            .find(|line| {
+                line.starts_with(&format!(
+                    "{}\t",
+                    base64::engine::general_purpose::STANDARD.encode("sub")
+                ))
+            })
+            .unwrap()
+            .to_owned();
+        assert!(
+            sub_line.contains(&format!("\tspecial\t{newest}\tH 160000 {newest} 0")),
+            "{sub_line}"
+        );
+        // A file changed inside it, without a new commit: not read.
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        std::fs::write(root.join("sub/x"), "y\n").unwrap();
+        std::fs::write(root.join("sub/x"), "dirty\n").unwrap();
+        let dirty = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&dirty, "tree"), field(&observed, "tree"));
+        assert!(
+            !markers.path().join("ran").exists(),
+            "the capture ran the submodule's filter"
+        );
+        git(&root.join("sub"), &["checkout", "--quiet", "--", "x"]);
+        // Moved to another commit: the tree, the comparison, the changed
+        // lines and the patch say so.
+        git(&root.join("sub"), &["checkout", "--quiet", &older]);
         let compared = capture(
             root,
             &format!("capture_mode=compare\nbaseline={baseline}\nexpected={expected}\n"),
@@ -1128,39 +1229,88 @@ mod tests {
             field(&compared, "changed"),
             base64::engine::general_purpose::STANDARD.encode("sub")
         );
-        let (_, _, after) = repository(&compared, "sub").unwrap();
-        assert_ne!(after, before);
-        assert!(
-            !markers.path().join("ran").exists(),
-            "the capture ran the submodule's filter"
-        );
-        // Its commit moved: the patch shows that, as Git does.
-        git(
-            &root.join("sub"),
-            &[&committer[..], &["commit", "--quiet", "-am", "moved"]].concat(),
-        );
-        let moved = capture(root, "capture_mode=observe\n").unwrap();
-        let patch = String::from_utf8(decoded(&moved, "patch_b64")).unwrap();
+        let (_, _, kind, digest) = changed_lines(&compared)
+            .unwrap()
+            .into_iter()
+            .find(|(path, ..)| path == "sub")
+            .unwrap();
+        assert_eq!((kind.as_str(), digest.as_str()), ("special", older.as_str()));
+        let patch = String::from_utf8(decoded(&compared, "patch_b64")).unwrap();
         assert!(
             patch.starts_with("diff --git a/sub b/sub\nindex ")
-                && patch.contains("+Subproject commit "),
+                && patch.contains(&format!("-Subproject commit {newest}\n"))
+                && patch.contains(&format!("+Subproject commit {older}\n")),
             "{patch}"
         );
-        assert!(!patch.contains("-dirty"), "{patch}");
-        // A nested checkout the turn makes: one record, never a deleted path,
-        // no patch section, and a change inside it changes the tree.
-        let nested = root.join("nested");
-        std::fs::create_dir(&nested).unwrap();
+        // Not checked out, or with a .git that names no repository: the
+        // commit the index records, never the superproject's HEAD.
+        git(&root.join("sub"), &["checkout", "--quiet", &newest]);
+        git(root, &["submodule", "deinit", "--quiet", "--force", "sub"]);
+        let deinit = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&deinit, "tree"), field(&observed, "tree"));
+        std::fs::create_dir(root.join("sub/.git")).unwrap();
+        let broken = capture(root, "capture_mode=observe\n").unwrap();
+        assert_eq!(field(&broken, "tree"), field(&observed, "tree"));
+        std::fs::remove_dir(root.join("sub/.git")).unwrap();
+        // A nested checkout the turn makes: one unread record, in every
+        // mode, named, never a deleted path, no patch section; a change
+        // inside it changes nothing a capture records.
+        let nested = root.join("tools/nested");
+        std::fs::create_dir_all(&nested).unwrap();
         git(&nested, &["init", "--quiet"]);
         std::fs::write(nested.join("payload.sh"), "secret\n").unwrap();
+        for mode in ["capture_mode=observe\n", "capture_mode=keep\n"] {
+            let made = capture(root, mode).unwrap();
+            assert_eq!(
+                field(&made, "unread"),
+                base64::engine::general_purpose::STANDARD.encode("tools/nested"),
+                "{mode}"
+            );
+            let (_, _, kind, digest) = changed_lines(&made)
+                .unwrap()
+                .into_iter()
+                .find(|(path, ..)| path == "tools/nested")
+                .unwrap();
+            assert_eq!((kind.as_str(), digest.as_str()), ("special", "unread"));
+            let patch = String::from_utf8(decoded(&made, "patch_b64")).unwrap();
+            assert!(!patch.contains("nested"), "{patch}");
+            if mode.contains("keep") {
+                let _ = std::fs::remove_dir_all(field(&made, "baseline"));
+            }
+        }
         let made = capture(root, "capture_mode=observe\n").unwrap();
-        let (mode, kind, _) = repository(&made, "nested").unwrap();
-        assert_eq!((mode.as_str(), kind.as_str()), ("755", "repository"));
-        let patch = String::from_utf8(decoded(&made, "patch_b64")).unwrap();
-        assert!(!patch.contains("nested"), "{patch}");
         std::fs::write(nested.join("payload.sh"), "changed\n").unwrap();
         let changed = capture(root, "capture_mode=observe\n").unwrap();
-        assert_ne!(field(&changed, "tree"), field(&made, "tree"));
+        assert_eq!(field(&changed, "tree"), field(&made, "tree"));
+    }
+
+    /// More nested checkouts than one capture names fail it, and it says
+    /// so (exit 71).
+    #[test]
+    fn more_nested_checkouts_than_a_capture_names_fail_it_and_say_so() {
+        let repo = sizeable_repository();
+        let root = repo.path();
+        for index in 0..3 {
+            let nested = root.join(format!("nested-{index}"));
+            std::fs::create_dir(&nested).unwrap();
+            git(&nested, &["init", "--quiet"]);
+        }
+        assert!(capture(root, "capture_mode=observe\n").is_ok());
+        let small = REPOSITORY_CAPTURE_SCRIPT.replace(
+            "if [ \"$unread_size\" -gt 65536 ]; then",
+            "if [ \"$unread_size\" -gt 20 ]; then",
+        );
+        assert_ne!(small, REPOSITORY_CAPTURE_SCRIPT);
+        let (code, stdout, stderr) =
+            run_command(root, &format!("capture_mode=observe\n{small}"));
+        assert_eq!(code, 71, "{stderr}");
+        assert_eq!(stdout, "");
+        assert!(
+            stderr.ends_with(
+                "the repository holds more nested Git checkouts than one capture lists\n"
+            ),
+            "{stderr}"
+        );
     }
 
     /// `len` bytes no compressor shrinks, as a compiled test program's would
@@ -1244,7 +1394,6 @@ mod tests {
                 whole[..MAX_PATCH_PREFIX_BYTES]
             );
             for name in [
-                "format",
                 "head",
                 "tree",
                 "manifest_bytes",
@@ -1254,6 +1403,7 @@ mod tests {
             ] {
                 assert_eq!(field(&observed, name), field(&unbounded, name), "{name}");
             }
+            assert_eq!(field(&observed, "format"), "3");
             assert_eq!(field(&unbounded, "changed_complete"), "0");
             let mut changed: Vec<(String, String)> = changed_lines(&observed)
                 .unwrap()
@@ -1301,15 +1451,28 @@ mod tests {
         }
     }
 
+    /// A capture's output as the 1.4 capture's would be: format 2, without
+    /// the nested checkouts' names (here none).
+    fn as_v14(output: &str) -> String {
+        assert!(output.starts_with("format=3\n"), "{output}");
+        assert!(output.contains("\nunread=\n"), "{output}");
+        output
+            .replacen("format=3\n", "format=2\n", 1)
+            .replacen("\nunread=\n", "\n", 1)
+    }
+
     /// Up to the 512 KiB the host records, a patch is printed whole and the
-    /// capture is byte for byte the 1.4 capture; one line more and only its
-    /// first 12 KiB is.
+    /// capture is byte for byte the 1.4 capture, but for its format and the
+    /// nested checkouts' names; one line more and only its first 12 KiB is.
     #[test]
     fn a_patch_up_to_the_recorded_bound_is_printed_whole_as_before() {
         let repo = sizeable_repository();
         let root = repo.path();
         let (_, unchanged, _) = run_command(root, REPOSITORY_SNAPSHOT_COMMAND_V3);
-        assert_eq!(capture(root, "capture_mode=observe\n").unwrap(), unchanged);
+        assert_eq!(
+            as_v14(&capture(root, "capture_mode=observe\n").unwrap()),
+            unchanged
+        );
         std::fs::write(root.join("config/prod.js"), "prod, fixed\n").unwrap();
         // An untracked text file whose patch is within one line of the bound.
         let line = format!("{}\n", "x".repeat(63));
@@ -1327,7 +1490,8 @@ mod tests {
         );
         let output = capture(root, "capture_mode=observe\n").unwrap();
         assert_eq!(
-            output, before,
+            as_v14(&output),
+            before,
             "a patch within the bound is printed as 1.4 did"
         );
         assert_eq!(field(&output, "changed_complete"), "1");

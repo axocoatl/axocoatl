@@ -568,6 +568,7 @@ fn capture(phase: CapturePhase) -> CaptureFacts {
         patch: None,
         changed: None,
         head: None,
+        unread: Vec::new(),
     }
 }
 
@@ -771,6 +772,7 @@ fn recorded_snapshots_convert_to_capture_facts() {
             changed_paths: vec!["x".into()],
         }),
         changed_manifest: None,
+        unread_paths: vec!["nested".into()],
     };
     let facts = CaptureFacts::from_snapshot(&snapshot);
     assert_eq!(facts.phase, CapturePhase::After);
@@ -778,6 +780,7 @@ fn recorded_snapshots_convert_to_capture_facts() {
     assert_eq!(facts.manifest.as_deref(), Some("abc"));
     assert_eq!(facts.patch.as_deref(), Some(patch.as_slice()));
     assert_eq!(facts.compared.unwrap().1, vec!["x".to_string()]);
+    assert_eq!(facts.unread, vec!["nested".to_string()]);
     let mut partial = snapshot.clone();
     partial.manifest_complete = false;
     partial.patch_complete = false;
@@ -1958,13 +1961,23 @@ fn signed_receipt(
     files: &[(&str, &str)],
     removed: &[&str],
 ) -> OpenedReceipt {
-    use axocoatl_session::receipt::{sha256_hex, sign_statement, Statement};
+    use axocoatl_session::receipt::sha256_hex;
     let subject: Vec<serde_json::Value> = files
         .iter()
         .map(|(path, content)| {
             serde_json::json!({"name": path, "digest": {"sha256": sha256_hex(content.as_bytes())}})
         })
         .collect();
+    signed_receipt_of(key, subject, removed)
+}
+
+/// A receipt of the passing run [`outcome`] whose subjects are `subject`.
+fn signed_receipt_of(
+    key: &crate::receipt_key::SigningKey,
+    subject: Vec<serde_json::Value>,
+    removed: &[&str],
+) -> OpenedReceipt {
+    use axocoatl_session::receipt::{sign_statement, Statement};
     let statement: Statement = serde_json::from_value(serde_json::json!({
         "_type": receipt_v1::STATEMENT_TYPE,
         "subject": subject,
@@ -2078,6 +2091,127 @@ async fn a_kept_run_with_a_receipt_carries_it_in_trailers_and_the_body() {
         &format!("git worktree add -q {} {}", worktree.display(), kept.commit),
     );
     assert!(receipt_v1::check_files(&parsed.statement, &worktree).is_empty());
+}
+
+/// A submodule the run moved is committed as the commit it holds (a
+/// gitlink), as the run's receipt covers it; one that holds another commit
+/// than the receipt's is refused, as is one without a receipt, which no
+/// directory time can stand in for. A run whose repository holds a nested
+/// Git checkout (not a submodule), whose files no capture reads, is refused
+/// and told what to do.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_moved_submodule_is_kept_as_its_receipt_covers_it_and_a_nested_checkout_refused() {
+    use axocoatl_session::receipt::sha256_hex;
+    let mut fixture = Fixture::new();
+    let upstream = fixture.dir.path().join("upstream");
+    std::fs::create_dir_all(&upstream).unwrap();
+    sh(
+        &upstream,
+        "git init -q -b main && echo x > x && git add x && git commit -q -m x && echo y > x \
+         && git commit -q -am y",
+    );
+    let older = sh(&upstream, "git rev-parse HEAD~1");
+    let newest = sh(&upstream, "git rev-parse HEAD");
+    sh(
+        &fixture.repo,
+        &format!(
+            "git -c protocol.file.allow=always submodule add -q {} vendor/sub && git commit -q \
+             -m submodule",
+            upstream.display()
+        ),
+    );
+    fixture.head = sh(&fixture.repo, "git rev-parse HEAD");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let manifest = fixture.manifest();
+    sh(&fixture.repo.join("vendor/sub"), &format!("git checkout -q {older}"));
+    write(&fixture.repo.join("a.txt"), "one, fixed\n");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let attribution = RunAttribution {
+        paths: ["a.txt", "vendor/sub"]
+            .iter()
+            .map(|path| path.to_string())
+            .collect(),
+        ..RunAttribution::default()
+    };
+    let refusal = |result: Result<KeepPrResponse, KeepPrError>| match result {
+        Err(KeepPrError::Refused(message)) => message,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    let message = refusal(
+        fixture
+            .keep(&request(), &manifest, &outcome(), &attribution, None)
+            .await,
+    );
+    assert_eq!(
+        message,
+        "the run moved the submodule vendor/sub to another commit, and without a receipt that \
+         covers it Keep as PR cannot tell that it still holds the commit the run left; commit \
+         it yourself"
+    );
+    let (_keys, key) = signing_key();
+    let subjects = |commit: &str| {
+        vec![
+            serde_json::json!({"name": "a.txt", "digest": {"sha256": sha256_hex(b"one, fixed\n")}}),
+            serde_json::json!({"name": "vendor/sub", "digest": {"gitCommit": commit}}),
+        ]
+    };
+    let stale = signed_receipt_of(&key, subjects(&newest), &[]);
+    let message = refusal(
+        fixture
+            .keep_signed(
+                &request(),
+                &manifest,
+                &outcome(),
+                &attribution,
+                None,
+                Some(&stale),
+            )
+            .await,
+    );
+    assert!(
+        message.contains("vendor/sub: the submodule holds another commit"),
+        "{message}"
+    );
+    assert_eq!(fixture.branches(), "refs/heads/work");
+    let receipt = signed_receipt_of(&key, subjects(&older), &[]);
+    let kept = fixture
+        .keep_signed(
+            &request(),
+            &manifest,
+            &outcome(),
+            &attribution,
+            None,
+            Some(&receipt),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept.paths, vec!["a.txt", "vendor/sub"]);
+    assert_eq!(
+        sh(&fixture.repo, &format!("git ls-tree {} vendor/sub", kept.commit)),
+        format!("160000 commit {older}\tvendor/sub")
+    );
+    // The person's checkout still has the submodule's old commit staged.
+    assert_eq!(
+        sh(&fixture.repo, "git ls-files -s vendor/sub"),
+        format!("160000 {newest} 0\tvendor/sub")
+    );
+
+    let nested = RunAttribution {
+        paths: ["a.txt"].iter().map(|path| path.to_string()).collect(),
+        unread: ["tools/nested"].iter().map(|path| path.to_string()).collect(),
+        ..RunAttribution::default()
+    };
+    assert_eq!(
+        refusal(
+            fixture
+                .keep(&request(), &manifest, &outcome(), &nested, None)
+                .await
+        ),
+        "tools/nested is a nested Git checkout (not a submodule) whose files Axocoatl's \
+         repository captures do not read, so what an Agent changed inside it is not known, so \
+         Keep as PR does not guess; ignore it in .gitignore, or make it a submodule"
+    );
 }
 
 /// A covered file edited after the run (after its checks judged it), a

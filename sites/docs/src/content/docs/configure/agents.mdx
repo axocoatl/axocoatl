@@ -327,9 +327,10 @@ take longer; the turn then needs attention and says that the capture did not fin
 within its 180 seconds. A capture also fails, and says why, when it cannot read a file
 it records (one in the repository or its `.git` directory that the Agents' user may not
 read), or when its listings of the repository's files pass the 1 GiB it may write, which
-takes millions of files. A submodule or nested Git checkout is one entry of a capture,
-whose digest covers its files, its Git settings and the commit it has checked out, so a
-change to a file inside one is a change to that path.
+takes millions of files. A submodule is one entry of a capture, recording its checked-out
+commit (or its index entry when that commit cannot be read); its contents are not captured.
+A nested Git checkout that is not a submodule is listed as unread. Captures fail when
+those nested-checkout names exceed their 64 KiB encoded limit.
 
 If the checks cannot be paid for because the paying Agent's budget is spent, has
 expired or was revoked, the turn needs attention and says why, for example "Required
@@ -365,9 +366,9 @@ A larger change is shown source first, then generated and dense text, then binar
 files, each file whole when it fits and else cut at a hunk boundary, or, for a source
 file not one whole hunk of fits (a new file has only one), after its last whole line
 that does; a note first says that not all of it is shown, and the files left out are
-listed with their bytes. A submodule or nested Git checkout is one entry of the
-repository's captures, and the patch shows a submodule only by the commit it has checked
-out: those the turn changed are named after the change. The reviewer is told it has not
+listed with their bytes. The patch shows a submodule only by its recorded commit:
+those the turn changed are named after the change. Every unread nested checkout is
+also named, whether its entry changed or not. The reviewer is told it has not
 seen those parts and is asked to read those files before it judges them, and to judge a
 binary file by its name and size. It is asked to start its answer with `VERDICT: APPROVE`
 or `VERDICT: CHANGES`, followed by findings, each on its own line, numbered `F1`, `F2`, …

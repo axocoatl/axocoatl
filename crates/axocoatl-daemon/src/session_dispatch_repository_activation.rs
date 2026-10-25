@@ -135,6 +135,73 @@ impl AdmittedWriteScope {
             })
         })
     }
+    /// Whether the scope lets an Agent change every path under `directory`
+    /// (and `directory` itself), so nothing there could be out of scope: a
+    /// pattern naming a directory whole (`lib/`, `lib/**`) at or above it,
+    /// or one that matches every name (`*`). An unrestricted scope owns
+    /// every directory but Git's own.
+    pub(super) fn owns_directory(&self, directory: &str) -> bool {
+        if axocoatl_session::path_scope::in_git_directory(directory) {
+            return false;
+        }
+        let Some(scope) = &self.0 else {
+            return true;
+        };
+        scope.iter().any(|pattern| {
+            if !pattern.contains('/') {
+                return pattern.bytes().all(|byte| byte == b'*');
+            }
+            let owned = pattern
+                .strip_suffix('/')
+                .or_else(|| pattern.strip_suffix("/**"));
+            owned.is_some_and(|owned| {
+                !owned.contains(['*', '?'])
+                    && (directory == owned || directory.starts_with(&format!("{owned}/")))
+            })
+        })
+    }
+    /// Why an activation's changes judged against this scope may not stand:
+    /// the paths `outside` it that changed, and the nested Git checkouts
+    /// (`unread`, whose files no capture reads) where it does not own every
+    /// path, since a change inside one could lie outside it. `None` when
+    /// neither.
+    pub(super) fn violation(&self, outside: &[String], unread: &[String]) -> Option<String> {
+        let mut reasons = Vec::new();
+        let hidden: Vec<&str> = unread
+            .iter()
+            .filter(|path| !self.owns_directory(path))
+            .map(String::as_str)
+            .collect();
+        // A nested checkout the Agent made or removed is named once, below.
+        let outside: Vec<&str> = outside
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !hidden.contains(path))
+            .collect();
+        if !outside.is_empty() {
+            reasons.push(format!(
+                "it changed {} outside the paths this Agent may change ({})",
+                outside.join(", "),
+                self.describe()
+            ));
+        }
+        if !hidden.is_empty() {
+            let (is, it, submodule) = if hidden.len() == 1 {
+                ("is a nested Git checkout", "it", "a submodule")
+            } else {
+                ("are nested Git checkouts", "them", "submodules")
+            };
+            reasons.push(format!(
+                "{} {is} (not {submodule}) whose files the repository captures do not read, so \
+                 changes inside {it} outside the paths this Agent may change ({}) cannot be \
+                 ruled out (ignore {it} in .gitignore, or make {it} {submodule})",
+                hidden.join(", "),
+                self.describe()
+            ));
+        }
+        (!reasons.is_empty())
+            .then(|| format!("{}; the change is kept for review", reasons.join("; ")))
+    }
     /// How the scope reads in messages to the Agent and the person.
     pub(super) fn describe(&self) -> String {
         match &self.0 {
@@ -1143,6 +1210,67 @@ mod write_scope_tests {
         AdmittedWriteScope(
             scope.map(|scope| scope.iter().map(|pattern| (*pattern).to_owned()).collect()),
         )
+    }
+
+    /// A scope owns a directory when nothing under it could be outside the
+    /// scope: a pattern naming it, or a directory above it, whole, or one
+    /// matching every name. Git's own directory is never owned.
+    #[test]
+    fn a_scope_owns_only_directories_it_names_whole() {
+        let lib = scope(Some(&["lib/", "docs/**", "src/*.rs"]));
+        for (directory, owned) in [
+            ("lib", true),
+            ("lib/nested", true),
+            ("docs/vendor/x", true),
+            ("library", false),
+            ("src", false),
+            ("src/nested", false),
+            ("tools/nested", false),
+            ("lib/.git", false),
+        ] {
+            assert_eq!(lib.owns_directory(directory), owned, "{directory}");
+        }
+        assert!(scope(Some(&["*"])).owns_directory("tools/nested"));
+        assert!(!scope(Some(&["*.rs"])).owns_directory("tools/nested"));
+        assert!(!scope(Some(&["l*/"])).owns_directory("lib/nested"));
+        assert!(!scope(Some(&[])).owns_directory("lib"));
+        assert!(scope(None).owns_directory("tools/nested"));
+    }
+
+    /// A violation names the paths that changed outside the scope, and
+    /// every nested Git checkout the scope does not own whole, once each,
+    /// with what to do; none when there is neither.
+    #[test]
+    fn a_violation_names_changed_paths_and_unowned_nested_checkouts() {
+        let lib = scope(Some(&["lib/"]));
+        let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+        assert_eq!(lib.violation(&[], &[]), None);
+        assert_eq!(lib.violation(&[], &names(&["lib/nested"])), None);
+        assert_eq!(
+            lib.violation(&names(&["config/x"]), &[]).unwrap(),
+            "it changed config/x outside the paths this Agent may change (lib/); the change is \
+             kept for review"
+        );
+        assert_eq!(
+            lib.violation(&names(&["tools/nested"]), &names(&["tools/nested"]))
+                .unwrap(),
+            "tools/nested is a nested Git checkout (not a submodule) whose files the repository \
+             captures do not read, so changes inside it outside the paths this Agent may change \
+             (lib/) cannot be ruled out (ignore it in .gitignore, or make it a submodule); the \
+             change is kept for review"
+        );
+        assert_eq!(
+            lib.violation(
+                &names(&["config/x", "vendor/sub"]),
+                &names(&["a", "b/c", "lib/ok"])
+            )
+            .unwrap(),
+            "it changed config/x, vendor/sub outside the paths this Agent may change (lib/); a, \
+             b/c are nested Git checkouts (not submodules) whose files the repository captures \
+             do not read, so changes inside them outside the paths this Agent may change (lib/) \
+             cannot be ruled out (ignore them in .gitignore, or make them submodules); the \
+             change is kept for review"
+        );
     }
 
     #[test]

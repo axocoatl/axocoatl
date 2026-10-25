@@ -4,7 +4,7 @@ use axocoatl_session::execution_content::{
     is_capture_baseline, ActivationRepositorySnapshot, ActivationRepositorySnapshotView,
     RepositoryComparison, RepositorySnapshotPhase, MAX_CHANGED_MANIFEST_BYTES,
     MAX_COMPARED_PATH_BYTES, MAX_PATCH_PREFIX_BYTES, MAX_RECORDED_PATCH_BYTES,
-    REPOSITORY_CAPTURE_SCRIPT,
+    MAX_UNREAD_PATH_BYTES, REPOSITORY_CAPTURE_SCRIPT, SPECIAL_KIND, UNREAD_DIGEST,
 };
 use base64::Engine as _;
 
@@ -56,6 +56,14 @@ pub(super) fn capture_command_mode(command: &str) -> Option<CaptureMode> {
 
 fn is_digest(value: &str) -> bool {
     value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// A Git commit id, SHA-1 or SHA-256, in lowercase hex.
+fn is_commit(value: &str) -> bool {
+    (value.len() == 40 || value.len() == 64)
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -424,7 +432,10 @@ impl SessionDispatchController {
     /// told so in words the failure classes read as a stop. The captures
     /// compare complete manifests, whatever the index's flags; files the
     /// repository's ignore rules exclude are not judged, but the ignore files
-    /// Git reads, and Git's own settings, hooks and exclude files, are.
+    /// Git reads, and Git's own settings, hooks and exclude files, are. A
+    /// submodule is judged by the commit it has checked out, as one path; a
+    /// nested Git checkout's files are read by no capture, so one in either
+    /// capture fails a writer's activation unless its scope owns all of it.
     pub(crate) fn write_scope_violation(
         &self,
         activation: &ActivationRef,
@@ -478,15 +489,34 @@ impl SessionDispatchController {
             .into_iter()
             .filter(|path| !scope.allows_change(path))
             .collect();
-        Ok((!outside.is_empty()).then(|| {
-            format!(
-                "it changed {} outside the paths this Agent may change ({}); the change is kept \
-                 for review",
-                outside.join(", "),
-                scope.describe()
-            )
-        }))
+        // A read-only Agent's shell runs under the kernel's write
+        // restriction, so no nested checkout can hold its writes.
+        let unread: Vec<String> = if scope.is_read_only() {
+            Vec::new()
+        } else {
+            unread_checkouts(&captures).into_iter().collect()
+        };
+        Ok(scope.violation(&outside, &unread))
     }
+}
+
+/// The nested Git checkouts (not submodules) an activation's Before or After
+/// capture named, whose files no capture reads, so a change inside one is in
+/// neither capture's tree.
+pub(crate) fn unread_checkouts(
+    captures: &[ActivationRepositorySnapshotView],
+) -> std::collections::BTreeSet<String> {
+    captures
+        .iter()
+        .map(|capture| &capture.content)
+        .filter(|capture| {
+            matches!(
+                capture.phase,
+                RepositorySnapshotPhase::Before | RepositorySnapshotPhase::After
+            )
+        })
+        .flat_map(|capture| capture.unread_paths.iter().cloned())
+        .collect()
 }
 
 /// How the failure of a writer stopped before its captures could establish
@@ -1185,6 +1215,12 @@ pub(super) const CAPTURE_LISTING_TOO_LARGE: &str = "The repository capture's lis
      repository's files reached the 1 GiB a capture may write, so the candidate is not \
      verified: the repository holds more files, or longer names, than one capture lists";
 
+/// Why a capture of a repository holding more nested Git checkouts than one
+/// capture names (exit 71) recorded nothing.
+pub(super) const CAPTURE_TOO_MANY_NESTED: &str = "The repository holds more nested Git \
+     checkouts than one capture names (64 KiB of their names), so the candidate is not \
+     verified: add them to .gitignore, or make them submodules";
+
 /// Read one capture's result. A capture around the checks that ran past its
 /// time limit carries that limit as `timed_out_after_ms`.
 pub(super) fn parse_capture(
@@ -1209,6 +1245,7 @@ pub(super) fn parse_capture(
     match exit_code {
         Some(65) => return Err(error(CAPTURE_UNREADABLE)),
         Some(69) => return Err(error(CAPTURE_LISTING_TOO_LARGE)),
+        Some(71) => return Err(error(CAPTURE_TOO_MANY_NESTED)),
         _ => {}
     }
     if exit_code != Some(0)
@@ -1245,11 +1282,13 @@ pub(super) fn parse_capture(
         CaptureMode::Keep => 2,
         CaptureMode::Compare { .. } => 3,
     };
-    // Format 2 adds the lines of the paths that differ from HEAD; format 1
-    // is the capture a check group admitted before it keeps running.
+    // Format 2 adds the lines of the paths that differ from HEAD, and format
+    // 3 the nested checkouts; formats 1 and 2 are the captures of 1.3 and
+    // 1.4 that a check group admitted before still runs.
     let base_fields = match field("format")? {
         "1" => 8,
         "2" => 10,
+        "3" => 11,
         _ => return Err(error("Unsupported repository capture")),
     };
     if fields.len() != base_fields + judgement_fields {
@@ -1318,9 +1357,12 @@ pub(super) fn parse_capture(
     observation.patch_base64 = observation
         .patch_complete
         .then(|| base64::engine::general_purpose::STANDARD.encode(&patch));
-    if base_fields == 10 {
+    if base_fields >= 10 {
         observation.changed_manifest =
             changed_manifest(field("changed_complete")?, field("changed_b64")?)?;
+    }
+    if base_fields == 11 {
+        observation.unread_paths = unread_paths(field("unread")?)?;
     }
     if matches!(mode, CaptureMode::Observe) {
         return Ok(());
@@ -1370,11 +1412,39 @@ pub(super) fn parse_capture(
     Ok(())
 }
 
+/// The nested Git checkouts a capture named (`unread`, base64 names joined
+/// by commas), whose files no capture reads.
+fn unread_paths(listed: &str) -> Result<Vec<String>> {
+    if listed.is_empty() {
+        return Ok(Vec::new());
+    }
+    if listed.len() > MAX_UNREAD_PATH_BYTES / 3 * 4 {
+        return Err(error("Repository capture exceeds its declared bounds"));
+    }
+    let mut paths = Vec::new();
+    let mut bytes = 0;
+    for encoded in listed.split(',') {
+        let path = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()
+            .filter(|path| !path.is_empty() && path.len() <= 4096)
+            .ok_or_else(|| error("Invalid nested checkout in a repository capture"))?;
+        bytes += path.len();
+        if bytes > MAX_UNREAD_PATH_BYTES {
+            return Err(error("Repository capture exceeds its declared bounds"));
+        }
+        paths.push(String::from_utf8_lossy(&path).into_owned());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// The lines of the paths that differ from HEAD a capture recorded: each
 /// `<base64 path>\t<mode>\t<kind>\t<digest>`, of a file or link with its
-/// SHA-256, a deleted path, or a submodule or nested checkout
-/// ([`axocoatl_session::turn_review::REPOSITORY`]) with the digest of all of
-/// it. `None` when the capture left them out.
+/// SHA-256, a deleted path, a submodule ([`SPECIAL_KIND`]) with the commit
+/// it has checked out, or a nested checkout with [`UNREAD_DIGEST`]. `None`
+/// when the capture left them out.
 fn changed_manifest(complete: &str, encoded: &str) -> Result<Option<String>> {
     match complete {
         "0" if encoded.is_empty() => return Ok(None),
@@ -1399,9 +1469,8 @@ fn changed_manifest(complete: &str, encoded: &str) -> Result<Option<String>> {
                     && mode.len() <= 4
                     && mode.bytes().all(|byte| (b'0'..=b'7').contains(&byte))
                     && match *kind {
-                        "file" | "link" | axocoatl_session::turn_review::REPOSITORY => {
-                            is_digest(digest)
-                        }
+                        "file" | "link" => is_digest(digest),
+                        SPECIAL_KIND => *digest == UNREAD_DIGEST || is_commit(digest),
                         "deleted" => *digest == "missing",
                         _ => false,
                     }
@@ -1442,6 +1511,7 @@ pub(super) fn empty_observation(
         baseline: None,
         compared: None,
         changed_manifest: None,
+        unread_paths: Vec::new(),
     }
 }
 
@@ -1559,85 +1629,134 @@ mod judgement_tests {
         assert!(parse_capture(&output(&other), &mut observation(), &compare).is_err());
     }
 
-    /// Format 2 records the lines of the paths that differ from HEAD, a
-    /// submodule's or nested checkout's among them (or says it left them
-    /// out); format 1, which a check group admitted before still runs, has
-    /// none; a malformed line refuses the capture.
+    /// Format 3 records the lines of the paths that differ from HEAD (or
+    /// says it left them out), a submodule's with its commit and a nested
+    /// checkout's as unread among them, and names every nested checkout;
+    /// format 2, the 1.4 capture a check group admitted before still runs,
+    /// has the lines without the names, and format 1 neither; a malformed
+    /// line or name refuses the capture.
     #[test]
-    fn the_lines_of_the_changed_paths_are_read_from_format_2() {
+    fn the_lines_of_the_changed_paths_are_read_from_formats_2_and_3() {
         let encode = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
         let lines = format!(
-            "{}\t644\tfile\t{}\n{}\t0\tdeleted\tmissing\n{}\t777\tlink\t{}\n{}\t755\trepository\t{}\n",
+            "{}\t644\tfile\t{}\n{}\t0\tdeleted\tmissing\n{}\t777\tlink\t{}\n\
+             {}\t755\tspecial\t{}\n{}\t755\tspecial\tunread\n",
             encode("lib/a.rs"),
             digest('1'),
             encode("old.rs"),
             encode("docs/link"),
             digest('2'),
             encode("vendor/sub"),
-            digest('4')
+            "4".repeat(40),
+            encode("tools"),
         );
-        let format2 = |complete: &str, encoded: &str| {
-            let mut value = output(&format!(
-                "changed_complete={complete}
-changed_b64={encoded}
-"
-            ));
+        let formatted = |format: &str, extra: &str| {
+            let mut value = output(extra);
             let stdout = value["stdout"]
                 .as_str()
                 .unwrap()
-                .replacen("format=1", "format=2", 1);
+                .replacen("format=1", &format!("format={format}"), 1);
             value["stdout"] = serde_json::Value::String(stdout);
             value
         };
+        let format3_with = |complete: &str, encoded: &str, unread: &str| {
+            formatted(
+                "3",
+                &format!("changed_complete={complete}\nchanged_b64={encoded}\nunread={unread}\n"),
+            )
+        };
+        let format3 = |complete: &str, encoded: &str| format3_with(complete, encoded, "");
+        // The nested checkouts' names.
+        let unread = format!("{},{}", encode("tools"), encode("a b/c"));
+        let mut named = observation();
+        parse_capture(
+            &format3_with("1", &encode(&lines), &unread),
+            &mut named,
+            &CaptureMode::Observe,
+        )
+        .unwrap();
+        assert_eq!(named.unread_paths, vec!["a b/c".to_owned(), "tools".to_owned()]);
+        for bad in [
+            "!!".to_owned(),
+            format!("{},", encode("tools")),
+            format!("{},", encode(&"x".repeat(4097))),
+            vec![encode(&"y".repeat(4000)); 13].join(","),
+        ] {
+            assert!(
+                parse_capture(
+                    &format3_with("1", &encode(&lines), &bad),
+                    &mut observation(),
+                    &CaptureMode::Observe
+                )
+                .is_err(),
+                "{bad}"
+            );
+        }
         let mut recorded = observation();
         parse_capture(
-            &format2("1", &encode(&lines)),
+            &format3("1", &encode(&lines)),
             &mut recorded,
             &CaptureMode::Observe,
         )
         .unwrap();
         assert_eq!(recorded.changed_manifest.as_deref(), Some(lines.as_str()));
+        assert_eq!(recorded.unread_paths, Vec::<String>::new());
         let mut left_out = observation();
-        parse_capture(&format2("0", ""), &mut left_out, &CaptureMode::Observe).unwrap();
+        parse_capture(&format3("0", ""), &mut left_out, &CaptureMode::Observe).unwrap();
         assert_eq!(left_out.changed_manifest, None);
+        // The 1.4 capture: its lines, and no names.
+        let mut v14 = observation();
+        let format2 = formatted(
+            "2",
+            &format!("changed_complete=1\nchanged_b64={}\n", encode(&lines)),
+        );
+        parse_capture(&format2, &mut v14, &CaptureMode::Observe).unwrap();
+        assert_eq!(v14.changed_manifest.as_deref(), Some(lines.as_str()));
+        assert_eq!(v14.unread_paths, Vec::<String>::new());
         let mut earlier = observation();
         parse_capture(&output(""), &mut earlier, &CaptureMode::Observe).unwrap();
         assert_eq!(earlier.changed_manifest, None);
         for bad in [
-            format2("0", &encode(&lines)),
-            format2("2", ""),
-            format2("1", &encode("lib/a.rs\t644\tfile\tabc\n")),
-            format2(
+            format3("0", &encode(&lines)),
+            format3("2", ""),
+            format3("1", &encode("lib/a.rs\t644\tfile\tabc\n")),
+            format3(
                 "1",
                 &encode(&format!("{}\t644\tfile\tnot-hex\n", encode("a"))),
             ),
-            format2(
+            format3(
                 "1",
                 &encode(&format!("{}\t0\tdeleted\t{}\n", encode("a"), digest('3'))),
             ),
-            format2(
+            format3(
                 "1",
-                &encode(&format!("{}\t755\trepository\tmissing\n", encode("a"))),
+                &encode(&format!("{}\t755\trepository\t{}\n", encode("a"), digest('3'))),
             ),
-            format2(
+            format3(
                 "1",
-                &encode(&format!("{}\t0\tspecial\t{}\n", encode("a"), digest('3'))),
+                &encode(&format!("{}\t755\tspecial\tmissing\n", encode("a"))),
             ),
-            format2("1", "!!"),
-            // Format 2 without its fields, format 1 with them.
-            {
-                let mut value = output("");
-                let stdout = value["stdout"]
-                    .as_str()
-                    .unwrap()
-                    .replacen("format=1", "format=2", 1);
-                value["stdout"] = serde_json::Value::String(stdout);
-                value
-            },
+            format3(
+                "1",
+                &encode(&format!("{}\t755\tspecial\t{}\n", encode("a"), "3".repeat(41))),
+            ),
+            format3("1", "!!"),
+            // Formats 2 and 3 without their fields, format 1 with them.
+            formatted("2", ""),
+            formatted("3", ""),
+            formatted(
+                "3",
+                &format!("changed_complete=1\nchanged_b64={}\n", encode(&lines)),
+            ),
+            formatted(
+                "2",
+                &format!("changed_complete=1\nchanged_b64={}\nunread=\n", encode(&lines)),
+            ),
             output(&format!(
                 "changed_complete=1\nchanged_b64={}\n",
                 encode(&lines)
             )),
+            formatted("4", ""),
         ] {
             assert!(
                 parse_capture(&bad, &mut observation(), &CaptureMode::Observe).is_err(),
@@ -1772,10 +1891,15 @@ changed_b64={encoded}
                 "{failure}"
             );
         }
-        // A capture that could not read a file it records, and one whose
-        // listing reached the limit on its temporary files, say so in every
-        // mode.
-        for (code, reason) in [(65, CAPTURE_UNREADABLE), (69, CAPTURE_LISTING_TOO_LARGE)] {
+        // A capture that could not read a file it records, one whose
+        // listing reached the limit on its temporary files, and one of a
+        // repository with more nested checkouts than it names, say so in
+        // every mode.
+        for (code, reason) in [
+            (65, CAPTURE_UNREADABLE),
+            (69, CAPTURE_LISTING_TOO_LARGE),
+            (71, CAPTURE_TOO_MANY_NESTED),
+        ] {
             let failed =
                 serde_json::json!({"stdout": "", "exit_code": code, "stdout_truncated": false});
             for mode in [&CaptureMode::Observe, &CaptureMode::Keep, &compare] {
@@ -1790,16 +1914,20 @@ changed_b64={encoded}
              not verified: "
         ));
         assert!(CAPTURE_LISTING_TOO_LARGE.contains("reached the 1 GiB a capture may write"));
-        // The capture names those failures with those codes, and the limit
-        // is 1 GiB of 512-byte blocks.
+        // The capture names those failures with those codes, the limit is
+        // 1 GiB of 512-byte blocks, and the nested checkouts' names take at
+        // most 64 KiB in base64, the host's bound on them.
         let script = axocoatl_session::execution_content::REPOSITORY_SNAPSHOT_COMMAND;
         for said in [
             "file_limit=2097152\nulimit -f \"$file_limit\"\n",
             "    exit 69\n",
             "    exit 65\n",
+            "if [ \"$unread_size\" -gt 65536 ]; then\n",
+            "  exit 71\n",
         ] {
             assert!(script.contains(said), "{said}");
         }
+        assert_eq!(MAX_UNREAD_PATH_BYTES, 65536 / 4 * 3);
         // A capture around the checks that ran past its time limit says so,
         // with the limit, in every mode.
         let timed_out = serde_json::json!({"stdout": "", "exit_code": null,
@@ -1871,6 +1999,28 @@ changed_b64={encoded}
         assert_eq!(
             judged(&before, &same_tree),
             Some(vec!["config/x".to_owned()])
+        );
+    }
+
+    /// The nested checkouts a write scope is judged on are those the
+    /// activation's own Before or After capture named: one there before, one
+    /// made by it, and one it removed; never one only a check's capture
+    /// named.
+    #[test]
+    fn the_nested_checkouts_judged_are_those_the_activation_captures_named() {
+        let mut before = observation();
+        before.phase = RepositorySnapshotPhase::Before;
+        before.unread_paths = vec!["kept".into(), "removed".into()];
+        let mut after = observation();
+        after.unread_paths = vec!["kept".into(), "made".into()];
+        let mut check = observation();
+        check.phase = RepositorySnapshotPhase::AfterCheck { index: 0 };
+        check.unread_paths = vec!["by-a-check".into()];
+        assert_eq!(
+            unread_checkouts(&[view(before), view(after), view(check)])
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["kept", "made", "removed"]
         );
     }
 }

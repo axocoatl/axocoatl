@@ -2588,6 +2588,107 @@ async fn actual_tampering_with_the_kept_manifest_fails_closed() {
     }
 }
 
+/// A repository far larger than an 8 KiB manifest with a submodule at
+/// vendor/sub (committed at the newest of two commits), whose upstream is
+/// `upstream`. Returns the older commit.
+fn repository_with_a_submodule(root: &std::path::Path, upstream: &std::path::Path) -> String {
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "-c",
+                "protocol.file.allow=always",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git_init(upstream);
+    for content in ["x\n", "y\n"] {
+        std::fs::write(upstream.join("x"), content).unwrap();
+        git(upstream, &["add", "-A"]);
+        git(upstream, &["commit", "--quiet", "-m", content]);
+    }
+    sizeable_repository(root);
+    git(
+        root,
+        &[
+            "submodule",
+            "add",
+            "--quiet",
+            upstream.to_str().unwrap(),
+            "vendor/sub",
+        ],
+    );
+    git(root, &["commit", "--quiet", "-m", "submodule"]);
+    git(upstream, &["rev-parse", "HEAD~1"])
+}
+
+/// A submodule is judged by the commit it has checked out, as one path:
+/// a scoped writer that moves one outside its paths fails, one that leaves
+/// it alone is accepted, and one whose paths hold it may move it. Its files
+/// are not read, so the capture runs nothing its configuration names.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_a_submodule_is_judged_by_its_commit() {
+    for (writes, command, accepted) in [
+        (&["lib/"][..], "git -C vendor/sub checkout --quiet OLDER", false),
+        (&["lib/"][..], "printf y > lib/file-1.js", true),
+        (&["lib/", "vendor/"][..], "git -C vendor/sub checkout --quiet OLDER", true),
+    ] {
+        let mut f = fixture().await;
+        let upstream = tempfile::tempdir().unwrap();
+        let older = repository_with_a_submodule(f._workspace.path(), upstream.path());
+        let command = command.replace("OLDER", &older);
+        let (settled, _) = settle_scoped_shell(&mut f, writes, &command).await;
+        assert_eq!(settled.accepted, accepted, "{command}: {:?}", settled.failure);
+        if !accepted {
+            let failure = settled.failure.unwrap();
+            assert!(
+                failure.starts_with(
+                    "it changed vendor/sub outside the paths this Agent may change (lib/); the \
+                     change is kept for review"
+                ),
+                "{failure}"
+            );
+        }
+    }
+}
+
+/// A nested Git checkout (not a submodule) is one entry whose files no
+/// capture reads: a scoped writer that makes one inside a directory its
+/// paths name whole is accepted, and one that makes one elsewhere fails,
+/// saying that changes inside it cannot be ruled out and what to do.
+#[tokio::test]
+#[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]
+async fn actual_a_nested_checkout_is_judged_by_what_could_lie_inside() {
+    for (place, accepted) in [("lib/nested", true), ("tools/nested", false)] {
+        let mut f = fixture().await;
+        sizeable_repository(f._workspace.path());
+        let command = format!(
+            "mkdir -p {place} && git -C {place} init --quiet && printf x > {place}/payload.sh \
+             && printf y > lib/file-1.js"
+        );
+        let (settled, _) = settle_scoped_shell(&mut f, &["lib/"], &command).await;
+        assert_eq!(settled.accepted, accepted, "{place}: {:?}", settled.failure);
+        if !accepted {
+            assert_eq!(
+                settled.failure.unwrap(),
+                "tools/nested is a nested Git checkout (not a submodule) whose files the \
+                 repository captures do not read, so changes inside it outside the paths this \
+                 Agent may change (lib/) cannot be ruled out (ignore it in .gitignore, or make \
+                 it a submodule); the change is kept for review"
+            );
+        }
+    }
+}
+
 /// Ordinary work inside the scope, staged with Git, is accepted.
 #[tokio::test]
 #[ignore = "requires explicit AXO_SUPERVISOR_TEST_IMAGE and actual Podman with the rebuilt embedded helper"]

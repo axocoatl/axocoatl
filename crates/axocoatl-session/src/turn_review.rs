@@ -8,7 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::execution_content::{
-    ActivationEvidenceContent, ExecutionContentError, ExecutionContentStore,
+    ActivationEvidenceContent, ExecutionContentError, ExecutionContentStore, SPECIAL_KIND,
+    UNREAD_DIGEST,
 };
 use crate::execution_store::DurableTurnSnapshot;
 use crate::turn_contract::{
@@ -907,14 +908,11 @@ pub fn describe_partial_change(
             };
             let mut changed: Vec<(&[u8], &str)> = Vec::new();
             let mut earlier: Vec<(&[u8], &str)> = Vec::new();
-            let mut nested: Vec<(&[u8], &str)> = Vec::new();
-            for (path, (kind, _)) in &after {
-                if kind == REPOSITORY {
-                    nested.push((path.as_slice(), kind.as_str()));
-                } else if named.contains(String::from_utf8_lossy(path).as_ref()) {
-                    earlier.push((path.as_slice(), kind.as_str()));
+            for (path, (kind, entry)) in &after {
+                if named.contains(String::from_utf8_lossy(path).as_ref()) {
+                    earlier.push((path.as_slice(), shown_kind(kind, entry)));
                 } else {
-                    changed.push((path.as_slice(), kind.as_str()));
+                    changed.push((path.as_slice(), shown_kind(kind, entry)));
                 }
             }
             let now: std::collections::BTreeSet<String> = after
@@ -926,8 +924,7 @@ pub fn describe_partial_change(
                 .filter(|name| !now.contains(*name))
                 .map(|name| (name.as_bytes(), "file"))
                 .collect();
-            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() && nested.is_empty()
-            {
+            if changed.is_empty() && earlier.is_empty() && reverted.is_empty() {
                 text.push_str("\nThe turn changed no files.\n");
             }
             if !changed.is_empty() {
@@ -966,13 +963,12 @@ pub fn describe_partial_change(
                     &mut room,
                 );
             }
-            list_nested(&mut text, nested, &in_head, &mut room);
         }
         (Some(before), Some(after)) => {
             let changed: Vec<(&[u8], &str)> = after
                 .iter()
                 .filter(|(path, entry)| before.get(*path) != Some(entry))
-                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+                .map(|(path, (kind, entry))| (path.as_slice(), shown_kind(kind, entry)))
                 .collect();
             let reverted: Vec<(&[u8], &str)> = before
                 .keys()
@@ -1006,15 +1002,10 @@ pub fn describe_partial_change(
             }
         }
         (None, Some(after)) => {
-            let mut nested: Vec<(&[u8], &str)> = Vec::new();
-            let mut differing: Vec<(&[u8], &str)> = Vec::new();
-            for (path, (kind, _)) in &after {
-                if kind == REPOSITORY {
-                    nested.push((path.as_slice(), kind.as_str()));
-                } else {
-                    differing.push((path.as_slice(), kind.as_str()));
-                }
-            }
+            let differing: Vec<(&[u8], &str)> = after
+                .iter()
+                .map(|(path, (kind, entry))| (path.as_slice(), shown_kind(kind, entry)))
+                .collect();
             if differing.is_empty() {
                 text.push_str("\nNo path differs from HEAD.\n");
             } else {
@@ -1036,7 +1027,6 @@ pub fn describe_partial_change(
                     &mut room,
                 );
             }
-            list_nested(&mut text, nested, &in_head, &mut room);
         }
     }
     let (shown, covered, binary_left_out) = shown_prefix(prefix, MAX_SHOWN_PREFIX_BYTES);
@@ -1115,15 +1105,8 @@ pub fn fit_description(text: String, budget: ChangeBudget<'_>) -> String {
 /// `before` and `after`; empty when there is nothing to say. Bounded as
 /// [`describe_partial_change`] bounds its lists.
 pub fn earlier_changes(before: &str, after: &str) -> String {
-    // A submodule or nested checkout is listed whether it differs from HEAD
-    // or not; [`nested_repositories`] names those the turn changed.
-    let files = |lines: &str| {
-        let mut paths = differing_paths(lines);
-        paths.retain(|_, (kind, _)| kind != REPOSITORY);
-        paths
-    };
-    let before = files(before);
-    let after = files(after);
+    let before = differing_paths(before);
+    let after = differing_paths(after);
     let mut text = String::new();
     let mut room = Listing {
         names: MAX_LISTED_PATHS,
@@ -1133,7 +1116,7 @@ pub fn earlier_changes(before: &str, after: &str) -> String {
     let earlier: Vec<(&[u8], &str)> = after
         .iter()
         .filter(|(path, _)| before.contains_key(*path))
-        .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
+        .map(|(path, (kind, entry))| (path.as_slice(), shown_kind(kind, entry)))
         .collect();
     if !earlier.is_empty() {
         list_paths(
@@ -1170,100 +1153,112 @@ pub fn earlier_changes(before: &str, after: &str) -> String {
     text
 }
 
-/// The kind of a capture's line for a submodule or nested Git checkout:
-/// one entry for all of it, whose digest covers its files, its Git settings
-/// and the commit it has checked out. A capture lists every one beside the
-/// paths that differ from HEAD, changed or not, and the patch shows a
-/// submodule only by that commit and a nested checkout not at all.
-pub const REPOSITORY: &str = "repository";
-
-/// Append `nested`, submodules and nested Git checkouts whose change no
-/// earlier capture's lines can tell, under a heading that says so.
-fn list_nested(
-    text: &mut String,
-    nested: Vec<(&[u8], &str)>,
-    in_head: &std::collections::BTreeSet<Vec<u8>>,
-    room: &mut Listing,
-) {
-    if nested.is_empty() {
-        return;
+/// How a list names a path of a capture's lines of `kind` whose line is
+/// `entry` (`mode\tkind\tdigest`): a submodule and a nested Git checkout
+/// apart from files, by their record ([`SPECIAL_KIND`]).
+fn shown_kind<'a>(kind: &'a str, entry: &str) -> &'a str {
+    if kind != SPECIAL_KIND {
+        return kind;
     }
-    let count = nested.len();
-    list_paths(
-        text,
-        &format!(
-            "{count} submodule{} or nested Git checkout{}, whose files the patch does not show; \
-             the turn may have changed {}, which the capture taken when it began cannot tell \
-             apart, so read {} files yourself:",
-            if count == 1 { "" } else { "s" },
-            if count == 1 { "" } else { "s" },
-            if count == 1 { "it" } else { "them" },
-            if count == 1 { "its" } else { "their" },
-        ),
-        nested,
-        in_head,
-        room,
-    );
+    if entry.rsplit('\t').next() == Some(UNREAD_DIGEST) {
+        NESTED_SHOWN
+    } else {
+        SUBMODULE_SHOWN
+    }
 }
 
-/// What a change shown from its patch must add about submodules and nested
-/// Git checkouts: the patch shows a submodule only by the commit it has
-/// checked out and a nested checkout not at all. From the lines of the paths
-/// that differ from HEAD the captures recorded on one HEAD, `before` when the
-/// turn began (`None` when that capture recorded none, or HEAD moved) and
-/// `after`: those whose line differs from `before`'s, or every one without
-/// `before`, named to be read. Empty when there is none. Bounded as
-/// [`describe_partial_change`] bounds its lists.
-pub fn nested_repositories(before: Option<&str>, after: &str) -> String {
-    let after = differing_paths(after);
-    let nested = |paths: &std::collections::BTreeMap<Vec<u8>, (String, String)>| {
-        paths
-            .iter()
-            .filter(|(_, (kind, _))| kind == REPOSITORY)
-            .map(|(path, entry)| (path.clone(), entry.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>()
-    };
+const SUBMODULE_SHOWN: &str = "submodule";
+const NESTED_SHOWN: &str = "nested checkout";
+
+/// What the reviewer must add to a change about what no patch shows: the
+/// submodules whose commit the turn changed, from the lines of the paths
+/// that differ from HEAD the captures recorded on one HEAD (`before` when
+/// the turn began, `None` when that capture recorded none or HEAD moved,
+/// and `after`), each with the commit it now holds; and the nested Git
+/// checkouts (not submodules) either capture named (`unread`), whose files
+/// no capture reads, so the turn may have changed files inside them. Empty
+/// when there is neither. Bounded as [`describe_partial_change`] bounds its
+/// lists.
+pub fn not_in_the_patch(before: Option<&str>, after: Option<&str>, unread: &[String]) -> String {
     let mut text = String::new();
     let mut room = Listing {
         names: MAX_LISTED_PATHS,
         bytes: MAX_LISTED_PATH_BYTES,
     };
-    let none = std::collections::BTreeSet::new();
-    let now = nested(&after);
-    match before.map(differing_paths) {
-        Some(before) => {
-            let then = nested(&before);
-            let changed: Vec<(&[u8], &str)> = now
-                .iter()
-                .filter(|(path, entry)| then.get(*path) != Some(entry))
-                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
-                .collect();
-            if !changed.is_empty() {
-                list_paths(
-                    &mut text,
-                    &format!(
-                        "[Not shown above: the turn changed files in {} submodule{} or nested Git \
-                         checkout{}, which the patch shows only by a submodule's commit. You \
-                         have not seen those changes; read the files yourself:]",
-                        changed.len(),
-                        if changed.len() == 1 { "" } else { "s" },
-                        if changed.len() == 1 { "" } else { "s" },
-                    ),
-                    changed,
-                    &none,
-                    &mut room,
-                );
-            }
-        }
-        None => {
-            let all: Vec<(&[u8], &str)> = now
-                .iter()
-                .map(|(path, (kind, _))| (path.as_slice(), kind.as_str()))
-                .collect();
-            list_nested(&mut text, all, &none, &mut room);
+    let submodules = |lines: &str| {
+        differing_paths(lines)
+            .into_iter()
+            .filter(|(_, (kind, entry))| shown_kind(kind, entry) == SUBMODULE_SHOWN)
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    if let Some(after) = after {
+        let now = submodules(after);
+        let then = before.map(submodules);
+        let moved: Vec<String> = now
+            .iter()
+            .filter(|(path, entry)| then.as_ref().is_none_or(|then| then.get(*path) != Some(entry)))
+            .map(|(path, (_, entry))| {
+                format!(
+                    "{} (now at commit {})\n",
+                    quote_path(path),
+                    entry.rsplit('\t').next().unwrap_or_default()
+                )
+            })
+            .collect();
+        if !moved.is_empty() {
+            let heading = if then.is_some() {
+                "Submodules whose commit the turn changed, which the patch shows only by that \
+                 commit, never their files:"
+            } else {
+                "Submodules whose commit differs from HEAD (this can include changes made \
+                 before the turn), which the patch shows only by that commit, never their \
+                 files:"
+            };
+            list_lines(&mut text, heading, moved, &mut room);
         }
     }
+    if !unread.is_empty() {
+        let count = unread.len();
+        let lines: Vec<String> = unread
+            .iter()
+            .map(|path| format!("{}\n", quote_path(path.as_bytes())))
+            .collect();
+        list_lines(
+            &mut text,
+            &format!(
+                "[Not shown above: {count} nested Git checkout{} (not {}), whose files the \
+                 repository captures do not read, so the turn may have changed files inside {} \
+                 that nothing here shows. You have not seen those; read them yourself:]",
+                if count == 1 { "" } else { "s" },
+                if count == 1 { "a submodule" } else { "submodules" },
+                if count == 1 { "it" } else { "them" },
+            ),
+            lines,
+            &mut room,
+        );
+    }
     text
+}
+
+/// Append `heading` and as many of `lines` (each one name's line) as
+/// `room` takes, then how many are left unlisted.
+fn list_lines(text: &mut String, heading: &str, lines: Vec<String>, room: &mut Listing) {
+    text.push('\n');
+    text.push_str(heading);
+    text.push('\n');
+    let mut listed = 0;
+    for line in &lines {
+        if room.names == 0 || line.len() > room.bytes {
+            break;
+        }
+        room.names -= 1;
+        room.bytes -= line.len();
+        text.push_str(line);
+        listed += 1;
+    }
+    if listed < lines.len() {
+        text.push_str(&format!("...and {} more, not listed\n", lines.len() - listed));
+    }
 }
 
 /// `count` files, as a heading names them: `1 file`, `2 files`.
@@ -1297,8 +1292,9 @@ fn list_paths(
         let line = match *kind {
             "deleted" => format!("{} (deleted)\n", quote_path(path)),
             "link" => format!("{} (symbolic link)\n", quote_path(path)),
-            REPOSITORY => format!(
-                "{} (a submodule or nested Git checkout)\n",
+            SUBMODULE_SHOWN => format!("{} (a submodule)\n", quote_path(path)),
+            NESTED_SHOWN => format!(
+                "{} (a nested Git checkout, whose files are not read)\n",
                 quote_path(path)
             ),
             _ => format!("{}\n", quote_path(path)),
@@ -2501,98 +2497,103 @@ mod tests {
              file):\nscratch.txt\n"
         );
         assert_eq!(earlier_changes("", &after), "");
-        // A submodule is listed by every capture, changed or not: it is no
-        // file with uncommitted changes, and a nested checkout is no file
-        // the patch would show.
+        // A submodule whose commit differed from HEAD before and after, and
+        // a nested checkout, are named as any path is, as what they are.
         let with = |lines: &str, digest: char| {
             format!(
                 "{lines}{}{}",
-                changed_line(b"vendor/sub", REPOSITORY, digest),
-                changed_line(b"tools", REPOSITORY, 'f')
+                special_line(b"vendor/sub", &digest.to_string().repeat(40)),
+                special_line(b"tools", UNREAD_DIGEST)
             )
         };
-        assert_eq!(
-            earlier_changes(&with(&before, '1'), &with(&after, '2')),
-            earlier_changes(&before, &after)
+        let named = earlier_changes(&with(&before, '1'), &with(&after, '2'));
+        assert!(
+            named.contains(
+                "(3 files):\nnotes.txt\ntools (a nested Git checkout, whose files are not \
+                 read)\nvendor/sub (a submodule)\n"
+            ),
+            "{named}"
         );
     }
 
-    /// The patch shows a submodule only by its commit and a nested checkout
-    /// not at all. A change shown from the patch names, after it, those
-    /// whose capture line the turn changed, or, when the capture taken as it
-    /// began listed none, every one as one the turn may have changed; a
-    /// change too large to show lists them by what the captures tell.
+    /// A capture's line of a submodule (its commit) or of a nested Git
+    /// checkout (`unread`).
+    fn special_line(path: &[u8], digest: &str) -> String {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(path);
+        format!("{encoded}\t755\t{SPECIAL_KIND}\t{digest}\n")
+    }
+
+    /// The patch shows a submodule only by its commit, and a nested Git
+    /// checkout's files not at all. A change names, after it, the
+    /// submodules whose commit the turn changed, with that commit (or, when
+    /// the capture taken as it began listed none, those whose commit differs
+    /// from HEAD, which can include earlier changes), and every nested
+    /// checkout either capture named, as one the turn may have changed
+    /// inside. A change too large to show lists them among its paths, as
+    /// what they are.
     #[test]
     fn submodules_and_nested_checkouts_the_patch_does_not_show_are_named() {
+        let (one, two) = ("1".repeat(40), "2".repeat(64));
         let before = [
             changed_line(b"src/lib.rs", "file", 'a'),
-            changed_line(b"vendor/sub", REPOSITORY, '1'),
-            changed_line(b"tools", REPOSITORY, 'f'),
+            special_line(b"vendor/sub", &one),
+            special_line(b"tools", UNREAD_DIGEST),
         ]
         .concat();
         let after = [
             changed_line(b"src/lib.rs", "file", 'c'),
-            changed_line(b"vendor/sub", REPOSITORY, '2'),
-            changed_line(b"tools", REPOSITORY, 'f'),
-            changed_line(b"nested", REPOSITORY, '3'),
+            special_line(b"vendor/sub", &two),
+            special_line(b"tools", UNREAD_DIGEST),
+            special_line(b"nested", UNREAD_DIGEST),
         ]
         .concat();
+        let unread = ["nested".to_owned(), "tools".to_owned()];
         assert_eq!(
-            nested_repositories(Some(&before), &after),
-            "\n[Not shown above: the turn changed files in 2 submodules or nested Git \
-             checkouts, which the patch shows only by a submodule's commit. You have not seen \
-             those changes; read the files yourself:]\nnested (a submodule or nested Git \
-             checkout)\nvendor/sub (a submodule or nested Git checkout)\n"
+            not_in_the_patch(Some(&before), Some(&after), &unread),
+            format!(
+                "\nSubmodules whose commit the turn changed, which the patch shows only by that \
+                 commit, never their files:\nvendor/sub (now at commit {two})\n\n[Not shown \
+                 above: 2 nested Git checkouts (not submodules), whose files the repository \
+                 captures do not read, so the turn may have changed files inside them that \
+                 nothing here shows. You have not seen those; read them yourself:]\nnested\n\
+                 tools\n"
+            )
         );
-        assert_eq!(nested_repositories(Some(&after), &after), "");
-        let unknown = nested_repositories(None, &before);
+        assert_eq!(not_in_the_patch(Some(&after), Some(&after), &[]), "");
+        assert_eq!(not_in_the_patch(None, None, &[]), "");
         assert_eq!(
-            unknown,
-            "\n2 submodules or nested Git checkouts, whose files the patch does not show; the \
-             turn may have changed them, which the capture taken when it began cannot tell \
-             apart, so read their files yourself:\ntools (a submodule or nested Git \
-             checkout)\nvendor/sub (a submodule or nested Git checkout)\n"
+            not_in_the_patch(None, Some(&before), &unread[1..]),
+            format!(
+                "\nSubmodules whose commit differs from HEAD (this can include changes made \
+                 before the turn), which the patch shows only by that commit, never their \
+                 files:\nvendor/sub (now at commit {one})\n\n[Not shown above: 1 nested Git \
+                 checkout (not a submodule), whose files the repository captures do not read, \
+                 so the turn may have changed files inside it that nothing here shows. You \
+                 have not seen those; read them yourself:]\ntools\n"
+            )
         );
-        assert_eq!(
-            nested_repositories(None, &changed_line(b"src/lib.rs", "file", 'c')),
-            ""
-        );
-        // Too large to show: from both captures' lines, only the changed
-        // ones, among the turn's files.
+        // Too large to show: from both captures' lines, the changed ones,
+        // as what they are.
         let listed = describe_partial_change(EarlierPaths::Listed(&before), Some(&after), "", 9);
         assert!(
             listed.contains(
-                "The 3 files the turn changed:\nnested (a submodule or nested Git checkout)\n"
+                "The 3 files the turn changed:\nnested (a nested Git checkout, whose files are \
+                 not read)\nsrc/lib.rs\nvendor/sub (a submodule)\n"
             ),
             "{listed}"
         );
-        assert!(listed.contains("\nvendor/sub (a submodule or nested Git checkout)\n"));
         assert!(!listed.contains("tools"), "{listed}");
-        // Without the earlier lines, every one apart, as one the turn may
-        // have changed, never as a path that differs from HEAD.
-        for earlier in [
-            EarlierPaths::NotListed,
-            EarlierPaths::OtherHead,
-            EarlierPaths::Patched(&std::collections::BTreeSet::new()),
-        ] {
-            let text = describe_partial_change(earlier, Some(&after), "", 9);
-            assert!(
-                text.contains(
-                    "\n3 submodules or nested Git checkouts, whose files the patch does not \
-                     show; the turn may have changed them"
-                ),
-                "{text}"
-            );
-            assert!(
-                !text.contains("files the turn changed:") || text.contains("The 1 file the turn"),
-                "{text}"
-            );
-            assert!(
-                !text.contains("files the turn changed:\nnested")
-                    && !text.contains("files the turn changed:\ntools"),
-                "{text}"
-            );
-        }
+        let unknown = describe_partial_change(EarlierPaths::NotListed, Some(&after), "", 9);
+        assert!(
+            unknown.contains(
+                "paths that differ from HEAD (they may include changes made before this turn, \
+                 which the capture taken when it began did not list):\nnested (a nested Git \
+                 checkout, whose files are not read)\nsrc/lib.rs\ntools (a nested Git checkout, \
+                 whose files are not read)\nvendor/sub (a submodule)\n"
+            ),
+            "{unknown}"
+        );
     }
 
     /// Thousands of changed paths, the most one capture lists (3,072 small
