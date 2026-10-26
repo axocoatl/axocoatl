@@ -15,6 +15,7 @@
 #             `container exists` find no container
 #   timeout-retrieving   the same, with Podman's other message for it (it
 #             cannot retrieve the exec session: no such container)
+#   timeout-removed      the same, with Podman's already-removed message
 #   timeout-other        the same, with another Podman error instead
 #   timeout-settling     as Podman 6.1 does at the lifetime: the login is
 #             killed (exit 137, no message), and for the first two
@@ -101,6 +102,9 @@ case "${1:-}" in
               ;;
             timeout-retrieving)
               printf 'Error: retrieving exec session 0123abcd from container 4567ef: no container with ID 4567ef found in database: no such container\n' >&2
+              ;;
+            timeout-removed)
+              printf 'Error: container has already been removed\r\n' >&2
               ;;
             *)
               printf 'Error: read unixpacket @->/proc/self/fd/7/attach: read: connection reset by peer\n' >&2

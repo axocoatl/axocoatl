@@ -237,6 +237,7 @@ serve_ollama() {
 
 run() {
   local group=$1 mode=${2:-run} crate args log count expected=0 passed=0 failed=0 unfinished name
+  local status command_failures=0
   local filters=()
   umask 022
   export AXO_SUPERVISOR_TEST_IMAGE=$supervisor_root
@@ -284,7 +285,9 @@ run() {
     log="$work/$crate.log"
     set +e
     cargo test --locked --no-fail-fast "${args[@]}" -- --ignored --test-threads=1 ${filters[@]+"${filters[@]}"} 2>&1 | tee "$log"
+    status=$?
     set -e
+    ((status == 0)) || command_failures=$((command_failures + 1))
     tally "$log"
     # The native Session test's other two cases: JSON and a tool round-trip.
     if [[ $group == ollama && $crate == axocoatl-daemon ]]; then
@@ -293,7 +296,9 @@ run() {
         expected=$((expected + 1))
         set +e
         env "$case=1" cargo test --locked "${args[@]}" -- --ignored --test-threads=1 --exact "$name" 2>&1 | tee "$log"
+        status=$?
         set -e
+        ((status == 0)) || command_failures=$((command_failures + 1))
         tally "$log"
       done
     fi
@@ -304,7 +309,10 @@ run() {
   unfinished=$((expected - passed - failed))
   ((unfinished > 0)) || unfinished=0
   echo "Podman suites ($group): $passed of $expected ignored tests passed, $failed failed, $unfinished without a result"
-  [[ $expected -gt 0 && $passed -eq $expected && $failed -eq 0 ]]
+  if ((command_failures > 0)); then
+    echo "test-podman-suites: $command_failures Cargo test pipelines failed" >&2
+  fi
+  [[ $expected -gt 0 && $passed -eq $expected && $failed -eq 0 && $command_failures -eq 0 ]]
 }
 
 # Add one cargo test log's passed and failed tests to the run's: each test
@@ -324,6 +332,9 @@ tally() {
       }
       last = ""
     }
+    # CI forces Cargo color even through tee. Normalize SGR before finding
+    # binary boundaries, or a later empty target overwrites earlier passes.
+    { gsub(/\033\[[0-9;]*m/, "") }
     /^ *Running / { flush() }
     /^test result: / { last = $0 }
     END { flush(); print passed + 0, failed + 0 }' "$1")
@@ -353,6 +364,7 @@ ignored_tests() {
 }
 
 check() {
+  bash "$script_dir/test-podman-suites-parser.sh"
   local problems=0 crate file name group covered entry found
   local -a groups=(isolation daemon cli other ollama)
   local tests

@@ -1446,7 +1446,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   container while `container inspect` no longer finds it. The command said
   `Codex's auth.json could not be read from the login container (exit status: 125)` and
   exited 5. It now waits up to 10 seconds for Podman to remove the container, then says
-  the sign-in was not completed within the time, with exit 2.
+  the sign-in was not completed within the time, with exit 2. After a confirmed
+  timeout, Podman's `container has already been removed` teardown message is hidden
+  too; an early container removal or another error remains visible.
 - **A run stops its Session's containers when it ends.** A finished run, a run that ended
   at its environment and a run whose driver failed left the Session's container and
   egress sidecar running until the daemon stopped. An error after admission made the

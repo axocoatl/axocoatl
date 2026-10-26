@@ -12,6 +12,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
+bash "$script_dir/test-ci-registry-mirror.sh"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-workflow-contracts.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 copy="$work_dir/checkout"

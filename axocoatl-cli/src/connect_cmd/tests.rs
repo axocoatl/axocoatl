@@ -2909,7 +2909,7 @@ async fn a_sign_in_the_container_outlived_says_it_was_not_completed_in_time() {
     assert!(args.iter().any(|arg| arg == "--timeout=1"), "{args:?}");
 }
 
-/// Podman's two errors about an exec session the container's lifetime
+/// Podman's errors about an exec session the container's lifetime
 /// ended under it are not shown, after Codex's whole output; the same
 /// errors are shown when the container ended before its lifetime, and
 /// another Podman error is shown when the lifetime ended the container.
@@ -2920,22 +2920,30 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
     const NO_SESSION: &str = "Error: no exec session with ID 0123abcd found\r\n";
     const NOT_RETRIEVED: &str = "Error: retrieving exec session 0123abcd from container \
         4567ef: no container with ID 4567ef found in database: no such container\r\n";
+    const REMOVED: &str = "Error: container has already been removed\r\r\n";
     const OTHER: &str =
         "Error: read unixpacket @->/proc/self/fd/7/attach: read: connection reset by peer\r\n";
     let second = Duration::from_secs(1);
     let fixtures = [
         ("timeout", second),
         ("timeout-retrieving", second),
+        ("timeout-removed", second),
         ("timeout-other", second),
         ("timeout-retrieving", codex_container::DEFAULT_LIFETIME),
+        ("timeout-removed", codex_container::DEFAULT_LIFETIME),
     ]
     .map(|(mode, lifetime)| (ContainerFixture::new(mode), lifetime));
     let run = |index: usize| {
         let (fixture, lifetime) = &fixtures[index];
         run_container_login(fixture, fixture.login(None, *lifetime), false, CODEX_PROMPT)
     };
-    let (no_session, not_retrieved, other, early) = tokio::join!(run(0), run(1), run(2), run(3));
-    for (name, (result, screen)) in [("no session", no_session), ("not retrieved", not_retrieved)] {
+    let (no_session, not_retrieved, removed, other, early, removed_early) =
+        tokio::join!(run(0), run(1), run(2), run(3), run(4), run(5));
+    for (name, (result, screen)) in [
+        ("no session", no_session),
+        ("not retrieved", not_retrieved),
+        ("removed", removed),
+    ] {
         let terminal = with_outcome(&screen, &result);
         let failure = result.expect_err(name);
         assert_eq!(failure.code, exit::NO_TOKEN, "{name}");
@@ -2973,23 +2981,24 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         )),
         "{terminal:?}"
     );
-    let (result, screen) = early;
-    let terminal = with_outcome(&screen, &result);
-    let failure = result.expect_err("early");
-    assert_eq!(failure.message, codex_container::ended_early());
-    assert!(screen.contains(NOT_RETRIEVED));
-    assert!(
-        terminal.ends_with(&format!(
-            "{CODEX_PROMPT}\r\n\r\n{NOT_RETRIEVED}\r\n✗ {}\r\n",
-            failure.message
-        )),
-        "{terminal:?}"
-    );
+    for ((result, screen), said) in [(early, NOT_RETRIEVED), (removed_early, REMOVED)] {
+        let terminal = with_outcome(&screen, &result);
+        let failure = result.expect_err("early");
+        assert_eq!(failure.message, codex_container::ended_early());
+        assert!(screen.contains(said));
+        assert!(
+            terminal.ends_with(&format!(
+                "{CODEX_PROMPT}\r\n\r\n{said}\r\n✗ {}\r\n",
+                failure.message
+            )),
+            "{terminal:?}"
+        );
+    }
     for (fixture, _) in &fixtures {
         assert!(fixture.stored().is_none());
     }
 
-    for lost in [NO_SESSION, NOT_RETRIEVED] {
+    for lost in [NO_SESSION, NOT_RETRIEVED, REMOVED] {
         assert!(
             codex_container::lost_exec_session(lost.as_bytes()),
             "{lost}"
@@ -3025,6 +3034,9 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         "\x1b[31mError: no exec session with ID 0123 found\x1b[0m\n",
         "Error: no exec session with ID 0123 found\r\nmore\r\n",
         "Error: no exec session with ID 0123 found, retrying\n",
+        "Error: container has already been removed, retrying\n",
+        "Error logging in: container has already been removed\n",
+        "Error: container has already been removed\nmore\n",
     ] {
         assert!(
             !codex_container::lost_exec_session(kept.as_bytes()),
