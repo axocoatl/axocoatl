@@ -142,7 +142,7 @@ async function onboard() {
     return 9;
   }
   if (!onPath('podman')) {
-    out('Not ready yet, 1 step left:\n  1) Install Podman: sudo apt-get install -y podman');
+    out('Not ready yet, 1 step left:\n  1) Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman');
     return 1;
   }
   if (process.env.FAKE_NO_SUBUID) {
@@ -309,7 +309,7 @@ async function main() {
       const doc = {
         ready,
         sections: {
-          sandbox: [{ name: 'podman', status: onPath('podman') ? 'ok' : 'fail', detail: '', fix: 'sudo apt-get install -y podman' }],
+          sandbox: [{ name: 'podman', status: onPath('podman') ? 'ok' : 'fail', detail: '', fix: 'sudo apt-get update && sudo apt-get install -y podman' }],
           models: [{ name: 'ollama', status: config ? 'ok' : 'fail', detail: config?.baseUrl ?? '', fix: '' }],
           writers: [],
           daemon: [{ name: 'daemon', status: 'warn', detail: 'not running', fix: 'axocoatl dev' }],

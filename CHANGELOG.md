@@ -323,8 +323,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed" refusal and the Podman status line: on Apple silicon with Homebrew "Run
   `axocoatl onboard` (it installs Podman after asking), or: `brew install podman`"; on
   Apple silicon without Homebrew, the podman.io installer; on an Intel Mac, the Podman
-  5.8 package; on Linux, the distribution's command (`sudo apt-get install -y podman`,
-  dnf, pacman, zypper); on Ubuntu 22.04 and older, that its Podman is too old. 1.4.0
+  5.8 package; on Linux, the distribution's command (`sudo apt-get update && sudo apt-get
+  install -y podman`, dnf, pacman, zypper); on Ubuntu 22.04 and older, that its Podman
+  is too old. 1.4.0
   printed `brew install podman && podman machine init && podman machine start` on every
   Mac.
 - **The daemon follows `CONTAINER_CONNECTION` and `CONTAINER_HOST` as Podman does.** On

@@ -785,8 +785,8 @@ mod tests {
             .starts_with("Podman 6 no longer supports Intel Macs"));
         assert_eq!(
             fix(InstallRoute::for_linux(UBUNTU)),
-            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get install \
-             -y podman`."
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get update && \
+             sudo apt-get install -y podman`."
         );
         assert_eq!(
             fix(InstallRoute::for_linux("ID=ubuntu\nVERSION_ID=\"22.04\"\n")),
