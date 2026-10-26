@@ -5,8 +5,8 @@
 // removal) that signed-out.test.mjs sets, from another *.localhost page,
 // with a count of the cookies the browser sends back.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
@@ -55,6 +55,7 @@ test('the flood is the one the journeys set: 51 cookies of 4,000 bytes, then 9 d
   assert.equal(planted.said, "Set 60 cookies for localhost with Path=/api. Safari sends 57 of them back to this page's server (48 of the 51 large, 9 of the 9 small).");
   const removed = await run(['/ws', 'clear'], { planted: 0, fill: 0, fit: 0 });
   assert.ok(removed.cookies.length === 60 && removed.cookies.every((c) => c.endsWith('; Domain=localhost; Path=/ws; Max-Age=0')));
+  assert.deepEqual(removed.cookies.map((cookie) => cookie.split('=')[0]), planted.cookies.map((cookie) => cookie.split('=')[0]));
   assert.deepEqual(removed.asked, ['/ws/gate-cookie-count']);
   assert.match(removed.said, /Safari sends 0 of them back/);
   const counted = await run(['/', 'count'], { planted: 3, fill: 0, fit: 3 });
@@ -97,4 +98,39 @@ test('the server binds loopback only, writes its port and logs each request with
   } finally {
     child.kill();
   }
+});
+
+// Exercise the actual gate question's decision against retained request logs;
+// no browser or operator answers are simulated as release evidence here.
+test('fixture cleanup requires a fresh clear navigation, a later zero count, and an observed working workbench', () => {
+  const gate = readFileSync(path.join(HERE, 'newuser-mac.sh'), 'utf8');
+  const fn = gate.match(/^expired_step\(\) \{[\s\S]*?^\}/m)?.[0];
+  assert.ok(fn, 'the gate has its explicit fixture-expiry step');
+  const dir = path.join(scratch, 'expiry-question');
+  mkdirSync(path.join(dir, 'logs'), { recursive: true });
+  const clear = 'GET /clear?path=/api document\n';
+  const count = (n) => `GET /api/gate-cookie-count empty planted=${n}\n`;
+  const decide = (log, answer = 'y', since = 0) => {
+    writeFileSync(path.join(dir, 'logs', 'safari-pages.log'), log);
+    const result = spawnSync('/bin/bash', ['-c', `
+      set -eu
+      GATE_ATTACH=$2
+      TEST_ANSWER=$3
+      eval "$1"
+      ask() { ANSWER=$TEST_ANSWER; ANSWER_NOTE='observation did not match'; }
+      gate_record() { printf '%s\n' "$2"; }
+      expired_step 'Is the workbench still signed in and working?' "$4"
+    `, 'gate-expiry-test', fn, dir, answer, String(since)], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  assert.equal(decide(count(53) + clear + count(0)), 'pass');
+  assert.equal(decide(count(0)), 'fail', 'Settings removal or a count alone is not fixture expiry');
+  assert.equal(decide(clear + count(0), 'y', 2), 'fail', 'an old successful cleanup is not a new observation');
+  assert.equal(decide(count(0) + clear), 'fail', 'a count before clear is not its result');
+  assert.equal(decide(clear + count(53)), 'fail', 'remaining planted cookies fail cleanup');
+  assert.equal(decide(clear + count(0) + count(1)), 'fail', 'a later nonzero count is retained');
+  assert.equal(decide(clear + 'GET /ws/gate-cookie-count empty planted=0\n'), 'fail', 'the count must use the planted path');
+  assert.equal(decide('GET /clear?path=/ws document\n' + count(0)), 'fail', 'a different clear path does not qualify');
+  assert.equal(decide(clear + count(0), 'n'), 'fail', 'zero cookies do not replace the workbench observation');
 });

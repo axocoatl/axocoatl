@@ -190,6 +190,21 @@ test('the steps each path must show come from their block in RELEASE_GATE.md, an
   }
 });
 
+test('Safari fixture expiry needs new evidence and cannot relabel the failed Settings-removal attempt', () => {
+  const steps = parseRequiredSteps(readFileSync(path.join(REPO, 'docs', 'RELEASE_GATE.md'), 'utf8')).get('C1-workbench-webkit');
+  const cleanup = "the gate's planted localhost cookies are expired";
+  const old = 'Manage Website Data removes the planted localhost cookies';
+  assert.ok(steps.includes(cleanup));
+  assert.ok(!steps.includes(old));
+  const recorded = steps.filter((name) => name !== cleanup).map((name) => ({ name, status: 'pass', required: true }));
+  // Even an old claimed Settings pass is not evidence of this new action.
+  for (const status of ['pass', 'fail']) {
+    const problems = requiredStepProblems('C1-workbench-webkit', [...recorded, { name: old, status, required: true }], steps);
+    assert.ok(problems.some((problem) => problem.includes(cleanup) && problem.includes('was not recorded')));
+  }
+  assert.deepEqual(requiredStepProblems('C1-workbench-webkit', [...recorded, { name: cleanup, status: 'pass', required: true }], steps), []);
+});
+
 test('a required path that did not record, skipped, failed or made optional a step the list names is refused', () => {
   const required = ['the account started without Podman or a Podman machine'];
   const recorded = (status, extra = {}) => [{ name: 'run fix node-deps', status: 'pass', required: true }, { name: required[0], status, required: true, ...extra }];

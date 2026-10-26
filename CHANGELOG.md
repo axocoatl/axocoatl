@@ -1390,6 +1390,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   activation: a text call as `unrunnable_tool_call`, as before, anything else as the new
   `no_answer` ("The model gave no answer and no tool call Axocoatl could run"), not as a
   provider failure. A required reviewer's round still runs again once after that.
+- **OpenRouter refuses a Qwen tool call returned as answer text.** A complete standalone
+  function/parameter envelope naming an offered tool, with no native tool call, now
+  uses the same one-retry path with usage and cost settled. A repeated malformed
+  response stops as `unrunnable_tool_call`. The text is never executed and no tool id
+  is invented; quoted examples and responses with native calls keep their meaning.
+  The regression replays the response captured during service onboarding and exercises
+  both recovery to a real native call and refusal after a second malformed response.
 - **An Ollama model that another program unloads while Axocoatl reads its context is
   loaded again.** To read a native Ollama model's context, Axocoatl loads it and reads
   `/api/ps`. When another program on the same Ollama loaded a model in between, Ollama

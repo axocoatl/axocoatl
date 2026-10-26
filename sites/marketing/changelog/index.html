@@ -252,27 +252,31 @@
               from its <code>Set-Cookie</code> headers.</li>
           <li>In Safari a Preview never runs top-level. Safari on macOS lets a page on a
               <code>*.localhost</code> address that runs in its own tab set a cookie for
-              <code>localhost</code> that reaches the workbench and every Session's
-              Preview. The daemon now answers a Preview page that Safari would open in a
-              tab or window of its own, however it got there (a link, a redirect,
-              Command-click, a typed address), with a page that says why, and never asks
-              the app. The workbench offers no Open full preview there, and the Preview
-              frame cannot open windows. Measured in Playwright's WebKit on macOS, not in
-              Safari itself or on iPhone or iPad.</li>
+              <code>localhost</code> that other apps on <code>localhost</code> and
+              top-level Session Previews receive. The workbench now uses
+              <code>127.0.0.1</code> and never receives those cookies. The daemon answers
+              a Preview page that Safari would open in a tab or window of its own,
+              however it got there (a link, a redirect, Command-click, a typed address),
+              with a page that says why, and never asks the app. The workbench offers no
+              Open full preview there, and the Preview frame cannot open windows.
+              Measured in Playwright's WebKit on macOS; iPhone and iPad were not
+              exercised.</li>
           <li>The legacy Preview path, on the workbench's own address, now answers a
               browser only for <code>fetch()</code>, and no longer passes on the app's
               cookies. A link to it let the app store cookies for <code>localhost</code>
               (measured in Playwright's Chromium and WebKit).</li>
-          <li>Known issue: a page Axocoatl does not serve, such as a development server you
-              run yourself on a <code>*.localhost</code> address, can still set such
-              cookies in Safari. It cannot sign in or read the workbench's cookies, but
-              enough of them to fill the about 200 KB Safari sends with a request can sign
-              that browser out of the workbench's API (with <code>Path=/api</code>, until
-              localhost's data is removed in Safari's settings) or out of the whole
-              workbench (with <code>Path=/</code>), and with <code>Path=/ws</code> they
-              stop its live updates
-              (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).
-              Measured in Playwright's WebKit, not in Safari itself.</li>
+          <li>Known limits: a page outside Axocoatl on a <code>*.localhost</code>
+              address can still set <code>Domain=localhost</code> cookies in Safari.
+              They never reach the workbench at <code>127.0.0.1</code>, but Safari's
+              Manage Website Data does not remove them. A page on another
+              <code>127.0.0.1</code> port can set cookies the workbench does receive:
+              enough of them can sign Safari out of its API or the whole workbench,
+              or stop its live updates. Close that page, remove website data for
+              <code>127.0.0.1</code>, then open the sign-in link again. A burst of cookies
+              from another page can also make WebKit evict cookies across the browser,
+              including a recent workbench sign-in; this was observed with no workbench
+              page open. These cookie limits and their recovery are documented
+              (<a href="https://docs.axocoatl.ai/operate/security/#safari-shares-domainlocalhost-cookies">details</a>).</li>
         </ul>
 
         <h3>Verified</h3>

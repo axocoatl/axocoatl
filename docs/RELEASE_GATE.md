@@ -168,7 +168,7 @@ these steps.
   - `a redirect from another site to a Preview gets Axocoatl's refusal page`
   - `a Command-click inside the Preview gets Axocoatl's refusal page`
   - `a Domain=localhost cookie flood from another page leaves the workbench as the docs say`
-  - `Manage Website Data removes the planted localhost cookies`
+  - `the gate's planted localhost cookies are expired`
   - `Ctrl+C stops axocoatl dev with exit 0`
 - `C1-recovery`
   - `podman machine stop`
@@ -916,8 +916,8 @@ account; any account of the gate Mac with Node 22 will do.
   question are kept). The gate checks the commit's author and that Ctrl+C
   stops `axocoatl dev` with exit 0, and never prints or records the
   sign-in link (the driver reads it on standard input).
-- Then, in Safari itself, always answered by the person (the cookie and
-  website-data steps need Safari's own profile, not WebDriver's). After
+- Then, in Safari itself, always answered by the person (these cookie
+  steps need Safari's own profile, not WebDriver's). After
   the driver, whose automation window closes when it finishes, the gate
   opens the sign-in link in an ordinary Safari window and names the
   workspace and the Session (from `GET /api/sessions`) to open there. The
@@ -936,13 +936,25 @@ account; any account of the gate Mac with Node 22 will do.
   smaller ones, `Domain=localhost; Path=/api`). Its own server counts the
   planted cookies Safari sends back to it, and the page shows that count:
   the step needs at least one, so the evidence shows the flood was in
-  place. When the workbench's sign-in link is on `localhost`, reloading it
-  must show "This browser is signed out", and removing localhost in
-  Safari > Settings > Privacy > Manage Website Data must sign it in again
-  with the link; when the link is on another host, which `Domain=localhost`
-  cookies never reach, the workbench must stay signed in. Either way,
-  after the removal the same server's count page must show that Safari
-  sends none of the planted cookies back.
+  place. The workbench is served at `127.0.0.1`, which `Domain=localhost`
+  cookies never reach, and must stay signed in. For a legacy sign-in link
+  on `localhost`, the gate instead records the documented signed-out state.
+  Close the plant tab, then open the same fixture's `/clear?path=/api` page:
+  it expires only the 60 named test cookies with their original domain and
+  path. A fresh clear-page request followed by the server's count of zero
+  and an observed working workbench are required (open the sign-in link
+  again for the legacy `localhost` case).
+
+  This is fixture cleanup, **not general website-data recovery**. Safari's
+  Manage Website Data can list host-only `localhost` data while leaving
+  `Domain=localhost` and `*.localhost` cookies in place; the security docs
+  already describe that limitation. Expiring the gate's known cookie names
+  does not remove arbitrary cookies or service workers. The documented
+  recovery for a flood from another `127.0.0.1` port still requires removing
+  `127.0.0.1` website data and signing in again; this cleanup does not verify
+  that separate recovery path. Previous failed Settings-removal attempts
+  remain failed evidence. The renamed cleanup step requires a new observed
+  result; old evidence is not relabeled or migrated.
 - Separately, CI's "Product browser regressions" job runs
   every browser regression on WebKit, Safari's engine
   (`AXO_BROWSER_ENGINE=webkit`, see `axocoatl-server/browser-tests/README.md`),

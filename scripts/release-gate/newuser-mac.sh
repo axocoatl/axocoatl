@@ -885,21 +885,28 @@ flood_step() {
   fi
 }
 
-# removed_step QUESTION SINCE: Manage Website Data removed the flood: the
-# last count after line SINCE of safari-pages.mjs's log is 0, and the
-# operator answers yes to QUESTION.
-removed_step() {
-  local name="Manage Website Data removes the planted localhost cookies" removed
+# expired_step QUESTION SINCE: the fixture's /clear page expired only its
+# named Domain=localhost cookies with Path=/api. Require a fresh clear
+# navigation and a subsequent server count of 0, plus the observed result.
+# This is test cleanup, not Safari Settings or arbitrary website recovery.
+expired_step() {
+  local name="the gate's planted localhost cookies are expired" removed
   ask "$1"
-  removed=$(planted_since "$2")
+  removed=$(tail -n +"$(($2 + 1))" "$GATE_ATTACH/logs/safari-pages.log" 2>/dev/null | awk '
+    /^GET \/clear\?path=\/api document$/ { cleared = 1; count = ""; next }
+    cleared && /^GET \/api\/gate-cookie-count [^ ]+ planted=[0-9]+$/ {
+      count = $NF; sub(/^planted=/, "", count)
+    }
+    END { if (cleared && count != "") print count }
+  ')
   if [ -z "$removed" ]; then
-    gate_record "$name" fail '' '' '' "no count after the removal: open the count page once localhost is removed"
+    gate_record "$name" fail '' '' '' "no fresh /clear?path=/api navigation followed by its server count"
   elif [ "$removed" != 0 ]; then
-    gate_record "$name" fail '' '' '' "after the removal Safari still sent $removed of the planted cookies back"
+    gate_record "$name" fail '' '' '' "after the fixture expired its cookies Safari still sent $removed of them back"
   elif [ "$ANSWER" != y ]; then
     gate_record "$name" fail '' '' '' "the operator ($(id -un)) answered no: ${ANSWER_NOTE:-no note}"
   else
-    gate_record "$name" pass '' '' '' "after the removal Safari sent none of the planted cookies back; the operator ($(id -un)) answered yes: $1"
+    gate_record "$name" pass '' '' '' "the fixture expired only its 60 named Domain=localhost cookies with Path=/api and Safari sent none back; the operator ($(id -un)) answered yes: $1; this is not general website-data recovery"
   fi
 }
 
@@ -909,7 +916,7 @@ removed_step() {
 # site, or Command-clicked inside the Preview gets Axocoatl's refusal page
 # and never reaches the app, and a Domain=localhost cookie flood from
 # another *.localhost page does to the workbench what the docs say, until
-# localhost's data is removed in Safari's settings.
+# the fixture expires only its planted cookies again.
 safari_preview_steps() {
   local link=$1 repo=$2 port session='' session_name='' found address pages_port before host
   port=$(daemon_port)
@@ -975,12 +982,12 @@ APP
     # docs say the API then refuses this browser and the workbench says so.
     flood_step "Reload the workbench tab. Does it show 'This browser is signed out' (after loading again at most twice), and not reload without end?" "$before"
     before=$(pages_lines)
-    removed_step "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it, then open http://gate-pages.localhost:$pages_port/count?path=/api: does it say Safari sends 0 of them back? Then open the sign-in link again ('axocoatl url'). Is the workbench signed in and working?" "$before"
+    expired_step "Close the plant tab, then open http://gate-pages.localhost:$pages_port/clear?path=/api: does it say Safari sends 0 of the planted cookies back? This page expires only the gate's test cookies. Then open the sign-in link again ('axocoatl url'). Is the workbench signed in and working?" "$before"
   else
     # The workbench is on $host, which Domain=localhost cookies never reach.
     flood_step "Reload the workbench tab (at $host). Is it still signed in, showing your Session, with no 'signed out' message?" "$before"
     before=$(pages_lines)
-    removed_step "Open Safari > Settings > Privacy > Manage Website Data…, search for localhost. Is localhost listed? Remove it, then open http://gate-pages.localhost:$pages_port/count?path=/api: does it say Safari sends 0 of them back? Is the workbench still signed in and working?" "$before"
+    expired_step "Close the plant tab, then open http://gate-pages.localhost:$pages_port/clear?path=/api: does it say Safari sends 0 of the planted cookies back? This page expires only the gate's test cookies. Is the workbench still signed in and working?" "$before"
   fi
   kill "$pages_pid" 2>/dev/null
   pages_pid=''
