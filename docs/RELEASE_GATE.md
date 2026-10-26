@@ -849,6 +849,26 @@ account; any account of the gate Mac with Node 22 will do.
     the paths that onboard (`local`, `claude-code`, `codex`, `openrouter`
     and `service`) cannot pass with it; `workbench`, `recovery` and
     `real-repo` do not onboard and are not changed by it.
+  - After an interrupted run, `--resume --paths real-repo` (or an explicit
+    list of `service`, `workbench`, `workbench-chromium`, `recovery` and
+    `real-repo`) continues the existing installation. Before each path it
+    checks the candidate archive against its `.sha256`, compares the installed
+    executable's SHA-256 with the archive's binary, and checks its version.
+    It records those identities in `resume-candidate.json`; a missing or
+    different binary, bad checksum or wrong version stops that path before
+    any daemon, onboarding or task operation. It never installs a binary.
+    It also refuses an already-running daemon or other listener at the
+    configured port before the first resumed path: a daemon may still be
+    running older bytes despite an updated installed binary. Stop it explicitly;
+    the resumed invocation then starts the verified candidate itself.
+    `local` and the fresh provider sign-in paths are refused with `--resume`;
+    their evidence still comes from the original clean-account run of the
+    same candidate commit. The collector's exact-commit requirement is
+    unchanged; resume cannot carry those results across candidate commits.
+    All selected paths retain their normal required steps and live observations.
+    Use a new `--evidence-root` for the continuation. Resume refuses to
+    overwrite existing selected-path evidence, and does not merge or relabel
+    earlier results.
   - Every `onboard --update` after the first finds the gate's own
     `axocoatl dev`, which started before onboarding changes the
     configuration, and asks "The daemon on port … started before … changed,

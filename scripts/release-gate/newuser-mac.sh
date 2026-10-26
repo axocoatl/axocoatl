@@ -28,6 +28,10 @@
 #                         local,claude-code,codex,openrouter,service,workbench,
 #                         workbench-chromium,recovery,real-repo;
 #                         default for C2: local,openrouter
+#     --resume            continue service, workbench, workbench-chromium,
+#                         recovery or real-repo with the installed candidate;
+#                         verifies its bytes and version against the archive,
+#                         never counts as a clean install or a fresh sign-in
 #     --commit SHA        commit the candidate was built from (default HEAD)
 #     --evidence-root DIR default <repo>/release-evidence
 #     --pr-repo OWNER/axocoatl-gate-NAME  throwaway repository for --keep pr
@@ -61,7 +65,7 @@ usage() {
 
 account=${GATE_ACCOUNT:-axo-newuser}
 release_dir='' site='' machine=C1 paths='' commit='' evidence_root="$gate_repo/release-evidence"
-pr_repo='' real_repo='' real_task='' assume_yes=0 workbench_driver=0
+pr_repo='' real_repo='' real_task='' assume_yes=0 workbench_driver=0 resume=0 resume_binary='' resume_path='' resume_daemon_checked=0
 original_args=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -75,6 +79,7 @@ while [ $# -gt 0 ]; do
     --real-repo) real_repo=${2:?}; shift ;;
     --real-task) real_task=${2:?}; shift ;;
     --workbench-driver) workbench_driver=1 ;;
+    --resume) resume=1 ;;
     --yes) assume_yes=1 ;;
     -h | --help) usage ;;
     *) gate_die "unknown argument: $1 (see --help)" ;;
@@ -114,6 +119,24 @@ if [ -z "$paths" ]; then
   fi
 fi
 
+# A continuation cannot supply the clean-account or fresh-sign-in paths.
+# Validate before recording or changing PATH, including an omitted --paths
+# (whose defaults contain local).
+if [ "$resume" = 1 ]; then
+  case ",$paths," in
+    *,,*) gate_die "--resume requires an explicit, nonempty --paths list" ;;
+  esac
+  old_ifs=$IFS
+  IFS=,
+  for path_name in $paths; do
+    case "$path_name" in
+      service | workbench | workbench-webkit | workbench-chromium | recovery | real-repo) ;;
+      *) gate_die "--resume cannot run '$path_name'; choose service, workbench, workbench-chromium, recovery or real-repo" ;;
+    esac
+  done
+  IFS=$old_ifs
+fi
+
 work="$HOME/axocoatl-gate-work"
 mkdir -p "$work"
 if [ -z "${GATE_IN_SCRIPT:-}" ]; then
@@ -125,7 +148,19 @@ if [ -z "${GATE_IN_SCRIPT:-}" ]; then
 fi
 transcript=$GATE_IN_SCRIPT
 
-GATE_BASE_PATH=$(gate_new_user_path)
+# Resolve the existing executable before hiding it. A resumed account may
+# keep Node beside axocoatl, so mirror the other tools instead of removing
+# their entire directory. Do not expose axocoatl until it is verified.
+if [ "$resume" = 1 ]; then
+  resume_binary=$(type -P axocoatl 2>/dev/null) || resume_binary=''
+  if [ -n "$resume_binary" ]; then
+    resume_binary=$(CDPATH='' cd -- "$(dirname -- "$resume_binary")" && pwd)/${resume_binary##*/}
+  fi
+  resume_path=$(mktemp -d "${TMPDIR:-/tmp}/axo-gate-resume-path.XXXXXX") || gate_die 'cannot prepare the resume PATH'
+  GATE_BASE_PATH=$(gate_path_without axocoatl "$resume_path")
+else
+  GATE_BASE_PATH=$(gate_new_user_path)
+fi
 export GATE_BASE_PATH PATH="$GATE_BASE_PATH"
 models_cached=no
 grep -q 'models_cached=1' "$HOME/.axocoatl-gate-reset" 2>/dev/null && models_cached=yes
@@ -138,6 +173,7 @@ cleanup() {
   [ -n "$dev_pid" ] && kill -INT "$dev_pid" 2>/dev/null
   [ -n "$driver_pid" ] && kill "$driver_pid" 2>/dev/null
   [ -n "$pages_pid" ] && kill "$pages_pid" 2>/dev/null
+  [ -n "$resume_path" ] && rm -rf -- "$resume_path"
 }
 trap cleanup EXIT
 
@@ -256,8 +292,14 @@ doctor_ready() {
 }
 
 path_begin() {
+  if [ "$resume" = 1 ] && { [ -e "$evidence_root/$version/$commit/$machine-$1.json" ] || [ -e "$evidence_root/$version/$commit/$machine-$1" ]; }; then
+    gate_die "--resume will not overwrite existing $machine-$1 evidence; choose a new --evidence-root"
+  fi
   gate_begin "$evidence_root" "$version" "$commit" "$machine-$1" C
   gate_host_json "$GATE_TMP/host.json"
+  if [ "${GATE_SIMULATION:-}" = 1 ]; then
+    gate_record "simulation: a stand-in axocoatl and a sandboxed installer" fail '' '' '' 'test scaffolding, never release evidence'
+  fi
   touch "$GATE_TMP/began"
   gate_record "free disk at the start" pass '' '' '' "$(($(gate_free_kb "$HOME") / 1024)) MiB free; models cached: $models_cached" optional
   printf '\n===== %s-%s (%s at %s) =====\n' "$machine" "$1" "$version" "${commit:0:12}"
@@ -329,7 +371,65 @@ fresh_account() {
   fi
 }
 
+# resume_install: verify the archive before reading its binary, then verify
+# the installed executable before invoking it. Stream the one archive member;
+# nothing is installed or extracted onto the host. Recheck for each path so
+# a later path cannot silently use a replaced executable or archive.
+resume_install() {
+  local name="resume uses the checksum-verified installed candidate"
+  local expected actual candidate installed reported state port
+  PATH=$GATE_BASE_PATH
+  export PATH
+  if [ -z "$resume_binary" ] || [ ! -x "$resume_binary" ]; then
+    gate_record "$name" fail '' '' '' '--resume found no executable axocoatl on the original PATH'
+    return 1
+  fi
+  expected=$(awk 'NR == 1 { print $1 }' "$tarball.sha256" 2>/dev/null)
+  actual=$(gate_sha256 "$tarball")
+  if ! printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || [ "$actual" != "$expected" ]; then
+    gate_record "$name" fail '' '' '' "archive checksum mismatch: expected ${expected:-none}, got $actual"
+    return 1
+  fi
+  if ! candidate=$(set -o pipefail; tar -xzOf "$tarball" axocoatl | gate_sha256 /dev/stdin); then
+    gate_record "$name" fail '' '' '' 'cannot read the candidate archive binary'
+    return 1
+  fi
+  installed=$(gate_sha256 "$resume_binary")
+  if [ "$installed" != "$candidate" ]; then
+    gate_record "$name" fail '' '' '' "installed binary checksum mismatch: expected $candidate, got $installed ($resume_binary)"
+    return 1
+  fi
+  if ! reported=$("$resume_binary" --version 2>&1) || [ "$reported" != "axocoatl $version" ]; then
+    gate_record "$name" fail '' '' '' "installed candidate version mismatch: expected axocoatl $version, got $reported"
+    return 1
+  fi
+  # A still-running daemon may have loaded an older binary of the same
+  # version before the installed file was replaced. Its health cannot prove
+  # candidate identity. Never stop that unowned process or reuse it as proof.
+  if [ "$resume_daemon_checked" = 0 ]; then
+    port=$(daemon_port)
+    state=$(gate_daemon_state "$port" "$(config_file)")
+    if [ "$state" != none ]; then
+      gate_record "$name" fail '' '' '' "resume found an unowned daemon or listener on port $port ($state); stop it explicitly before resuming so this invocation starts the verified candidate"
+      return 1
+    fi
+    resume_daemon_checked=1
+  fi
+  GATE_INSTALLED=$resume_binary
+  PATH="${resume_binary%/*}:$GATE_BASE_PATH"
+  export GATE_INSTALLED PATH
+  node -e '
+    const [archive, archive_sha256, binary, binary_sha256, version] = process.argv.slice(1);
+    console.log(JSON.stringify({ mode: "resume", clean_install: false, archive, archive_sha256, binary, binary_sha256, version }, null, 2));
+  ' "$tarball" "$actual" "$resume_binary" "$installed" "$reported" >"$GATE_ATTACH/resume-candidate.json"
+  gate_record "$name" pass '' '' '' "$resume_binary; $reported; binary sha256 $installed; archive sha256 $actual; continued existing installation, no clean-install claim"
+}
+
 install_once() {
+  if [ "$resume" = 1 ]; then
+    resume_install
+    return $?
+  fi
   if command -v axocoatl >/dev/null 2>&1; then
     gate_record "axocoatl is installed" pass '' '' '' "$(command -v axocoatl)"
     return 0

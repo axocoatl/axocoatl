@@ -791,6 +791,165 @@ if [ "$status" = 2 ] && printf '%s' "$out" | grep -Eq 'gate account|macOS gate';
 else
   fail "newuser-mac.sh refusal (exit $status): $out"
 fi
+# --- A separate macOS gate invocation can resume only the exact installed
+# candidate. Reuse the fake CLI and model server; the platform/account shims
+# let this run on Linux too. Everything is confined to a temporary HOME.
+(
+  set -e
+  sim="$work/mac-resume"
+  mkdir -p "$sim/bin" "$sim/installed" "$sim/dist" "$sim/site" "$sim/home"
+  # shellcheck source=scripts/release-gate/lib.sh
+  . "$script_dir/lib.sh"
+  version=1.5.0
+  commit=$(printf 'c%.0s' $(seq 1 40))
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$FAKE_CALLS"\nexec node "%s" "$@"\n' \
+    "$script_dir/testdata/fake-axocoatl.mjs" >"$sim/installed/axocoatl"
+  chmod +x "$sim/installed/axocoatl"
+  tarball="$sim/dist/axocoatl-v$version-aarch64-apple-darwin.tar.gz"
+  tar -czf "$tarball" -C "$sim/installed" axocoatl
+  printf '%s  %s\n' "$(gate_sha256 "$tarball")" "${tarball##*/}" >"$tarball.sha256"
+  cp "$tarball.sha256" "$sim/good.sha256"
+  cat >"$sim/bin/uname" <<'UNAME'
+#!/bin/sh
+case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) exec /usr/bin/uname "$@" ;; esac
+UNAME
+  cat >"$sim/bin/id" <<'ID'
+#!/bin/sh
+case "$1" in -u) echo 1001 ;; -un) echo axo-resume-test ;; *) exec /usr/bin/id "$@" ;; esac
+ID
+  # Do not probe the operator's Ollama, even during the default-path check.
+  cat >"$sim/bin/curl" <<CURL
+#!/bin/sh
+for arg do case "\$arg" in *127.0.0.1:11434/*) exit 7 ;; esac; done
+exec "$(command -v curl)" "\$@"
+CURL
+  printf '#!/bin/sh\nexit 1\n' >"$sim/bin/podman"
+  chmod +x "$sim/bin/"*
+  printf '<pre>curl -fsSL https://axocoatl.ai/install.sh | sh\naxocoatl onboard\naxocoatl doctor\naxocoatl dev</pre>\n' >"$sim/site/index.html"
+  printf '#!/bin/sh\necho TEST_INSTALLER_REFUSED >&2\nexit 85\n' >"$sim/site/install.sh"
+  node_dir=$(dirname "$(command -v node)")
+  test_path="$sim/bin:$sim/installed:$node_dir:/usr/bin:/bin:/usr/sbin:/sbin"
+  gate_fixture_repo node-deps "$sim/repository"
+  # The normal invocation must still enter the fresh-install path; it may
+  # not silently accept the existing binary. Its installer is a harmless
+  # refusal, and any fresh-account failures remain in its simulated evidence.
+  invoke_mac() {
+    local case_name=$1
+    shift
+    env -u GITHUB_ACTIONS HOME="$sim/home" GATE_ACCOUNT=axo-resume-test GATE_SIMULATION=1 \
+      GATE_IN_SCRIPT="$sim/$case_name.log" FAKE_CALLS="$sim/$case_name.calls" \
+      FAKE_AXOCOATL_VERSION="${fake_version:-$version}" PATH="$test_path" \
+      "$script_dir/newuser-mac.sh" --release-dir "$sim/dist" --site "$sim/site" \
+      --commit "$commit" --paths real-repo --evidence-root "$sim/$case_name-evidence" \
+      --real-repo "$sim/repository" --real-task 'Fix the paging bug in src/paginate.js.' "$@" \
+      </dev/null >"$sim/$case_name.log" 2>&1
+  }
+  if invoke_mac fresh; then echo 'the default invocation silently resumed' >&2; exit 1; fi
+  node -e '
+    const e = require(process.argv[1]);
+    if (!e.steps.some(s => s.name === "the account started without Axocoatl, its data or stored secrets")
+      || !e.steps.some(s => s.name === "install with the published command" && s.status === "fail")
+      || e.steps.some(s => s.name.startsWith("resume uses"))) throw Error("default fresh gate changed");
+  ' "$sim/fresh-evidence/$version/$commit/C1-real-repo.json"
+  [ ! -s "$sim/fresh.calls" ] || { echo 'the default invocation used the hidden installed CLI' >&2; exit 1; }
+
+  # An invalid resume stops before any daemon, task, onboarding or installer.
+  rejected_resume() {
+    local case_name=$1 detail=$2
+    shift 2
+    if invoke_mac "$case_name" --resume "$@"; then echo "$case_name unexpectedly passed" >&2; exit 1; fi
+    node -e '
+      const e = require(process.argv[1]);
+      const s = e.steps.find(s => s.name === "resume uses the checksum-verified installed candidate");
+      if (s?.status !== "fail" || !s.detail.includes(process.argv[2])) throw Error(JSON.stringify(s));
+      if (e.steps.some(s => /^(install with|the account started|clone the|run fix|axocoatl dev)/.test(s.name))) throw Error("refused resume started work");
+    ' "$sim/$case_name-evidence/$version/$commit/C1-real-repo.json" "$detail"
+    if [ "$case_name" = version ] || [ "$case_name" = daemon ]; then
+      [ "$(cat "$sim/$case_name.calls")" = --version ] || { echo "$case_name ran more than the version check" >&2; exit 1; }
+    elif [ -s "$sim/$case_name.calls" ]; then
+      echo "$case_name executed an unverified CLI" >&2; exit 1
+    fi
+  }
+  printf '%064d  %s\n' 0 "${tarball##*/}" >"$tarball.sha256"
+  rejected_resume checksum 'archive checksum mismatch'
+  cp "$sim/good.sha256" "$tarball.sha256"
+  cp "$sim/installed/axocoatl" "$sim/good-binary"
+  printf '\n# different bytes, same version\n' >>"$sim/installed/axocoatl"
+  rejected_resume binary 'installed binary checksum mismatch'
+  cp "$sim/good-binary" "$sim/installed/axocoatl"
+  fake_version=1.4.0 rejected_resume version 'installed candidate version mismatch'
+  mv "$sim/installed/axocoatl" "$sim/installed/hidden"
+  rejected_resume missing 'found no executable axocoatl'
+  mv "$sim/installed/hidden" "$sim/installed/axocoatl"
+  for forbidden in local real-repo,local claude-code codex openrouter; do
+    if invoke_mac forbidden --resume --paths "$forbidden"; then echo "resume accepted $forbidden" >&2; exit 1; fi
+    grep -q -- '--resume cannot run' "$sim/forbidden.log"
+    [ ! -d "$sim/forbidden-evidence" ] || { echo 'forbidden path wrote evidence' >&2; exit 1; }
+    [ ! -s "$sim/forbidden.calls" ] || { echo 'forbidden path ran the binary' >&2; exit 1; }
+  done
+
+  node "$script_dir/stub-model-server.mjs" --port 0 --port-file "$sim/stub.port" >"$sim/stub.log" 2>&1 &
+  stub_pid=$!
+  old_pid=''
+  trap '[ -z "$old_pid" ] || { kill "$old_pid" 2>/dev/null || true; wait "$old_pid" 2>/dev/null || true; }; kill "$stub_pid" 2>/dev/null || true; wait "$stub_pid" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 100); do [ -s "$sim/stub.port" ] && break; sleep 0.1; done
+  port=$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')
+  mkdir -p "$sim/home/Library/Application Support/Axocoatl" "$sim/home/.config/axocoatl"
+  printf 'server:\n  port: %s\nproviders:\n  ollama:\n    base_url: "http://127.0.0.1:%s"\nrun:\n  models:\n    writer: "ollama:qwen3-coder:30b"\n    reviewer: "ollama:gpt-oss:20b"\n' \
+    "$port" "$(cat "$sim/stub.port")" >"$sim/home/Library/Application Support/Axocoatl/config.yaml"
+  cp "$sim/home/Library/Application Support/Axocoatl/config.yaml" "$sim/home/.config/axocoatl/config.yaml"
+  # A pre-existing same-version daemon is not proved by the installed
+  # binary's hash. Refuse it before work and do not stop the unowned process.
+  env HOME="$sim/home" FAKE_AXOCOATL_VERSION="$version" FAKE_CALLS="$sim/unowned.calls" PATH="$test_path" \
+    "$sim/installed/axocoatl" dev >"$sim/unowned.log" 2>&1 &
+  old_pid=$!
+  for _ in $(seq 1 100); do
+    curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  curl -fsS "http://127.0.0.1:$port/health" >/dev/null
+  rejected_resume daemon 'an unowned daemon'
+  kill -0 "$old_pid" || { echo 'resume stopped the unowned daemon' >&2; exit 1; }
+  kill -TERM "$old_pid"
+  wait "$old_pid"
+  old_pid=''
+  # Node may share the installed binary's directory (for example Homebrew).
+  # Resuming must hide the unverified CLI without also hiding Node.
+  ln -s "$(command -v node)" "$sim/installed/node"
+  test_path="$sim/bin:$sim/installed:/usr/bin:/bin:/usr/sbin:/sbin"
+  # GATE_SIMULATION deliberately prevents even a successful stand-in run
+  # from passing. All resumed operations must otherwise finish normally.
+  if invoke_mac resumed --resume; then echo 'simulation became release evidence' >&2; exit 1; fi
+  node -e '
+    const fs = require("fs"); const e = require(process.argv[1]);
+    const failed = e.steps.filter(s => s.status !== "pass");
+    if (failed.length !== 1 || !failed[0].name.startsWith("simulation:")) throw Error(JSON.stringify(failed));
+    for (const name of ["resume uses the checksum-verified installed candidate", "clone the real repository",
+      "run fix on real-repo (verdict 0, 1 or 2, not infrastructure)", "receipt verify on real-repo (documented command)",
+      "no tool-call markup in the accepted output of the run on real-repo"]) {
+      if (!e.steps.some(s => s.name === name && s.status === "pass")) throw Error(`missing ${name}`);
+    }
+    if (e.steps.some(s => /^(install with|the account started)/.test(s.name))) throw Error("resume claimed a fresh install");
+    const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+    if (p.mode !== "resume" || p.clean_install !== false || p.version !== "axocoatl 1.5.0"
+      || p.binary_sha256 !== process.argv[3] || p.archive_sha256 !== process.argv[4]) throw Error(JSON.stringify(p));
+    if (!e.attachments.includes("C1-real-repo/resume-candidate.json")) throw Error("missing resume provenance attachment");
+  ' "$sim/resumed-evidence/$version/$commit/C1-real-repo.json" \
+    "$sim/resumed-evidence/$version/$commit/C1-real-repo/resume-candidate.json" \
+    "$(gate_sha256 "$sim/installed/axocoatl")" "$(gate_sha256 "$tarball")"
+  evidence="$sim/resumed-evidence/$version/$commit/C1-real-repo.json"
+  before=$(gate_sha256 "$evidence")
+  if invoke_mac resumed --resume; then echo 'resume overwrote existing evidence' >&2; exit 1; fi
+  grep -q -- '--resume will not overwrite existing' "$sim/resumed.log"
+  [ "$(gate_sha256 "$evidence")" = "$before" ] || { echo 'resume changed the previous evidence' >&2; exit 1; }
+)
+mac_resume_status=$?
+if [ "$mac_resume_status" = 0 ]; then
+  pass "newuser-mac.sh --resume: exact installed candidate runs and verifies a real-repo task; mismatched archive, binary, version, absent install or unowned daemon stop before work; old evidence is preserved; clean-install and sign-in paths stay prohibited; default stays fresh"
+else
+  fail "newuser-mac.sh resume simulation"
+fi
+
 # What the macOS gate runs, read from the script (it runs only in a gate
 # account): every new-user C1 path by default, the separate browser path,
 # the questions the workbench path
