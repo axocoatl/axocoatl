@@ -889,15 +889,20 @@ mod tests {
 
     /// A model server for one request: it reads the request, sends its
     /// headers after `headers` (never, for `None`), then each of `chunks`
-    /// the given time after the one before, then nothing. The receiver says
-    /// when the client closed the connection.
+    /// the given time after the one before, then nothing. The receivers say
+    /// when complete request headers arrived and when the client disconnected.
     async fn slow_server(
         headers: Option<Duration>,
         chunks: Vec<(Duration, &'static str)>,
-    ) -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<()>) {
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (received, received_rx) = tokio::sync::oneshot::channel();
         let (closed, closed_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
@@ -906,10 +911,14 @@ mod tests {
             let mut buffer = [0_u8; 1024];
             while !request.windows(4).any(|window| window == b"\r\n\r\n") {
                 match read.read(&mut buffer).await {
-                    Ok(0) | Err(_) => return,
+                    Ok(0) | Err(_) => {
+                        let _ = closed.send(());
+                        return;
+                    }
                     Ok(read) => request.extend_from_slice(&buffer[..read]),
                 }
             }
+            let _ = received.send(());
             let sending = tokio::spawn(async move {
                 let Some(headers) = headers else {
                     return std::future::pending::<()>().await;
@@ -930,18 +939,34 @@ mod tests {
             sending.abort();
             let _ = closed.send(());
         });
-        (address, closed_rx)
+        (address, received_rx, closed_rx)
+    }
+
+    #[tokio::test]
+    async fn the_model_server_observes_a_disconnect_before_complete_request_headers() {
+        use tokio::io::AsyncWriteExt;
+
+        let (address, _received, closed) = slow_server(None, Vec::new()).await;
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        socket.write_all(b"GET / HTTP/1.1\r\n").await.unwrap();
+        drop(socket);
+        assert!(
+            closed_soon(closed).await,
+            "the probe lost a client that closed before request headers"
+        );
     }
 
     async fn closed_soon(closed: tokio::sync::oneshot::Receiver<()>) -> bool {
-        tokio::time::timeout(Duration::from_secs(5), closed)
-            .await
-            .is_ok_and(|closed| closed.is_ok())
+        match tokio::time::timeout(Duration::from_secs(5), closed).await {
+            Ok(Ok(())) => true,
+            Ok(Err(_)) => panic!("the model-server probe stopped without observing the connection"),
+            Err(_) => false,
+        }
     }
 
     #[tokio::test]
     async fn the_first_chunk_may_take_the_first_token_timeout_and_later_ones_the_idle_one() {
-        let (address, closed) = slow_server(
+        let (address, _received, closed) = slow_server(
             Some(Duration::ZERO),
             vec![
                 (Duration::from_millis(300), "first"),
@@ -985,20 +1010,27 @@ mod tests {
 
     #[tokio::test]
     async fn an_answer_that_does_not_start_in_time_fails_and_its_connection_closes() {
-        // No headers: Ollama sends them with the first token.
-        let (address, closed) = slow_server(None, Vec::new()).await;
+        // No headers: Ollama sends them with the first token. First prove
+        // the server received the request, so client construction and socket
+        // scheduling cannot consume the model's response-timeout interval.
+        let (address, received, closed) = slow_server(None, Vec::new()).await;
+        let mut sending = Box::pin(http_client().get(format!("http://{address}/")).send());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = received => result.expect("the model server did not receive complete request headers"),
+                response = &mut sending => panic!("the silent model request ended during setup: {response:?}"),
+            }
+        })
+        .await
+        .expect("the request did not reach the model server during setup");
         let deadlines = StreamDeadlines::start(StreamTimeouts {
             first_token: Duration::from_millis(200),
             idle: Duration::from_millis(50),
         });
         let started = tokio::time::Instant::now();
-        let error = deadlines
-            .headers(
-                http_client().get(format!("http://{address}/")).send(),
-                "ollama",
-            )
-            .await
-            .unwrap_err();
+        // Transfer ownership: timing out must drop the actual request,
+        // not only a borrow of it or a detached task's handle.
+        let error = deadlines.headers(sending, "ollama").await.unwrap_err();
         assert!(started.elapsed() >= Duration::from_millis(190));
         let message = error.to_string();
         assert!(
@@ -1013,7 +1045,7 @@ mod tests {
 
         // Headers at once and no chunk: the first-token deadline, not the
         // idle one, ends the wait.
-        let (address, closed) = slow_server(Some(Duration::ZERO), Vec::new()).await;
+        let (address, _received, closed) = slow_server(Some(Duration::ZERO), Vec::new()).await;
         let mut deadlines = StreamDeadlines::start(StreamTimeouts {
             first_token: Duration::from_millis(300),
             idle: Duration::from_millis(50),
