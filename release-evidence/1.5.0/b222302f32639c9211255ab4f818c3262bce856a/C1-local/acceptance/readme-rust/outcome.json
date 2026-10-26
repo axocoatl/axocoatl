@@ -1,0 +1,97 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "cargo test"
+      ],
+      "candidate_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (/tmp/axocoatl-cargo-target/debug/deps/newuser_rust-50d5cd83481d83ad)\n   Doc-tests newuser_rust\n",
+      "stdout_tail": "\nrunning 4 tests\ntest tests::a_partial_last_page_keeps_the_items_left_over ... ok\ntest tests::a_page_size_of_zero_is_refused - should panic ... ok\ntest tests::no_items_make_no_pages ... ok\ntest tests::the_last_page_is_full_when_the_total_is_a_multiple_of_the_page_size ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793041282780,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 2,
+    "events": 29,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)",
+    "reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)",
+    "image localhost/axocoatl-recipe-rust:0e5acf3d40e2 \u00b7 toolchain rust (Cargo.toml at the repository root) \u00b7 check cargo test (detected from the repository) \u00b7 setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)",
+    "setup `cargo fetch` (detected): exited 0 (1.1 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call"
+  ],
+  "ollama_versions": {
+    "gpt-oss:20b": [
+      "0.40.11"
+    ],
+    "qwen3-coder:30b": [
+      "0.40.11"
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3",
+  "started_at_ms": 1793041146414,
+  "task": "Paging skips the last item when the total is a multiple of the page size",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-6e9441cb-5440-478d-88cd-56d89b05480f"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 0,
+    "input_tokens": 119271,
+    "output_tokens": 4744,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-8da81286-fbee-488d-b12e-8456cb65c2a8"
+}

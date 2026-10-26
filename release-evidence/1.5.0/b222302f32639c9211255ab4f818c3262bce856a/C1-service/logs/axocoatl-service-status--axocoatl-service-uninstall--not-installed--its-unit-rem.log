@@ -1,0 +1,9 @@
+Always-On Service (launchd backend)
+  installed: no
+  running:   no
+  at login:  no
+  detail:    not installed
+  logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.

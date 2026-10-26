@@ -1,0 +1,26 @@
+{
+  "operator": "Codex assistant using ordinary Safari via native CUA",
+  "human_operator": false,
+  "observations": "Answers are supplied individually after actual observed UI behavior",
+  "started_at": "2026-10-26T18:01:43.065682+00:00",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "path_kind": "official supported resumed workbench",
+  "no_clean_install_claim": true,
+  "session": "ses-f312fd01-051b-4735-8008-283888f6cfbe",
+  "task": "Fix the paging bug in src/paginate.js.",
+  "configuration_observed": {
+    "agents": 1,
+    "model": "openrouter:openai/gpt-oss-120b",
+    "helpers": 0,
+    "required_checks": false,
+    "required_review": false,
+    "default_limits_unchanged": true,
+    "actual_external_key_total_cap_usd": 0.94
+  },
+  "commit": "83f61151707d2f47d262ef4f776c2d1526bf02b4",
+  "cookie_count_before_clear": 53,
+  "cookie_count_after_clear": 0,
+  "signed_in_after_each_reload": true,
+  "ui_screenshots": "ui-observations",
+  "unreported_operator_interventions": false
+}

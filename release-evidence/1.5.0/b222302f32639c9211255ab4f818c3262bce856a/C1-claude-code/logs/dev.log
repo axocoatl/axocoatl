@@ -1,0 +1,14 @@
+Axocoatl dev mode
+  Config: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  Agents: 4
+  Runtime: 2 agents spawned
+  IPC:    /Users/erick/.axocoatl/run/axocoatl.sock
+  Server: http://127.0.0.1:8080
+  Health: http://127.0.0.1:8080/health
+  Sign in: run `axocoatl url --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'` for the browser sign-in link
+
+Axocoatl is running. Press Ctrl+C to stop.
+2026-10-26T19:17:47.516695Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-54dbe080b17658179bb992f76d65a48a74949471 tool=search
+2026-10-26T19:17:57.085672Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-54dbe080b17658179bb992f76d65a48a74949471 tool=search
+2026-10-26T19:18:07.819848Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-54dbe080b17658179bb992f76d65a48a74949471 tool=search
+2026-10-26T19:18:45.098386Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-b05c22818b6908274af6523c9738172ae8163709 tool=search

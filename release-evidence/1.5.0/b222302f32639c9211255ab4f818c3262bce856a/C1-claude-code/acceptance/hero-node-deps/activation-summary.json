@@ -1,0 +1,11 @@
+[
+  {
+    "role": "writer",
+    "state": "failed",
+    "failure": "content-efddda0c541ec6f7a34d91ad9291ecf42cc5c441ffc5f3932807317d9718e575",
+    "currently_accepted": false,
+    "event_counts": {},
+    "usage": null,
+    "events": []
+  }
+]

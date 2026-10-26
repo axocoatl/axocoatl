@@ -1,0 +1,242 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-service",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T14:19:11Z",
+  "finished_at": "2026-10-26T14:29:51.304Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "47287 MiB free; models cached: yes"
+    },
+    {
+      "name": "resume uses the checksum-verified installed candidate",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl; axocoatl 1.5.0; binary sha256 d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b; archive sha256 2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659; continued existing installation, no clean-install claim"
+    },
+    {
+      "name": "onboard --update: Step 6, the Always-On Service (interactive)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 375.5,
+      "bytes_downloaded": 14285264
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "Step 6: the operator (erick) chose the Always-On Service"
+    },
+    {
+      "name": "axocoatl service status (onboarding installed and started the Always-On Service (Step 6))",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 98
+    },
+    {
+      "name": "onboarding installed and started the Always-On Service (Step 6)",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; loaded"
+    },
+    {
+      "name": "the service answers on port 8080",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard --update --writer ollama --smoke-test (the configuration changes while the service runs) (interactive; every answer is in the transcript)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 182.5,
+      "bytes_downloaded": 23490809
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "onboard --update --writer ollama --smoke-test (the configuration changes while the service runs): every prompt was answered by the operator (erick); the transcript holds each"
+    },
+    {
+      "name": "onboarding restarted the service after the configuration changed (Step 7)",
+      "status": "pass",
+      "required": true,
+      "detail": "onboarding asked to restart it, and an Axocoatl daemon on port 8080 runs the current configuration"
+    },
+    {
+      "name": "run fix on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 78.9,
+      "bytes_downloaded": 16307478
+    },
+    {
+      "name": "run on service-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on service-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on service-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 2280
+    },
+    {
+      "name": "receipt matches the record on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1163
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 7cdbe50fcf4a holds any"
+    },
+    {
+      "name": "a fix through the Always-On Service passed, its receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "the README's command on node-deps, port 8080"
+    },
+    {
+      "name": "axocoatl service status (axocoatl service status: installed and running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 10788
+    },
+    {
+      "name": "axocoatl service status: installed and running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; loaded"
+    },
+    {
+      "name": "axocoatl service stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 1077
+    },
+    {
+      "name": "axocoatl service status (axocoatl service stop: the service is not running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 200
+    },
+    {
+      "name": "axocoatl service stop: the service is not running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: no; installed, not loaded"
+    },
+    {
+      "name": "nothing answers on port 8080 after the service stopped",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl service uninstall",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 118
+    },
+    {
+      "name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "axocoatl service uninstall: not installed, its unit removed",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: no, running: no; not installed"
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "47247 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-service/logs/axocoatl-service-status--axocoatl-service-status--installed-and-running-.log",
+    "C1-service/logs/axocoatl-service-status--axocoatl-service-stop--the-service-is-not-running-.log",
+    "C1-service/logs/axocoatl-service-status--axocoatl-service-uninstall--not-installed--its-unit-rem.log",
+    "C1-service/logs/axocoatl-service-status--onboarding-installed-and-started-the-Always-On-Service-.log",
+    "C1-service/logs/axocoatl-service-stop.log",
+    "C1-service/logs/axocoatl-service-uninstall.log",
+    "C1-service/logs/onboard---update---writer-ollama---smoke-test--the-configuration-changes-while-t.log",
+    "C1-service/logs/onboard---update--Step-6--the-Always-On-Service--interactive-.log",
+    "C1-service/logs/onboarding/onboard-20261026-141912.log",
+    "C1-service/logs/onboarding/onboard-20261026-142527.log",
+    "C1-service/logs/receipt-matches-the-record-on-service-node-deps.log",
+    "C1-service/logs/receipt-verify-on-service-node-deps--documented-command-.log",
+    "C1-service/logs/record-verify-on-service-node-deps.log",
+    "C1-service/logs/run-fix-on-service-node-deps.log",
+    "C1-service/resume-candidate.json",
+    "C1-service/service-node-deps/axocoatl-junit.xml",
+    "C1-service/service-node-deps/changes.txt",
+    "C1-service/service-node-deps/command.txt",
+    "C1-service/service-node-deps/run.axorecord.jsonl",
+    "C1-service/service-node-deps/run.log",
+    "C1-service/service-node-deps/run.receipt.json",
+    "C1-service/transcript.txt"
+  ]
+}

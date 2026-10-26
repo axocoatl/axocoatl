@@ -1,0 +1,207 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793040706421,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793040706421,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-70616529-34d0-42e9-9088-c5fe35b5bc0f",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793040708912,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-70616529-34d0-42e9-9088-c5fe35b5bc0f",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793040709225,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:a93c13ad-2fbf-4ce5-9f5d-5ac17371a427",
+        "agent": "team-definition-1baa734609bf4e55e333c10b106f23c2468192ca28f4e8ab289c7abca77ec9ec",
+        "invocation_id": "tool-17b2236bf02f67adf4022bd3a74eabf36d71c270aa9ab19dbc3d5570e16839f6",
+        "kind": "agent",
+        "node_id": "team-node-249843fb5e69e26629e0f1f1",
+        "process": "tool-17b2236bf02f67adf4022bd3a74eabf36d71c270aa9ab19dbc3d5570e16839f6:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "0c25bf4e86152864"
+    },
+    "seq": 5,
+    "ts_ms": 1793040732282,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "0c25bf4e86152864"
+    },
+    "seq": 6,
+    "ts_ms": 1793040732460,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:a93c13ad-2fbf-4ce5-9f5d-5ac17371a427",
+        "agent": "team-definition-1baa734609bf4e55e333c10b106f23c2468192ca28f4e8ab289c7abca77ec9ec",
+        "invocation_id": "tool-ebd1b20c1d59bc072cc7be50a5e2d78049dc03fe191453f1cde8cd4d1ae583e9",
+        "kind": "agent",
+        "node_id": "team-node-249843fb5e69e26629e0f1f1",
+        "process": "tool-ebd1b20c1d59bc072cc7be50a5e2d78049dc03fe191453f1cde8cd4d1ae583e9:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "3e14edac19aab9ae"
+    },
+    "seq": 7,
+    "ts_ms": 1793040733455,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "3e14edac19aab9ae"
+    },
+    "seq": 8,
+    "ts_ms": 1793040733563,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:a93c13ad-2fbf-4ce5-9f5d-5ac17371a427",
+        "agent": "team-definition-1baa734609bf4e55e333c10b106f23c2468192ca28f4e8ab289c7abca77ec9ec",
+        "invocation_id": "tool-8ad60660aae56b2fdd67f945b250f530bd9014244e5b936dce4e0ebc88b04daf",
+        "kind": "agent",
+        "node_id": "team-node-249843fb5e69e26629e0f1f1",
+        "process": "tool-8ad60660aae56b2fdd67f945b250f530bd9014244e5b936dce4e0ebc88b04daf:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "2d54148f8329a8bd"
+    },
+    "seq": 9,
+    "ts_ms": 1793040734513,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "2d54148f8329a8bd"
+    },
+    "seq": 10,
+    "ts_ms": 1793040734644,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:a93c13ad-2fbf-4ce5-9f5d-5ac17371a427",
+        "agent": "team-definition-1baa734609bf4e55e333c10b106f23c2468192ca28f4e8ab289c7abca77ec9ec",
+        "invocation_id": "tool-1c4248b39c384f60e72a1585459e737ea106f76fa337e70c33a7376041f2e05c",
+        "kind": "agent",
+        "node_id": "team-node-249843fb5e69e26629e0f1f1",
+        "process": "tool-1c4248b39c384f60e72a1585459e737ea106f76fa337e70c33a7376041f2e05c:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "818a3d62e36e12fb"
+    },
+    "seq": 11,
+    "ts_ms": 1793040737513,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "818a3d62e36e12fb"
+    },
+    "seq": 12,
+    "ts_ms": 1793040737646,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:a93c13ad-2fbf-4ce5-9f5d-5ac17371a427",
+        "agent": "team-definition-1baa734609bf4e55e333c10b106f23c2468192ca28f4e8ab289c7abca77ec9ec",
+        "invocation_id": "tool-b00871390f4897c0a5b18153ce2f6d5b7c07882cbc64149570fcbd51281c9975",
+        "kind": "agent",
+        "node_id": "team-node-249843fb5e69e26629e0f1f1",
+        "process": "tool-b00871390f4897c0a5b18153ce2f6d5b7c07882cbc64149570fcbd51281c9975:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "8d189e0bd71798ee"
+    },
+    "seq": 13,
+    "ts_ms": 1793040738718,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "8d189e0bd71798ee"
+    },
+    "seq": 14,
+    "ts_ms": 1793040738834,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 15,
+    "ts_ms": 1793040762098,
+    "v": 1
+  }
+]

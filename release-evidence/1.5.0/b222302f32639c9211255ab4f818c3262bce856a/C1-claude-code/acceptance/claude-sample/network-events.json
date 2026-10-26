@@ -1,0 +1,409 @@
+[
+  {
+    "event": {
+      "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793041569253,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793041569253,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-1f3d177b-f1a7-4ff4-96bc-18beed3c7332",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793041571171,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-1f3d177b-f1a7-4ff4-96bc-18beed3c7332",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793041571392,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c",
+        "agent": "team-definition-5e5c8debd4daeda34505bf18f5c48162449cb4367cf861f32067a23d2b913ed9",
+        "kind": "agent",
+        "node_id": "team-node-d9f7215c994596e7e5faf187",
+        "process": "external:activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "7034652c0dcb0942"
+    },
+    "seq": 5,
+    "ts_ms": 1793041574124,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c",
+        "agent": "team-definition-5e5c8debd4daeda34505bf18f5c48162449cb4367cf861f32067a23d2b913ed9",
+        "kind": "agent",
+        "node_id": "team-node-d9f7215c994596e7e5faf187",
+        "process": "external:activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c"
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "7034652c0dcb0942"
+    },
+    "seq": 6,
+    "ts_ms": 1793041574829,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c",
+        "agent": "team-definition-5e5c8debd4daeda34505bf18f5c48162449cb4367cf861f32067a23d2b913ed9",
+        "kind": "agent",
+        "node_id": "team-node-d9f7215c994596e7e5faf187",
+        "process": "external:activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c"
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "7034652c0dcb0942"
+    },
+    "seq": 7,
+    "ts_ms": 1793041574829,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/settings",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 8,
+    "ts_ms": 1793041574836,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 1764,
+      "kind": "close",
+      "ms": 40,
+      "outcome": "closed",
+      "up": 1929
+    },
+    "seq": 9,
+    "ts_ms": 1793041574837,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/policy_limits",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 10,
+    "ts_ms": 1793041574877,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 1781,
+      "kind": "close",
+      "ms": 81,
+      "outcome": "closed",
+      "up": 1934
+    },
+    "seq": 11,
+    "ts_ms": 1793041574879,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c",
+        "agent": "team-definition-5e5c8debd4daeda34505bf18f5c48162449cb4367cf861f32067a23d2b913ed9",
+        "kind": "agent",
+        "node_id": "team-node-d9f7215c994596e7e5faf187",
+        "process": "external:activation:e0a8c842-3d17-4e10-b50d-7fc44351f30c"
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "7034652c0dcb0942"
+    },
+    "seq": 12,
+    "ts_ms": 1793041574990,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 13,
+    "ts_ms": 1793041575036,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 3650,
+      "kind": "response",
+      "ms": 1687,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 47499
+    },
+    "seq": 14,
+    "ts_ms": 1793041576723,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 2
+    },
+    "seq": 15,
+    "ts_ms": 1793041576816,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 2931,
+      "kind": "response",
+      "ms": 849,
+      "outcome": "completed",
+      "seq_in_conn": 2,
+      "status": 200,
+      "up": 48187
+    },
+    "seq": 16,
+    "ts_ms": 1793041577665,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 3
+    },
+    "seq": 17,
+    "ts_ms": 1793041577687,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 4320,
+      "kind": "response",
+      "ms": 1038,
+      "outcome": "completed",
+      "seq_in_conn": 3,
+      "status": 200,
+      "up": 49863
+    },
+    "seq": 18,
+    "ts_ms": 1793041578726,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 4
+    },
+    "seq": 19,
+    "ts_ms": 1793041578895,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 3581,
+      "kind": "response",
+      "ms": 1140,
+      "outcome": "completed",
+      "seq_in_conn": 4,
+      "status": 200,
+      "up": 50688
+    },
+    "seq": 20,
+    "ts_ms": 1793041580035,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 21553,
+      "kind": "close",
+      "ms": 5064,
+      "outcome": "closed",
+      "up": 203731
+    },
+    "seq": 21,
+    "ts_ms": 1793041580054,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "7034652c0dcb0942"
+    },
+    "seq": 22,
+    "ts_ms": 1793041580076,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 23,
+    "ts_ms": 1793041601552,
+    "v": 1
+  }
+]

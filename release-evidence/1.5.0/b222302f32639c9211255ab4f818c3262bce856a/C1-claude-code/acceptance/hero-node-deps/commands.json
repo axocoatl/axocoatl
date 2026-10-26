@@ -1,0 +1,108 @@
+[
+  {
+    "name": "signed-interrupted-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+    "start": "2026-10-26T19:18:26.284045+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.290647+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "81e7a5c6e0601edc832b0736f5d14d6ca343b03aff08b595f5a3d331cb486454",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+    "start": "2026-10-26T19:18:26.290883+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.297694+00:00",
+    "exit_code": 6,
+    "stdout_sha256": "f736c32ab2292f4065a4917d269c5e438c22d2b64997e2a9bc3a2b752c40e129",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+    "start": "2026-10-26T19:18:26.297915+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.304490+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "6daad99de55c59c7966f9ebe3edd9225d7bcdadc902d1c4b2449bb9ad7889a9e",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+    "start": "2026-10-26T19:18:26.304655+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.330252+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "fa78db9c5fcf9bcc3cfcb94ef58a1a70581603312b802a378939e3cc18eb6f22",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check",
+    "start": "2026-10-26T19:18:26.330503+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.342168+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check",
+    "start": "2026-10-26T19:18:26.362799+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:18:26.746282+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "20d9b828dc49d7d27fb1fc5178b6694fa77e1c84912fdec2957b923163d230e4",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

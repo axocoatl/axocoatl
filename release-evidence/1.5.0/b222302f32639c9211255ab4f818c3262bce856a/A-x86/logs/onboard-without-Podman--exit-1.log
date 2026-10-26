@@ -1,0 +1,42 @@
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.Or3u2w/home-no-podman/.local/state/axocoatl/onboard-20261026-140324.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, x86_64, 16 GB memory, 4 cores, 81 GB free.
+Found: Ollama 0.40.6 at http://127.0.0.1:37199 (cloud models off), gh, git 2.55.0, a running Axocoatl daemon.
+Not found: Podman, claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  Refresh apt package lists now with `sudo apt-get update`? This downloads current package metadata from your configured repositories and asks for your password.
+    → not done: it needs sudo, and --yes runs sudo only with --allow-sudo
+  ✗ Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:37199, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:37199
+    Workbench port: 8200
+  ✓ Configuration written: /tmp/axo-gate.Or3u2w/home-no-podman/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.Or3u2w/home-no-podman/.local/share/axocoatl
+
+Step 5 · Check
+  ✗ Podman is not installed; it is needed for every Session and every axocoatl run
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+
+Not ready yet, 1 step left:
+  1) Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman
+Run `axocoatl onboard` again once they are done; it keeps what is already set up.

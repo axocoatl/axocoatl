@@ -1,0 +1,889 @@
+[
+  {
+    "event": {
+      "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793042297328,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793042297328,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-265af712-0f54-4eb5-9f9f-8d83924607d0",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793042299140,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-265af712-0f54-4eb5-9f9f-8d83924607d0",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793042299347,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb",
+      "change": {
+        "command_id": "run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb:setup-allow:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "3bbee1f66a3db327f077f7f9bb7578d068ac35719dd1ad6747f31613a5d7154b",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "registry.npmjs.org:443 (allowed for this Session)",
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793042300247,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 6,
+    "ts_ms": 1793042300256,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:622",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "104.16.2.34",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.1.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:4",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 7,
+    "ts_ms": 1793042301184,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:122",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "104.16.2.34",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.1.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 8,
+    "ts_ms": 1793042301184,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:122",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.1.34",
+        "104.16.0.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 9,
+    "ts_ms": 1793042301184,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:622",
+        "2606:4700::6810:122",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "104.16.2.34",
+        "104.16.3.34",
+        "104.16.1.34",
+        "104.16.0.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 10,
+    "ts_ms": 1793042301184,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:122",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "104.16.2.34",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.1.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:5",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 11,
+    "ts_ms": 1793042301185,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:122",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:722",
+        "2606:4700::6810:522",
+        "2606:4700::6810:922",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "104.16.2.34",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.1.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:6",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 12,
+    "ts_ms": 1793042301187,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "fe0209db5b7b4c81"
+    },
+    "seq": 13,
+    "ts_ms": 1793042301384,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb",
+      "change": {
+        "command_id": "run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb:setup-revoke:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 14,
+    "ts_ms": 1793042301384,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 10009,
+      "ip": "104.16.2.34",
+      "kind": "close",
+      "ms": 223,
+      "outcome": "revoked",
+      "up": 2202
+    },
+    "seq": 15,
+    "ts_ms": 1793042301384,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 14395,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 218,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 16,
+    "ts_ms": 1793042301384,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "down": 8087,
+      "ip": "104.16.2.34",
+      "kind": "close",
+      "ms": 206,
+      "outcome": "revoked",
+      "up": 2207
+    },
+    "seq": 17,
+    "ts_ms": 1793042301385,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 15110,
+      "ip": "104.16.2.34",
+      "kind": "close",
+      "ms": 221,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 18,
+    "ts_ms": 1793042301385,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "down": 8249,
+      "ip": "104.16.2.34",
+      "kind": "close",
+      "ms": 198,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 19,
+    "ts_ms": 1793042301385,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "down": 132141,
+      "ip": "104.16.2.34",
+      "kind": "close",
+      "ms": 201,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 20,
+    "ts_ms": 1793042301385,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:3777aa83-f560-4b1b-aa57-c6b538152bbc",
+        "agent": "team-definition-8179d6604cd06ba7e72be96dc383c5434c2dfa5b5ce3bba5c886cc858a6e3276",
+        "kind": "agent",
+        "node_id": "team-node-11c09b4f055aa74972c0a5a0",
+        "process": "external:activation:3777aa83-f560-4b1b-aa57-c6b538152bbc"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "8fce4ee7086e017a"
+    },
+    "seq": 21,
+    "ts_ms": 1793042302591,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:3777aa83-f560-4b1b-aa57-c6b538152bbc",
+        "agent": "team-definition-8179d6604cd06ba7e72be96dc383c5434c2dfa5b5ce3bba5c886cc858a6e3276",
+        "kind": "agent",
+        "node_id": "team-node-11c09b4f055aa74972c0a5a0",
+        "process": "external:activation:3777aa83-f560-4b1b-aa57-c6b538152bbc"
+      },
+      "conn": "g1:8",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "8fce4ee7086e017a"
+    },
+    "seq": 22,
+    "ts_ms": 1793042303242,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:3777aa83-f560-4b1b-aa57-c6b538152bbc",
+        "agent": "team-definition-8179d6604cd06ba7e72be96dc383c5434c2dfa5b5ce3bba5c886cc858a6e3276",
+        "kind": "agent",
+        "node_id": "team-node-11c09b4f055aa74972c0a5a0",
+        "process": "external:activation:3777aa83-f560-4b1b-aa57-c6b538152bbc"
+      },
+      "conn": "g1:7",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "8fce4ee7086e017a"
+    },
+    "seq": 23,
+    "ts_ms": 1793042303242,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/settings",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 24,
+    "ts_ms": 1793042303250,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 1765,
+      "kind": "close",
+      "ms": 11,
+      "outcome": "closed",
+      "up": 1929
+    },
+    "seq": 25,
+    "ts_ms": 1793042303251,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:8",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/policy_limits",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 26,
+    "ts_ms": 1793042303291,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:8",
+      "down": 1781,
+      "kind": "close",
+      "ms": 52,
+      "outcome": "closed",
+      "up": 1934
+    },
+    "seq": 27,
+    "ts_ms": 1793042303291,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:3777aa83-f560-4b1b-aa57-c6b538152bbc",
+        "agent": "team-definition-8179d6604cd06ba7e72be96dc383c5434c2dfa5b5ce3bba5c886cc858a6e3276",
+        "kind": "agent",
+        "node_id": "team-node-11c09b4f055aa74972c0a5a0",
+        "process": "external:activation:3777aa83-f560-4b1b-aa57-c6b538152bbc"
+      },
+      "conn": "g1:9",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "8fce4ee7086e017a"
+    },
+    "seq": 28,
+    "ts_ms": 1793042303401,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 29,
+    "ts_ms": 1793042303406,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 4068,
+      "kind": "response",
+      "ms": 1590,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 47423
+    },
+    "seq": 30,
+    "ts_ms": 1793042304996,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 2
+    },
+    "seq": 31,
+    "ts_ms": 1793042305060,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 2917,
+      "kind": "response",
+      "ms": 1428,
+      "outcome": "completed",
+      "seq_in_conn": 2,
+      "status": 200,
+      "up": 48220
+    },
+    "seq": 32,
+    "ts_ms": 1793042306488,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 3
+    },
+    "seq": 33,
+    "ts_ms": 1793042306511,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 11107,
+      "kind": "response",
+      "ms": 2547,
+      "outcome": "completed",
+      "seq_in_conn": 3,
+      "status": 200,
+      "up": 50279
+    },
+    "seq": 34,
+    "ts_ms": 1793042309058,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 4
+    },
+    "seq": 35,
+    "ts_ms": 1793042309231,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 9973,
+      "kind": "response",
+      "ms": 2024,
+      "outcome": "completed",
+      "seq_in_conn": 4,
+      "status": 200,
+      "up": 52614
+    },
+    "seq": 36,
+    "ts_ms": 1793042311255,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 5
+    },
+    "seq": 37,
+    "ts_ms": 1793042311390,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 7654,
+      "kind": "response",
+      "ms": 2360,
+      "outcome": "completed",
+      "seq_in_conn": 5,
+      "status": 200,
+      "up": 54064
+    },
+    "seq": 38,
+    "ts_ms": 1793042313750,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 44686,
+      "kind": "close",
+      "ms": 10364,
+      "outcome": "closed",
+      "up": 261600
+    },
+    "seq": 39,
+    "ts_ms": 1793042313765,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "8fce4ee7086e017a"
+    },
+    "seq": 40,
+    "ts_ms": 1793042313787,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 41,
+    "ts_ms": 1793042379784,
+    "v": 1
+  }
+]

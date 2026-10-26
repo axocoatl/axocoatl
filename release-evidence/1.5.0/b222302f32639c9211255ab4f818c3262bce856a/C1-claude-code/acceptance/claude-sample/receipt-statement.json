@@ -1,0 +1,170 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/paging.js",
+      "digest": {
+        "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-db6f78c8-f2ec-40c1-9900-2f0f4fb6ce27",
+      "session_id": "ses-1f3d177b-f1a7-4ff4-96bc-18beed3c7332",
+      "started_at_ms": 1793041573516,
+      "finished_at_ms": 1793041601813,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "c4416404622647a019d7c92fa240cc81d36e1381ccbc858067fa56ef0ea4e2ee"
+    },
+    "repository": {
+      "base_commit": "46f26e7c5302ac8198e53a1d22895fee327bb91a",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix-claude-code",
+      "version": 1,
+      "kind": "fix",
+      "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 1,
+          "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+          "rules": [
+            "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+          ],
+          "routes": [
+            {
+              "id": "route#0",
+              "host": "api.anthropic.com",
+              "provider_fetch": "refuse"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "toolchain": "node",
+        "reason": "package.json at the repository root",
+        "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+        "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+        "recipes": [
+          "claude-code",
+          "node"
+        ],
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "cache_volume": "axo-tc-b22122786e711060d2729152",
+        "probe": {
+          "program": "npm",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 346
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 23,
+      "allowed_connections": 3,
+      "refused_connections": 0,
+      "route_requests": 4,
+      "routes": [
+        [
+          "api.anthropic.com",
+          4
+        ]
+      ]
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "40bba6f72ad999f8d1c50f65ad462d647a463a52881eb638d680b8cceb29492c"
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 104256,
+      "output_tokens": 979,
+      "cost_microunits": 45888,
+      "cost_usd": 0.045888,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "40bba6f72ad999f8d1c50f65ad462d647a463a52881eb638d680b8cceb29492c",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

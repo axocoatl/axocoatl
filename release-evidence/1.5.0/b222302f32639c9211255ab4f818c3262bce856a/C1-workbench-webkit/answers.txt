@@ -1,0 +1,15 @@
+2026-10-26T18:00:20Z	erick	Did the link open the workbench in Safari, signed in?	y	
+2026-10-26T18:00:48Z	erick	Choose Open workspace… with your home folder (/Users/erick). Was it refused?	y	
+2026-10-26T18:01:10Z	erick	Now open /Users/erick/axocoatl-gate-work/repos/workbench as the workspace. Was it accepted?	y	
+2026-10-26T18:01:54Z	erick	Create a New session with 5173 in Exposed ports. Did it start?	y	
+2026-10-26T18:02:43Z	erick	Open Team & budget. Were the limits pre-filled, and did Apply succeed without editing them?	y	
+2026-10-26T18:03:54Z	erick	Send one turn asking to fix the paging bug in src/paginate.js. Did the turn finish and change the file?	y	
+2026-10-26T18:04:09Z	erick	Open Source Control. Does it show 'Last turn N' (N of at least 1: the writer may also add or change a test) listing src/paginate.js?	y	
+2026-10-26T18:04:54Z	erick	Commit the change from Source Control. Did it succeed?	y	
+2026-10-26T18:06:36Z	erick	Does the Browser view show the page 'Axocoatl gate Preview'?	y	
+2026-10-26T18:06:43Z	erick	Is 'Open full preview' greyed out, with a line under the address bar saying that in Safari Previews stay in this pane?	y	
+2026-10-26T18:07:05Z	erick	Paste http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ into a new Safari tab. Does Safari show Axocoatl's page 'This Preview opens only in the workbench', and not the app?	y	
+2026-10-26T18:07:19Z	erick	Open http://gate-pages.localhost:63106/go?to=http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ in a new tab. Does Safari end on the same refusal page, and not the app?	y	
+2026-10-26T18:07:49Z	erick	Back in the workbench's Browser view, hold Command and click 'Open the next page' in the Preview. Did a tab open on Axocoatl's refusal page, and not on the app?	y	
+2026-10-26T18:08:18Z	erick	Reload the workbench tab (at 127.0.0.1). Is it still signed in, showing your Session, with no 'signed out' message?	y	
+2026-10-26T18:09:00Z	erick	Close the plant tab, then open http://gate-pages.localhost:63106/clear?path=/api: does it say Safari sends 0 of the planted cookies back? This page expires only the gate's test cookies. Is the workbench still signed in and working?	y	

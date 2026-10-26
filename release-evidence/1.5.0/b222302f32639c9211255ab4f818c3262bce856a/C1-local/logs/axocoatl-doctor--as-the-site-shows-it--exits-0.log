@@ -1,0 +1,39 @@
+  (loading gpt-oss:20b once to read its context…)
+  (loading qwen3-coder:30b once to read its context…)
+Axocoatl doctor (config: /Users/erick/Library/Application Support/Axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 6.1.4 ready (machine podman-machine-default: applehv, rootless, 6 CPUs / 8 GiB; kernel 7.2.7-200.fc44.aarch64), needed for every Session and every axocoatl run
+  [ OK ] Platform: macOS on Apple silicon, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] Ollama 0.40.11 at http://localhost:11434, a version native Sessions accept
+  [ OK ] Ollama cloud models disabled at http://localhost:11434 (~/.ollama/server.json)
+  [ OK ] gpt-oss:20b: GGUF; 13.8 GB, fits in memory; 32768-token context, contract probes passed; 12.8 GB loaded, all in GPU memory
+  [ OK ] qwen3-coder:30b: GGUF; 18.6 GB, fits in memory; 32768-token context, contract probes passed; 20.3 GB loaded, all in GPU memory
+
+Writers
+  [ OK ] Claude Code: not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)
+  [ OK ] Codex: not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)
+  [ OK ] claude CLI: /opt/homebrew/bin/claude 2.1.92 (Claude Code)
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: signed in (for `--keep pr`)
+  [ OK ] Stored credentials: receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  [ OK ] Data dir writable: /Users/erick/Library/Application Support/Axocoatl/data
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.39.5 (the daemon runs git on your repositories)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes

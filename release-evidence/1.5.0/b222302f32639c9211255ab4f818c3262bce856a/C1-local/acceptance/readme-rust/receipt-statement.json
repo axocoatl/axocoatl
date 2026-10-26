@@ -1,0 +1,168 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/lib.rs",
+      "digest": {
+        "sha256": "5a4ca1b9177f617cb55401b72019ef75edcbb9ed99d99f8ea6d98aa6fad07519"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "session_id": "ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3",
+      "started_at_ms": 1793041146414,
+      "finished_at_ms": 1793041282780,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "8df97588f021a44c6c80f155939ddc596fad0a226ca7bcc5bc903ebe316551f0"
+    },
+    "repository": {
+      "base_commit": "f2a5b630d4edaa45c5e297cba9f22a51390e7a8b",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix",
+      "version": 1,
+      "kind": "fix",
+      "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "ollama 0.40.11",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 7,
+          "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+          "rules": []
+        }
+      ],
+      "environment": {
+        "toolchain": "rust",
+        "reason": "Cargo.toml at the repository root",
+        "image": "localhost/axocoatl-recipe-rust:0e5acf3d40e2",
+        "image_id": "9793d71dcfc764ccbf631d162a7210e58a83a3ef318f99c042164d29fd5574b4",
+        "recipes": [
+          "rust"
+        ],
+        "check": "cargo test",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "cargo fetch",
+          "source": "detected",
+          "script_sha256": "471eeafc71b8d16620386f0a132facfc78168b25eaa54e05a50de4ac59e43732",
+          "exit_code": 0,
+          "duration_ms": 1053,
+          "registry_hosts": [
+            "index.crates.io",
+            "static.crates.io",
+            "crates.io"
+          ],
+          "allowed_connections": 2,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-954d69e4ece5bc432cf48ce5",
+        "probe": {
+          "program": "cargo",
+          "program_found": true,
+          "baseline_exit": 101,
+          "duration_ms": 646
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 29,
+      "allowed_connections": 2,
+      "refused_connections": 0,
+      "route_requests": 0,
+      "routes": []
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "cargo test"
+        ],
+        "candidate_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3"
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 119271,
+      "output_tokens": 4744,
+      "cost_microunits": 0,
+      "cost_usd": 0.0,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

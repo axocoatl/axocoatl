@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-496781e8-80a1-4c0a-b546-0f5eb4909a55",
+  "verdict": "pass",
+  "statement_sha256": "sha256:f65887dc6541be5e05f311686f4b35a7a6012a5c4baed228d1b141a3eb7cd4f8",
+  "files": {
+    "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-496781e8-80a1-4c0a-b546-0f5eb4909a55 (fix@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-70616529-34d0-42e9-9088-c5fe35b5bc0f, finished at 1793040762373 ms",
+    "Base commit 4622270ce51ee14cdf837e48731d66b1a14bc348",
+    "Agent writer (writer): native ollama 0.40.11, ollama:qwen3-coder:30b",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by ollama:gpt-oss:20b (ollama 0.40.11): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paging.js  sha256:c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

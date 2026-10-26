@@ -1,0 +1,100 @@
+[
+  {
+    "name": "trusted-public-key",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "key"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+    "start": "2026-10-26T18:54:26.526027+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.533520+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/repo",
+      "--record",
+      "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/repo",
+    "start": "2026-10-26T18:54:26.533692+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.541048+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "d87eacb9eea92bfc0031f7ca211df930a96b37277a1b10c7db7801f4466b11c0",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/record.jsonl"
+    ],
+    "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/repo",
+    "start": "2026-10-26T18:54:26.541357+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.550190+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "ce0b9bc5144351fc5747f63ac50b5f140c710fb8eece6772bbd0791436551633",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/record.jsonl"
+    ],
+    "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-59949c1962f842c7bc37f7623e727a23/repo",
+    "start": "2026-10-26T18:54:26.550388+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.651552+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check",
+    "start": "2026-10-26T18:54:26.651858+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.665175+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check",
+    "start": "2026-10-26T18:54:26.665405+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:54:26.899392+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "2af85c6fa640a195744ffd8be5a01c9ac1a797f243580334ec30972e5360d9d6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

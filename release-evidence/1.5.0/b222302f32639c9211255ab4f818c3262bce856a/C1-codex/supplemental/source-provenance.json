@@ -1,0 +1,885 @@
+{
+  "schema": "axocoatl.recovery.additive-staging-provenance/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "recorded_at": "2026-10-26T20:56:22.906417+00:00",
+  "prior_manifest_sha256": "0f9dc5dfd2c419a362a3dd1cb255d27d090d2441ac74c66f8faffe4aaf07fc70",
+  "prior_files_preserved": 1040,
+  "copied_files": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+      "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+      "bytes": 7868,
+      "category": "completed-supplemental-result"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/axocoatl-junit.xml",
+      "sha256": "48f5f1c3457a83b4dcfb765dd48081d84072f4efa4cf501ea6fce367e757f096",
+      "bytes": 2504,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/changes.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/changes.txt",
+      "sha256": "893fe5e962bb43517cc0c228110732d39d6c73ca5097a692d4f5dc5ddc0d35c0",
+      "bytes": 564,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/command.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/command.txt",
+      "sha256": "1c27e34bc1024f9dce3a8ecf7a39ad7e70c03d294ad2f71010fb9aa8912c6113",
+      "bytes": 138,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/receipt.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/receipt.json",
+      "sha256": "19f2657b7bb6489046f008315de794307c4de3794c89d6153dfdb9d08d998bff",
+      "bytes": 5020,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl",
+      "sha256": "fbd0ff15b23f6463621c9010baf1faaa29dfbf7bcd97aec99ae1b7a15782c04f",
+      "bytes": 366740,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/run.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-node-deps/run.log",
+      "sha256": "958ec357a5930a6e73f493fe41d47c6e55ca760b110421c96e69ea32c8685074",
+      "bytes": 7916,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/axocoatl-junit.xml",
+      "sha256": "026e3986e9701a3a5c75f6f2eff410563aa032c15263c4b655401ab550e80140",
+      "bytes": 2509,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/changes.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/changes.txt",
+      "sha256": "8cd680f236b12ca94b5bac1377715c89a9bb4b4beb1d34121dab787b66ae6de1",
+      "bytes": 489,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/command.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/command.txt",
+      "sha256": "1c27e34bc1024f9dce3a8ecf7a39ad7e70c03d294ad2f71010fb9aa8912c6113",
+      "bytes": 138,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/receipt.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/receipt.json",
+      "sha256": "9482361c7a1d7629c682c8566477bb6b0f72fc992cfaec04d7ba76b964c88aeb",
+      "bytes": 5032,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl",
+      "sha256": "b216d0ce47c47ba7269a2e8492bf4d29e91b5a663f6d60da2586ff6dde14c085",
+      "bytes": 351981,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/run.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/codex-python-pytest/run.log",
+      "sha256": "9f9ae4c19f4e343580938ee8a40077c25943a08739c21b7aa86cd3dfae3935a4",
+      "bytes": 9041,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/configuration.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/configuration.json",
+      "sha256": "0b729ab69b0f279d960241c854eb40c3bbbfc609af0bca258e0b08d7bd43853b",
+      "bytes": 395,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/doctor.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/doctor.json",
+      "sha256": "1f3621f46fe1ffa61ee911831fc2b8e9dad717df84d9563c8e75693673dce3aa",
+      "bytes": 4544,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/dev.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/dev.log",
+      "sha256": "671821036996331788248b6d630a6265e05faa1d8097aad8b286ad529abbfdf4",
+      "bytes": 649,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/doctor-JSON-ready-for-supplemental-Codex-checks.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/doctor-JSON-ready-for-supplemental-Codex-checks.log",
+      "sha256": "567e05a2883fa79b29d3e2e733feda23a3dc9144475395be462ffa0178a5474f",
+      "bytes": 52,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/doctor-text-ready.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/doctor-text-ready.log",
+      "sha256": "5e5b64d4ea36c8c733da914b0e5a868c70f7333fa1fa3a0fe8c356f43b72e510",
+      "bytes": 2252,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-node-deps.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-node-deps.log",
+      "sha256": "658d0e9103e52ddd7b5c990aff12d4ea607190ffce87031ccb6d61fc6276ba9b",
+      "bytes": 279,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-python-pytest.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-python-pytest.log",
+      "sha256": "a6ab5830f389e41bfd7b952f3e78728c5291cbf70ccbd3a807cd40eab899b1bf",
+      "bytes": 279,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-node-deps--documented-command-.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-node-deps--documented-command-.log",
+      "sha256": "9f3416a63918ced92df4bc3b845ecb61fba6ff0eaffcc6c5d1d5627fbb395cc0",
+      "bytes": 273,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-python-pytest--documented-command-.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-python-pytest--documented-command-.log",
+      "sha256": "657bbc12528c77aafebdc1e2653b65c9f94d032c0aa84fec64041a5a5aba5c87",
+      "bytes": 273,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/record-verify-on-codex-node-deps.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/record-verify-on-codex-node-deps.log",
+      "sha256": "713ce7d4b3b5f07d1a10c24e8796f681f309eb59835d0f14f323a6a9daf594bb",
+      "bytes": 278,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/record-verify-on-codex-python-pytest.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/record-verify-on-codex-python-pytest.log",
+      "sha256": "7657f4099a27d6d4c732fcf728a65c94bbbb643345531dfadb63b8a5169cf154",
+      "bytes": 278,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/run-fix-on-codex-node-deps.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/run-fix-on-codex-node-deps.log",
+      "sha256": "958ec357a5930a6e73f493fe41d47c6e55ca760b110421c96e69ea32c8685074",
+      "bytes": 7916,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/logs/run-fix-on-codex-python-pytest.log",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/logs/run-fix-on-codex-python-pytest.log",
+      "sha256": "9f9ae4c19f4e343580938ee8a40077c25943a08739c21b7aa86cd3dfae3935a4",
+      "bytes": 9041,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/provenance.json",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/provenance.json",
+      "sha256": "34bc410a4ac9af265adec312863c820f43dc5cdea805d48742b71128c667d624",
+      "bytes": 1058,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/published-command.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/published-command.txt",
+      "sha256": "47711c8a5559dd4127847f8a872cdc760bd00574b29a9db5ed13fd6a23ce706b",
+      "bytes": 59,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/runner.sh",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/runner.sh",
+      "sha256": "6f547d267a4e1d5454e2b7530e0ab3944f54561bb248b2588c18a4750ce8d47d",
+      "bytes": 10013,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/transcript.txt",
+      "staged_relative": "C1-codex/supplemental/supplemental-codex-fixtures-only/transcript.txt",
+      "sha256": "8c872c09b04661e595b9098824ab2828ce3d3b4d096ee6e4333736bce33b8770",
+      "bytes": 23391,
+      "category": "completed-supplemental-artifact"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/summary.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/summary.json",
+      "sha256": "3ae74199db0d546a9df9afef486e1bd9e4909ac72f216e0fec0e690e42fec0ea",
+      "bytes": 8444,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/accepted-answers.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/accepted-answers.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/activation-summary.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/activation-summary.json",
+      "sha256": "73b5c2b45964c3450ffa096b92c2a2537ea1c13c5bf13df8ccb261aa16c29a2d",
+      "bytes": 21573,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/assessment.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/assessment.json",
+      "sha256": "f4172d91fc880e282d943f3ad7d9ebea65bcd18bc18a24bdaa15c1ec8ecf7ec0",
+      "bytes": 22909,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/axocoatl-junit.xml",
+      "sha256": "026e3986e9701a3a5c75f6f2eff410563aa032c15263c4b655401ab550e80140",
+      "bytes": 2509,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/changes.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/changes.txt",
+      "sha256": "8cd680f236b12ca94b5bac1377715c89a9bb4b4beb1d34121dab787b66ae6de1",
+      "bytes": 489,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/command.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/command.txt",
+      "sha256": "1c27e34bc1024f9dce3a8ecf7a39ad7e70c03d294ad2f71010fb9aa8912c6113",
+      "bytes": 138,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/commands.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/commands.json",
+      "sha256": "37a4edfced5124a2c7fc0f36655d2f09b9d3c023f12501f5c6e8ceb68e536362",
+      "bytes": 5587,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/gate-output-exclusions.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/gate-output-exclusions.json",
+      "sha256": "238c3099eeef74e06db6c222cd375b538939d1bad55cc17eb73d31df692df961",
+      "bytes": 658,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/git-status-after.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/git-status-after.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/git-status-before.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/git-status-before.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-dependency-provenance.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-dependency-provenance.json",
+      "sha256": "5a6ed248aaf27aa8df0736f24ca7cda710934752a27a1780a9c4b0c314a2e033",
+      "bytes": 255,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/independent-receipt-verify.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/independent-receipt-verify.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/independent-receipt-verify.stdout",
+      "sha256": "e6f4a74fb07d9dd4322a382f4d56947be5811244c2a18b94705bd01b313c56ee",
+      "bytes": 2301,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/independent-record-verify.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/independent-record-verify.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/independent-record-verify.stdout",
+      "sha256": "7657f4099a27d6d4c732fcf728a65c94bbbb643345531dfadb63b8a5169cf154",
+      "bytes": 278,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/module-selection.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/module-selection.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/module-selection.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/module-selection.stdout",
+      "sha256": "b14fe3c81f083509f9b2720c26b1776e5f5b1a05c7ebe4035a7496f54667531a",
+      "bytes": 180,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/negative-evidence.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/negative-evidence.json",
+      "sha256": "452ffd7d98b4970adc939ad322372f03b1e2861bea116036d4485570dde2f851",
+      "bytes": 8774,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/network-events.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/network-events.json",
+      "sha256": "8df9f1e9b03d0468274042ba5fc18dac851f1bb503e6220c8e3fa5a172534a28",
+      "bytes": 34526,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original-tests.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original-tests.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original-tests.stdout",
+      "sha256": "c6fd59310f2a6f5f8821af2c5249dc9666f91bc9d647d75e36eb952663099484",
+      "bytes": 541,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/outcome.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/outcome.json",
+      "sha256": "56fc6f02f04c718498537dad64e936cea84e8f0f46ccbf6e7b232f2f10e2200a",
+      "bytes": 3501,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/patch.diff",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/patch.diff",
+      "sha256": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+      "bytes": 416,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/receipt-statement.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/receipt-statement.json",
+      "sha256": "c268b2ea0ea6cbc4eab869f96be1a70a19ee9fa09e0306cf59d604fcb8e28d15",
+      "bytes": 5181,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/receipt.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/receipt.json",
+      "sha256": "9482361c7a1d7629c682c8566477bb6b0f72fc992cfaec04d7ba76b964c88aeb",
+      "bytes": 5032,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/run.axorecord.jsonl",
+      "sha256": "b216d0ce47c47ba7269a2e8492bf4d29e91b5a663f6d60da2586ff6dde14c085",
+      "bytes": 351981,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/run.log",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/run.log",
+      "sha256": "9f9ae4c19f4e343580938ee8a40077c25943a08739c21b7aa86cd3dfae3935a4",
+      "bytes": 9041,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/runtime-version.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/runtime-version.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original/pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original/pyproject.toml",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/original/tests/test_pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-check/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-check/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check/pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-check/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check/pyproject.toml",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-check/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check/tests/test_pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/host-check/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/final/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/final/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/final/pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/final/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/final/pyproject.toml",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/final/tests/test_pages.py",
+      "staged_relative": "C1-codex/supplemental/acceptance/python-pytest/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/accepted-answers.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/accepted-answers.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/activation-summary.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/activation-summary.json",
+      "sha256": "55c65ac6715bfdaa6dfb798ee4a0a36940b072196ca4bc45eb3a3f443abca47a",
+      "bytes": 21570,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/assessment.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/assessment.json",
+      "sha256": "623fee7638aa0afc45a7db9a3d2729df4be5db014a447b87507e8ce7066771c8",
+      "bytes": 13485,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/axocoatl-junit.xml",
+      "sha256": "48f5f1c3457a83b4dcfb765dd48081d84072f4efa4cf501ea6fce367e757f096",
+      "bytes": 2504,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/changes.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/changes.txt",
+      "sha256": "893fe5e962bb43517cc0c228110732d39d6c73ca5097a692d4f5dc5ddc0d35c0",
+      "bytes": 564,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/command.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/command.txt",
+      "sha256": "1c27e34bc1024f9dce3a8ecf7a39ad7e70c03d294ad2f71010fb9aa8912c6113",
+      "bytes": 138,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/commands.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/commands.json",
+      "sha256": "0071c883f76ce2d381c2e2b1c1845a44cd1ddc3ac758b2d45c115c00b0caea2d",
+      "bytes": 4383,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/gate-output-exclusions.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/gate-output-exclusions.json",
+      "sha256": "bf6e027b53ad529aa35a86384c88e3aa48ddcf85c513406c2c42ff9ae799fc96",
+      "bytes": 658,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/git-status-after.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/git-status-after.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/git-status-before.txt",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/git-status-before.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-dependency-provenance.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/independent-receipt-verify.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/independent-receipt-verify.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/independent-receipt-verify.stdout",
+      "sha256": "f4921b49512e785c37924e823dcab3baab1575221c239e1e7df609b1c3abc0cd",
+      "bytes": 2295,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/independent-record-verify.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/independent-record-verify.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/independent-record-verify.stdout",
+      "sha256": "713ce7d4b3b5f07d1a10c24e8796f681f309eb59835d0f14f323a6a9daf594bb",
+      "bytes": 278,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/negative-evidence.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/negative-evidence.json",
+      "sha256": "ec0a7297fbad1102addc02ab9aca98e99a7990c80e624d449c58f0d5c9e01542",
+      "bytes": 1020,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/network-events.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/network-events.json",
+      "sha256": "dc8bc1b3cd49f7d16f699e47f80c464f0708dc30f51c7ea0a3e85eaa92f17dd5",
+      "bytes": 21141,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original-tests.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original-tests.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/outcome.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/outcome.json",
+      "sha256": "d19b733dc0ae6df7a499df43e62decb5db727b5431c33bb169affb06ebca66e0",
+      "bytes": 3378,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/patch.diff",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/patch.diff",
+      "sha256": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+      "bytes": 484,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/receipt-statement.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/receipt-statement.json",
+      "sha256": "d59f8e98924e24ca0ea0129e0a80e9bae4adbea104ec400db8db45b1addaec26",
+      "bytes": 5157,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/receipt.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/receipt.json",
+      "sha256": "19f2657b7bb6489046f008315de794307c4de3794c89d6153dfdb9d08d998bff",
+      "bytes": 5020,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/run.axorecord.jsonl",
+      "sha256": "fbd0ff15b23f6463621c9010baf1faaa29dfbf7bcd97aec99ae1b7a15782c04f",
+      "bytes": 366740,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/run.log",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/run.log",
+      "sha256": "958ec357a5930a6e73f493fe41d47c6e55ca760b110421c96e69ea32c8685074",
+      "bytes": 7916,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/runtime-version.stderr",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/runtime-version.stdout",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/package-lock.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/package.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/test/paginate.test.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/original/src/paginate.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/package-lock.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/package.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/test/paginate.test.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check/src/paginate.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/host-check/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/.gitignore",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/README.md",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/package-lock.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/package.json",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/test/paginate.test.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/final/src/paginate.js",
+      "staged_relative": "C1-codex/supplemental/acceptance/node-deps/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606,
+      "category": "independent-artifact-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/transcript.txt",
+      "staged_relative": "C1-codex/supplemental/outer-transcript.txt",
+      "sha256": "c640d7dd26d543caabc7a129e7bfe8976c3081ad26fd30090fbd04a24c8de574",
+      "bytes": 23683,
+      "category": "completed-runtime-wrapper-transcript"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/codex-supplement-coordination.json",
+      "staged_relative": "C1-codex/supplemental/coordination.json",
+      "sha256": "a9c071ec7dc41092271ae9d381c03166c3c57dac341f78ca809895abe7a85636",
+      "bytes": 775,
+      "category": "runtime-coordination"
+    }
+  ],
+  "excluded_cache_trees": [
+    "acceptance/node-deps/host-check/node_modules",
+    "acceptance/node-deps/npm-cache"
+  ],
+  "generated_context_sha256": "3c23e69db0afed51d5248859ad3a1b4e5da7cb1769fd87d92ff33a6ecfc360e5",
+  "formal_path_result_preserved": true,
+  "new_formal_paths": [],
+  "scope": "Read and copy completed sanitized evidence only; no tests, inference, authentication, configuration, source or Git mutations."
+}

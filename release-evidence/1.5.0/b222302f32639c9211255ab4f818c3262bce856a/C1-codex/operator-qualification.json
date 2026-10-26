@@ -1,0 +1,38 @@
+{
+  "schema": "axocoatl.recovery.operator-qualification/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "path": "C1-codex",
+  "recorded_at": "2026-10-26T20:46:56.058571+00:00",
+  "official_path_result": {
+    "pass": false,
+    "passed_steps": 4,
+    "recorded_steps": 5,
+    "onboarding_exit_code": 1,
+    "onboarding_seconds": 4299.8,
+    "finished_at": "2026-10-26T20:32:01.772Z"
+  },
+  "operator_context": {
+    "harness_operator": "Codex assistant via tool-owned PTY and native CUA",
+    "human_operator_of_harness": false,
+    "original_operator_snapshot": "operator-original.json",
+    "original_snapshot_is_historical": true
+  },
+  "browser_interruption": {
+    "tool": "CUA getApp",
+    "observed_elapsed_seconds": 3384.5556,
+    "subsequent_connector_state": "expired",
+    "source": "Root agent reported its actual tool observation in the staging instruction; no independent raw tool trace was supplied to this staging task."
+  },
+  "separate_post_gate_connection": {
+    "command": "axocoatl connect codex",
+    "authentication_completed_by": "user",
+    "reported_exit_code": 0,
+    "reported_secret_stored": true,
+    "source": "Root agent observation reported in the staging instruction. No credential contents were inspected or copied.",
+    "is_original_onboarding_completion": false
+  },
+  "supplemental_functional_checks": "pending; no supplemental fixture outcome included in this stage",
+  "qualification": "The separate successful connection does not repair or relabel the failed fresh-onboarding path. Required live-onboarding, ChatGPT billing/sign-in and fixture evidence are not inferred from that connection.",
+  "openrouter": "Running; deliberately not read, copied, or snapshotted by this stage.",
+  "D1": "Stopped at user direction; incomplete, not waived."
+}

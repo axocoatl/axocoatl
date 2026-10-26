@@ -1,0 +1,16 @@
+[
+  {
+    "path": ".gate-preview-requests.log",
+    "tracked": false,
+    "sha256_at_observation": "b26af28d0583aef67a570116beff2f4a1cb7c2eb594eaf7cd567af64d03b7768",
+    "reason": "Official live gate Preview helper or request log written after model turn/commit by the gate; excluded from model artifact assessment.",
+    "at": "2026-10-26T18:08:37.435942+00:00"
+  },
+  {
+    "path": "gate-preview-app.cjs",
+    "tracked": false,
+    "sha256_at_observation": "1ab4f57ab00b9048a9eebd4a18bfdb15c43c6f9046b97ca57a309bcb4d99d9b1",
+    "reason": "Official live gate Preview helper or request log written after model turn/commit by the gate; excluded from model artifact assessment.",
+    "at": "2026-10-26T18:08:37.436105+00:00"
+  }
+]

@@ -1,0 +1,181 @@
+receipt	Set up job	﻿2026-10-26T19:19:51.6586665Z Current runner version: '2.338.0'
+receipt	Set up job	2026-10-26T19:19:51.6625661Z ##[group]Runner Image Provisioner
+receipt	Set up job	2026-10-26T19:19:51.6627234Z Hosted Compute Agent
+receipt	Set up job	2026-10-26T19:19:51.6628302Z Version: 20261021.618
+receipt	Set up job	2026-10-26T19:19:51.6629470Z Commit: 21505ad2541d5be6135ed84fc33697146cf75b8e
+receipt	Set up job	2026-10-26T19:19:51.6631001Z Build Date: 2026-10-21T00:45:21Z
+receipt	Set up job	2026-10-26T19:19:51.6632195Z Worker ID: {ed92a4ae-098c-49aa-bc13-2bfec87ffb63}
+receipt	Set up job	2026-10-26T19:19:51.6633513Z Region: westus2
+receipt	Set up job	2026-10-26T19:19:51.6634507Z Cloud: Azure
+receipt	Set up job	2026-10-26T19:19:51.6635383Z ##[endgroup]
+receipt	Set up job	2026-10-26T19:19:51.6638042Z ##[group]Operating System
+receipt	Set up job	2026-10-26T19:19:51.6639164Z Ubuntu
+receipt	Set up job	2026-10-26T19:19:51.6640174Z 24.04.5
+receipt	Set up job	2026-10-26T19:19:51.6641441Z LTS
+receipt	Set up job	2026-10-26T19:19:51.6642340Z ##[endgroup]
+receipt	Set up job	2026-10-26T19:19:51.6643542Z ##[group]Runner Image
+receipt	Set up job	2026-10-26T19:19:51.6644637Z Image: ubuntu-24.04
+receipt	Set up job	2026-10-26T19:19:51.6645703Z Version: 20261012.334.1
+receipt	Set up job	2026-10-26T19:19:51.6647696Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+receipt	Set up job	2026-10-26T19:19:51.6651279Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+receipt	Set up job	2026-10-26T19:19:51.6653057Z ##[endgroup]
+receipt	Set up job	2026-10-26T19:19:51.6655387Z ##[group]GITHUB_TOKEN Permissions
+receipt	Set up job	2026-10-26T19:19:51.6658256Z Contents: read
+receipt	Set up job	2026-10-26T19:19:51.6659364Z Metadata: read
+receipt	Set up job	2026-10-26T19:19:51.6660453Z PullRequests: read
+receipt	Set up job	2026-10-26T19:19:51.6661815Z ##[endgroup]
+receipt	Set up job	2026-10-26T19:19:51.6665104Z Secret source: Actions
+receipt	Set up job	2026-10-26T19:19:51.6666734Z Cache mode: write
+receipt	Set up job	2026-10-26T19:19:51.6668168Z Prepare workflow directory
+receipt	Set up job	2026-10-26T19:19:51.7355779Z Prepare all required actions
+receipt	Set up job	2026-10-26T19:19:51.7430547Z Getting action download info
+receipt	Set up job	2026-10-26T19:19:52.1981886Z Download action repository 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+receipt	Set up job	2026-10-26T19:19:52.3064282Z Download action repository 'axocoatl/axocoatl@b222302f32639c9211255ab4f818c3262bce856a' (SHA:b222302f32639c9211255ab4f818c3262bce856a)
+receipt	Set up job	2026-10-26T19:19:56.4456838Z Complete job name: receipt
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	﻿2026-10-26T19:19:56.5364358Z ##[group]Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5365305Z with:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5365811Z   ref: eaf2c9ab1a85e8586a4fc18fb9446c4006f80439
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5366301Z   persist-credentials: false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5366782Z   repository: codeoperators/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5369626Z   token: ***
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5370000Z   ssh-strict: true
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5370420Z   ssh-user: git
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5371170Z   clean: true
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5371626Z   sparse-checkout-cone-mode: true
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5372181Z   fetch-depth: 1
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5372545Z   fetch-tags: false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5372961Z   show-progress: true
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5373338Z   lfs: false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5373700Z   submodules: false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5374145Z   set-safe-directory: true
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5374589Z   allow-unsafe-pr-checkout: false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.5375415Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6885009Z Syncing repository: codeoperators/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6887459Z ##[group]Getting Git version info
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6888546Z Working directory is '/home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026'
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6890037Z [command]/usr/bin/git version
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6890604Z git version 2.55.0
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6892895Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6898454Z Temporarily overriding HOME='/home/runner/work/_temp/629c12bc-bc11-4edb-918e-1b18727a97f9' before making global git config changes
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6899871Z Adding repository directory to the temporary git global config as a safe directory
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6901627Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6904077Z Deleting the contents of '/home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026'
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6906067Z ##[group]Initializing the repository
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6907186Z [command]/usr/bin/git init /home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.6998803Z hint: Using 'master' as the name for the initial branch. This default branch name
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7024186Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7034024Z hint: to use in all of your new repositories, which will suppress this warning,
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7035179Z hint: call:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7035813Z hint:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7036663Z hint: 	git config --global init.defaultBranch <name>
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7037531Z hint:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7038395Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7039591Z hint: 'development'. The just-created branch can be renamed via this command:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7040926Z hint:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7041829Z hint: 	git branch -m <name>
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7042593Z hint:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7043510Z hint: Disable this message with "git config set advice.defaultBranchName false"
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7045253Z Initialized empty Git repository in /home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026/.git/
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7048207Z [command]/usr/bin/git remote add origin https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7131844Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7133256Z ##[group]Disabling automatic garbage collection
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7151826Z [command]/usr/bin/git config --local gc.auto 0
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7170388Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7171740Z ##[group]Setting up auth
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7181878Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7215918Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7757378Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.7801896Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8046061Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8088317Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8328607Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8374925Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8376458Z ##[group]Fetching the repository
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:56.8386778Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin eaf2c9ab1a85e8586a4fc18fb9446c4006f80439
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2338741Z From https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2351956Z  * branch            eaf2c9ab1a85e8586a4fc18fb9446c4006f80439 -> FETCH_HEAD
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2364175Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2365607Z ##[group]Determining the checkout info
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2366860Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2367820Z [command]/usr/bin/git sparse-checkout disable
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2420515Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2455768Z ##[group]Checking out the ref
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2459923Z [command]/usr/bin/git checkout --progress --force eaf2c9ab1a85e8586a4fc18fb9446c4006f80439
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2524555Z Note: switching to 'eaf2c9ab1a85e8586a4fc18fb9446c4006f80439'.
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2545152Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2556377Z You are in 'detached HEAD' state. You can look around, make experimental
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2558070Z changes and commit them, and you can discard any commits you make in this
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2559277Z state without impacting any branches by switching back to a branch.
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2560071Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2560667Z If you want to create a new branch to retain commits you create, you may
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2562140Z do so (now or later) by using -c with the switch command. Example:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2562905Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2563329Z   git switch -c <new-branch-name>
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2563883Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2564306Z Or undo this operation with:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2564832Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2565204Z   git switch -
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2565650Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2566229Z Turn off this advice by setting config variable advice.detachedHead to false
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2566972Z 
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2567495Z HEAD is now at eaf2c9a fix-claude-code: Paging skips the last item
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2569782Z ##[endgroup]
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2661535Z [command]/usr/bin/git log -1 --format=%H
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2662634Z eaf2c9ab1a85e8586a4fc18fb9446c4006f80439
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2673264Z ##[group]Removing auth
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2678358Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.2715464Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3006804Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3036882Z http.https://github.com/.extraheader
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3044910Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3081411Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3319702Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3357530Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+receipt	Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:19:57.3602046Z ##[endgroup]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	﻿2026-10-26T19:19:57.3951096Z ##[group]Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3951695Z with:
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3951946Z   version: v1.4.0
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3952229Z   keys-file: .axocoatl/receipt-keys
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3952546Z   require-receipt: true
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3952829Z   require-pass: true
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3953110Z   allow-uncovered-files: false
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3955611Z   github-token: ***
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.3955892Z ##[endgroup]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4019400Z ##[start-action display=Install Axocoatl;id=__axocoatl_axocoatl.install]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4064303Z ##[group]Run "$GITHUB_ACTION_PATH/install.sh"
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4064779Z ^[[36;1m"$GITHUB_ACTION_PATH/install.sh"^[[0m
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4296258Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4296716Z env:
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4296970Z   AXOCOATL_VERSION: v1.4.0
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4297269Z   AXOCOATL_SHA256: 
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4297522Z   AXOCOATL_BINARY: 
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:57.4297814Z ##[endgroup]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9817574Z Installed axocoatl 1.4.0 from axocoatl-v1.4.0-x86_64-unknown-linux-gnu.tar.gz (SHA-256 2eab4f886511ce9a8ac3c1ec47ef972e770f73a327187233d0000f237dc45812, as the release publishes).
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9860034Z ##[end-action id=__axocoatl_axocoatl.install;outcome=success;conclusion=success;duration_ms=2583]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9871483Z ##[start-action display=Verify the receipt;id=__axocoatl_axocoatl.verify]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9904914Z ##[group]Run "$GITHUB_ACTION_PATH/verify.sh"
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9905311Z ^[[36;1m"$GITHUB_ACTION_PATH/verify.sh"^[[0m
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9969034Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9969466Z env:
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9969879Z   AXOCOATL_BIN: /home/runner/work/_temp/axocoatl-verify-receipt.9wanbs/bin/axocoatl
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9972941Z   GH_TOKEN: ***
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9973250Z   KEYS_FILE: .axocoatl/receipt-keys
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9973749Z   REQUIRE_RECEIPT: true
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9974239Z   REQUIRE_PASS: true
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9974551Z   ALLOW_UNCOVERED_FILES: false
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:19:59.9974857Z ##[endgroup]
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:20:02.5226798Z Verified the receipt of run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb (verdict pass), signed by sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce, which .axocoatl/receipt-keys at the base commit trusts; 1 changed file(s), 0 not covered.
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T19:20:02.5268161Z ##[end-action id=__axocoatl_axocoatl.verify;outcome=success;conclusion=success;duration_ms=2539]
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	﻿2026-10-26T19:20:02.5417092Z Post job cleanup.
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6386846Z [command]/usr/bin/git version
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6418821Z git version 2.55.0
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6501936Z Temporarily overriding HOME='/home/runner/work/_temp/fd1569b3-e58a-429e-b6f5-50efe2fccaaf' before making global git config changes
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6503596Z Adding repository directory to the temporary git global config as a safe directory
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6505260Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/axocoatl-gate-150-recovery-20261026/axocoatl-gate-150-recovery-20261026
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6552672Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.6621877Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.7011962Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.7069677Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.7481881Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+receipt	Post Run actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09	2026-10-26T19:20:02.7542172Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+receipt	Complete job	﻿2026-10-26T19:20:02.7944448Z Cleaning up orphan processes

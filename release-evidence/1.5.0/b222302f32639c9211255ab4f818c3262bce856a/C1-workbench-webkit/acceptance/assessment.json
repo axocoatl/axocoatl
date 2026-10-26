@@ -1,0 +1,173 @@
+{
+  "schema": "axocoatl.recovery.workbench-artifact-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T18:08:37.802529+00:00",
+  "session_id": "ses-f312fd01-051b-4735-8008-283888f6cfbe",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/workbench",
+  "base_commit": "a6e8722f65dae052ffa65881a6cadc1abefb18d6",
+  "artifact_commit": "83f61151707d2f47d262ef4f776c2d1526bf02b4",
+  "task": "Fix the paging bug in src/paginate.js.",
+  "outcome": "accepted",
+  "actual_fix": "The final page length uses (items.length % size || size), retaining a full final page when the total is an exact multiple. A partial remainder is unchanged; empty input creates no pages and existing size validation stays intact.",
+  "changed_files": [
+    "src/paginate.js"
+  ],
+  "original_tests_and_manifests_unchanged": true,
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "unchanged": true
+    },
+    "package-lock.json": {
+      "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "unchanged": true
+    },
+    "src/paginate.js": {
+      "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "final_sha256": "c549a6a2746299d2132d49e39905b691e7adf11cb99e3226a052068380301ff0",
+      "unchanged": false
+    },
+    "test/paginate.test.js": {
+      "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "unchanged": true
+    }
+  },
+  "excluded_harness_files": [
+    ".gate-preview-requests.log",
+    "gate-preview-app.cjs"
+  ],
+  "configuration": {
+    "source": "Model and Team settings from root operator actual Safari observation; independent Session export confirms one accepted Lead activation with no helpers/reviewer activation",
+    "lead": "openrouter:openai/gpt-oss-120b",
+    "agents": 1,
+    "helpers": 0,
+    "host_required_checks": false,
+    "required_review": false,
+    "budget": "Default Team budgets applied unchanged; existing total-key cap0.94USD remains in force"
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+        "start": "2026-10-26T18:08:37.461419+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:08:37.472994+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+        "start": "2026-10-26T18:08:37.473197+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:08:37.749985+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "be79a04dd7b81235b149022393fc33a33bc965c1df84751c6af904ab4fff1315",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "--export",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/session-export.json"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance",
+        "start": "2026-10-26T18:08:37.802970+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:08:37.827289+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "fc61ab9572f0396e063a3accfc0d1c534fbfc954c55694b2fe3b3167addbf779",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "tests_ran_on": "Byte-identical final tracked-file snapshot; existing dependencies copied with symlinks preserved",
+    "tracked_files_unchanged_by_audit": true,
+    "baseline_rerun": false,
+    "new_tests": false,
+    "new_inference": false,
+    "accepted_answers_exit": 0
+  },
+  "session_export_assessment": "See session-export-assessment.json; no receipt is expected for an ordinary workbench turn.",
+  "scope": "Artifact acceptance only. This is a single-Agent run, not evidence of helpers, required host checks, required review, or completion of the full Safari gate.",
+  "evidence_hashes": {
+    "patch.diff": "8f4ee781ca944f009a9569426524debc43e074846a657b8cb1e1e4a377f138fe",
+    "commit.txt": "eeda684b94f98c2b1d2e61d8800cb4725219481f6da7b568edb7098bd6266299",
+    "baseline.json": "76dd91cc13c78f0dfe4e07ab85e4f1a9782cab047b8e527f2b5bda29ac9b6d4f",
+    "excluded-harness-files.json": "7e6a13f2ff9c4c1084974a0c037aa000243b77063163eab977c7e86c7b52c952",
+    "original-tests.stdout": "be79a04dd7b81235b149022393fc33a33bc965c1df84751c6af904ab4fff1315",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "session-export.json": "a481b2be79b675b7b94e309e3a6e03f2c46ca1cec6f30cf74938f1f53edd5178",
+    "session-export-assessment.json": "37a0e51e487a47e8cb73037b84986a700b34947828383f3476bb11eeb293a3d6"
+  },
+  "tool_errors": [],
+  "provider_retries": [
+    {
+      "schema_version": 1,
+      "activation": {
+        "session_id": "ses-f312fd01-051b-4735-8008-283888f6cfbe",
+        "turn_id": "turn-904446d9-df2a-4636-a873-c72b05ae5f48",
+        "execution_epoch_id": "epoch:turn-904446d9-df2a-4636-a873-c72b05ae5f48",
+        "node_id": "team-node-8e9e9246ee0fd40b1695cae2",
+        "generation": 1,
+        "activation_id": "activation:3c5b69a0-a1fd-4179-af61-1d79bef3a6f3"
+      },
+      "sequence": 4,
+      "recorded_at_unix_ms": 1793037808000,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    },
+    {
+      "schema_version": 1,
+      "activation": {
+        "session_id": "ses-f312fd01-051b-4735-8008-283888f6cfbe",
+        "turn_id": "turn-904446d9-df2a-4636-a873-c72b05ae5f48",
+        "execution_epoch_id": "epoch:turn-904446d9-df2a-4636-a873-c72b05ae5f48",
+        "node_id": "team-node-8e9e9246ee0fd40b1695cae2",
+        "generation": 1,
+        "activation_id": "activation:3c5b69a0-a1fd-4179-af61-1d79bef3a6f3"
+      },
+      "sequence": 6,
+      "recorded_at_unix_ms": 1793037809293,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 37 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 7 tools offered. Asking it once more with a note, as a new, separately reserved call"
+      }
+    }
+  ],
+  "usage": {
+    "kind": "measured",
+    "usage": {
+      "input_tokens": 16818,
+      "output_tokens": 122,
+      "reasoning_tokens": 577
+    }
+  }
+}

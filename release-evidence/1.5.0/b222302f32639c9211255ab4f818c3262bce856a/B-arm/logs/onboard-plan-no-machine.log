@@ -1,0 +1,117 @@
+Axocoatl setup
+--plan: nothing is changed; every action is printed instead.
+
+Step 0 · This computer
+This computer: macOS 15.7.9, Apple M1 (Virtual), 7 GB memory, 3 cores, 41 GB free.
+Found: Homebrew 6.0.22, Podman 5.8.2 (no machine), Ollama 0.40.6 at http://127.0.0.1:49227 (cloud models off), gh, git 2.55.0.
+Not found: claude, codex.
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  would ask: Create the Podman machine your Sessions run in?
+      podman machine init --cpus 1 --memory 3584 --disk-size 60
+      podman machine start
+    This downloads about 0.9 GB and uses up to 3.5 GiB of memory while it runs. This size has not been tested yet (6 CPUs / 8 GiB is). [Y/n]
+    would run: podman machine init --cpus 1 --memory 3584 --disk-size 60
+    would run: podman machine start
+  would ask: Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+    would run: podman pull docker.io/library/alpine:3.20
+    would run: podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:49227, cloud models off (2 models installed)
+  Suggested: writer qwen3-coder:30b, reviewer gpt-oss:20b (from the models on this server that fit this computer).
+  Model for the writer (Lead; Scout and the chat Assistant use it too): qwen3-coder:30b (1B, 1.1 GB)
+  Model for the reviewer (a different model that only reads): gpt-oss:20b (1B, 1.1 GB)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  would load each model once to read its context and run the contract probes
+
+Step 4 · The configuration
+  would write /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.7XhK05/plan-no-machine/Library/Application Support/Axocoatl/config.yaml:
+    + # Axocoatl — local Ollama setup
+    + agents:
+    +   # Default team. Lead owns the change; Scout and Reviewer are read-only
+    +   # helpers it can delegate to once you opt in and approve their limits in
+    +   # Team & budget. A new Session starts with Lead alone.
+    +   - id: lead
+    +     name: "Lead"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    +     role: autonomous
+    +     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
+    +     system_prompt: "Answer only with tool calls until the change is made and checked; then write a short summary of what you changed. You own this change: find the relevant code and tests (if you have helpers, ask scout to find code you do not know), make the change, run the check command from the project instructions (AXOCOATL.md) or the tests and fix failures, then check your diff against the task (if you have helpers, ask reviewer to review it) and fix each defect found."
+    +     sampling:
+    +       max_tokens: 4096
+    + 
+    +   - id: scout
+    +     name: "Scout"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    +     role: worker
+    +     tools: [read_file, list_dir, grep, glob, bash]
+    +     writes: []
+    +     system_prompt: "Answer the lead's question with file paths, line numbers and short evidence. Change nothing."
+    +     sampling:
+    +       max_tokens: 4096
+    + 
+    +   - id: reviewer
+    +     name: "Reviewer"
+    +     provider: ollama
+    +     model: "gpt-oss:20b"
+    +     role: worker
+    +     tools: [read_file, list_dir, grep, glob, bash]
+    +     writes: []
+    +     system_prompt: "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing."
+    +     sampling:
+    +       max_tokens: 4096
+    + 
+    +   # Plain chat for `axocoatl chat`; not part of the default team.
+    +   - id: assistant
+    +     name: "Assistant"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    +     system_prompt: "You are a helpful assistant."
+    +     tools: [read_file, list_dir, grep, glob]
+    +     token_budget:
+    +       per_execution: 16000
+    +       per_call: 8192
+    +       overflow_policy: warn
+    + 
+    + providers:
+    +   ollama:
+    +     base_url: "http://127.0.0.1:49227"
+    + 
+    + # Defaults for `axocoatl run`: writer_model and reviewer_model.
+    + # `--model writer=PROVIDER:MODEL` or `--model reviewer=…` overrides them.
+    + # Writer: ollama (axocoatl run fix)
+    + run:
+    +   models:
+    +     writer: "ollama:qwen3-coder:30b"
+    +     reviewer: "ollama:gpt-oss:20b"
+    + 
+    + server:
+    +   port: 8200
+    +   host: "127.0.0.1"
+
+Step 5 · Check
+  would run the same checks as `axocoatl doctor` on the new configuration
+
+Step 6 · Start Axocoatl
+  How should Axocoatl run?: In this terminal now (axocoatl dev)
+  would ask: Run a first fix now on a small sample repository to prove the setup end to end? It runs locally. [Y/n]
+
+Step 7 · A first run
+    would copy the sample repository to a temporary directory, SAMPLE, and run: axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo SAMPLE/repo --receipt SAMPLE/receipt.json --record SAMPLE/record.jsonl --config '/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.7XhK05/plan-no-machine/Library/Application Support/Axocoatl/config.yaml' --model writer=ollama:qwen3-coder:30b --model reviewer=ollama:gpt-oss:20b
+    would then run: axocoatl receipt verify SAMPLE/receipt.json --key "$(axocoatl receipt key)" --repo SAMPLE/repo
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+  would start: axocoatl dev --config /var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T//axo-gate-b.7XhK05/plan-no-machine/Library/Application Support/Axocoatl/config.yaml
+
+Plan only: nothing was changed.

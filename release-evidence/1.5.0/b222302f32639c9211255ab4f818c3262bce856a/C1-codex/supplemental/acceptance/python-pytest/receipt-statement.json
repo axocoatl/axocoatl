@@ -1,0 +1,183 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "pages.py",
+      "digest": {
+        "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-ccb1bfbc-b435-4596-abc8-22c102bc93c9",
+      "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+      "started_at_ms": 1793047946421,
+      "finished_at_ms": 1793048018829,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "ba552c6d5359e75beb337d8f39fbf4af3b21a4408308480ef461560dd1e10468"
+    },
+    "repository": {
+      "base_commit": "2551bf6fb26a001321531206509f3f3d63ddb3be",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix-codex",
+      "version": 1,
+      "kind": "fix",
+      "digest": "6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 5,
+          "digest": "3d761d88932ffab82279a9cd1316414f61a84406bb9f521fd34f7424ce8ac22f",
+          "rules": [
+            "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+          ],
+          "routes": [
+            {
+              "id": "route#0",
+              "host": "chatgpt.com",
+              "provider_fetch": "refuse"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "toolchain": "python",
+        "reason": "pyproject.toml at the repository root",
+        "image": "localhost/axocoatl-recipe-codex-python:c75fb26e819a",
+        "image_id": "29e132408b37bbf799f9d3ac202fb88da0b3ae7519e6fe13017878a56293992a",
+        "recipes": [
+          "codex",
+          "python"
+        ],
+        "check": "python3 -m pytest",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "pip install -e '.[test]'",
+          "source": "detected",
+          "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+          "exit_code": 0,
+          "duration_ms": 6493,
+          "registry_hosts": [
+            "pypi.org",
+            "files.pythonhosted.org"
+          ],
+          "allowed_connections": 4,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-e1a4c65c99205f08aec6a3e8",
+        "probe": {
+          "program": "python3",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 539
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 59,
+      "allowed_connections": 12,
+      "refused_connections": 6,
+      "route_requests": 8,
+      "routes": [
+        [
+          "chatgpt.com",
+          8
+        ]
+      ]
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "python3 -m pytest"
+        ],
+        "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a"
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 124340,
+      "output_tokens": 1791,
+      "cost_microunits": 28106,
+      "cost_usd": 0.028106,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": true
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

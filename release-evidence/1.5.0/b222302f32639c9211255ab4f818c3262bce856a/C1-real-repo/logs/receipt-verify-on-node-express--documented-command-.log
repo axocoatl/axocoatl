@@ -1,0 +1,4 @@
+receipt of run run-d5b54fe1-d139-4bb6-a30b-254c8f7fda13, verdict checks_failed
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+files: 3 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)

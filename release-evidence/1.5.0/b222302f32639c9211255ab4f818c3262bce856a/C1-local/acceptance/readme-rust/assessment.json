@@ -1,0 +1,359 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T19:02:35.113917+00:00",
+  "fixture": "rust",
+  "label": "readme-rust",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+  "base_commit": "f2a5b630d4edaa45c5e297cba9f22a51390e7a8b",
+  "run_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+  "result": "ACCEPTED",
+  "artifact_review": "The final-page branch now uses the remaining slice length (items.len() minus start), preserving a full final page for exact multiples and a partial final page otherwise. Only the production expression in src/lib.rs changed; the embedded original test module is byte-identical.",
+  "changed_files": [
+    "src/lib.rs"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "run.axorecord.jsonl",
+    "run.receipt.json"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "final_sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "unchanged": true
+    },
+    "Cargo.lock": {
+      "original_sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "final_sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "unchanged": true
+    },
+    "Cargo.toml": {
+      "original_sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "final_sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "final_sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "unchanged": true
+    },
+    "src/lib.rs": {
+      "original_sha256": "0252b65275ba544b33e24f370dfb262339d40fd391095adbc1a50427523d111f",
+      "final_sha256": "5a4ca1b9177f617cb55401b72019ef75edcbb9ed99d99f8ea6d98aa6fad07519",
+      "unchanged": false
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+        "start": "2026-10-26T19:01:58.192789+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:01:58.205664+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "bb103e318c7609f47caba7329103fe9844970bee2bfccc51920e37758e1c9895",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+        "start": "2026-10-26T19:01:58.205879+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:01:58.217384+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "81d14db68a136fa004a9d20b9cdce9446008b5c5e8bc36bdcb511f24097ec008",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+        "start": "2026-10-26T19:01:58.217680+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:01:58.346550+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.cargo/bin/cargo",
+          "+1.95.0",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check",
+        "start": "2026-10-26T19:01:58.346882+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:01:58.438101+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.cargo/bin/cargo",
+          "+1.95.0",
+          "test",
+          "--offline",
+          "--jobs",
+          "1"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check",
+        "start": "2026-10-26T19:01:58.438406+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:01:58.499541+00:00",
+        "exit_code": 101,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "9d813c3589b1e5c99bd8a563fe768602eed8aaf4bec6841fe00b4722be05b2bc"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false,
+    "process_invocations": 2,
+    "initial_setup_failure": {
+      "exit_code": 101,
+      "tests_loaded": false,
+      "assessment": "initial-assessment-setup-failure.json",
+      "reason": "Evidence copy had a Cargo workspace ancestor; no artifact failure established."
+    },
+    "effective_host_copy": "/private/tmp/axo-b222-rust-artifact-audit-t_z9m1xi",
+    "effective_command": {
+      "argv": [
+        "/Users/erick/.cargo/bin/cargo",
+        "+1.95.0",
+        "test",
+        "--offline",
+        "--jobs",
+        "1"
+      ],
+      "cwd": "/private/tmp/axo-b222-rust-artifact-audit-t_z9m1xi",
+      "start": "2026-10-26T19:02:33.569326+00:00",
+      "status": "completed",
+      "reason": "Initial invocation loaded no tests due to ancestor workspace discovery; execute identical fixture outside enclosing workspace without changing manifest.",
+      "exit_code": 0,
+      "end": "2026-10-26T19:02:35.113407+00:00",
+      "stdout_sha256": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+      "stderr_sha256": "b17361c7540074b9ee5e92010cf41ed53ac69935531e29f26cce2db9fc3176ab"
+    },
+    "manifest_changes": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "cargo test"
+      ],
+      "candidate_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (/tmp/axocoatl-cargo-target/debug/deps/newuser_rust-50d5cd83481d83ad)\n   Doc-tests newuser_rust\n",
+      "stdout_tail": "\nrunning 4 tests\ntest tests::a_partial_last_page_keeps_the_items_left_over ... ok\ntest tests::a_page_size_of_zero_is_refused - should panic ... ok\ntest tests::no_items_make_no_pages ... ok\ntest tests::the_last_page_is_full_when_the_total_is_a_multiple_of_the_page_size ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "ollama 0.40.11",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "rust",
+      "reason": "Cargo.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-rust:0e5acf3d40e2",
+      "image_id": "9793d71dcfc764ccbf631d162a7210e58a83a3ef318f99c042164d29fd5574b4",
+      "recipes": [
+        "rust"
+      ],
+      "check": "cargo test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "cargo fetch",
+        "source": "detected",
+        "script_sha256": "471eeafc71b8d16620386f0a132facfc78168b25eaa54e05a50de4ac59e43732",
+        "exit_code": 0,
+        "duration_ms": 1053,
+        "registry_hosts": [
+          "index.crates.io",
+          "static.crates.io",
+          "crates.io"
+        ],
+        "allowed_connections": 2,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-954d69e4ece5bc432cf48ce5",
+      "probe": {
+        "program": "cargo",
+        "program_found": true,
+        "baseline_exit": 101,
+        "duration_ms": 646
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "rust",
+      "test_command": "cargo test",
+      "host_setup": null,
+      "image_contains": "rust",
+      "setup_contains": "cargo fetch"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "27933ff2df554e8fde0e91caee282f02803df20fc03a5892a6c6ab2053e342b3",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 119271,
+    "output_tokens": 4744,
+    "cost_microunits": 0,
+    "cost_usd": 0.0,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "writer",
+        "sequence": 50,
+        "payload": {
+          "call_id": "call_f55h3rnp",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 32,
+        "payload": {
+          "call_id": "call_yfazft7q",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "cargo",
+      "program_found": true,
+      "baseline_exit": 101,
+      "duration_ms": 646
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 29,
+    "allowed_connections": 2,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this completed fresh local fixture; does not replace other required paths.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "run.receipt.json": "b812411c930a1818975ba24c70d5009e0d97c961181cb3975d6e4019a3852249",
+    "run.axorecord.jsonl": "e634e0f3b650b2204c211e03cada0431ee8d9385ea60b411f97aa91cd431f3ef",
+    "patch.diff": "428fe5d2b8e4273a229e17acbb59262da3cb9511fd09f655af825d511e1285b9",
+    "negative-evidence.json": "fbe505ad0af3320bd30d4fbb323a980c78dd3ec93d8dcec0755c85a27239bc30",
+    "activation-summary.json": "c44abdef9d7d97070d5c38fa136233225ac3cb026765374eeaa4ee347f12edfb",
+    "outcome.json": "14ee64c7c90340d7d11405fe598c0d8fd5234c2e75440395df49f733fdcdbe80",
+    "original-tests.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-tests.stderr": "9d813c3589b1e5c99bd8a563fe768602eed8aaf4bec6841fe00b4722be05b2bc",
+    "initial-assessment-setup-failure.json": "6f03cdd2a0d6c199d1257ed14b6446916f77911a6099b0da0bf71296a5bf1402",
+    "original-tests-outside-workspace.stdout": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+    "original-tests-outside-workspace.stderr": "b17361c7540074b9ee5e92010cf41ed53ac69935531e29f26cce2db9fc3176ab",
+    "original-tests-outside-workspace-command.json": "4c24fb0c6301f0990405a50bf2ec1487dd2ff37f00cd972e5e57ad9207b2da14"
+  }
+}

@@ -1,0 +1,77 @@
+· building the run's image localhost/axocoatl-recipe-codex-python:c75fb26e819a (codex + python, from docker.io/library/python:3.13.16-slim-bookworm): about 65 MB to download plus Node.js and codex, about 795 MB on disk, once on this computer; later runs reuse it
+STEP 1/15: FROM docker.io/library/python:3.13.16-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
+STEP 2/15: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+--> Using cache dc46d63047f92b8b516d9cff2819be1e0b16a77d7264d208ba4bc8b9a59f2b99
+--> dc46d63047f9
+STEP 3/15: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=python-3.13.16-bookworm
+--> Using cache c6ebb129a97277f7a849a963555df6a9e2314cb7987940d941830e5116224dbb
+--> c6ebb129a972
+STEP 4/15: COPY --from=docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/bin/node /usr/local/bin/node
+--> Using cache 526da03ae880f084d0d2f12677af477b9147794092b959b5c424c61a15324804
+--> 526da03ae880
+STEP 5/15: COPY --from=docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/lib/node_modules /usr/local/lib/node_modules
+--> Using cache 60fce8034df3e5ed1853664ec68988b01c42e3aa0457f477e04a25c5fec325a2
+--> 60fce8034df3
+STEP 6/15: ENV NPM_CONFIG_UPDATE_NOTIFIER=false     NPM_CONFIG_FUND=false     NPM_CONFIG_AUDIT=false
+--> Using cache 9748ed6a0fed58b666edd0c4fbffa595eeca2cb9332a215b462404dbf3a50a64
+--> 9748ed6a0fed
+STEP 7/15: RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx  && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack  && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!(major > 24 || (major === 24 && minor >= 8))) { console.error("the node graft needs Node >= 24.8, found " + process.version); process.exit(1); }'  && npm --version >/dev/null
+--> Using cache 56e134a4309dc49732cddd408782e9f7c85e48facf5d99129a7a1a54ef888a02
+--> 56e134a4309d
+STEP 8/15: RUN printf '%s\n'       '#!/usr/bin/env node'       'const crypto = require("crypto"), fs = require("fs");'       'const [file, wanted] = process.argv.slice(2);'       'const [algorithm, expected] = wanted.split(/-(.*)/s);'       'const actual = crypto.createHash(algorithm).update(fs.readFileSync(file)).digest("base64");'       'if (actual !== expected) { console.error("integrity mismatch for " + file + ": " + algorithm + "-" + actual); process.exit(1); }'       > /usr/local/bin/axocoatl-verify-integrity  && chmod 0755 /usr/local/bin/axocoatl-verify-integrity
+--> Using cache b5c84f5f1a4e8d7bb3bb15169459f95b7d5d85eb56c6ba3d79c5495b47d2a971
+--> b5c84f5f1a4e
+STEP 9/15: ENV AXOCOATL_TOOLCHAIN=python     AXOCOATL_CACHE=/opt/axocoatl-cache     VIRTUAL_ENV=/opt/axocoatl-cache/python/venv     PIP_CACHE_DIR=/opt/axocoatl-cache/python/pip     PIP_DISABLE_PIP_VERSION_CHECK=1     PIP_NO_INPUT=1     PIP_ROOT_USER_ACTION=ignore     PYTHONDONTWRITEBYTECODE=1     PYTEST_ADDOPTS="-p no:cacheprovider"     DIST_EXTRA_CONFIG=/etc/axocoatl/setuptools.cfg
+--> Using cache 857b496068fa72f1f502fc385e63f6375fd89876be67808051306e0459b8c214
+--> 857b496068fa
+STEP 10/15: ENV PATH=/opt/axocoatl-cache/python/venv/bin:$PATH
+--> Using cache 61314517848612fc1c5fbfa92bdf431eabc6f9c9f0b7fc39c68571dbf22b6ec1
+--> 613145178486
+STEP 11/15: RUN mkdir -p /opt/axocoatl-cache /etc/axocoatl  && printf '[egg_info]\negg_base = /tmp\n' > /etc/axocoatl/setuptools.cfg  && python3 --version  && python3 -m venv --help >/dev/null  && python3 -m pip --version >/dev/null
+--> Using cache 6f8a26fbd1f2fb9ac8b476875096226ad1d6a1fc486e52d584d1b678b5e7047d
+--> 6f8a26fbd1f2
+STEP 12/15: LABEL io.axocoatl.toolchain=python       io.axocoatl.toolchain.version=python-3.13.16
+--> Using cache ea86a7ab3dfb626e1e2224afd630cd7f93076e9c5ac4645aca30542747b2f5e3
+--> ea86a7ab3dfb
+STEP 13/15: RUN set -eu;     case "$(uname -m)" in       x86_64) platform=linux-x64; triple=x86_64-unknown-linux-musl; integrity='sha512-sIDhqV+bsZKKVaVFVY5iB+pAzyOz2XRm3H1KXCsSJwGj5p98qnrT0Fweo1Hfe7WnyTp8mfBNdbVzUeO+mHYugA==' ;;       aarch64) platform=linux-arm64; triple=aarch64-unknown-linux-musl; integrity='sha512-JLyjBlmjPvwTaicHemw+y5xQSz3Uja2r7F/xkvS8gFufTA2g132Ak+0fo35xnJ/k2uc9fTtjm0LrsEGI78L6Ng==' ;;       *) echo "codex: no pinned build for $(uname -m)" >&2; exit 1 ;;     esac;     work=$(mktemp -d); cd "$work";     npm pack --silent "@openai/codex@0.160.1-${platform}" >/dev/null;     axocoatl-verify-integrity "openai-codex-0.160.1-${platform}.tgz" "$integrity";     mkdir -p /opt/axocoatl/codex;     tar -xzf "openai-codex-0.160.1-${platform}.tgz" -C /opt/axocoatl/codex --strip-components=3 --no-same-owner "package/vendor/${triple}";     chmod -R a+rX /opt/axocoatl/codex;     ln -s /opt/axocoatl/codex/bin/codex /usr/local/bin/codex;     cd /; rm -rf "$work" /root/.npm;     codex --version
+codex-cli 0.160.1
+--> 3195deedbe2f
+STEP 14/15: LABEL io.axocoatl.recipe.codex=0.160.1
+--> 8d6f68426674
+STEP 15/15: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="codex,python" "io.axocoatl.recipe-digest"="c75fb26e819a3415216b29c0dcbdadb337be8eba3349c4ee8f91ad8b08b985cf"
+COMMIT localhost/axocoatl-recipe-codex-python:c75fb26e819a
+--> 29e132408b37
+Successfully tagged localhost/axocoatl-recipe-codex-python:c75fb26e819a
+29e132408b37bbf799f9d3ac202fb88da0b3ae7519e6fe13017878a56293992a
+· built localhost/axocoatl-recipe-codex-python:c75fb26e819a in 8 s (image id 29e132408b37)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix-codex in /Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest
+· run run-ccb1bfbc-b435-4596-abc8-22c102bc93c9 in Session ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+· note: image localhost/axocoatl-recipe-codex-python:c75fb26e819a · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e '.[test]'` (detected): exited 0 (6.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix-codex
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea started (run)
+· turn turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix-codex@1 sha256:6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+  image localhost/axocoatl-recipe-codex-python:c75fb26e819a · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e '.[test]'` (detected): exited 0 (6.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 124340 input + 1791 output tokens, $0.0281 (includes cost computed from reported tokens at list prices)
+Network: 59 recorded events, 12 allowed and 6 refused connections, 8 route requests
+Record: run-ccb1bfbc-b435-4596-abc8-22c102bc93c9
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key 8a7a6b546e72ca24, 1 file covered, 0 removed, judged_capture)

@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3",
+  "verdict": "pass",
+  "statement_sha256": "sha256:8dee46bb26eb2a314b511e2fae6bc07c5566bb6467c4f388aee6c79d85471818",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/repos/readme-node-deps",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3 (fix@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-4e194c4f-858c-4162-a7d1-7744ed401723, finished at 1793040997334 ms",
+    "Base commit 68d9ff19dc93376d23ce2c064caf8cd8002e43ec",
+    "Agent writer (writer): native ollama 0.40.11, ollama:qwen3-coder:30b",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by ollama:gpt-oss:20b (ollama 0.40.11): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:a010054ab3170d2de1b39d739d5a82dce7b3b6c68952f1ed7d7cf2df5454369b",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

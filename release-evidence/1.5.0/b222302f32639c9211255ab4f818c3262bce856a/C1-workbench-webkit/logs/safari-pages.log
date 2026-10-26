@@ -1,0 +1,6 @@
+GET /go?to=http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ document
+GET /plant?path=/api document
+GET /api/gate-cookie-count empty planted=53
+GET /favicon.ico image
+GET /clear?path=/api document
+GET /api/gate-cookie-count empty planted=0

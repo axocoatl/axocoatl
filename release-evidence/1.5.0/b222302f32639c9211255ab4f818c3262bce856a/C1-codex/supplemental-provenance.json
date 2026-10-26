@@ -1,0 +1,62 @@
+{
+  "schema": "axocoatl.recovery.supplemental-provenance/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "path": "C1-codex",
+  "staged_at": "2026-10-26T20:46:56.058571+00:00",
+  "original_path_json_unchanged": true,
+  "original_path_sha256": "a75f8218a90cf9b06e5c42a4ef498455d44edb5f5b0c0bbf831c71ea526c9050",
+  "original_attachments_unchanged": true,
+  "source_copies": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-codex.json",
+      "staged_relative": "C1-codex.json",
+      "sha256": "a75f8218a90cf9b06e5c42a4ef498455d44edb5f5b0c0bbf831c71ea526c9050",
+      "bytes": 1784,
+      "category": "completed-official-path"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-codex/logs/onboard---update---writer-codex--interactive--every-answer-is-in-the-transcript-.log",
+      "staged_relative": "C1-codex/logs/onboard---update---writer-codex--interactive--every-answer-is-in-the-transcript-.log",
+      "sha256": "9c753909e1abb94b0eca912aa605862ae540e1c4289668ca27dd662892ae38a6",
+      "bytes": 46,
+      "category": "completed-official-attachment"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-codex/logs/onboarding/onboard-20261026-192021.log",
+      "staged_relative": "C1-codex/logs/onboarding/onboard-20261026-192021.log",
+      "sha256": "ed33d364791f8efdc6b66a488ecbf4143cc92edbf43b12c40e4b3c2df1fcc3d5",
+      "bytes": 4632,
+      "category": "completed-official-attachment"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-codex/transcript.txt",
+      "staged_relative": "C1-codex/transcript.txt",
+      "sha256": "398d690bea5c2ed118e840cd3f08c1b3f496b09689f5680f428795899bdf7ce6",
+      "bytes": 167808,
+      "category": "completed-official-attachment"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/operator.json",
+      "staged_relative": "C1-codex/operator-original.json",
+      "sha256": "b1bea18689c3e282cdc8df2cb810a8bca76e1c3dacd0426a4c9ece9fc2af1d59",
+      "bytes": 1799,
+      "category": "original-operator-context"
+    }
+  ],
+  "generated_qualification": {
+    "path": "C1-codex/operator-qualification.json",
+    "sha256": "115b94945d2c970d349c774dcfa9e52577b707f5a576603c435a852dc1d319cd",
+    "basis": "Root agent explicitly supplied observed browser timing and subsequent separate connection results."
+  },
+  "recorded_path_pass": false,
+  "supplemental_functional_checks": "pending",
+  "new_gate_steps_declared": false,
+  "excluded": [
+    "incomplete/running C1-openrouter",
+    "private backups",
+    "credentials and authentication/account screenshots",
+    "Git objects",
+    "live runtime/configuration/secret state"
+  ]
+}

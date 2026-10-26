@@ -1,0 +1,28 @@
+Gate account erick: reset plan
+  podman machine rm -f podman-machine-default
+  rm -rf /Users/erick/Library/Application Support/Axocoatl
+  rm -rf /Users/erick/Library/Logs/Axocoatl
+  rm -rf /Users/erick/.axocoatl
+  rm -rf /Users/erick/.config/containers
+  rm -rf /Users/erick/.local/share/containers
+  rm -rf /Users/erick/axocoatl-gate-work
+  rm -rf /Users/erick/.ollama/server.json
+  brew services stop podman
+  brew uninstall podman
+  brew services stop ollama
+  brew uninstall ollama
+  (keeping ~/.ollama's downloaded models: the next run's evidence records 'models cached'; Ollama's settings, ~/.ollama/server.json, are removed, so onboarding turns its cloud models off again)
+  (keeping the gate's signing key in /Users/erick/.axocoatl-gate-signer)
++ podman machine rm -f podman-machine-default
++ rm -rf /Users/erick/Library/Application Support/Axocoatl
++ rm -rf /Users/erick/Library/Logs/Axocoatl
++ rm -rf /Users/erick/.axocoatl
++ rm -rf /Users/erick/.config/containers
++ rm -rf /Users/erick/.local/share/containers
++ rm -rf /Users/erick/axocoatl-gate-work
++ rm -rf /Users/erick/.ollama/server.json
++ brew uninstall podman
+Uninstalling /opt/homebrew/Cellar/podman/6.1.4... (220 files, 97.3MB)
++ brew uninstall ollama
+Uninstalling /opt/homebrew/Cellar/ollama/0.40.11... (15 files, 63.1MB)
+Gate account erick is reset.

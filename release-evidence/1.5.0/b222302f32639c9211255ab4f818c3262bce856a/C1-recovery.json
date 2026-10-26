@@ -1,0 +1,141 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-recovery",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T14:29:51Z",
+  "finished_at": "2026-10-26T14:31:15.258Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "47247 MiB free; models cached: yes"
+    },
+    {
+      "name": "resume uses the checksum-verified installed candidate",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl; axocoatl 1.5.0; binary sha256 d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b; archive sha256 2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659; continued existing installation, no clean-install claim"
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "podman machine stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.6,
+      "bytes_downloaded": 770116
+    },
+    {
+      "name": "the Podman machine is stopped before the run",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on recovery-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 76.6,
+      "bytes_downloaded": 17534402
+    },
+    {
+      "name": "run on recovery-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on recovery-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on recovery-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1919
+    },
+    {
+      "name": "record verify on recovery-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 164
+    },
+    {
+      "name": "receipt matches the record on recovery-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 9997
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on recovery-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since c9cb46d3a80a holds any"
+    },
+    {
+      "name": "a run with the machine stopped passed, its receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "the README's command on node-deps"
+    },
+    {
+      "name": "the run started the stopped machine",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "47256 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-recovery/logs/dev.log",
+    "C1-recovery/logs/podman-machine-stop.log",
+    "C1-recovery/logs/receipt-matches-the-record-on-recovery-node-deps.log",
+    "C1-recovery/logs/receipt-verify-on-recovery-node-deps--documented-command-.log",
+    "C1-recovery/logs/record-verify-on-recovery-node-deps.log",
+    "C1-recovery/logs/run-fix-on-recovery-node-deps.log",
+    "C1-recovery/recovery-node-deps/axocoatl-junit.xml",
+    "C1-recovery/recovery-node-deps/changes.txt",
+    "C1-recovery/recovery-node-deps/command.txt",
+    "C1-recovery/recovery-node-deps/run.axorecord.jsonl",
+    "C1-recovery/recovery-node-deps/run.log",
+    "C1-recovery/recovery-node-deps/run.receipt.json",
+    "C1-recovery/resume-candidate.json",
+    "C1-recovery/transcript.txt"
+  ]
+}

@@ -1,0 +1,893 @@
+[
+  {
+    "event": {
+      "digest": "3d761d88932ffab82279a9cd1316414f61a84406bb9f521fd34f7424ce8ac22f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793047863345,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793047863345,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-df73cdf6-67de-4be0-b467-5d389f8d57a8",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793047865576,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-df73cdf6-67de-4be0-b467-5d389f8d57a8",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793047865808,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a",
+      "change": {
+        "command_id": "run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a:setup-allow:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "59fe6db8e30cf0246dc2acc1c0d3febc87d7312c50ce2d27b6566107a3778803",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "registry.npmjs.org:443 (allowed for this Session)",
+        "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793047867728,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 6,
+    "ts_ms": 1793047867735,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:a22",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.6.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 7,
+    "ts_ms": 1793047868723,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "104.16.6.34",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 8,
+    "ts_ms": 1793047868728,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "104.16.6.34",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 9,
+    "ts_ms": 1793047868730,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "104.16.6.34",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:4",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 10,
+    "ts_ms": 1793047868730,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "104.16.6.34",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:5",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 11,
+    "ts_ms": 1793047868733,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:422",
+        "2606:4700::6810:22",
+        "2606:4700::6810:322",
+        "2606:4700::6810:522",
+        "2606:4700::6810:222",
+        "2606:4700::6810:822",
+        "2606:4700::6810:622",
+        "2606:4700::6810:722",
+        "2606:4700::6810:122",
+        "104.16.6.34",
+        "104.16.8.34",
+        "104.16.4.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:6",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 12,
+    "ts_ms": 1793047868740,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "951502ab7b728cfc"
+    },
+    "seq": 13,
+    "ts_ms": 1793047868949,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a",
+      "change": {
+        "command_id": "run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a:setup-revoke:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "3d761d88932ffab82279a9cd1316414f61a84406bb9f521fd34f7424ce8ac22f",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [
+        "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 14,
+    "ts_ms": 1793047868949,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 10011,
+      "ip": "104.16.6.34",
+      "kind": "close",
+      "ms": 223,
+      "outcome": "revoked",
+      "up": 2202
+    },
+    "seq": 15,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 8086,
+      "ip": "104.16.8.34",
+      "kind": "close",
+      "ms": 231,
+      "outcome": "revoked",
+      "up": 2207
+    },
+    "seq": 16,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "down": 15110,
+      "ip": "104.16.6.34",
+      "kind": "close",
+      "ms": 211,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 17,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "down": 14425,
+      "ip": "104.16.6.34",
+      "kind": "close",
+      "ms": 217,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 18,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 132141,
+      "ip": "104.16.6.34",
+      "kind": "close",
+      "ms": 221,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 19,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "down": 8247,
+      "ip": "104.16.6.34",
+      "kind": "close",
+      "ms": 221,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 20,
+    "ts_ms": 1793047868951,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:7da17728-ce7f-4c11-bfa3-7a1451486be2",
+        "agent": "team-definition-d8bb23a7ca2ee1a43b4eb7e9a4e4f21a3fb0cdc6a6a9d7aa1a10eb78d0bfa40f",
+        "kind": "agent",
+        "node_id": "team-node-1ce1170fba608a2f545e7a54",
+        "process": "external:activation:7da17728-ce7f-4c11-bfa3-7a1451486be2"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "1258fa118061838f"
+    },
+    "seq": 21,
+    "ts_ms": 1793047870144,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:7da17728-ce7f-4c11-bfa3-7a1451486be2",
+        "agent": "team-definition-d8bb23a7ca2ee1a43b4eb7e9a4e4f21a3fb0cdc6a6a9d7aa1a10eb78d0bfa40f",
+        "kind": "agent",
+        "node_id": "team-node-1ce1170fba608a2f545e7a54",
+        "process": "external:activation:7da17728-ce7f-4c11-bfa3-7a1451486be2"
+      },
+      "conn": "g1:7",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "1258fa118061838f"
+    },
+    "seq": 22,
+    "ts_ms": 1793047870827,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 23,
+    "ts_ms": 1793047870832,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "cookies_dropped": 3,
+      "down": 96022,
+      "kind": "response",
+      "ms": 4733,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 55427
+    },
+    "seq": 24,
+    "ts_ms": 1793047875565,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 101076,
+      "kind": "close",
+      "ms": 4742,
+      "outcome": "closed",
+      "up": 58487
+    },
+    "seq": 25,
+    "ts_ms": 1793047875568,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:7da17728-ce7f-4c11-bfa3-7a1451486be2",
+        "agent": "team-definition-d8bb23a7ca2ee1a43b4eb7e9a4e4f21a3fb0cdc6a6a9d7aa1a10eb78d0bfa40f",
+        "kind": "agent",
+        "node_id": "team-node-1ce1170fba608a2f545e7a54",
+        "process": "external:activation:7da17728-ce7f-4c11-bfa3-7a1451486be2"
+      },
+      "conn": "g1:8",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "1258fa118061838f"
+    },
+    "seq": 26,
+    "ts_ms": 1793047875575,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:8",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 27,
+    "ts_ms": 1793047875578,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:8",
+      "cookies_dropped": 3,
+      "down": 88121,
+      "kind": "response",
+      "ms": 3688,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 56776
+    },
+    "seq": 28,
+    "ts_ms": 1793047879266,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:8",
+      "down": 92170,
+      "kind": "close",
+      "ms": 3694,
+      "outcome": "closed",
+      "up": 60829
+    },
+    "seq": 29,
+    "ts_ms": 1793047879268,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:7da17728-ce7f-4c11-bfa3-7a1451486be2",
+        "agent": "team-definition-d8bb23a7ca2ee1a43b4eb7e9a4e4f21a3fb0cdc6a6a9d7aa1a10eb78d0bfa40f",
+        "kind": "agent",
+        "node_id": "team-node-1ce1170fba608a2f545e7a54",
+        "process": "external:activation:7da17728-ce7f-4c11-bfa3-7a1451486be2"
+      },
+      "conn": "g1:9",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "1258fa118061838f"
+    },
+    "seq": 30,
+    "ts_ms": 1793047879296,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 31,
+    "ts_ms": 1793047879299,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "cookies_dropped": 3,
+      "down": 111360,
+      "kind": "response",
+      "ms": 3805,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 60853
+    },
+    "seq": 32,
+    "ts_ms": 1793047883104,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:9",
+      "down": 115599,
+      "kind": "close",
+      "ms": 3811,
+      "outcome": "closed",
+      "up": 64906
+    },
+    "seq": 33,
+    "ts_ms": 1793047883106,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:7da17728-ce7f-4c11-bfa3-7a1451486be2",
+        "agent": "team-definition-d8bb23a7ca2ee1a43b4eb7e9a4e4f21a3fb0cdc6a6a9d7aa1a10eb78d0bfa40f",
+        "kind": "agent",
+        "node_id": "team-node-1ce1170fba608a2f545e7a54",
+        "process": "external:activation:7da17728-ce7f-4c11-bfa3-7a1451486be2"
+      },
+      "conn": "g1:10",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 194,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "1258fa118061838f"
+    },
+    "seq": 34,
+    "ts_ms": 1793047883323,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:10",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 35,
+    "ts_ms": 1793047883327,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:10",
+      "cookies_dropped": 3,
+      "down": 90530,
+      "kind": "response",
+      "ms": 4183,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 64746
+    },
+    "seq": 36,
+    "ts_ms": 1793047887510,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:10",
+      "down": 94643,
+      "kind": "close",
+      "ms": 4190,
+      "outcome": "closed",
+      "up": 68821
+    },
+    "seq": 37,
+    "ts_ms": 1793047887512,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "1258fa118061838f"
+    },
+    "seq": 38,
+    "ts_ms": 1793047887554,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 39,
+    "ts_ms": 1793047925964,
+    "v": 1
+  }
+]

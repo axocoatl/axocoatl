@@ -1,0 +1,4 @@
+receipt of run run-8ff54b58-1904-4ddf-9193-3e983357cc38, verdict interrupted
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 0 covered and 0 removed match . (workspace_at_finish; the receipt does not cover every path the run changed)
+result: valid (exit 0)

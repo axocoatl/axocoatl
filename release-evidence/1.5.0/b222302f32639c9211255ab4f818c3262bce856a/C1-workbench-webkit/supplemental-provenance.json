@@ -1,0 +1,21 @@
+{
+  "schema": "axocoatl.recovery.safari-supplemental-provenance/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "formal_path": "C1-workbench-webkit",
+  "raw_gate_output_preserved_byte_for_byte": true,
+  "operator": "Codex assistant using ordinary Safari via native CUA",
+  "human_operator": false,
+  "os_account": "erick",
+  "operator_provenance": "operator.json",
+  "ui_observations": "ui-observations/",
+  "artifact_acceptance": "acceptance/assessment.json",
+  "interpretation": "The erick account named by the shell transcript is the OS account. Each observed answer was supplied by the Codex assistant through CUA, not by a human operator. Original formal gate answers, result and transcript are not rewritten. Supplemental files are covered by the same unsigned manifest.",
+  "excluded_payloads": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check/node_modules",
+      "reason": "Reproducible dependency payload omitted; the unchanged lockfile and host-dependency-provenance.json retain provenance. Symlinks are not allowed in release manifests."
+    }
+  ],
+  "clean_install_claim": false,
+  "release_ready_claimed": false
+}

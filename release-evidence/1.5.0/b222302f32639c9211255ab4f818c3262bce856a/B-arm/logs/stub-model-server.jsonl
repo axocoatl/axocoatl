@@ -1,0 +1,8 @@
+{"at":"2026-10-26T14:15:43.380Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:15:43.383Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:15:43.384Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:15:43.386Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:15:43.412Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:15:43.413Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:15:43.415Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:15:43.416Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}

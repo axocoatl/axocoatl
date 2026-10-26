@@ -1,0 +1,143 @@
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261026-190315.log
+
+Step 0 · This computer
+$ /usr/bin/sw_vers -productVersion
+  exit 0
+  | 26.6
+
+$ /usr/sbin/sysctl -n machdep.cpu.brand_string
+  exit 0
+  | Apple M5 Pro
+
+$ xcode-select -p
+  exit 0
+  | /Library/Developer/CommandLineTools
+
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.39.5 (Apple Git-154)
+
+$ brew --version
+  exit 0
+  | Homebrew 7.0.10
+
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 53 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5, a running Axocoatl 1.5.0 daemon.
+Not found: codex.
+Port 8080 is in use; Axocoatl will use the next free port.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: Claude Code (your Claude Pro or Max plan; claude found at /opt/homebrew/bin/claude) (--writer)
+  Reviewer model: ollama:gpt-oss:20b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · Claude Code
+  ✓ claude 2.1.92 at /opt/homebrew/bin/claude
+  Claude Code runs on your Claude Pro or Max plan: `claude setup-token` needs a subscription. Anthropic API keys, Bedrock and Vertex are not supported by fix-claude-code.
+? Build the claude-code sandbox image now (`axocoatl recipe build claude-code`, about 0.6 to 0.9 GB)? [Y/n]
+  answered yes
+  $ axocoatl recipe build claude-code --config /Users/erick/Library/Application Support/Axocoatl/config.yaml
+$ /usr/local/bin/axocoatl recipe build claude-code --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+  exit 0
+? Sign in now? `axocoatl connect claude-code` runs `claude setup-token` and opens your browser. [Y/n]
+  answered yes
+  $ axocoatl connect claude-code --config /Users/erick/Library/Application Support/Axocoatl/config.yaml
+$ /usr/local/bin/axocoatl connect claude-code --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+  exit 0
+  Claude Code runs in your repository's language image (Node.js, Python, Go or Rust, detected from package.json, pyproject.toml or requirements, go.mod or Cargo.toml), with the dependencies installed first and only the package registries open for that step (https://docs.axocoatl.ai/configure/toolchains/).
+
+  The reviewer: a different model that only reads the change.
+  ✓ Ollama 0.40.11 at http://localhost:11434, cloud models off (2 models installed)
+  ✓ gpt-oss:20b is installed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  Changes to /Users/erick/Library/Application Support/Axocoatl/config.yaml:
+    -     model: "qwen3-coder:30b"
+    +     model: "gpt-oss:20b"
+    -     model: "qwen3-coder:30b"
+    +     model: "gpt-oss:20b"
+    -     model: "qwen3-coder:30b"
+    +     model: "gpt-oss:20b"
+    - # Writer: ollama (axocoatl run fix)
+    + # Writer: claude-code (axocoatl run fix-claude-code)
+    -     writer: "ollama:qwen3-coder:30b"
+? Write these changes? The current file is kept as config.yaml.bak-20261026-190455 next to it. [Y/n]
+  answered yes
+  ✓ Backed up to /Users/erick/Library/Application Support/Axocoatl/config.yaml.bak-20261026-190455
+wrote /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Configuration written: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Data: /Users/erick/Library/Application Support/Axocoatl/data
+
+Step 5 · Check
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+$ /opt/homebrew/bin/gh auth status
+  exit 0
+  | github.com
+  |   ✓ Logged in to github.com account cubanerick (keyring)
+  |   - Active account: true
+  |   - Git operations protocol: https
+  |   - Token: gho_************************************
+  |   - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+
+Ready for: axocoatl run fix-claude-code, workbench Sessions
+  ✓ axocoatl run fix-claude-code (reviewer ollama:gpt-oss:20b)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:gpt-oss:20b)
+Ready: yes
+? Run a first fix now on a small sample repository to prove the setup end to end? It uses your Claude plan quota. [Y/n]
+  answered yes
+
+Step 7 · A first run
+  Sample repository: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo
+? The daemon on port 8080 started before /Users/erick/Library/Application Support/Axocoatl/config.yaml changed, so the first run would use the old configuration. Stop it now (this ends any Session turn or run in progress; start `axocoatl dev` again afterwards)? [Y/n]
+  answered yes
+  Stopping the daemon on port 8080 (it ends its Sessions first)…
+  ✓ Stopped the daemon on port 8080; start `axocoatl dev` again afterwards
+  Starting a daemon for this run (axocoatl serve on port 8080; its first start downloads an 87 MB embedding model once)…
+  $ axocoatl run fix-claude-code --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model reviewer=ollama:gpt-oss:20b
+$ /usr/local/bin/axocoatl run fix-claude-code --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model reviewer=ollama:gpt-oss:20b
+  exit 0
+$ /usr/local/bin/axocoatl receipt key --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+  exit 0
+  | ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24
+
+  $ axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json --key "$(axocoatl receipt key)" --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo
+$ /usr/local/bin/axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json --key 'ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo
+  exit 0
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix-claude-code --task "Describe the bug"
+(reviewer ollama:gpt-oss:20b comes from your setup; --model ROLE=PROVIDER:MODEL overrides them)

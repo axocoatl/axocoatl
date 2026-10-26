@@ -1,0 +1,236 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "supplemental-codex-fixtures-only",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T20:50:35Z",
+  "finished_at": "2026-10-26T20:53:40.884Z",
+  "steps": [
+    {
+      "name": "exact b222 installed binary and candidate archive verified",
+      "status": "pass",
+      "required": true,
+      "detail": "binary d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b; archive 2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659"
+    },
+    {
+      "name": "existing Codex ChatGPT secret is stored",
+      "status": "pass",
+      "required": true,
+      "detail": "name-only secret listing; no fresh sign-in claim"
+    },
+    {
+      "name": "Codex uses the ChatGPT-plan credential",
+      "status": "pass",
+      "required": true,
+      "detail": "existing configuration names codex-chatgpt"
+    },
+    {
+      "name": "reviewer is local Ollama",
+      "status": "pass",
+      "required": true,
+      "detail": "ollama:gpt-oss:20b"
+    },
+    {
+      "name": "doctor JSON ready for supplemental Codex checks",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 10.6,
+      "bytes_downloaded": 271273
+    },
+    {
+      "name": "doctor ready with no failing item",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor text ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.4,
+      "bytes_downloaded": 11557
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix-codex, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "owned supplemental daemon ready",
+      "status": "pass",
+      "required": true,
+      "detail": "port 8080; exact installed binary started by this script"
+    },
+    {
+      "name": "configuration unchanged before node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990"
+    },
+    {
+      "name": "run fix on codex-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 74,
+      "bytes_downloaded": 192345252
+    },
+    {
+      "name": "run on codex-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-codex-node:9ecb56968dac"
+    },
+    {
+      "name": "run on codex-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on codex-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 892
+    },
+    {
+      "name": "record verify on codex-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1769
+    },
+    {
+      "name": "receipt matches the record on codex-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on codex-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 41fd99d540ae holds any"
+    },
+    {
+      "name": "configuration unchanged before python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990"
+    },
+    {
+      "name": "run fix on codex-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 91.8,
+      "bytes_downloaded": 173156773
+    },
+    {
+      "name": "run on codex-python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-codex-python:c75fb26e819a"
+    },
+    {
+      "name": "run on codex-python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on codex-python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 118
+    },
+    {
+      "name": "record verify on codex-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 684
+    },
+    {
+      "name": "receipt matches the record on codex-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 464
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on codex-python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 2551bf6fb26a holds any"
+    },
+    {
+      "name": "supplemental daemon stopped with exit 0",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "owner configuration hash is unchanged after fixtures",
+      "status": "pass",
+      "required": true
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "supplemental-codex-fixtures-only/codex-node-deps/axocoatl-junit.xml",
+    "supplemental-codex-fixtures-only/codex-node-deps/changes.txt",
+    "supplemental-codex-fixtures-only/codex-node-deps/command.txt",
+    "supplemental-codex-fixtures-only/codex-node-deps/receipt.json",
+    "supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl",
+    "supplemental-codex-fixtures-only/codex-node-deps/run.log",
+    "supplemental-codex-fixtures-only/codex-python-pytest/axocoatl-junit.xml",
+    "supplemental-codex-fixtures-only/codex-python-pytest/changes.txt",
+    "supplemental-codex-fixtures-only/codex-python-pytest/command.txt",
+    "supplemental-codex-fixtures-only/codex-python-pytest/receipt.json",
+    "supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl",
+    "supplemental-codex-fixtures-only/codex-python-pytest/run.log",
+    "supplemental-codex-fixtures-only/configuration.json",
+    "supplemental-codex-fixtures-only/doctor.json",
+    "supplemental-codex-fixtures-only/logs/dev.log",
+    "supplemental-codex-fixtures-only/logs/doctor-JSON-ready-for-supplemental-Codex-checks.log",
+    "supplemental-codex-fixtures-only/logs/doctor-text-ready.log",
+    "supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-node-deps.log",
+    "supplemental-codex-fixtures-only/logs/receipt-matches-the-record-on-codex-python-pytest.log",
+    "supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-node-deps--documented-command-.log",
+    "supplemental-codex-fixtures-only/logs/receipt-verify-on-codex-python-pytest--documented-command-.log",
+    "supplemental-codex-fixtures-only/logs/record-verify-on-codex-node-deps.log",
+    "supplemental-codex-fixtures-only/logs/record-verify-on-codex-python-pytest.log",
+    "supplemental-codex-fixtures-only/logs/run-fix-on-codex-node-deps.log",
+    "supplemental-codex-fixtures-only/logs/run-fix-on-codex-python-pytest.log",
+    "supplemental-codex-fixtures-only/provenance.json",
+    "supplemental-codex-fixtures-only/published-command.txt",
+    "supplemental-codex-fixtures-only/runner.sh",
+    "supplemental-codex-fixtures-only/transcript.txt"
+  ]
+}

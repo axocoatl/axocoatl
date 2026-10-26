@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-43c49a89-876a-410d-ae61-8df90a22c0a0",
+  "verdict": "pass",
+  "statement_sha256": "sha256:effb019229f4aee2d8bec2c0839e56ded7453ed1cefd27610a249b7c3e97861f",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/repos/readme-python-pytest",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-43c49a89-876a-410d-ae61-8df90a22c0a0 (fix@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-1b42f3d6-6aa3-4c4f-b59a-dfead611b9bb, finished at 1793041115885 ms",
+    "Base commit 88e235af7ebd0a6e1c2c27c2ac47c175578c509b",
+    "Agent writer (writer): native ollama 0.40.11, ollama:qwen3-coder:30b",
+    "Check tests: passed, exit 0 (sh -c python3 -m pytest)",
+    "Review by ollama:gpt-oss:20b (ollama 0.40.11): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  pages.py  sha256:41c1b2a22dba96b27aedde11409935cb921b98e3f2e37e2696a15c560336400e",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 5): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

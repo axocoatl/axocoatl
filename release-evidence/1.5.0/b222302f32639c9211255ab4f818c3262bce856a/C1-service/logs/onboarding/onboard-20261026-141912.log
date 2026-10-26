@@ -1,0 +1,112 @@
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261026-141912.log
+
+Step 0 · This computer
+$ /usr/bin/sw_vers -productVersion
+  exit 0
+  | 26.6
+
+$ /usr/sbin/sysctl -n machdep.cpu.brand_string
+  exit 0
+  | Apple M5 Pro
+
+$ xcode-select -p
+  exit 0
+  | /Library/Developer/CommandLineTools
+
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.39.5 (Apple Git-154)
+
+$ brew --version
+  exit 0
+  | Homebrew 7.0.10
+
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 49 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5.
+Not found: codex.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+? Who writes the code? → A hosted model (OpenRouter credits)
+  Writer model: openrouter:qwen/qwen3-coder-30b-a3b-instruct (kept from your configuration)
+  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+? Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n]
+  answered yes
+  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists qwen/qwen3-coder-30b-a3b-instruct
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  ✓ /Users/erick/Library/Application Support/Axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+$ /opt/homebrew/bin/gh auth status
+  exit 0
+  | github.com
+  |   ✓ Logged in to github.com account cubanerick (keyring)
+  |   - Active account: true
+  |   - Git operations protocol: https
+  |   - Token: gho_************************************
+  |   - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+
+  ! Claude Code: not connected (claude-code-oauth is not stored)
+  ! Codex: not connected
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  ! axocoatl run fix-claude-code (not connected: run `axocoatl connect claude-code`)
+  ! axocoatl run fix-codex (not connected: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+
+Step 6 · Start Axocoatl
+? How should Axocoatl run? → Always on, starting at login (a launchd or systemd service)
+? Install the Always-On Service (it starts Axocoatl at login and keeps it running)? [Y/n]
+  answered yes
+$ /usr/local/bin/axocoatl service install --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+  exit 0
+$ /usr/local/bin/axocoatl service restart
+  exit 0
+? Run a first fix now on a small sample repository to prove the setup end to end? It costs about $0.01 on OpenRouter. [Y/n]
+  answered no
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)

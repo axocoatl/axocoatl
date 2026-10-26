@@ -1,0 +1,20 @@
+{
+  "schema": "axocoatl.gate-real-repos/1",
+  "note": "The timed real-repository runs of the new-user gate's real-repo path, which a release requires (docs/RELEASE_GATE.md, Tier C, C1-real-repo). Each is cloned at its pinned commit ('self' is this repository at the candidate commit) and run with `axocoatl run fix` and the task below; a verdict of 0, 1 or 2 passes (the model may not manage the task), anything else is an infrastructure failure. The time and download are recorded and compared with the previous release.",
+  "repos": [
+    {
+      "name": "node-express",
+      "about": "a Node app with 27 dependencies and 16 dev dependencies and no lockfile, so its setup installs the whole tree",
+      "url": "https://github.com/expressjs/express.git",
+      "ref": "v5.1.0",
+      "commit": "cd7d4397c398a3f3ecadeaf9ef6ac1377bd414c4",
+      "task": "Add a test to test/res.location.js that res.location('back') sets the Location header to '/' when the request has no Referrer header. Do not change lib/."
+    },
+    {
+      "name": "rust-axocoatl",
+      "about": "this Rust workspace at the candidate commit",
+      "url": "self",
+      "task": "Add a unit test for shell_word in axocoatl-cli/src/main.rs: a path containing a space comes back single-quoted, and a path containing a single quote has it escaped. Do not change shell_word."
+    }
+  ]
+}

@@ -1,0 +1,298 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T18:58:02.960852+00:00",
+  "fixture": "node-plain",
+  "label": "readme-node-plain",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/readme-node-plain",
+  "base_commit": "0317bf2369ed00612b212249b34f21945460d938",
+  "run_id": "run-a0168247-5757-4926-b077-0ab79940b231",
+  "result": "ACCEPTED",
+  "artifact_review": "Only Math.floor became Math.ceil in the page count, retaining the final partial page. Original full-page behavior and size validation are unchanged.",
+  "changed_files": [
+    "src/paging.js"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "final_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "final_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "unchanged": true
+    },
+    "src/paging.js": {
+      "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "final_sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "unchanged": false
+    },
+    "test/paging.test.js": {
+      "original_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "final_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/readme-node-plain",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-node-plain",
+        "start": "2026-10-26T18:58:02.607358+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:58:02.617979+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e8f4480f507f9a8c22865677937cd242d6f3f9cc0db2e40084fc063ebf80ceab",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-node-plain",
+        "start": "2026-10-26T18:58:02.618208+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:58:02.626594+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "dfbe9ff81580b6ce0ee4977bd23ac1abdda222ebc9992a2e5710d0a3b8fa0779",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-node-plain",
+        "start": "2026-10-26T18:58:02.626786+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:58:02.727587+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check",
+        "start": "2026-10-26T18:58:02.727885+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:58:02.739996+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check",
+        "start": "2026-10-26T18:58:02.740236+00:00",
+        "status": "completed",
+        "end": "2026-10-26T18:58:02.945356+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "6f1a739e4bb8a3a68412b78dc75a041dcfa30fd78ddad65a12145193a9f9584f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "9d45ec4dcfc1bc1cce2f002c51150f9bc182c53432a792d212fc4e1816a8b6e8",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.610537ms)\n\u2714 keeps the last item on a page of its own (0.078208ms)\n\u2714 refuses a page size below one (0.147749ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 32.258208\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "ollama 0.40.11",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-node:3b267c748259",
+      "image_id": "b5d48e90838f8df4bce8ed92ed15860b6b684cf517828281f1a9a540ef07f9b3",
+      "recipes": [
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "cache_volume": "axo-tc-c37ce8678f0d6cc6adb564de",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 343
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "owner": "onboarding (the first-run sample repository)",
+      "command": "fixture-readme",
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": null,
+      "image_contains": "node",
+      "setup_contains": null
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "9d45ec4dcfc1bc1cce2f002c51150f9bc182c53432a792d212fc4e1816a8b6e8",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 52689,
+    "output_tokens": 1920,
+    "cost_microunits": 0,
+    "cost_usd": 0.0,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 12,
+        "payload": {
+          "call_id": "call_o10gdeya",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 120,
+          "result_sha256": "7542121a982c34a74be24a98b66c744db0526100d99ef7415fc545e4ecb02b1b"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 343
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 11,
+    "allowed_connections": 0,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this completed fresh local fixture; does not replace other required paths.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "2a0e66118ae19713eee4f7e0bb90336520f03f11804b51e84d9edf3d9917a5c9",
+    "run.axorecord.jsonl": "0d52807ccf0f0fefb8b8b42dd75ab245e168d56bce21ced54b6911896cf64206",
+    "patch.diff": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+    "negative-evidence.json": "7a6c0b3670f45a9fee67520dd90e59c0f78fdfd2ecabcf60feaef18a17e7a3fd",
+    "activation-summary.json": "7322f67cf2a324095f05ca1b38f4a4b85d916f98f0cc66788824df797a03b0f9",
+    "outcome.json": "3a405576ba0da42067e26bdfdf2aada4a02e6536cc8df723b738aec1e0cdfef5",
+    "original-tests.stdout": "6f1a739e4bb8a3a68412b78dc75a041dcfa30fd78ddad65a12145193a9f9584f",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

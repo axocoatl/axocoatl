@@ -1,0 +1,31 @@
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.Or3u2w/repos/node-yarn
+· run run-4e1a3255-827e-437e-b24d-acbd261d880f in Session ses-a47c10bb-fa78-42d8-9559-8f5972c7a4b7
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+· note: setup `yarn install --frozen-lockfile --prefer-offline` (detected): exited 0 (1.1 s); 8 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-8f103c86-6eb9-41f1-b667-1caf4fc148f9 started (run)
+· turn turn-8f103c86-6eb9-41f1-b667-1caf4fc148f9 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+  setup `yarn install --frozen-lockfile --prefer-offline` (detected): exited 0 (1.1 s); 8 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 10283 input + 393 output tokens, $0.0000
+Network: 29 recorded events, 8 allowed and 0 refused connections, 0 route requests
+Record: run-4e1a3255-827e-437e-b24d-acbd261d880f
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key dca4a52536891bc7, 1 file covered, 0 removed, judged_capture)

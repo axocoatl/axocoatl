@@ -1,0 +1,71 @@
+gate: PASS  start without axocoatl on PATH
+gate: PASS  scripted model server (gate stub reporting 0.40.6, cloud off)
+axocoatl-install: resolving latest release...
+axocoatl-install: downloading axocoatl-v1.5.0-x86_64-unknown-linux-gnu.tar.gz (v1.5.0)...
+axocoatl-install: checksum verified
+axocoatl-install: installed axocoatl v1.5.0 -> /usr/local/bin/axocoatl
+
+Next:  axocoatl onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first
+       axocoatl doctor       # check the sandbox, the models and the daemon
+       axocoatl dev          # start the daemon; leave it running
+gate: PASS  install with the published command (1.0s)
+gate: PASS  installed binary is where the installer said
+gate: PASS  a new shell finds axocoatl
+gate: PASS  installed binary is the tarball's
+gate: PASS  axocoatl --version names 1.5.0
+gate: RUN   onboard refuses this machine (exit 1)
+Axocoatl setup
+Every command this runs is logged to /tmp/axo-gate.6AP6Zu/home/.local/state/axocoatl/onboard-20261026-135912.log
+
+Step 0 · This computer
+This computer: Ubuntu 22.04.5 LTS, x86_64, 16 GB memory, 4 cores, 87 GB free.
+Found: Podman 3.4.4 (ready), Ollama 0.40.6 at http://127.0.0.1:42747 (cloud models off), gh, git 2.55.0.
+Not found: claude, codex.
+  ! Platform: Ubuntu 22.04.5 LTS: Axocoatl has not been verified on it yet (Ubuntu 24.04 is)
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✗ Podman 3.4.4 is too old: Axocoatl runs need Podman 4.3 or later (4.9 tested). Ubuntu 22.04 ships Podman 3.4.4; use Ubuntu 24.04 or newer.
+  ✓ Landlock ABI 4
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.6 at http://127.0.0.1:42747, cloud models off (2 models installed)
+  ✓ qwen3-coder:30b is installed
+  ✓ gpt-oss:20b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  The new configuration sets:
+    `axocoatl run fix`: writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b
+    Workbench Sessions: Lead, Scout and the chat Assistant on ollama:qwen3-coder:30b, Reviewer on ollama:gpt-oss:20b
+    Ollama server: http://127.0.0.1:42747
+    Workbench port: 8200
+  ✓ Configuration written: /tmp/axo-gate.6AP6Zu/home/.config/axocoatl/config.yaml
+  ✓ Data: /tmp/axo-gate.6AP6Zu/home/.local/share/axocoatl
+
+Step 5 · Check
+  ✗ Podman version: Podman 3.4.4 is too old: Axocoatl runs need Podman 4.3 or later (4.9 tested). Ubuntu 22.04 ships Podman 3.4.4; use Ubuntu 24.04 or newer
+  ! Resource caps: rootless Podman can use the cgroup controllers [memory, pids], so Session containers run without their CPU (2 CPUs, cgroup controller cpu) cap (sandbox.require_resource_limits: true refuses to start them instead)
+  ! gh: not signed in; `axocoatl run --keep pr` needs it
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+
+Not ready yet, 1 step left:
+  1) Podman 3.4.4 is too old: Axocoatl runs need Podman 4.3 or later (4.9 tested). Ubuntu 22.04 ships Podman 3.4.4; use Ubuntu 24.04 or newer.
+Run `axocoatl onboard` again once they are done; it keeps what is already set up.
+gate: PASS  onboard refuses this machine (exit 1) (4.3s)
+gate: PASS  onboard names Podman 3.4.4
+gate: RUN   doctor --json is not ready
+  (loading gpt-oss:20b once to read its context…)
+  (loading qwen3-coder:30b once to read its context…)
+gate: PASS  doctor --json is not ready (1.3s)
+gate: PASS  doctor fails Podman, naming Podman 3.4.4
+gate: PASS  nothing ran sudo or a package manager through PATH
+gate: PASS  nothing ran sudo by any path (system journal)
+A-x86-refusal: PASS (13/13 steps passed)
+gate: evidence: /home/runner/work/axocoatl/axocoatl/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86-refusal.json

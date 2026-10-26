@@ -1,0 +1,90 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+    "start": "2026-10-26T19:01:58.192789+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:01:58.205664+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "bb103e318c7609f47caba7329103fe9844970bee2bfccc51920e37758e1c9895",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+    "start": "2026-10-26T19:01:58.205879+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:01:58.217384+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "81d14db68a136fa004a9d20b9cdce9446008b5c5e8bc36bdcb511f24097ec008",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+    "start": "2026-10-26T19:01:58.217680+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:01:58.346550+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.cargo/bin/cargo",
+      "+1.95.0",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check",
+    "start": "2026-10-26T19:01:58.346882+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:01:58.438101+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.cargo/bin/cargo",
+      "+1.95.0",
+      "test",
+      "--offline",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check",
+    "start": "2026-10-26T19:01:58.438406+00:00",
+    "status": "completed",
+    "end": "2026-10-26T19:01:58.499541+00:00",
+    "exit_code": 101,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "9d813c3589b1e5c99bd8a563fe768602eed8aaf4bec6841fe00b4722be05b2bc"
+  }
+]

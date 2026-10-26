@@ -1,0 +1,406 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "keep_pr": {
+    "pull_request": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/pull/3",
+    "kept_branch": "axocoatl/fix-claude-code-da6ea8e6",
+    "kept_commit": "eaf2c9ab1a85e8586a4fc18fb9446c4006f80439",
+    "kept_commit_matches_assessed_files": true,
+    "kept_changed_paths": [
+      "src/paginate.js"
+    ],
+    "receipt_trailer_digest": "sha256:32cb1d15327661e3ac2bca8087c615a849b559733edeb26206cf28ce3184166e",
+    "base_signer_matches_fresh_trust": true,
+    "workflow_pinned_to_source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+    "strict_action_verified_this_run": true,
+    "action_run": "40385751156",
+    "action_evidence_source": "Unmodified official gate-collected logs; no additional network call",
+    "gate_baseline_extras": [
+      ".axocoatl/receipt-keys",
+      ".github/workflows/verify-receipt.yml"
+    ]
+  },
+  "assessed_at": "2026-10-26T19:21:31.289080+00:00",
+  "fixture": "node-deps",
+  "label": "keep-pr",
+  "repo": "/Users/erick/axocoatl-gate-work/pr-repo",
+  "base_commit": "dcb55fbeffbc01afe7f3b0ac5fd3787cdf5ef0e3",
+  "run_id": "run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb",
+  "result": "ACCEPTED",
+  "artifact_review": "Only src/paginate.js changed: removal of remainder-based sizing lets Array.slice clamp the final endpoint, preserving full and partial final pages. Original tests/manifests and gate-provisioned trust/workflow files are unchanged. The kept commit contains exactly the assessed production change and a digest matching this signed receipt.",
+  "changed_files": [
+    "src/paginate.js"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".axocoatl/receipt-keys": {
+      "original_sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "final_sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "unchanged": true
+    },
+    ".github/workflows/verify-receipt.yml": {
+      "original_sha256": "88f5ca12c98c61817e5606dd7ab09bb47245ba82d7e9c9f2e9b056ae7cd10c15",
+      "final_sha256": "88f5ca12c98c61817e5606dd7ab09bb47245ba82d7e9c9f2e9b056ae7cd10c15",
+      "unchanged": true
+    },
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "unchanged": true
+    },
+    "package-lock.json": {
+      "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "unchanged": true
+    },
+    "src/paginate.js": {
+      "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "final_sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "unchanged": false
+    },
+    "test/paginate.test.js": {
+      "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/pr-repo",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/pr-repo",
+        "start": "2026-10-26T19:21:30.797106+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:21:30.805859+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "5fcf8559a9650a478b54d30b708f5033302b25b63f513b10fb561b564e48bc7a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/pr-repo",
+        "start": "2026-10-26T19:21:30.806033+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:21:30.814884+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "269b26f6778fde46058a36b57c8bbc452c1ba3b69220375942de7e0553fceccc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/pr-repo",
+        "start": "2026-10-26T19:21:30.815056+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:21:30.911682+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check",
+        "start": "2026-10-26T19:21:30.911915+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:21:30.923275+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check",
+        "start": "2026-10-26T19:21:30.943318+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:21:31.271734+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "b384b52648f9c263fecd7238e4370fd2f68a5375e7b015de48be7e4dbe140208",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "fd1ee91f276251c9403cd2bc8edad060bb8c37a724c62d53a47b7613683e7416",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  0.50ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+      "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+      "recipes": [
+        "claude-code",
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "npm ci --prefer-offline --no-audit --no-fund",
+        "source": "detected",
+        "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+        "exit_code": 0,
+        "duration_ms": 1337,
+        "registry_hosts": [
+          "registry.npmjs.org"
+        ],
+        "allowed_connections": 6,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-7aed907ba098cc6dbb508be8",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 307
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "npm ci --ignore-scripts --no-audit --no-fund",
+      "image_contains": "node",
+      "setup_contains": "npm ci"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "fd1ee91f276251c9403cd2bc8edad060bb8c37a724c62d53a47b7613683e7416",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 129189,
+    "output_tokens": 3584,
+    "cost_microunits": 57871,
+    "cost_usd": 0.057871,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 30,
+        "payload": {
+          "call_id": "call_m3c83yds",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 34,
+        "payload": {
+          "call_id": "call_579sfoph",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 68,
+          "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 38,
+        "payload": {
+          "call_id": "call_whe520d6",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [
+      {
+        "event": {
+          "conn": "g1:7",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/settings",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 24,
+        "ts_ms": 1793042303250,
+        "v": 1
+      },
+      {
+        "event": {
+          "conn": "g1:8",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/policy_limits",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 26,
+        "ts_ms": 1793042303291,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 307
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 41,
+    "allowed_connections": 9,
+    "refused_connections": 0,
+    "route_requests": 5,
+    "routes": [
+      [
+        "api.anthropic.com",
+        5
+      ]
+    ]
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual acceptance of this separate Claude Keep-as-PR artifact and its recorded strict receipt Action; does not convert the cancelled hero Node attempt into a pass.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "bac430bc20bfe9551bd3e4074934aa7386184c969699d9b3e62cbd8b5787f1ca",
+    "run.axorecord.jsonl": "587ad748256262ec8f65b716fd306845295a59ab99c5a0a267616d0773cdd5e0",
+    "patch.diff": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+    "negative-evidence.json": "3364f25332ba1d14ba43be4302cbfc886db292401d7357f4c7f0818f8e555ebd",
+    "activation-summary.json": "61f940469aaab7c99f288cdac7c74862b0d827001cc6a41b8f3cd95405625454",
+    "outcome.json": "c16938678b1b995e44f2ac81fa37ba6951b0f72d70734304285a71c7fdd41d8b",
+    "original-tests.stdout": "b384b52648f9c263fecd7238e4370fd2f68a5375e7b015de48be7e4dbe140208",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

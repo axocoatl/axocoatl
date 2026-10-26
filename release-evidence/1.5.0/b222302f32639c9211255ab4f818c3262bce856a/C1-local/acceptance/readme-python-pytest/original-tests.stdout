@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.7, pytest-9.1.1, pluggy-1.7.0
+rootdir: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check
+configfile: pyproject.toml
+testpaths: tests
+collected 4 items
+
+tests/test_pages.py ....                                                 [100%]
+
+============================== 4 passed in 0.01s ===============================

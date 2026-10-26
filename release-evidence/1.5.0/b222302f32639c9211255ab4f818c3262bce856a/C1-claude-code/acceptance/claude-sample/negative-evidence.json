@@ -1,0 +1,57 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 48,
+      "payload": {
+        "call_id": "call_fxvwbq4l",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [
+    {
+      "event": {
+        "conn": "g1:1",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/settings",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 8,
+      "ts_ms": 1793041574836,
+      "v": 1
+    },
+    {
+      "event": {
+        "conn": "g1:2",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/policy_limits",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 10,
+      "ts_ms": 1793041574877,
+      "v": 1
+    }
+  ],
+  "recorded_baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 346
+  },
+  "failed_activations": []
+}

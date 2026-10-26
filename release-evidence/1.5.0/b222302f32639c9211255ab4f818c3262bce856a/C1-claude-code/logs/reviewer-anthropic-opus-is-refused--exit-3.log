@@ -1,0 +1,1 @@
+axocoatl run: the reviewer runs anthropic:opus, on the provider anthropic, and a native Agent or reviewer runs only on Ollama or OpenRouter (Claude Code and Codex can write, in fix-claude-code and fix-codex, but cannot review): pass --model reviewer=ollama:MODEL or --model reviewer=openrouter:VENDOR/MODEL

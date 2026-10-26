@@ -1,0 +1,162 @@
+{"at":"2026-10-26T13:58:54.907Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:54.907Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:54.907Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:54.908Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:54.912Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:54.912Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:54.913Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:54.913Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:57.629Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:57.629Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:57.630Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:57.630Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:57.634Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:57.635Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:57.635Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:57.635Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:59.008Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:59.009Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:59.009Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:59.009Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:58:59.014Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:59.014Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:59.014Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:58:59.015Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:59:18.295Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:59:18.296Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:59:18.296Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:59:18.296Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T13:59:18.300Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:59:18.300Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:59:18.300Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:59:18.301Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}
+{"at":"2026-10-26T13:59:28.607Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T13:59:28.700Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T13:59:28.837Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T13:59:28.969Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T13:59:29.185Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T13:59:29.365Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file src/paging.js","fixture":"node-plain"}
+{"at":"2026-10-26T13:59:29.514Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"node-plain"}
+{"at":"2026-10-26T13:59:30.247Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T13:59:37.516Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T13:59:37.591Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file src/paginate.js","fixture":"node-deps"}
+{"at":"2026-10-26T13:59:37.775Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"node-deps"}
+{"at":"2026-10-26T13:59:38.439Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:00:05.931Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:00:06.043Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:00:06.128Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file pages.py","fixture":"python-pytest"}
+{"at":"2026-10-26T14:00:06.272Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"python-pytest"}
+{"at":"2026-10-26T14:00:07.350Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:00:49.781Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:00:50.026Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:00:50.172Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:00:50.254Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file src/lib.rs","fixture":"rust"}
+{"at":"2026-10-26T14:00:50.446Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"rust"}
+{"at":"2026-10-26T14:00:51.211Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:01:29.290Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:01:29.372Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:01:29.443Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:01:29.522Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:01:29.602Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file pages.go","fixture":"go"}
+{"at":"2026-10-26T14:01:29.741Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"go"}
+{"at":"2026-10-26T14:01:30.424Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:01:40.111Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:01:40.197Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:01:40.270Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:01:40.342Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:01:40.469Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:01:40.548Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:01:40.626Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file src/pager.js","fixture":"node-pnpm"}
+{"at":"2026-10-26T14:01:40.766Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"node-pnpm"}
+{"at":"2026-10-26T14:01:42.003Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:01:50.383Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:01:50.497Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:01:50.617Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:01:50.688Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:01:50.766Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:01:50.852Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:01:50.975Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:01:51.064Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file src/pages.js","fixture":"node-yarn"}
+{"at":"2026-10-26T14:01:51.313Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"node-yarn"}
+{"at":"2026-10-26T14:01:52.372Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:02:00.138Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:02:00.217Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:02:00.306Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:02:00.388Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:02:00.472Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:02:00.658Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:02:00.775Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:02:00.882Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file lib/paginate.js"}
+{"at":"2026-10-26T14:02:00.961Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file lib/paginate.js","fixture":"node-yarn-berry"}
+{"at":"2026-10-26T14:02:01.166Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"node-yarn-berry"}
+{"at":"2026-10-26T14:02:02.307Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:02:16.868Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:02:16.981Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:02:17.059Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:02:17.137Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:02:17.212Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:02:17.542Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:02:17.659Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:02:17.741Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file lib/paginate.js"}
+{"at":"2026-10-26T14:02:17.916Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file paging/__init__.py"}
+{"at":"2026-10-26T14:02:17.994Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file paging/__init__.py","fixture":"python-poetry"}
+{"at":"2026-10-26T14:02:18.219Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"python-poetry"}
+{"at":"2026-10-26T14:02:19.412Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:02:35.098Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:02:35.177Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:02:35.256Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:02:35.327Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:02:35.407Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:02:35.488Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:02:35.574Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:02:35.655Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file lib/paginate.js"}
+{"at":"2026-10-26T14:02:35.732Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file paging/__init__.py"}
+{"at":"2026-10-26T14:02:35.809Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pagination/__init__.py"}
+{"at":"2026-10-26T14:02:35.892Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file pagination/__init__.py","fixture":"python-uv"}
+{"at":"2026-10-26T14:02:36.048Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"python-uv"}
+{"at":"2026-10-26T14:02:37.078Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:02:52.805Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:02:52.961Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:02:53.036Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:02:53.173Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:02:53.252Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:02:53.354Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:02:53.431Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:02:53.605Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file lib/paginate.js"}
+{"at":"2026-10-26T14:02:53.689Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file paging/__init__.py"}
+{"at":"2026-10-26T14:02:53.798Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pagination/__init__.py"}
+{"at":"2026-10-26T14:02:53.925Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pager/__init__.py"}
+{"at":"2026-10-26T14:02:54.010Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file pager/__init__.py","fixture":"python-pdm"}
+{"at":"2026-10-26T14:02:54.197Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"python-pdm"}
+{"at":"2026-10-26T14:02:55.317Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:03:10.382Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paginate.js"}
+{"at":"2026-10-26T14:03:10.450Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.py"}
+{"at":"2026-10-26T14:03:10.522Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/lib.rs"}
+{"at":"2026-10-26T14:03:10.609Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pages.go"}
+{"at":"2026-10-26T14:03:10.683Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/paging.js"}
+{"at":"2026-10-26T14:03:10.758Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pager.js"}
+{"at":"2026-10-26T14:03:10.839Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file src/pages.js"}
+{"at":"2026-10-26T14:03:10.926Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file lib/paginate.js"}
+{"at":"2026-10-26T14:03:11.006Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file paging/__init__.py"}
+{"at":"2026-10-26T14:03:11.080Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pagination/__init__.py"}
+{"at":"2026-10-26T14:03:11.158Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pager/__init__.py"}
+{"at":"2026-10-26T14:03:11.282Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"read_file pagebreak/__init__.py"}
+{"at":"2026-10-26T14:03:11.409Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"edit_file pagebreak/__init__.py","fixture":"python-hatch"}
+{"at":"2026-10-26T14:03:11.559Z","path":"/api/chat","role":"writer","model":"qwen3-coder:30b","step":"text","fixture":"python-hatch"}
+{"at":"2026-10-26T14:03:12.618Z","path":"/api/chat","role":"reviewer","model":"gpt-oss:20b","step":"text"}
+{"at":"2026-10-26T14:03:24.303Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:24.304Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:24.304Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:24.304Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:24.307Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:24.307Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:24.308Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:24.308Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:25.812Z","path":"/api/chat","role":"probe","probe":"over-long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:25.812Z","path":"/api/chat","role":"probe","probe":"stop","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:25.813Z","path":"/api/chat","role":"probe","probe":"long","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:25.813Z","path":"/api/chat","role":"probe","probe":"tool","model":"qwen3-coder:30b"}
+{"at":"2026-10-26T14:03:25.816Z","path":"/api/chat","role":"probe","probe":"over-long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:25.816Z","path":"/api/chat","role":"probe","probe":"stop","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:25.816Z","path":"/api/chat","role":"probe","probe":"long","model":"gpt-oss:20b"}
+{"at":"2026-10-26T14:03:25.817Z","path":"/api/chat","role":"probe","probe":"tool","model":"gpt-oss:20b"}

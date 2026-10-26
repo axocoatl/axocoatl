@@ -1,0 +1,81 @@
+gate: PASS  free disk at the start
+
+===== C1-workbench-webkit (1.5.0 at b222302f3263) =====
+gate: PASS  resume uses the checksum-verified installed candidate
+gate: PASS  axocoatl dev answers on port 8080 with the current configuration
+gate: PASS  axocoatl url prints a sign-in link
+
+In Safari: use the workbench as a new user would, on /Users/erick/axocoatl-gate-work/repos/workbench
+
+>>> Did the link open the workbench in Safari, signed in? [y/n] y
+>>> answered y
+gate: PASS  the sign-in link opened the workbench
+
+>>> Choose Open workspace… with your home folder (/Users/erick). Was it refused? [y/n] y
+>>> answered y
+gate: PASS  Open workspace refuses the home folder
+
+>>> Now open /Users/erick/axocoatl-gate-work/repos/workbench as the workspace. Was it accepted? [y/n] y
+>>> answered y
+gate: PASS  Open workspace accepts the repository
+
+>>> Create a New session with 5173 in Exposed ports. Did it start? [y/n] y
+>>> answered y
+gate: PASS  New session starts
+
+>>> Open Team & budget. Were the limits pre-filled, and did Apply succeed without editing them? [y/n] y
+>>> answered y
+gate: PASS  Team & budget is pre-filled and Apply works
+
+>>> Send one turn asking to fix the paging bug in src/paginate.js. Did the turn finish and change the file? [y/n] y
+>>> answered y
+gate: PASS  one turn edits a file
+
+>>> Open Source Control. Does it show 'Last turn N' (N of at least 1: the writer may also add or change a test) listing src/paginate.js? [y/n] y
+>>> answered y
+gate: PASS  Source Control lists the turn's change to src/paginate.js
+
+>>> Commit the change from Source Control. Did it succeed? [y/n] y
+>>> answered y
+gate: PASS  a commit from the workbench succeeds
+gate: PASS  the commit is authored by this account's identity
+gate: PASS  no tool-call markup in the workbench Session's accepted answers
+
+In Safari, in that Session: open its Terminal and, in the repository's folder, run
+
+    node gate-preview-app.cjs
+
+then open the Session's Browser view and enter http://localhost:5173 in its address bar.
+
+>>> Does the Browser view show the page 'Axocoatl gate Preview'? [y/n] y
+>>> answered y
+gate: PASS  the Preview shows the Session's app in the workbench
+gate: PASS  the app received the Preview's request from the workbench's frame
+
+>>> Is 'Open full preview' greyed out, with a line under the address bar saying that in Safari Previews stay in this pane? [y/n] y
+>>> answered y
+gate: PASS  Open full preview is disabled in Safari, and the workbench says why
+
+>>> Paste http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ into a new Safari tab. Does Safari show Axocoatl's page 'This Preview opens only in the workbench', and not the app? [y/n] y
+>>> answered y
+gate: PASS  a Preview address typed into a tab gets Axocoatl's refusal page
+
+>>> Open http://gate-pages.localhost:63106/go?to=http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ in a new tab. Does Safari end on the same refusal page, and not the app? [y/n] y
+>>> answered y
+gate: PASS  a redirect from another site to a Preview gets Axocoatl's refusal page
+
+>>> Back in the workbench's Browser view, hold Command and click 'Open the next page' in the Preview. Did a tab open on Axocoatl's refusal page, and not on the app? [y/n] y
+>>> answered y
+gate: PASS  a Command-click inside the Preview gets Axocoatl's refusal page
+
+Open http://gate-pages.localhost:63106/plant?path=/api in a new Safari tab. It sets the cookies and shows how many of them Safari sends back.
+
+>>> Reload the workbench tab (at 127.0.0.1). Is it still signed in, showing your Session, with no 'signed out' message? [y/n] y
+>>> answered y
+gate: PASS  a Domain=localhost cookie flood from another page leaves the workbench as the docs say
+
+>>> Close the plant tab, then open http://gate-pages.localhost:63106/clear?path=/api: does it say Safari sends 0 of the planted cookies back? This page expires only the gate's test cookies. Is the workbench still signed in and working? [y/n] y
+>>> answered y
+gate: PASS  the gate's planted localhost cookies are expired
+gate: PASS  Ctrl+C stops axocoatl dev with exit 0
+gate: PASS  free disk at the end

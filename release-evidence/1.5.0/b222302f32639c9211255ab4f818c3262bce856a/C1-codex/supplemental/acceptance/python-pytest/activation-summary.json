@@ -1,0 +1,588 @@
+[
+  {
+    "role": "writer",
+    "state": "accepted",
+    "failure": null,
+    "currently_accepted": true,
+    "event_counts": {
+      "reasoning_summary": 17,
+      "text": 1,
+      "provider_response": 1
+    },
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 99989,
+        "output_tokens": 615,
+        "reasoning_tokens": null
+      }
+    },
+    "events": [
+      {
+        "activation": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 1,
+          "tool_calls": 0
+        },
+        "recorded_at_unix_ms": 1793047988187,
+        "schema_version": 1,
+        "sequence": 18
+      }
+    ]
+  },
+  {
+    "role": "reviewer",
+    "state": "accepted",
+    "failure": null,
+    "currently_accepted": true,
+    "event_counts": {
+      "reasoning_summary": 76,
+      "provider_response": 9,
+      "tool_proposed": 8,
+      "tool_result": 8,
+      "text": 2
+    },
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 24351,
+        "output_tokens": 1176,
+        "reasoning_tokens": null
+      }
+    },
+    "events": [
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793047991859,
+        "schema_version": 1,
+        "sequence": 4
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 21,
+          "arguments_sha256": "c899cdd1dbac3f3ead677a0d0edc414b53252da0ca7078ed2bfe66bd9a86c560",
+          "call_id": "call_3garbrdq",
+          "kind": "tool_proposed",
+          "name": "glob",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        },
+        "recorded_at_unix_ms": 1793047991864,
+        "schema_version": 1,
+        "sequence": 5
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_3garbrdq",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "glob",
+          "result_bytes": 119,
+          "result_sha256": "87666b234f9e9362b66e22f3159fe7f71dd8af6939906a5a82b848cb55aa99be"
+        },
+        "recorded_at_unix_ms": 1793047992053,
+        "schema_version": 1,
+        "sequence": 6
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793047992975,
+        "schema_version": 1,
+        "sequence": 8
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 43,
+          "arguments_sha256": "df4cd664a842575fa2a9168246cd876ee438d613913ecba57da3adda975e6551",
+          "call_id": "call_b6qqo6ec",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        },
+        "recorded_at_unix_ms": 1793047992979,
+        "schema_version": 1,
+        "sequence": 9
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_b6qqo6ec",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 674,
+          "result_sha256": "21241f68c8c5ca827202a56459b203982fc791ec145daf123fd66eb071ceb1c3"
+        },
+        "recorded_at_unix_ms": 1793047993170,
+        "schema_version": 1,
+        "sequence": 10
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793047994205,
+        "schema_version": 1,
+        "sequence": 12
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 54,
+          "arguments_sha256": "b1c1157e2a66bbc72d56255baf90b105d70a5ee9ef103f6e79a317243611425b",
+          "call_id": "call_1giquui6",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        },
+        "recorded_at_unix_ms": 1793047994211,
+        "schema_version": 1,
+        "sequence": 13
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_1giquui6",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 706,
+          "result_sha256": "ebb56a477fcbe5f0da9b435b24f5ab0a122110f32faac397dfdba08cb28f12de"
+        },
+        "recorded_at_unix_ms": 1793047994420,
+        "schema_version": 1,
+        "sequence": 14
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793048003546,
+        "schema_version": 1,
+        "sequence": 47
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 32,
+          "arguments_sha256": "d60a7d558a3015328a2ef44d764cf2867a7eb38c35938516a6ad9a52b83a3790",
+          "call_id": "call_i18egrgi",
+          "kind": "tool_proposed",
+          "name": "grep",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        },
+        "recorded_at_unix_ms": 1793048003550,
+        "schema_version": 1,
+        "sequence": 48
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_i18egrgi",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "recorded_at_unix_ms": 1793048003772,
+        "schema_version": 1,
+        "sequence": 49
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793048004736,
+        "schema_version": 1,
+        "sequence": 51
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 32,
+          "arguments_sha256": "d60a7d558a3015328a2ef44d764cf2867a7eb38c35938516a6ad9a52b83a3790",
+          "call_id": "call_ib15tq0u",
+          "kind": "tool_proposed",
+          "name": "grep",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        },
+        "recorded_at_unix_ms": 1793048004740,
+        "schema_version": 1,
+        "sequence": 52
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_ib15tq0u",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "recorded_at_unix_ms": 1793048004923,
+        "schema_version": 1,
+        "sequence": 53
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793048005904,
+        "schema_version": 1,
+        "sequence": 55
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 33,
+          "arguments_sha256": "a803f2593301028b6af41bb43d9cb90bf79d079169bdd486b18ca23266373fba",
+          "call_id": "call_psxyjkf7",
+          "kind": "tool_proposed",
+          "name": "grep",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        },
+        "recorded_at_unix_ms": 1793048005910,
+        "schema_version": 1,
+        "sequence": 56
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_psxyjkf7",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 596,
+          "result_sha256": "2a4e903d4ba8cde509d6e89a8ad640cfbefbe2139f23d7d2a9c4707d45150824"
+        },
+        "recorded_at_unix_ms": 1793048006120,
+        "schema_version": 1,
+        "sequence": 57
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793048007191,
+        "schema_version": 1,
+        "sequence": 59
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 44,
+          "arguments_sha256": "4a83371b6c03c906fe11c550970a1d1dbeac197e507e1895a54e89e33794cd5e",
+          "call_id": "call_6ncgwzbw",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 7
+        },
+        "recorded_at_unix_ms": 1793048007197,
+        "schema_version": 1,
+        "sequence": 60
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_6ncgwzbw",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 1130,
+          "result_sha256": "e5424a660187ba34f15d49f23bd6dec1263addfc6ed28b8cd6c1e824daa4c54e"
+        },
+        "recorded_at_unix_ms": 1793048007391,
+        "schema_version": 1,
+        "sequence": 61
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        },
+        "recorded_at_unix_ms": 1793048016009,
+        "schema_version": 1,
+        "sequence": 92
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "arguments_bytes": 26,
+          "arguments_sha256": "54c06223e56278d7059a039428c4c826defa6ce730f47f01dd4677fb25a60f67",
+          "call_id": "call_qxexmv68",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 8
+        },
+        "recorded_at_unix_ms": 1793048016016,
+        "schema_version": 1,
+        "sequence": 93
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "call_id": "call_qxexmv68",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 321,
+          "result_sha256": "444eb24903ee426751a0f6733ed8c42f3b5743818c4033656dec7128fe212ff2"
+        },
+        "recorded_at_unix_ms": 1793048016213,
+        "schema_version": 1,
+        "sequence": 94
+      },
+      {
+        "activation": {
+          "activation_id": "review-activation-bce069b81426f30ece80b45eb57aa7f5479270bf4d67e4a6",
+          "execution_epoch_id": "epoch:turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea",
+          "generation": 1,
+          "node_id": "required-review",
+          "session_id": "ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65",
+          "turn_id": "turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea"
+        },
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 0
+        },
+        "recorded_at_unix_ms": 1793048017854,
+        "schema_version": 1,
+        "sequence": 102
+      }
+    ]
+  }
+]

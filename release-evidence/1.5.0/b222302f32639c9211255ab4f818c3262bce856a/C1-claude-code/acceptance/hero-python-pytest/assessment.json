@@ -1,0 +1,406 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T19:20:14.555518+00:00",
+  "fixture": "python-pytest",
+  "label": "hero-python-pytest",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/hero-python-pytest",
+  "base_commit": "96be4466fc2b04665722fa9ed051e3f6b59cd790",
+  "run_id": "run-37594920-dcc6-42d0-8863-c53853ab293b",
+  "result": "ACCEPTED",
+  "artifact_review": "Only pages.py changed: a step-sized slice comprehension replaces remainder-based final-page sizing. Python slice clamping preserves full and partial final pages, empty input stays empty, and the existing nonpositive-size guard remains. Tests and package metadata are unchanged.",
+  "changed_files": [
+    "pages.py"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "unchanged": true
+    },
+    "pages.py": {
+      "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "final_sha256": "c79b04d0b7d7b66d8c67a50d9465be88c18ba018fc03c5e099c5e834dc7047f6",
+      "unchanged": false
+    },
+    "pyproject.toml": {
+      "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "unchanged": true
+    },
+    "tests/test_pages.py": {
+      "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/hero-python-pytest",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-python-pytest",
+        "start": "2026-10-26T19:20:14.251413+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.259395+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "d71c25025927d7362a952ebaf75646ffe5071afd7ed5f487fa54f075b98f11de",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-python-pytest",
+        "start": "2026-10-26T19:20:14.259582+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.267290+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "2e5f7b11e913a25029e260505e769e7a3afaf4fa0443ee9a97fb281fd22b4302",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-python-pytest",
+        "start": "2026-10-26T19:20:14.267518+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.295246+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check",
+        "start": "2026-10-26T19:20:14.295500+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.310644+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "module-selection",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-c",
+          "import pathlib,pages,pytest; assert pathlib.Path(pages.__file__).resolve()==pathlib.Path(\"pages.py\").resolve();print(pages.__file__);print(pytest.__version__)"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check",
+        "start": "2026-10-26T19:20:14.310861+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.431628+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "bc9cd306972318d7e067083c32d99955321832813b76f423f6f10b8271baee38",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check",
+        "start": "2026-10-26T19:20:14.431911+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:20:14.540140+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "a67e83d5ee55e627bcf3a336fd7c27c7d7737455b8ee239af73bdd2e16c5cab3",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -m pytest"
+      ],
+      "candidate_sha256": "133d32ada2c98a63956aae8bc4dfd5cbc8ee8aae198fa84f95feefc58e62f88a",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "============================= test session starts ==============================\nplatform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0\nrootdir: /Users/erick/axocoatl-gate-work/repos/hero-python-pytest\nconfigfile: pyproject.toml\ntestpaths: tests\ncollected 4 items\n\ntests/test_pages.py ....                                                 [100%]\n\n============================== 4 passed in 0.03s ===============================\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "python",
+      "reason": "pyproject.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-claude-code-python:abd396bc9cca",
+      "image_id": "8897022aaf3fc1ad67feb657139da16986d0e401819f77166db514a0a0202578",
+      "recipes": [
+        "claude-code",
+        "python"
+      ],
+      "check": "python3 -m pytest",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "pip install -e '.[test]'",
+        "source": "detected",
+        "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+        "exit_code": 0,
+        "duration_ms": 6641,
+        "registry_hosts": [
+          "pypi.org",
+          "files.pythonhosted.org"
+        ],
+        "allowed_connections": 4,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-c338d783897b2cf14fae2b4f",
+      "probe": {
+        "program": "python3",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 524
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e '.[test]'",
+      "image_contains": "python",
+      "setup_contains": "pip install"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "133d32ada2c98a63956aae8bc4dfd5cbc8ee8aae198fa84f95feefc58e62f88a",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 116128,
+    "output_tokens": 1562,
+    "cost_microunits": 49573,
+    "cost_usd": 0.049573,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 13,
+        "payload": {
+          "call_id": "call_bb1i16j9",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 17,
+        "payload": {
+          "call_id": "call_kh2fzvfj",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 47,
+        "payload": {
+          "call_id": "call_ydjl30wq",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 85,
+        "payload": {
+          "call_id": "call_4eiytf3j",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [
+      {
+        "event": {
+          "conn": "g1:5",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/policy_limits",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 22,
+        "ts_ms": 1793042254709,
+        "v": 1
+      },
+      {
+        "event": {
+          "conn": "g1:6",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/settings",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 24,
+        "ts_ms": 1793042254753,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "python3",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 524
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 37,
+    "allowed_connections": 7,
+    "refused_connections": 0,
+    "route_requests": 4,
+    "routes": [
+      [
+        "api.anthropic.com",
+        4
+      ]
+    ]
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this completed fresh Claude fixture; does not replace other required paths.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "e6155d1e007887709ce067df6bed14b6c0e187144cb3fbfaf6a1b47d5eaea99c",
+    "run.axorecord.jsonl": "793c35bf0c812926952969ae21bc6bb2af5c87751d0aba175f44fd6ac0717c0b",
+    "patch.diff": "9b4d26e3dced102d2d79e9358d09f2ad26a030d0f747da3b5f3141411c603f96",
+    "negative-evidence.json": "67bab7828d2892d5b80e2a8578caaf51cbe48919f7be27a69bac49c242ce0bdc",
+    "activation-summary.json": "941c81b9f4b9466958dbdf308e44756a37348963f615ba9d2c509195f2382441",
+    "outcome.json": "50a47730dca1e056db40e9f99db365fc8a182216d53be2e424513222f5598319",
+    "original-tests.stdout": "a67e83d5ee55e627bcf3a336fd7c27c7d7737455b8ee239af73bdd2e16c5cab3",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

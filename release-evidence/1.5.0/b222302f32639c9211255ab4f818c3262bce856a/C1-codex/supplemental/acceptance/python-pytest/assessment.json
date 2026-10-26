@@ -1,0 +1,597 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T20:54:04.338236+00:00",
+  "fixture": "python-pytest",
+  "label": "codex-python-pytest",
+  "repo": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest",
+  "base_commit": "2551bf6fb26a001321531206509f3f3d63ddb3be",
+  "run_id": "run-ccb1bfbc-b435-4596-abc8-22c102bc93c9",
+  "result": "ACCEPTED",
+  "artifact_review": "Only pages.py changed: the final-page branch uses len(items) minus start, keeping a full final page for exact multiples and the remaining items otherwise. Original tests and package metadata are unchanged. This assesses the completed fixture only, not the earlier failed onboarding path.",
+  "changed_files": [
+    "pages.py"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "unchanged": true
+    },
+    "pages.py": {
+      "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "final_sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "unchanged": false
+    },
+    "pyproject.toml": {
+      "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "unchanged": true
+    },
+    "tests/test_pages.py": {
+      "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest",
+        "start": "2026-10-26T20:54:04.033299+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.041095+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e6f4a74fb07d9dd4322a382f4d56947be5811244c2a18b94705bd01b313c56ee",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest",
+        "start": "2026-10-26T20:54:04.041379+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.049461+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "7657f4099a27d6d4c732fcf728a65c94bbbb643345531dfadb63b8a5169cf154",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest",
+        "start": "2026-10-26T20:54:04.049811+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.078132+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check",
+        "start": "2026-10-26T20:54:04.078444+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.093424+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "module-selection",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-c",
+          "import pathlib,pages,pytest; assert pathlib.Path(pages.__file__).resolve()==pathlib.Path(\"pages.py\").resolve();print(pages.__file__);print(pytest.__version__)"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check",
+        "start": "2026-10-26T20:54:04.093601+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.211417+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "b14fe3c81f083509f9b2720c26b1776e5f5b1a05c7ebe4035a7496f54667531a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/python-pytest/host-check",
+        "start": "2026-10-26T20:54:04.211705+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:54:04.322270+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c6fd59310f2a6f5f8821af2c5249dc9666f91bc9d647d75e36eb952663099484",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -m pytest"
+      ],
+      "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "============================= test session starts ==============================\nplatform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0\nrootdir: /Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest\nconfigfile: pyproject.toml\ntestpaths: tests\ncollected 4 items\n\ntests/test_pages.py ....                                                 [100%]\n\n============================== 4 passed in 0.03s ===============================\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "python",
+      "reason": "pyproject.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-codex-python:c75fb26e819a",
+      "image_id": "29e132408b37bbf799f9d3ac202fb88da0b3ae7519e6fe13017878a56293992a",
+      "recipes": [
+        "codex",
+        "python"
+      ],
+      "check": "python3 -m pytest",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "pip install -e '.[test]'",
+        "source": "detected",
+        "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+        "exit_code": 0,
+        "duration_ms": 6493,
+        "registry_hosts": [
+          "pypi.org",
+          "files.pythonhosted.org"
+        ],
+        "allowed_connections": 4,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-e1a4c65c99205f08aec6a3e8",
+      "probe": {
+        "program": "python3",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 539
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e '.[test]'",
+      "image_contains": "python",
+      "setup_contains": "pip install"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 124340,
+    "output_tokens": 1791,
+    "cost_microunits": 28106,
+    "cost_usd": 0.028106,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": true
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 49,
+        "payload": {
+          "call_id": "call_i18egrgi",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 53,
+        "payload": {
+          "call_id": "call_ib15tq0u",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:9",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 36,
+        "ts_ms": 1793047963949,
+        "v": 1
+      },
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:10",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 37,
+        "ts_ms": 1793047963951,
+        "v": 1
+      },
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:11",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 38,
+        "ts_ms": 1793047964457,
+        "v": 1
+      },
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:12",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 39,
+        "ts_ms": 1793047965466,
+        "v": 1
+      },
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:13",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 40,
+        "ts_ms": 1793047967472,
+        "v": 1
+      },
+      {
+        "event": {
+          "addrs": [],
+          "binding": {
+            "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+            "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+            "kind": "agent",
+            "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+            "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+          },
+          "conn": "g1:14",
+          "conn_kind": "connect",
+          "decision": "deny",
+          "host": "pypi.org",
+          "kind": "open",
+          "peer": {
+            "ancestors": [
+              "/usr/local/bin/python3.13",
+              "/usr/bin/dash",
+              "/opt/axocoatl/codex/bin/codex",
+              "/usr/bin/dash",
+              "/usr/bin/dash",
+              "/axocoatl-exec-supervisor"
+            ],
+            "exe": "/usr/local/bin/python3.13",
+            "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+            "gid": 1000,
+            "pid": 278,
+            "uid": 1000
+          },
+          "policy_revision": 5,
+          "port": 443,
+          "reason": "not_allowed",
+          "scope": "session",
+          "status": 403,
+          "token": "b7a506fa7f1f609c"
+        },
+        "seq": 41,
+        "ts_ms": 1793047971479,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "python3",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 539
+    },
+    "failed_activations": []
+  },
+  "formal_C1_codex": "Original fresh onboarding path remains failed; this is supplemental fixture-only acceptance.",
+  "network": {
+    "events": 59,
+    "allowed_connections": 12,
+    "refused_connections": 6,
+    "route_requests": 8,
+    "routes": [
+      [
+        "chatgpt.com",
+        8
+      ]
+    ]
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this supplemental Codex fixture after user-completed connector authentication; does not establish fresh onboarding or change the original failed C1-codex path.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "9482361c7a1d7629c682c8566477bb6b0f72fc992cfaec04d7ba76b964c88aeb",
+    "run.axorecord.jsonl": "b216d0ce47c47ba7269a2e8492bf4d29e91b5a663f6d60da2586ff6dde14c085",
+    "patch.diff": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+    "negative-evidence.json": "452ffd7d98b4970adc939ad322372f03b1e2861bea116036d4485570dde2f851",
+    "activation-summary.json": "73b5c2b45964c3450ffa096b92c2a2537ea1c13c5bf13df8ccb261aa16c29a2d",
+    "outcome.json": "56fc6f02f04c718498537dad64e936cea84e8f0f46ccbf6e7b232f2f10e2200a",
+    "original-tests.stdout": "c6fd59310f2a6f5f8821af2c5249dc9666f91bc9d647d75e36eb952663099484",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

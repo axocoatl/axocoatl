@@ -1,0 +1,2 @@
+?? .gate-preview-requests.log
+?? gate-preview-app.cjs

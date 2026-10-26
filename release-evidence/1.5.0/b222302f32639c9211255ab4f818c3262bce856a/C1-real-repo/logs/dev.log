@@ -1,0 +1,13 @@
+Axocoatl dev mode
+  Config: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  Agents: 4
+  Runtime: 2 agents spawned
+  IPC:    /Users/erick/.axocoatl/run/axocoatl.sock
+  Server: http://127.0.0.1:8080
+  Health: http://127.0.0.1:8080/health
+  Sign in: run `axocoatl url --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'` for the browser sign-in link
+
+Axocoatl is running. Press Ctrl+C to stop.
+2026-10-26T14:43:47.425773Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-6a5fe04e0d931e26fcc8f4a3f61bfbd0b9bf39f9 tool=search
+2026-10-26T14:57:38.239185Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-6803611107c1974993cedc0b3bdb007cf8524371 tool=search
+2026-10-26T14:59:14.441556Z  WARN axocoatl_actor::default_behavior: the model's response could not be used; asking it once more reason=the model's response held no answer and no tool call (it wrote only reasoning; 54 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason "stop" and 4 tools offered

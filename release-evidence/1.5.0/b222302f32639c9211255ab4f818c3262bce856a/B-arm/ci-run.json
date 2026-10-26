@@ -1,0 +1,16 @@
+{
+  "schema": "axocoatl.release-evidence.ci-run/1",
+  "id": 40333410399,
+  "run_attempt": 1,
+  "html_url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399",
+  "repository": "axocoatl/axocoatl",
+  "head_repository": "axocoatl/axocoatl",
+  "workflow_path": ".github/workflows/ci.yml",
+  "event": "push",
+  "head_branch": "dev",
+  "head_sha": "b222302f32639c9211255ab4f818c3262bce856a",
+  "status": "completed",
+  "conclusion": "success",
+  "run_started_at": "2026-10-26T13:45:36Z",
+  "updated_at": "2026-10-26T14:44:56Z"
+}

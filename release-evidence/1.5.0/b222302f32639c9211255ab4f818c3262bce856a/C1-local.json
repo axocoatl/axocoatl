@@ -1,0 +1,472 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-local",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T18:47:39Z",
+  "finished_at": "2026-10-26T19:03:15.470Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "59790 MiB free; models cached: yes"
+    },
+    {
+      "name": "the account started without Axocoatl, its data or stored secrets",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "the account started without Podman or a Podman machine",
+      "status": "pass",
+      "required": true,
+      "detail": "no podman where Homebrew or podman.io install it, none on the login PATH, no machine"
+    },
+    {
+      "name": "the account started without Ollama or its settings",
+      "status": "pass",
+      "required": true,
+      "detail": "no ollama program or app, no ~/.ollama/server.json, nothing on port 11434; downloaded models kept: yes"
+    },
+    {
+      "name": "no axocoatl on this account's PATH before the install",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "the staged site shows axocoatl onboard, doctor and dev",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "install with the published command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.6,
+      "bytes_downloaded": 0,
+      "detail": "curl -fsSL https://axocoatl.ai/install.sh | sh"
+    },
+    {
+      "name": "installed binary is where the installer said",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "a new shell finds axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "zsh -ilc: /usr/local/bin/axocoatl"
+    },
+    {
+      "name": "onboard: local models (interactive; every answer is in the transcript)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 302.1,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "onboard: local models: every prompt was answered by the operator (erick); the transcript holds each"
+    },
+    {
+      "name": "onboarding ended Ready with a passing first run",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Did onboarding end with 'Ready' and a passing first fix run on the sample repository?"
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 11.8,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "doctor: ready, no FAIL",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl doctor (as the site shows it) exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 13.8,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboarding installed Podman with Homebrew",
+      "status": "pass",
+      "required": true,
+      "detail": "podman 6.1.4, installed by Homebrew during onboarding"
+    },
+    {
+      "name": "onboarding installed Ollama with Homebrew",
+      "status": "pass",
+      "required": true,
+      "detail": "ollama 0.40.11, installed by Homebrew during onboarding"
+    },
+    {
+      "name": "onboarding created the Podman machine, and it runs",
+      "status": "pass",
+      "required": true,
+      "detail": "[    {        \"Name\": \"podman-machine-default\",        \"Default\": true,        \"Created\": \"2026-10-26T11:48:41.310494-07:00\",        \"Running\": true,        \"Starting\": false,        \"LastUp\": \"0001-01-01T00:00:00Z\",        \"Stream\": \"default\",        \"VMType\": \"applehv\",        \"CPUs\": 6,        \"M"
+    },
+    {
+      "name": "Ollama's cloud models are off (doctor)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on readme-node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 70.4,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on readme-node-plain chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "receipt verify on readme-node-plain (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on readme-node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on readme-node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on readme-node-plain",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 0317bf2369ed holds any"
+    },
+    {
+      "name": "run fix on readme-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 120.6,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on readme-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on readme-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on readme-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on readme-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on readme-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on readme-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 68d9ff19dc93 holds any"
+    },
+    {
+      "name": "run fix on readme-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 117.9,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on readme-python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on readme-python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on readme-python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on readme-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on readme-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on readme-python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 88e235af7ebd holds any"
+    },
+    {
+      "name": "run fix on readme-rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 166.1,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on readme-rust chose a rust image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-rust:0e5acf3d40e2"
+    },
+    {
+      "name": "run on readme-rust ran setup (cargo fetch)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on readme-rust (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on readme-rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on readme-rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on readme-rust",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since f2a5b630d4ed holds any"
+    },
+    {
+      "name": "run fix on readme-go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 110.9,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on readme-go chose a go image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-go:6063b3e9fdc6"
+    },
+    {
+      "name": "run on readme-go ran setup (go mod download)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on readme-go (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on readme-go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on readme-go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on readme-go",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 67b98f5d3ff6 holds any"
+    },
+    {
+      "name": "the README's command passed on every fixture, each receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "fixtures: node-plain node-deps python-pytest rust go "
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "50925 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-local/answers.txt",
+    "C1-local/doctor.json",
+    "C1-local/install-command.txt",
+    "C1-local/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+    "C1-local/logs/dev.log",
+    "C1-local/logs/doctor---json-says-ready.log",
+    "C1-local/logs/install-curl-urls.log",
+    "C1-local/logs/install.log",
+    "C1-local/logs/onboard--local-models--interactive--every-answer-is-in-the-transcript-.log",
+    "C1-local/logs/onboarding/onboard-20261026-184741.log",
+    "C1-local/logs/receipt-matches-the-record-on-readme-go.log",
+    "C1-local/logs/receipt-matches-the-record-on-readme-node-deps.log",
+    "C1-local/logs/receipt-matches-the-record-on-readme-node-plain.log",
+    "C1-local/logs/receipt-matches-the-record-on-readme-python-pytest.log",
+    "C1-local/logs/receipt-matches-the-record-on-readme-rust.log",
+    "C1-local/logs/receipt-verify-on-readme-go--documented-command-.log",
+    "C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+    "C1-local/logs/receipt-verify-on-readme-node-plain--documented-command-.log",
+    "C1-local/logs/receipt-verify-on-readme-python-pytest--documented-command-.log",
+    "C1-local/logs/receipt-verify-on-readme-rust--documented-command-.log",
+    "C1-local/logs/record-verify-on-readme-go.log",
+    "C1-local/logs/record-verify-on-readme-node-deps.log",
+    "C1-local/logs/record-verify-on-readme-node-plain.log",
+    "C1-local/logs/record-verify-on-readme-python-pytest.log",
+    "C1-local/logs/record-verify-on-readme-rust.log",
+    "C1-local/logs/run-fix-on-readme-go.log",
+    "C1-local/logs/run-fix-on-readme-node-deps.log",
+    "C1-local/logs/run-fix-on-readme-node-plain.log",
+    "C1-local/logs/run-fix-on-readme-python-pytest.log",
+    "C1-local/logs/run-fix-on-readme-rust.log",
+    "C1-local/readme-go/axocoatl-junit.xml",
+    "C1-local/readme-go/changes.txt",
+    "C1-local/readme-go/command.txt",
+    "C1-local/readme-go/run.axorecord.jsonl",
+    "C1-local/readme-go/run.log",
+    "C1-local/readme-go/run.receipt.json",
+    "C1-local/readme-node-deps/axocoatl-junit.xml",
+    "C1-local/readme-node-deps/changes.txt",
+    "C1-local/readme-node-deps/command.txt",
+    "C1-local/readme-node-deps/run.axorecord.jsonl",
+    "C1-local/readme-node-deps/run.log",
+    "C1-local/readme-node-deps/run.receipt.json",
+    "C1-local/readme-node-plain/axocoatl-junit.xml",
+    "C1-local/readme-node-plain/changes.txt",
+    "C1-local/readme-node-plain/command.txt",
+    "C1-local/readme-node-plain/receipt.json",
+    "C1-local/readme-node-plain/run.axorecord.jsonl",
+    "C1-local/readme-node-plain/run.log",
+    "C1-local/readme-python-pytest/axocoatl-junit.xml",
+    "C1-local/readme-python-pytest/changes.txt",
+    "C1-local/readme-python-pytest/command.txt",
+    "C1-local/readme-python-pytest/run.axorecord.jsonl",
+    "C1-local/readme-python-pytest/run.log",
+    "C1-local/readme-python-pytest/run.receipt.json",
+    "C1-local/readme-rust/axocoatl-junit.xml",
+    "C1-local/readme-rust/changes.txt",
+    "C1-local/readme-rust/command.txt",
+    "C1-local/readme-rust/run.axorecord.jsonl",
+    "C1-local/readme-rust/run.log",
+    "C1-local/readme-rust/run.receipt.json",
+    "C1-local/transcript.txt"
+  ]
+}

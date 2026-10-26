@@ -1,0 +1,32 @@
+ M src/paginate.js
+ M test/paginate.test.js
+?? axocoatl-junit.xml
+?? receipt.json
+?? run.axorecord.jsonl
+diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..d798d7f 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,8 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page < count; page += 1) {
+     const start = page * size;
+-    const length = page < count - 1 ? size : items.length % size;
+-    pages.push(items.slice(start, start + length));
++    pages.push(items.slice(start, start + size));
+   }
+   return pages;
+ }
+diff --git a/test/paginate.test.js b/test/paginate.test.js
+index 70c8674..b5c51de 100644
+--- a/test/paginate.test.js
++++ b/test/paginate.test.js
+@@ -22,4 +22,8 @@ test('a page size of zero is refused', () => {
+   assert.throws(() => paginate(numbers(3), 0), RangeError);
+ });
+ 
++test('fewer items than one page make a single short page', () => {
++  assert.equal(paginate(numbers(3), 5), [[1, 2, 3]]);
++});
++
+ test.run();
