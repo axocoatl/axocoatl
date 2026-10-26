@@ -52,6 +52,12 @@ warning, not a refusal.
 
 ## Required steps
 
+The Mac runner retains a failed onboarding command as a failure and stops the
+dependent path before its runs or PR actions. It does not record completed live
+onboarding for that command. Other independent paths may continue after an ordinary
+failure; interrupting onboarding with Ctrl+C saves the failed path and ends the
+runner.
+
 A path passes when every step it recorded as required passed, but a path
 that never recorded a step proves nothing about it. So each sentence of the
 public text about what was verified relies on a step listed here, and

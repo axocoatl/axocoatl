@@ -172,6 +172,7 @@ task="Paging skips the last item when the total is a multiple of the page size"
 preview_port=5173
 dev_pid='' driver_pid='' pages_pid=''
 podman_before='' ollama_before='' had_secret=''
+onboarding_interrupted=0
 # shellcheck disable=SC2329 # the EXIT trap runs it
 cleanup() {
   [ -n "$dev_pid" ] && kill -INT "$dev_pid" 2>/dev/null
@@ -461,6 +462,19 @@ install_once() {
   gate_install_new_user "$stage" "$site" "$install_command"
 }
 
+# Preserve a failed prerequisite without letting bookkeeping mask it.
+# An interrupted onboarding ends the harness after its path evidence is saved;
+# other failures stop only that path, so independent paths can still run.
+onboarding_step() {
+  local result
+  gate_step "$@"
+  result=$?
+  if [ "$result" != 0 ] && [ "$GATE_STEP_EXIT" = 130 ]; then
+    onboarding_interrupted=1
+  fi
+  return "$result"
+}
+
 # onboard NAME FLAG... : interactive unless --yes was given, either way
 # with --start none: Step 6's default would run `axocoatl dev` in the
 # foreground (blocking the gate, and printing the sign-in link into the
@@ -475,10 +489,10 @@ onboard() {
   shift
   ONBOARD_FROM=$(wc -c <"$transcript" 2>/dev/null || echo 0)
   if [ "$assume_yes" = 1 ]; then
-    gate_step "$name (--yes)" -- axocoatl onboard --yes "$@" --start none
+    onboarding_step "$name (--yes)" -- axocoatl onboard --yes "$@" --start none || return
     gate_skip "onboarding was answered live in the terminal" "a --yes run answers onboarding with flags"
   else
-    gate_step "$name (interactive; every answer is in the transcript)" --interactive -- axocoatl onboard "$@" --start none
+    onboarding_step "$name (interactive; every answer is in the transcript)" --interactive -- axocoatl onboard "$@" --start none || return
     gate_record "onboarding was answered live in the terminal" pass '' '' '' "$name: every prompt was answered by the operator ($(id -un)); the transcript holds each"
   fi
 }
@@ -633,9 +647,9 @@ path_local() {
   path_begin local
   install_once || { path_end; return; }
   if [ "$assume_yes" = 1 ]; then
-    onboard "onboard: local models" --writer ollama --podman create --pull --smoke-test
+    onboard "onboard: local models" --writer ollama --podman create --pull --smoke-test || { path_end; return 1; }
   else
-    onboard "onboard: local models"
+    onboard "onboard: local models" || { path_end; return 1; }
   fi
   if [ "$machine" = C2 ]; then
     confirm "onboarding steered a 16 GB Mac to an OpenRouter reviewer" "Did onboarding recommend an OpenRouter reviewer instead of a 33 GB local pull?"
@@ -659,7 +673,7 @@ path_claude_code() {
   path_begin claude-code
   install_once || { path_end; return; }
   signed_out_before "no Claude Code sign-in was stored before this path" claude-code-oauth
-  onboard "onboard --update --writer claude-code" --update --writer claude-code
+  onboard "onboard --update --writer claude-code" --update --writer claude-code || { path_end; return 1; }
   signed_in_during_onboarding "Claude Code was signed in through the browser during onboarding" claude-code-oauth \
     "Did onboarding open Claude's sign-in page in the browser, and did you sign in there?"
   doctor_ready fix-claude-code
@@ -765,7 +779,7 @@ path_codex() {
   path_begin codex
   install_once || { path_end; return; }
   signed_out_before "no Codex sign-in was stored before this path" codex-chatgpt
-  onboard "onboard --update --writer codex" --update --writer codex
+  onboard "onboard --update --writer codex" --update --writer codex || { path_end; return 1; }
   confirm "Codex billing was set to the ChatGPT plan" "Did onboarding say Codex runs bill to your ChatGPT plan (codex-chatgpt), without offering an OpenAI API key?"
   signed_in_during_onboarding "Codex was signed in with ChatGPT in the browser during onboarding" codex-chatgpt \
     "Did onboarding open the ChatGPT sign-in page in the browser, and did you sign in there?"
@@ -793,10 +807,12 @@ path_openrouter() {
   # first and lets onboarding use the connected key.
   signed_out_before "no OpenRouter key was stored before this path" openrouter
   if [ "$assume_yes" = 1 ]; then
-    gate_step "connect OpenRouter in the browser (axocoatl connect openrouter)" --interactive -- axocoatl connect openrouter
-    onboard "onboard --update --writer openrouter" --update --writer openrouter
+    onboarding_step "connect OpenRouter in the browser (axocoatl connect openrouter)" --interactive -- axocoatl connect openrouter \
+      || { path_end; return 1; }
+    onboard "onboard --update --writer openrouter" --update --writer openrouter || { path_end; return 1; }
   else
-    onboard "onboard --update --writer openrouter (connect in the browser when it asks)" --update --writer openrouter
+    onboard "onboard --update --writer openrouter (connect in the browser when it asks)" --update --writer openrouter \
+      || { path_end; return 1; }
   fi
   signed_in_during_onboarding "OpenRouter was connected through the browser sign-in during onboarding" openrouter \
     "When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter there (no key typed or pasted)?"
@@ -840,11 +856,13 @@ path_service() {
   GATE_DAEMON_PORT=$port
   export GATE_DAEMON_PORT
   if [ "$assume_yes" = 1 ]; then
-    gate_step "onboard --update: Step 6, the Always-On Service (--yes)" -- axocoatl onboard --yes --update --start service --no-smoke-test
+    onboarding_step "onboard --update: Step 6, the Always-On Service (--yes)" -- axocoatl onboard --yes --update --start service --no-smoke-test \
+      || { path_end; return 1; }
     gate_skip "onboarding was answered live in the terminal" "a --yes run answers onboarding with flags"
   else
     printf '\nIn Step 6 ("How should Axocoatl run?"), choose "Always on, starting at login" and agree to install it.\n'
-    gate_step "onboard --update: Step 6, the Always-On Service (interactive)" --interactive -- axocoatl onboard --update
+    onboarding_step "onboard --update: Step 6, the Always-On Service (interactive)" --interactive -- axocoatl onboard --update \
+      || { path_end; return 1; }
     gate_record "onboarding was answered live in the terminal" pass '' '' '' "Step 6: the operator ($(id -un)) chose the Always-On Service"
   fi
   gate_service_status "onboarding installed and started the Always-On Service (Step 6)" yes yes
@@ -856,7 +874,7 @@ path_service() {
     *) change=ollama ;;
   esac
   onboard "onboard --update --writer $change --smoke-test (the configuration changes while the service runs)" \
-    --update --writer "$change" --smoke-test
+    --update --writer "$change" --smoke-test || { path_end; return 1; }
   onboard_output "$output"
   gate_service_restart_steps "$(config_file)" "$port" "$output"
   local readme
@@ -1276,6 +1294,10 @@ IFS=,
 for path_name in $paths; do
   IFS=$old_ifs
   run_path "$path_name" || failed=1
+  if [ "$onboarding_interrupted" = 1 ]; then
+    failed=130
+    break
+  fi
 done
 IFS=$old_ifs
 echo

@@ -9,7 +9,7 @@
 # gate_finish, which writes <bundle>/<path>.json; every file the path keeps
 # (logs, receipts, records, transcripts) goes under <bundle>/<path>/.
 
-gate_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+gate_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 gate_repo=$(CDPATH='' cd -- "$gate_dir/../.." && pwd)
 gate_evidence_js="$gate_dir/evidence.mjs"
 # shellcheck disable=SC2034 # used by the scripts that source this file
@@ -183,6 +183,7 @@ gate_check() {
 # Runs COMMAND, keeps its output in <path>/logs/<name>.log (an interactive
 # step talks to the terminal and is kept by the transcript instead), and
 # records pass when it exits with the expected status (default 0).
+# GATE_STEP_EXIT retains the command status even though a failed check returns 1.
 gate_step() {
   local name=$1 optional='' expect=0 interactive=0
   shift
@@ -210,6 +211,8 @@ gate_step() {
     "$@" </dev/null 2>&1 | tee "$log" >&2
     status=${PIPESTATUS[0]}
   fi
+  # shellcheck disable=SC2034 # callers distinguish an interrupted prerequisite
+  GATE_STEP_EXIT=$status
   local seconds bytes detail
   seconds=$(node -e 'process.stdout.write(((Date.now() - Number(process.argv[1])) / 1000).toFixed(1))' "$t0")
   bytes=$(($(gate_rx_bytes) - b0))

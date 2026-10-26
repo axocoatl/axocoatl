@@ -147,6 +147,29 @@ const passingPaths = (commit) => ({
   'C1-local': pathEvidence('C1-local', commit),
 });
 
+test('the evidence CLI executes through a filesystem alias and still stays inert when imported', () => {
+  const alias = path.join(scratch, 'evidence-cli-alias.mjs');
+  symlinkSync(path.join(HERE, 'evidence.mjs'), alias);
+  for (const options of [[], ['--preserve-symlinks-main']]) {
+    const invoke = (...args) => spawnSync(process.execPath, [...options, alias, ...args], { encoding: 'utf8' });
+    const missing = invoke();
+    assert.equal(missing.status, 2, 'missing CLI arguments must not silently succeed');
+    assert.match(missing.stderr, /usage: evidence\.mjs/);
+    const invalid = invoke('not-a-command');
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /usage: evidence\.mjs/);
+    const steps = path.join(scratch, `alias-steps-${options.length}.jsonl`);
+    const recorded = invoke('add-step', '--file', steps, '--name', 'real failure', '--status', 'fail', '--exit', '130');
+    assert.equal(recorded.status, 0, recorded.stderr);
+    assert.equal(JSON.parse(readFileSync(steps, 'utf8')).exit_code, 130);
+    const imported = spawnSync(process.execPath, [...options, '--input-type=module', '-e',
+      'await import(process.argv[2]); console.log("imported");', path.join(HERE, 'evidence.test.mjs'), alias], { encoding: 'utf8' });
+    assert.equal(imported.status, 0, imported.stderr);
+    assert.equal(imported.stdout.trim(), 'imported');
+    assert.equal(imported.stderr, '');
+  }
+});
+
 test('the required paths come from the block in RELEASE_GATE.md, the 16 GB ones conditionally', () => {
   assert.deepEqual(parseRequiredPaths(REQUIRED), [
     { name: 'A-x86', when: 'always' }, { name: 'C1-local', when: 'always' }, { name: 'C2-local', when: 'sixteen-gb' },

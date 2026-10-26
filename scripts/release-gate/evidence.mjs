@@ -34,7 +34,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
 import {
-  appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, writeFileSync,
+  appendFileSync, existsSync, lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -807,7 +807,9 @@ function main(argv) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves module URLs through symlinks, including macOS /var -> /private/var.
+if (process.argv[1] && existsSync(process.argv[1])
+  && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (error) {

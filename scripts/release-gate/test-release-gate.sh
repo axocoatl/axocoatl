@@ -966,7 +966,7 @@ fs.appendFileSync(process.env.FAKE_GIT_LOG, `${JSON.stringify({ cwd: process.cwd
 const repos = JSON.parse(fs.readFileSync(process.env.FAKE_PINNED_MANIFEST)).repos;
 if (args[0] === 'clone') {
   const source = args.at(-2); const dest = args.at(-1);
-  const r = repos.find(r => r.url === source || r.url === 'self' && source === process.env.FAKE_PINNED_SOURCE);
+  const r = repos.find(r => r.url === source || r.url === 'self' && fs.realpathSync(source) === fs.realpathSync(process.env.FAKE_PINNED_SOURCE));
   if (!r) throw Error(`unexpected clone source ${source}`);
   if (r.url !== 'self' && args[args.indexOf('--branch') + 1] !== r.ref) throw Error('wrong pinned clone ref');
   const status = run(['clone', '-q', '--no-hardlinks', process.env.FAKE_PINNED_FIXTURE, dest]);
@@ -1021,9 +1021,15 @@ GIT
         if (!e.attachments.includes(`C1-real-repo/${r.name}/${file}`)) throw Error(`missing ${r.name}/${file}`);
       }
       const clone = git.find(c => c.argv[0] === "clone" && path.basename(c.argv.at(-1)) === `real-${r.name}`);
-      if (!clone || clone.argv.at(-2) !== (r.url === "self" ? source : r.url)) throw Error(`wrong clone for ${r.name}`);
+      if (!clone || (r.url === "self"
+        ? fs.realpathSync(clone.argv.at(-2)) !== fs.realpathSync(source)
+        : clone.argv.at(-2) !== r.url)) throw Error(`wrong clone for ${r.name}`);
       if (r.url === "self") {
-        if (!git.some(c => c.argv[0] === "-C" && c.argv[1] === run.cwd && c.argv[2] === "checkout" && c.argv.at(-1) === commit)) throw Error("self did not check out the candidate");
+        // macOS exposes TMPDIR through /var while Node reports /private/var.
+        // Compare the existing directories, still requiring the exact checkout.
+        if (!git.some(c => c.argv[0] === "-C" && c.argv[2] === "checkout"
+          && fs.realpathSync(c.argv[1]) === fs.realpathSync(run.cwd)
+          && c.argv.at(-1) === commit)) throw Error("self did not check out the candidate");
       } else {
         if (clone.argv[clone.argv.indexOf("--branch") + 1] !== r.ref
           || !e.steps.some(s => s.name === `${r.name} is at the pinned commit ${r.commit.slice(0, 12)}` && s.status === "pass")) throw Error("external pin was not verified");

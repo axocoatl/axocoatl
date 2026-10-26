@@ -920,6 +920,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Mac release gate stops dependent work when onboarding fails.** It retains the
+  command's failure and stops that path before fixture runs, sign-in attestations or
+  resetting the disposable PR repository. Ctrl+C preserves the path's evidence and
+  ends the harness instead of starting another path.
+- **Release evidence is written when the runner is reached through a path alias.**
+  Gate helpers resolve their directory, and the evidence command compares file
+  identity before invoking its CLI; macOS `/var` and `/private/var` no longer cause a
+  silent successful exit without evidence.
 - **Apt refreshes package lists before onboarding installs Podman.** Fresh Ubuntu
   images can have package sources enabled but incomplete cached indexes, so installation
   reported no Podman candidate. Onboarding asks separately before `sudo apt-get update`
