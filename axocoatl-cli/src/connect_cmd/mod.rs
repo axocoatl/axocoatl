@@ -517,6 +517,10 @@ pub(crate) async fn connect(
                 ),
             ));
         }
+        Selection::UncertainRedraw => {
+            return Err(failure(exit::NO_TOKEN,
+                "Claude Code changed credential cells after displaying its token; Axocoatl could not capture the redraw safely. The changed characters were hidden and nothing was stored."));
+        }
         Selection::Several(count) => {
             return Err(failure(
                 exit::NO_TOKEN,

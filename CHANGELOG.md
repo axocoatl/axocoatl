@@ -1776,6 +1776,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server of the version under test answers.
 
 ### Security
+- **Claude Code token capture handles reused terminal cells.** A redraw that reused
+  ordinary cells in the token's prefix, body, wrapped rows or suffix could leave text
+  unmasked or capture an incomplete token. The filter now reconstructs and masks those
+  cells. It also detects uncertain redraws of captured credential cells, keeps the
+  affected characters hidden and refuses capture with exit 2 before verification or
+  storage, even with `--no-verify`, instead of choosing the earlier token.
 - **The route to Ollama on this computer refuses Ollama 0.40's new endpoints.** Its
   exact-path allowlist already refused them; the tests now name them: `/api/codex/…` (a
   proxy that forwards to api.openai.com and chatgpt.com, checks only that the caller is

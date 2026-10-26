@@ -828,8 +828,10 @@ this contract, and Axocoatl cannot change or always detect those settings.
   `secrets/<name>` (`0600`). It reads the value from standard input or, with
   `--from-env VAR`, from an environment variable, never from an argument, so the value
   is not in the process list. `axocoatl connect claude-code` stores the Claude Code
-  token the same way, read from `claude setup-token`'s output in memory and hidden on
-  screen, so it is never shown, copied or typed. `axocoatl connect codex` stores a
+  token the same way, captured in memory through a terminal filter that masks recognized
+  token cells. If the filter detects an uncertain credential redraw, it hides the
+  affected characters and refuses capture with exit 2 before verification or storage,
+  even with `--no-verify`. `axocoatl connect codex` stores a
   ChatGPT sign-in (access token, refresh token and account id) the same way, read from
   the `auth.json` that `codex login` writes in a private `CODEX_HOME`: by default an
   in-memory one in a throwaway container of the pinned Codex (read straight into memory,

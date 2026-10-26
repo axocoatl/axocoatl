@@ -80,8 +80,8 @@ daemon also keeps the access token current on your computer.
    ```
 
 3. Connect its account, once, by signing in in your browser (see
-   [Store the credential](#store-the-credential)). You never see, copy, paste or type a
-   token:
+   [Store the credential](#store-the-credential)). The connection command captures and
+   stores the credential for you:
 
    ```sh
    axocoatl connect claude-code          # Claude Code: stores claude-code-oauth
@@ -267,33 +267,38 @@ environment:
 axocoatl connect claude-code
 ```
 
-This runs `claude setup-token` for you and stores the long-lived OAuth token it creates
+This runs `claude setup-token` for you and stores one complete captured OAuth token
 as the secret `claude-code-oauth`. You sign in in the browser as `claude setup-token`
-asks; you never see, copy, paste or type the token:
+asks; Axocoatl filters the terminal output instead of asking you to copy or paste a token:
 
 - `claude setup-token` runs in a pseudo-terminal the size of your terminal, and is
   resized with it when you resize the window, so its screen looks as it does when you
   run it yourself. In a terminal smaller than 40 columns by 24 rows it gets 40 by 24
   instead (in a smaller one Claude Code may not draw the whole token), and its screen
-  may then look broken, but the token is still read whole and hidden. Your terminal is
+  may then look broken. Capture must still identify one complete token before it can
+  be stored. Your terminal is
   in raw mode while it runs (your keystrokes go to it) and is restored when it ends,
   also on an error or a signal. Keystrokes stop going to it the moment it exits: what
   you type while the token is checked stays for your shell.
 - Everything it prints reaches your terminal through a filter that keeps a model of the
   terminal, so it sees each character in the cell it lands in, as you would. Claude Code
   draws the token in rows wrapped at the width of its box and placed by cursor movement;
-  the filter reads the token from those cells, at any width, with color codes,
-  hyperlinks or other escape sequences anywhere inside it, a border or padding around
-  it, or in pieces written at different times. Each cell of the token shows the next
+  the filter reads token characters from those cells, including characters retained
+  from an earlier frame when the renderer writes only changed cells. It follows the
+  token's prefix, body, wrapped rows and final suffix, using the cells' positions and
+  styles. Each recognized token cell shows the next
   character of `[token hidden by axocoatl]` (then a blank), so the rest of the screen
   stays where Claude Code put it. At most the public prefix `sk-ant` shows before the
   mask. Writes to your clipboard (OSC 52, and the kitty, iTerm2, tmux and screen forms
   of it) are dropped, and so is any other escape sequence holding a token.
 - Axocoatl reads the token from that output in memory only: exactly one
-  `sk-ant-oat01-…` token must appear, or nothing is stored and the command says why.
+  `sk-ant-oat01-…` token must be captured, or nothing is stored and the command says why.
+  If the filter detects an uncertain credential redraw, it keeps the affected
+  characters hidden and refuses capture with exit 2 before verification or storage. This refusal also applies with `--no-verify`; that flag skips only the
+  Anthropic check. Run `axocoatl connect claude-code` again to start a new sign-in.
   The token ends where it does on screen: the next line Claude Code prints is not
-  stored with it, nor is text after a blank on its last row. The token never goes into
-  a command line, an environment variable, a log, a temporary file or a message, and
+  stored with it, nor is text after a blank on its last row. The captured value is kept
+  out of command lines, environment variables, logs, temporary files and messages, and
   the buffers that held it are overwritten when they are freed.
 - It then checks the token with Anthropic over HTTPS (`GET /v1/models` with the
   token, which costs nothing; the response is never shown). A token Anthropic rejects
@@ -311,7 +316,8 @@ It needs an interactive terminal and the `claude` CLI: the first `claude` on `PA
 then `~/.local/bin/claude`, or the path given with `--claude PATH`. `--secret NAME`
 stores the token under another name. Like `recipe build`, it uses the data root of
 `--config` or `AXOCOATL_DATA_DIR`. Exit codes: 0 stored, 1 rejected by Anthropic, 2 no
-single token printed, 3 usage (no terminal, a bad name, no `claude`), 4 not checked
+single complete token captured or an uncertain credential redraw, 3 usage (no terminal,
+a bad name, no `claude`), 4 not checked
 (network), 5 the data directory or the secret store failed, 6 interrupted by a signal.
 Run it again whenever the token expires or is revoked.
 

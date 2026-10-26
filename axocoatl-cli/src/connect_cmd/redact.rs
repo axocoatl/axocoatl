@@ -40,7 +40,12 @@
 //!   styles its token) is masked but not stored: the row may as well be
 //!   the next line of plain output. Cells a renderer skipped because they
 //!   already held the same character (a token moved by a layout change) are
-//!   taken from the model when they are marked as a token's.
+//!   taken from the model. An exact leading prefix can reuse ordinary cells;
+//!   other ordinary cells must still have the token's style and sit between
+//!   its written characters, or trail them up to the visible non-token boundary.
+//!   Reused cells are repainted through the mask before new suffix bytes are
+//!   forwarded. A changed, already-secret cell after a token closed is hidden
+//!   and causes refusal unless a complete new prefix establishes a new run.
 //! - **Resizes.** From a resize until the program next moves the cursor to
 //!   an absolute position, erases the screen or goes quiet, it may still
 //!   draw for the old size: a token character on a run's row or the next
@@ -133,6 +138,7 @@ pub(crate) struct Found {
     /// Read while the terminal was being resized, when the program may still
     /// have drawn for the old size.
     suspect: bool,
+    uncertain_redraw: bool,
 }
 
 /// Where a run's characters on one row begin.
@@ -160,6 +166,9 @@ struct Run {
     prefix_cells: Vec<(usize, u64)>,
     /// The held prefix characters: their offset in `held` and index.
     held_chars: Vec<(usize, usize)>,
+    /// A new prefix attempt overwrote a secret cell. Until it becomes a
+    /// complete prefix, even an idle flush must not expose its characters.
+    rewritten_secret: bool,
     /// Where in `value` continuations that are masked but not stored
     /// begin (see [`TokenFilter::continues`]).
     detached_from: Option<usize>,
@@ -273,7 +282,7 @@ impl TokenFilter {
     pub(crate) fn flush_idle(&mut self, shown: &mut Vec<u8>) {
         self.resizing = false;
         if let Some(run) = self.run.as_mut() {
-            if !run.token && !self.held.is_empty() {
+            if !run.token && !self.held.is_empty() && !run.rewritten_secret {
                 shown.extend_from_slice(&self.held);
                 wipe(&mut self.held);
                 run.shown_raw = run.index;
@@ -286,6 +295,7 @@ impl TokenFilter {
     /// unfinished escape sequence or string is dropped, so it cannot swallow
     /// what is written to the terminal next.
     pub(crate) fn finish(&mut self, shown: &mut Vec<u8>) {
+        self.replay_trailing(self.screen.cursor(), shown);
         self.close(Close::Other, shown);
         wipe(&mut self.unit);
         wipe(&mut self.string);
@@ -389,6 +399,44 @@ impl TokenFilter {
     }
 
     fn on_char(&mut self, print: Print, bytes: &[u8], shown: &mut Vec<u8>) {
+        if print.wrapped_from.is_none()
+            && self.run.as_ref().is_some_and(|run| {
+                run.token && (print.row != run.last.1 || !is_token_char_with(print.ch, self.dots))
+            })
+        {
+            self.replay_trailing((print.x, print.row), shown);
+        }
+        // A differential renderer does not write cells that still hold the
+        // same character. Replay a gap through this very filter before the
+        // next new character: it can finish a prefix, and its cells need
+        // masking too. The source screen, not a guessed token, supplies them.
+        if is_token_char_with(print.ch, self.dots) {
+            let from = self
+                .run
+                .as_ref()
+                .and_then(|run| self.continues(run, &print));
+            if let Some((from, _)) = from.filter(|(from, _)| *from < print.x) {
+                self.emit(format!("\x1b[{}D", print.x - from).as_bytes(), shown);
+                for x in from..print.x {
+                    let ch = self
+                        .screen
+                        .cell(x, print.row)
+                        .expect("continuation cell")
+                        .ch;
+                    self.on_char(
+                        Print {
+                            ch,
+                            x,
+                            row: print.row,
+                            wrapped_from: None,
+                            previous: Cell::default(),
+                        },
+                        &[ch as u8],
+                        shown,
+                    );
+                }
+            }
+        }
         let decision = match &self.run {
             None => Decision::Afresh,
             Some(run) => {
@@ -428,7 +476,123 @@ impl TokenFilter {
             self.start(print, bytes);
             return;
         }
+        // The prefix itself can begin in cells the renderer did not write:
+        // for example, `status complete` -> `sk-ant-...` keeps the first s.
+        // Only exact prefix characters immediately left of this new cell
+        // qualify. They are replayed as public prefix text, then masked by
+        // the normal prefix matcher before any newly written suffix leaves.
+        if is_token_char_with(print.ch, self.dots) {
+            let prefix = self.prefix;
+            let reused = (1..=prefix.len().min(print.x)).rev().find(|&count| {
+                (count == prefix.len() || print.ch == char::from(prefix[count]))
+                    && (0..count).all(|i| {
+                        self.screen
+                            .cell(print.x - count + i, print.row)
+                            .is_some_and(|cell| !cell.tail && cell.ch == char::from(prefix[i]))
+                    })
+                    && (!self.word_start
+                        || self.word_starts(&Print {
+                            ch: char::from(prefix[0]),
+                            x: print.x - count,
+                            row: print.row,
+                            wrapped_from: None,
+                            previous: Cell::default(),
+                        }))
+            });
+            if let Some(count) = reused {
+                self.emit(format!("\x1b[{count}D").as_bytes(), shown);
+                let start = print.x - count;
+                self.start(
+                    Print {
+                        ch: char::from(prefix[0]),
+                        x: start,
+                        row: print.row,
+                        wrapped_from: None,
+                        previous: Cell::default(),
+                    },
+                    &prefix[..1],
+                );
+                for (i, &ch) in prefix.iter().enumerate().take(count).skip(1) {
+                    self.on_char(
+                        Print {
+                            ch: char::from(ch),
+                            x: start + i,
+                            row: print.row,
+                            wrapped_from: None,
+                            previous: Cell::default(),
+                        },
+                        &[ch],
+                        shown,
+                    );
+                }
+                self.on_char(print, bytes, shown);
+                return;
+            }
+        }
+        if print.previous.secret && is_token_char_with(print.ch, self.dots) {
+            // A completed token was patched without printing a new prefix.
+            // Do not emit the changed secret byte or silently choose the old
+            // credential. A complete new token cannot be established here.
+            shown.push(mask_byte(0));
+            self.screen.mark_secret(print.x, print.row);
+            if print.ch != print.previous.ch {
+                self.found.push(Found {
+                    value: Zeroizing::new(String::new()),
+                    overlong: false,
+                    suspect: false,
+                    uncertain_redraw: true,
+                });
+            }
+            return;
+        }
         self.emit(bytes, shown);
+    }
+
+    /// Repaint a visible suffix the renderer left unchanged, up to its
+    /// current non-token/blank boundary. Its original cell style must match
+    /// this run; unrelated differently styled text is not a continuation.
+    /// Called only once this row ends, or output ends, never on an idle flush.
+    fn replay_trailing(&mut self, display: (usize, u64), shown: &mut Vec<u8>) {
+        let Some(run) = self.run.as_ref().filter(|run| run.token) else {
+            return;
+        };
+        let (last_x, row) = run.last;
+        let count = (last_x + 1..self.screen.cols())
+            .take_while(|&x| {
+                self.screen.cell(x, row).is_some_and(|cell| {
+                    !cell.tail
+                        && is_token_char_with(cell.ch, self.dots)
+                        && (cell.secret || cell.rendition == run.rendition)
+                })
+            })
+            .count();
+        if count == 0 {
+            return;
+        }
+        // Relative movement preserves the child's saved cursor and origin
+        // mode. Both rows are already on screen; no raw cell is replayed.
+        let move_to = |from: (usize, u64), to: (usize, u64), out: &mut Vec<u8>| {
+            out.push(b'\r');
+            if to.1 < from.1 {
+                out.extend_from_slice(format!("\x1b[{}A", from.1 - to.1).as_bytes());
+            }
+            if to.1 > from.1 {
+                out.extend_from_slice(format!("\x1b[{}B", to.1 - from.1).as_bytes());
+            }
+            if to.0 > 0 {
+                out.extend_from_slice(format!("\x1b[{}C", to.0).as_bytes());
+            }
+        };
+        move_to(display, (last_x + 1, row), shown);
+        let run = self.run.as_mut().expect("run exists");
+        for x in last_x + 1..=last_x + count {
+            let cell = self.screen.cell(x, row).expect("suffix cell");
+            shown.push(mask_byte(run.index.saturating_sub(run.shown_raw)));
+            run.push(cell.ch);
+            run.last = (x, row);
+            self.screen.mark_secret(x, row);
+        }
+        move_to((last_x + count, row), display, shown);
     }
 
     /// Where, on `print`'s row, the run's continuation begins, when `print`
@@ -455,14 +619,23 @@ impl TokenFilter {
             return Some((print.x, true));
         }
         if print.row == last_row {
-            // A renderer skips cells that did not change: cells already
-            // shown as part of a token in between are taken as they are.
+            // Only the intervening, currently visible cells belong here:
+            // there is a new character at each end of the gap. Before the
+            // prefix is complete they must match it exactly; afterward every
+            // cell must be in the token alphabet. No missing cell is inferred.
             let skipped = (last_x + 1..print.x).all(|x| {
-                self.screen
-                    .cell(x, last_row)
-                    .is_some_and(|cell| cell.secret && is_token_char_with(cell.ch, self.dots))
+                self.screen.cell(x, last_row).is_some_and(|cell| {
+                    !cell.tail
+                        && is_token_char_with(cell.ch, self.dots)
+                        && (cell.secret || cell.rendition == run.rendition)
+                        && (run.token
+                            || self
+                                .prefix
+                                .get(run.index + x - last_x - 1)
+                                .is_none_or(|byte| cell.ch == char::from(*byte)))
+                })
             });
-            return (run.token && print.x > last_x + 1 && skipped).then_some((last_x + 1, true));
+            return (print.x > last_x + 1 && skipped).then_some((last_x + 1, true));
         }
         if print.row != last_row + 1 || self.screen.rendition() != run.rendition {
             return None;
@@ -473,10 +646,11 @@ impl TokenFilter {
         let mut start = print.x;
         if run.token {
             while start > 0
-                && self
-                    .screen
-                    .cell(start - 1, print.row)
-                    .is_some_and(|cell| cell.secret && is_token_char_with(cell.ch, self.dots))
+                && self.screen.cell(start - 1, print.row).is_some_and(|cell| {
+                    !cell.tail
+                        && is_token_char_with(cell.ch, self.dots)
+                        && (cell.secret || cell.rendition == run.rendition)
+                })
             {
                 start -= 1;
             }
@@ -596,6 +770,10 @@ impl TokenFilter {
             shown.push(mask);
             return true;
         }
+        run.rewritten_secret |= print.previous.secret;
+        if run.rewritten_secret {
+            self.screen.mark_secret(print.x, print.row);
+        }
         run.held_chars.push((self.held.len(), run.index));
         run.prefix_cells.push((print.x, print.row));
         run.push(print.ch);
@@ -612,6 +790,9 @@ impl TokenFilter {
         value.push(print.ch);
         wipe(&mut self.held);
         self.held.extend_from_slice(bytes);
+        if print.previous.secret {
+            self.screen.mark_secret(print.x, print.row);
+        }
         self.run = Some(Run {
             token: false,
             value,
@@ -627,6 +808,7 @@ impl TokenFilter {
             shown_raw: 0,
             prefix_cells: vec![(print.x, print.row)],
             held_chars: vec![(0, 0)],
+            rewritten_secret: print.previous.secret,
             detached_from: None,
             suspect: self.resizing,
         });
@@ -693,7 +875,23 @@ impl TokenFilter {
             return;
         };
         if !run.token {
-            // Not a token after all: what was held is shown as it is.
+            if run.rewritten_secret {
+                // The new s/eyJ-like prefix never became a whole token.
+                // Its cells were secret before this redraw, so neither a
+                // prefix mismatch nor EOF may release them as ordinary text.
+                for (offset, index) in &run.held_chars {
+                    self.held[*offset] = mask_byte(*index);
+                }
+                for &(x, row) in &run.prefix_cells {
+                    self.screen.mark_secret(x, row);
+                }
+                self.found.push(Found {
+                    value: Zeroizing::new(String::new()),
+                    overlong: false,
+                    suspect: false,
+                    uncertain_redraw: true,
+                });
+            }
             shown.extend_from_slice(&self.held);
             wipe(&mut self.held);
             return;
@@ -709,6 +907,7 @@ impl TokenFilter {
                 value: run.value,
                 overlong: true,
                 suspect,
+                uncertain_redraw: false,
             });
             return;
         }
@@ -749,6 +948,7 @@ impl TokenFilter {
                 value: piece,
                 overlong: false,
                 suspect,
+                uncertain_redraw: false,
             });
         }
     }
@@ -816,6 +1016,7 @@ impl TokenFilter {
                 value,
                 overlong,
                 suspect: false,
+                uncertain_redraw: false,
             });
             index = start + length.max(prefix.len());
         }
@@ -948,6 +1149,8 @@ pub(crate) enum Selection {
     None { other: usize },
     /// This many different Claude Code OAuth tokens.
     Several(usize),
+    /// Credential cells changed after capture without a complete new token.
+    UncertainRedraw,
 }
 
 /// Whether `found` has the form of a whole `claude setup-token` token: the
@@ -979,6 +1182,9 @@ fn distinct<'a>(candidates: impl Iterator<Item = &'a Found>) -> Vec<&'a Found> {
 /// for the old size) count only when no other token was read, and then the
 /// last one does (the program's redraw for the new size).
 pub(crate) fn select_token(found: &[Found]) -> Selection {
+    if found.iter().any(|found| found.uncertain_redraw) {
+        return Selection::UncertainRedraw;
+    }
     let plausible_ones: Vec<&Found> = found.iter().filter(|found| plausible(found)).collect();
     let other = found.len() - plausible_ones.len();
     let settled = distinct(

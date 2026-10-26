@@ -38,6 +38,8 @@ pub(crate) struct Cell {
     pub(crate) secret: bool,
     /// The right half of a wide character.
     pub(crate) tail: bool,
+    /// The style that was actually written in this cell, for differential redraws.
+    pub(crate) rendition: Rendition,
 }
 
 impl Zeroize for Cell {
@@ -45,6 +47,7 @@ impl Zeroize for Cell {
         self.ch.zeroize();
         self.secret.zeroize();
         self.tail.zeroize();
+        self.rendition = Rendition::default();
     }
 }
 
@@ -235,6 +238,8 @@ pub(crate) struct Print {
     /// continues it on the next row by autowrap (nothing moved the cursor in
     /// between).
     pub(crate) wrapped_from: Option<(usize, u64)>,
+    /// The cell before this write; its secrecy must survive a later redraw.
+    pub(crate) previous: Cell,
 }
 
 /// What a byte did.
@@ -622,16 +627,21 @@ impl Screen {
             self.split_wide(x + 1, y);
         }
         let index = y * self.cols + x;
+        let previous = self.grid[index];
         self.grid[index] = Cell {
             ch,
-            secret: false,
+            // A separator is still part of a differential rewrite. Keep its
+            // provenance until a complete credential-region erase below.
+            secret: previous.secret,
             tail: false,
+            rendition: self.rendition,
         };
         if width == 2 && x + 1 < self.cols {
             self.grid[index + 1] = Cell {
                 ch: ' ',
                 secret: false,
                 tail: true,
+                rendition: self.rendition,
             };
         }
         let row = self.scrolled + y as u64;
@@ -648,6 +658,7 @@ impl Screen {
             x,
             row,
             wrapped_from,
+            previous,
         })
     }
 
@@ -837,6 +848,7 @@ impl Screen {
                             ch: 'E',
                             secret: false,
                             tail: false,
+                            rendition: self.rendition,
                         };
                     }
                 }
@@ -1054,9 +1066,7 @@ impl Screen {
             b'X' => {
                 self.moved();
                 let (x, y) = (self.x, self.y);
-                for column in x..(x + count).min(self.cols) {
-                    self.grid[y * self.cols + column].zeroize();
-                }
+                self.erase_cells(y * self.cols + x..y * self.cols + (x + count).min(self.cols));
             }
             b'@' => self.insert_characters(count),
             b'P' => self.delete_characters(count),
@@ -1122,7 +1132,7 @@ impl Screen {
             }
             _ => return,
         };
-        self.grid[range].iter_mut().for_each(Zeroize::zeroize);
+        self.erase_cells(range);
     }
 
     fn erase_line(&mut self, mode: usize) {
@@ -1134,7 +1144,23 @@ impl Screen {
             2 => start..start + self.cols,
             _ => return,
         };
-        self.grid[range].iter_mut().for_each(Zeroize::zeroize);
+        self.erase_cells(range);
+    }
+
+    /// A partial erase may precede another credential redraw. Keep the
+    /// erased cells' secret provenance until no credential cells remain on
+    /// any visible row; then ordinary text can occupy the cleared region.
+    fn erase_cells(&mut self, range: std::ops::Range<usize>) {
+        for cell in &mut self.grid[range] {
+            let secret = cell.secret;
+            cell.zeroize();
+            cell.secret = secret;
+        }
+        if !self.grid.iter().any(|cell| cell.secret && !cell.is_blank()) {
+            for cell in &mut self.grid {
+                cell.secret = false;
+            }
+        }
     }
 
     fn insert_characters(&mut self, count: usize) {
@@ -1340,7 +1366,8 @@ mod tests {
                 ch: 'f',
                 x: 0,
                 row: 1,
-                wrapped_from: Some((4, 0))
+                wrapped_from: Some((4, 0)),
+                previous: Cell::default(),
             }
         );
         // A carriage return at the pending wrap stays on the row.

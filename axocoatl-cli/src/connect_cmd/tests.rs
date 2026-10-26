@@ -779,6 +779,59 @@ async fn claude_codes_rendering_is_stored_and_never_shown_at_any_width() {
     }
 }
 
+/// The child reuses an ordinary screen cell for the token's initial `s`.
+/// The real relay must mask the suffix before forwarding it and store the
+/// exact synthetic credential, with the user's terminal restored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_token_reusing_an_ordinary_screen_cell_is_stored_without_exposure() {
+    for size in [(40, 24), (80, 24), (100, 30)] {
+        let fixture = Fixture::new("replay");
+        let reused = [
+            0,
+            6,
+            20,
+            usize::from(size.0) - 2,
+            usize::from(size.0) - 1,
+            fixture.token.len() - 1,
+        ];
+        let (before, after) = super::redact::tests::reused_token_cells_replay(
+            &fixture.token,
+            usize::from(size.0),
+            usize::from(size.1),
+            &reused,
+        );
+        fixture.write_replay(size, &before, &after);
+        let (result, screen, raw) = run_connect(&fixture, None, size, false).await;
+        assert_not_shown(&screen, &fixture.token);
+        result.unwrap_or_else(|failure| panic!("{size:?}: {}", failure.message));
+        assert!(raw);
+        assert_eq!(fixture.stored().unwrap(), fixture.token.as_bytes());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_closed_token_rewrite_is_hidden_and_exits_without_storing_a_credential() {
+    for replacement in ['9', 's'] {
+        let fixture = Fixture::new("replay");
+        let before = format!("\x1b[2J\x1b[H{}", ink_model::PROMPT);
+        let after = format!(
+            "\x1b[H\x1b[33m{}\x1b[0m!\x1b[1;33H\x1b[33m{replacement}\x1b[{}G\x1b[0m!",
+            fixture.token,
+            fixture.token.len() + 1
+        );
+        fixture.write_replay((200, 30), before.as_bytes(), after.as_bytes());
+        let (result, screen, raw) = run_connect(&fixture, None, (200, 30), false).await;
+        let failure = result.expect_err("a partial rewrite must not select the old token");
+        assert_eq!(failure.code, exit::NO_TOKEN);
+        assert!(failure
+            .message
+            .contains("could not capture the redraw safely"));
+        assert!(fixture.stored().is_none());
+        assert!(raw);
+        assert_not_shown(&screen, &fixture.token);
+    }
+}
+
 /// A terminal smaller than the smallest `claude` runs in: `claude` gets a
 /// 40-by-24 terminal, so Claude Code draws the whole token, which is stored
 /// and never shown.

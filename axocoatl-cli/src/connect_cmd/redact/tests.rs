@@ -139,6 +139,7 @@ fn only_token(filter: &TokenFilter) -> String {
         Selection::One(token) => token.as_str().to_owned(),
         Selection::None { other } => panic!("no token captured ({other} other)"),
         Selection::Several(count) => panic!("{count} tokens captured"),
+        Selection::UncertainRedraw => panic!("uncertain token redraw"),
     }
 }
 
@@ -505,6 +506,213 @@ fn a_token_moved_by_a_layout_change_is_masked_and_captured() {
         let (shown, filter) = run_sized(&[&input], cols as u16, rows as u16, false);
         assert_eq!(only_token(&filter), token, "{cols}");
         assert_masked_cell_for_cell(&input, &shown, cols as u16, rows as u16, &token);
+    }
+}
+
+/// A differential redraw keeps the ordinary leading `s` already on the
+/// screen and writes only the remaining token. The prefix is present on
+/// screen but never appears contiguously in the program's output stream.
+pub(crate) fn ordinary_cell_replay(token: &str) -> (Vec<u8>, Vec<u8>) {
+    let before = format!(
+        "\x1b[H\x1b[38;5;214mstatus complete\x1b[0m\r\n{}",
+        ink_model::PROMPT
+    )
+    .into_bytes();
+    let after = format!("\x1b[H\x1b[38;5;214m\x1b[1C{}\x1b[0m\r\n", &token[1..]).into_bytes();
+    (before, after)
+}
+
+#[test]
+fn an_ordinary_cell_reused_as_the_prefix_is_masked_before_the_suffix_is_shown() {
+    let (before, after) = ordinary_cell_replay(TOKEN);
+    let input = [before.as_slice(), after.as_slice()].concat();
+    for cols in [40, 80, 200] {
+        let (shown, filter) = run_sized(&[&before, &after], cols, 24, true);
+        assert!(
+            leaked_positions(&shown, TOKEN).is_empty(),
+            "stream leak at {cols}"
+        );
+        assert_eq!(only_token(&filter), TOKEN, "{cols}");
+        assert_masked_cell_for_cell(&input, &shown, cols, 24, TOKEN);
+    }
+}
+
+/// Use the real differential renderer model, with isolated ordinary cells
+/// that become part of a credential at the same coordinates and style.
+pub(crate) fn reused_token_cells_replay(
+    token: &str,
+    cols: usize,
+    rows: usize,
+    reused: &[usize],
+) -> (Vec<u8>, Vec<u8>) {
+    let width = cols - 1;
+    let height = token.len().div_ceil(width);
+    let mut old = ink_model::Frame::new(cols);
+    old.rows = vec![vec![None; cols]; height + 2];
+    let mut new = old.clone();
+    for (i, ch) in token.chars().enumerate() {
+        let (x, y) = (1 + i % width, i / width);
+        old.rows[y][x] = Some(ink_model::Cell {
+            ch: if reused.contains(&i) { ch } else { '?' },
+            style: ink_model::WARNING,
+            link: 0,
+        });
+        new.rows[y][x] = Some(ink_model::Cell {
+            ch,
+            style: ink_model::WARNING,
+            link: 0,
+        });
+    }
+    for (x, ch) in ink_model::PROMPT.chars().enumerate() {
+        old.rows[height + 1][x] = Some(ink_model::Cell {
+            ch,
+            style: ink_model::PLAIN,
+            link: 0,
+        });
+        new.rows[height + 1][x] = old.rows[height + 1][x];
+    }
+    let mut renderer = ink_model::Renderer::new(cols, rows);
+    let mut before = renderer.start();
+    before.extend(renderer.render(&old));
+    let mut after = renderer.render(&new);
+    after.extend(renderer.exit());
+    (before, after)
+}
+
+#[test]
+fn ordinary_cells_reused_in_prefix_body_wrap_and_final_suffix_are_masked_and_captured() {
+    for cols in [40u16, 80, 200] {
+        let mut cases: Vec<Vec<usize>> = (0..OAUTH_PREFIX.len()).map(|i| vec![i]).collect();
+        cases.extend([
+            vec![20],
+            vec![TOKEN.len() - 1],
+            vec![usize::from(cols) - 2],
+            vec![usize::from(cols) - 1],
+            vec![0, 6, 20, TOKEN.len() - 1],
+        ]);
+        for reused in cases {
+            let (before, after) = reused_token_cells_replay(TOKEN, usize::from(cols), 24, &reused);
+            let input = [before.as_slice(), after.as_slice()].concat();
+            for bytewise in [false, true] {
+                let chunks = if bytewise {
+                    input.chunks(1).collect::<Vec<_>>()
+                } else {
+                    vec![before.as_slice(), after.as_slice()]
+                };
+                let (shown, filter) = run_sized(&chunks, cols, 24, true);
+                assert!(
+                    leaked_positions(&shown, TOKEN).is_empty(),
+                    "raw leak at {cols}, {reused:?}"
+                );
+                assert!(
+                    leaked_positions(visible(&shown).as_bytes(), TOKEN).is_empty(),
+                    "fragmented leak at {cols}, {reused:?}"
+                );
+                assert_eq!(only_token(&filter), TOKEN, "{cols}, {reused:?}");
+                assert_masked_cell_for_cell(&input, &shown, cols, 24, TOKEN);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_closed_credential_cell_changed_without_a_whole_token_is_hidden_and_refused() {
+    for index in [32, TOKEN.len() - 1] {
+        for replacement in ['9', 's'] {
+            let before = format!("\x1b[33m{TOKEN}\x1b[0m!");
+            let after = format!("\x1b[1;{}H\x1b[33m{replacement}", index + 1);
+            for end in ["".to_owned(), format!("\x1b[{}G\x1b[0m!", TOKEN.len() + 1)] {
+                let mut filter = TokenFilter::new(200, 24);
+                let mut shown = Vec::new();
+                filter.push(before.as_bytes(), &mut shown);
+                filter.flush_idle(&mut shown);
+                let at = shown.len();
+                filter.push(after.as_bytes(), &mut shown);
+                filter.flush_idle(&mut shown);
+                filter.push(end.as_bytes(), &mut shown);
+                filter.finish(&mut shown);
+                assert!(
+                    !visible(&shown[at..]).contains(replacement),
+                    "changed secret byte escaped"
+                );
+                assert!(matches!(selected(&filter), Selection::UncertainRedraw));
+            }
+        }
+    }
+}
+
+#[test]
+fn repeated_changes_to_a_closed_secret_cell_keep_every_new_byte_hidden() {
+    let before = format!("\x1b[33m{TOKEN}\x1b[0m!");
+    let mut filter = TokenFilter::new(200, 24);
+    let mut shown = Vec::new();
+    filter.push(before.as_bytes(), &mut shown);
+    for replacement in ['s', '9', 's', 'k', '7'] {
+        let at = shown.len();
+        let patch = format!(
+            "\x1b[1;33H\x1b[33m{replacement}\x1b[{}G\x1b[0m!",
+            TOKEN.len() + 1
+        );
+        filter.push(patch.as_bytes(), &mut shown);
+        filter.flush_idle(&mut shown);
+        assert!(
+            !visible(&shown[at..]).contains(replacement),
+            "repeated secret byte escaped"
+        );
+    }
+    filter.finish(&mut shown);
+    assert!(matches!(selected(&filter), Selection::UncertainRedraw));
+}
+
+#[test]
+fn separators_and_partial_erases_do_not_release_a_closed_tokens_secret_cells() {
+    let before = format!("\x1b[33m{TOKEN}\x1b[0m!");
+    let at = "\x1b[1;33H\x1b[33m";
+    let end = format!("\x1b[{}G\x1b[0m!", TOKEN.len() + 1);
+    for separator in [" ", "!", "\x1b[X", "\x1b[K"] {
+        let mut filter = TokenFilter::new(200, 24);
+        let mut shown = Vec::new();
+        filter.push(before.as_bytes(), &mut shown);
+        filter.push(format!("{at}{separator}{end}").as_bytes(), &mut shown);
+        filter.flush_idle(&mut shown);
+        let boundary = shown.len();
+        filter.push(format!("{at}9{}{end}", &TOKEN[33..]).as_bytes(), &mut shown);
+        filter.flush_idle(&mut shown);
+        filter.finish(&mut shown);
+        assert!(
+            !visible(&shown[boundary..]).contains('9'),
+            "secret after separator escaped"
+        );
+        assert!(matches!(selected(&filter), Selection::UncertainRedraw));
+    }
+    // A complete erase permits ordinary output; a partial row of a wrapped
+    // token does not count as erasing the whole credential.
+    for erase in ["\x1b[2K\r", "\x1b[2J\x1b[H"] {
+        let input = format!("{before}{erase}\x1b[0mordinary output!");
+        let (shown, filter) = run_sized(&[input.as_bytes()], 200, 24, true);
+        assert!(visible(&shown).contains("ordinary output!"));
+        assert_eq!(only_token(&filter), TOKEN);
+    }
+    for row in 1..=3 {
+        let mut filter = TokenFilter::new(40, 24);
+        let mut shown = Vec::new();
+        filter.push(before.as_bytes(), &mut shown);
+        filter.push(format!("\x1b[{row};1H\x1b[2K").as_bytes(), &mut shown);
+        let boundary = shown.len();
+        filter.push(format!("\x1b[{row};5H9!").as_bytes(), &mut shown);
+        filter.finish(&mut shown);
+        assert!(!visible(&shown[boundary..]).contains('9'));
+        assert!(matches!(selected(&filter), Selection::UncertainRedraw));
+    }
+}
+
+#[test]
+fn a_complete_unchanged_or_cleared_redraw_does_not_invalidate_capture() {
+    for clear in ["\r", "\x1b[2J\x1b[H"] {
+        let input = format!("\x1b[33m{TOKEN}\x1b[0m!{clear}\x1b[33m{TOKEN}\x1b[0m!");
+        let (shown, filter) = run_sized(&[input.as_bytes()], 200, 24, false);
+        assert_eq!(only_token(&filter), TOKEN);
+        assert!(leaked_positions(&shown, TOKEN).is_empty());
     }
 }
 

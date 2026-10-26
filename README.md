@@ -82,9 +82,10 @@ Record: run-289c0a31-ef02-42ac-b7a9-d21e8767ddae
   on your computer; Codex signs in with your ChatGPT plan. Choose either when
   `axocoatl onboard` asks who writes the code: it builds the program's image and signs you
   in through your browser (`axocoatl connect claude-code` runs `claude setup-token`;
-  `axocoatl connect codex` your ChatGPT sign-in) and stores the credential on your computer
-  without showing it; the daemon adds it on the host to each model request, and the
-  container holds a placeholder. Both run in an image that adds the program to the
+  `axocoatl connect codex` your ChatGPT sign-in) and stores the credential on your computer.
+  Claude Code's token is captured through a terminal filter. An uncertain credential
+  redraw is refused with nothing stored. The daemon adds the credential on the host to each model request,
+  and the container holds a placeholder. Both run in an image that adds the program to the
   repository's toolchain, with its dependencies installed first, so the repository's
   own check, such as `npm test`, `pytest` or `go test ./...`, runs as it does for `fix`. To change the model, the budgets or the checks,
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
@@ -537,7 +538,7 @@ axocoatl session upgrade --confirm  Convert stopped legacy Session storage after
 axocoatl run <loadout> --task "…"  Run a loadout headless; --junit, --record, --keep
 axocoatl loadouts list|show|validate
 axocoatl record verify <file>    Check a run's record bundle
-axocoatl connect claude-code     Sign in Claude Code and store its token, never shown
+axocoatl connect claude-code     Sign in Claude Code; mask and capture one complete token
 axocoatl connect codex           Sign in Codex with your ChatGPT plan, never shown
 axocoatl connect codex --status|--refresh  Show the sign-in, or refresh it now (no token shown)
 axocoatl secret set <name>       Store another route credential from stdin or --from-env VAR
