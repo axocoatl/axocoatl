@@ -94,6 +94,10 @@ case "$machine" in C1 | C2) ;; *) gate_die "--machine is C1 or C2" ;; esac
 [ -n "$release_dir" ] && [ -d "$release_dir" ] || gate_die "--release-dir must be the candidate's release directory"
 [ -n "$site" ] && [ -f "$site/index.html" ] && [ -f "$site/install.sh" ] || gate_die "--site must be the staged marketing site (index.html, install.sh)"
 command -v node >/dev/null 2>&1 || gate_die "node is required"
+# ensure_daemon changes directory; every evidence path must stay anchored
+# to the invocation directory, even when the output root does not exist yet.
+evidence_root=$(node -e 'process.stdout.write(require("path").resolve(process.argv[1]))' "$evidence_root") \
+  || gate_die 'cannot resolve --evidence-root'
 release_dir=$(CDPATH='' cd -- "$release_dir" && pwd)
 site=$(CDPATH='' cd -- "$site" && pwd)
 case "$(uname -m)" in
@@ -1209,9 +1213,28 @@ path_real_repo() {
     path_end
     return
   fi
-  # The pinned repositories of real-repos.json, each at its commit.
-  local name url ref pinned task_text clone status=0 names=''
-  while IFS=$'\t' read -r name url ref pinned task_text; do
+  # NUL-delimited fields preserve absent self ref/commit fields and every
+  # literal task character (including tabs and newlines). Materialize the
+  # rows first so invalid input cannot silently turn into an empty loop.
+  local name url ref pinned task_text clone status=0 names='' rows="$GATE_TMP/real-repos.fields"
+  if ! node -e '
+    const repos = require(process.argv[1]).repos;
+    if (!Array.isArray(repos) || !repos.length) throw Error("no pinned real repositories");
+    for (const r of repos) {
+      const fields = [r.name, r.url, r.ref ?? "", r.commit ?? "", r.task];
+      if (fields.some(v => typeof v !== "string" || v.includes("\0")) || !r.name || !r.url || !r.task.trim()) {
+        throw Error("invalid pinned real-repository fields");
+      }
+      process.stdout.write(fields.join("\0") + "\0");
+    }
+  ' "$script_dir/real-repos.json" >"$rows" 2>"$GATE_ATTACH/logs/real-repos.log" \
+    || ! cp "$script_dir/real-repos.json" "$GATE_ATTACH/real-repos.json"; then
+    gate_record "read the pinned real-repository tasks" fail '' '' '' 'cannot read or retain real-repos.json; see logs/real-repos.log'
+    path_end
+    return
+  fi
+  while IFS= read -r -d '' name && IFS= read -r -d '' url \
+    && IFS= read -r -d '' ref && IFS= read -r -d '' pinned && IFS= read -r -d '' task_text; do
     clone="$work/repos/real-$name"
     names="$names${names:+, }$name"
     rm -rf "$clone"
@@ -1224,9 +1247,7 @@ path_real_repo() {
         test "$(git -C "$clone" rev-parse HEAD 2>/dev/null)" = "$pinned" || { status=1; continue; }
     fi
     real_repo_run "$name" "$clone" "$task_text" || status=1
-  done < <(node -e '
-    for (const r of require(process.argv[1]).repos) console.log([r.name, r.url, r.ref ?? "", r.commit ?? "", r.task].join("\t"));
-  ' "$script_dir/real-repos.json")
+  done <"$rows"
   summary "a timed run on every pinned real repository ended with a verdict, its receipt verified" "$status" "$names"
   path_end
 }

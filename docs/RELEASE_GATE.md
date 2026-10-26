@@ -849,6 +849,9 @@ account; any account of the gate Mac with Node 22 will do.
     the paths that onboard (`local`, `claude-code`, `codex`, `openrouter`
     and `service`) cannot pass with it; `workbench`, `recovery` and
     `real-repo` do not onboard and are not changed by it.
+  - Relative `--evidence-root` paths are resolved against the directory
+    where the gate was invoked, before daemon startup changes directory.
+    Logs, records and the final path JSON stay under that same root.
   - After an interrupted run, `--resume --paths real-repo` (or an explicit
     list of `service`, `workbench`, `workbench-chromium`, `recovery` and
     `real-repo`) continues the existing installation. Before each path it
@@ -869,6 +872,10 @@ account; any account of the gate Mac with Node 22 will do.
     Use a new `--evidence-root` for the continuation. Resume refuses to
     overwrite existing selected-path evidence, and does not merge or relabel
     earlier results.
+  - The default `real-repo` path retains `real-repos.json` with its evidence
+    and passes each task literally to the CLI. A `self` entry uses the
+    candidate commit; its omitted external ref and commit do not change the
+    task. Empty tasks or unreadable manifest data fail before repository work.
   - Every `onboard --update` after the first finds the gate's own
     `axocoatl dev`, which started before onboarding changes the
     configuration, and asks "The daemon on port … started before … changed,

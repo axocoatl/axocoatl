@@ -36,6 +36,9 @@ const unitPath = darwin
   ? path.join(homedir(), 'Library', 'LaunchAgents', 'ai.axocoatl.daemon.plist')
   : path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'systemd', 'user', 'axocoatl.service');
 const servicePid = path.join(dataDir, 'fake-service.pid');
+if (process.env.FAKE_ARGV_LOG) {
+  appendFileSync(process.env.FAKE_ARGV_LOG, `${JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) })}\n`);
+}
 const [command, ...args] = process.argv.slice(2);
 const out = (text) => process.stdout.write(`${text}\n`);
 const err = (text) => process.stderr.write(`${text}\n`);

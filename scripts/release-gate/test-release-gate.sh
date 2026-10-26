@@ -833,17 +833,23 @@ CURL
   # The normal invocation must still enter the fresh-install path; it may
   # not silently accept the existing binary. Its installer is a harmless
   # refusal, and any fresh-account failures remain in its simulated evidence.
-  invoke_mac() {
+  invoke_mac() (
     local case_name=$1
+    local repo_args=(--real-repo "$sim/repository" --real-task 'Fix the paging bug in src/paginate.js.')
+    case "$case_name" in pinned | literal | invalid-task | malformed) repo_args=() ;; esac
     shift
+    cd "$sim"
     env -u GITHUB_ACTIONS HOME="$sim/home" GATE_ACCOUNT=axo-resume-test GATE_SIMULATION=1 \
-      GATE_IN_SCRIPT="$sim/$case_name.log" FAKE_CALLS="$sim/$case_name.calls" \
+      GATE_IN_SCRIPT="$sim/$case_name.log" FAKE_CALLS="$sim/$case_name.calls" FAKE_ARGV_LOG="$sim/$case_name.argv.jsonl" \
+      FAKE_REAL_GIT="${real_git:-}" FAKE_GIT_LOG="$sim/$case_name.git.jsonl" \
+      FAKE_PINNED_MANIFEST="${pinned_manifest:-}" FAKE_PINNED_SOURCE="${test_gate_repo:-$gate_repo}" \
+      FAKE_PINNED_CANDIDATE="$commit" FAKE_PINNED_FIXTURE="$sim/repository" \
       FAKE_AXOCOATL_VERSION="${fake_version:-$version}" PATH="$test_path" \
-      "$script_dir/newuser-mac.sh" --release-dir "$sim/dist" --site "$sim/site" \
-      --commit "$commit" --paths real-repo --evidence-root "$sim/$case_name-evidence" \
-      --real-repo "$sim/repository" --real-task 'Fix the paging bug in src/paginate.js.' "$@" \
+      "${test_gate_script:-$script_dir/newuser-mac.sh}" --release-dir "$sim/dist" --site "$sim/site" \
+      --commit "$commit" --paths real-repo --evidence-root "$case_name-evidence" \
+      ${repo_args[@]+"${repo_args[@]}"} "$@" \
       </dev/null >"$sim/$case_name.log" 2>&1
-  }
+  )
   if invoke_mac fresh; then echo 'the default invocation silently resumed' >&2; exit 1; fi
   node -e '
     const e = require(process.argv[1]);
@@ -942,10 +948,139 @@ CURL
   if invoke_mac resumed --resume; then echo 'resume overwrote existing evidence' >&2; exit 1; fi
   grep -q -- '--resume will not overwrite existing' "$sim/resumed.log"
   [ "$(gate_sha256 "$evidence")" = "$before" ] || { echo 'resume changed the previous evidence' >&2; exit 1; }
+
+  # Exercise the real pinned manifest loop, including its self entry with
+  # absent ref/commit fields. Only clone/ref resolution is substituted: no
+  # network, and both task/receipt/record paths run on the local fixture.
+  real_git=$(command -v git)
+  cat >"$sim/bin/git" <<'GIT'
+#!/usr/bin/env node
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+let args = process.argv.slice(2);
+const real = process.env.FAKE_REAL_GIT;
+const run = (a) => spawnSync(real, a, { stdio: 'inherit' }).status ?? 1;
+if (!process.env.FAKE_PINNED_MANIFEST || args.length === 1 && args[0] === '--version') process.exit(run(args));
+fs.appendFileSync(process.env.FAKE_GIT_LOG, `${JSON.stringify({ cwd: process.cwd(), argv: args })}\n`);
+const repos = JSON.parse(fs.readFileSync(process.env.FAKE_PINNED_MANIFEST)).repos;
+if (args[0] === 'clone') {
+  const source = args.at(-2); const dest = args.at(-1);
+  const r = repos.find(r => r.url === source || r.url === 'self' && source === process.env.FAKE_PINNED_SOURCE);
+  if (!r) throw Error(`unexpected clone source ${source}`);
+  if (r.url !== 'self' && args[args.indexOf('--branch') + 1] !== r.ref) throw Error('wrong pinned clone ref');
+  const status = run(['clone', '-q', '--no-hardlinks', process.env.FAKE_PINNED_FIXTURE, dest]);
+  if (status) process.exit(status);
+  const actual = spawnSync(real, ['-C', dest, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  fs.writeFileSync(path.join(dest, '.git', 'simulated-pin.json'), JSON.stringify({
+    expected: r.url === 'self' ? process.env.FAKE_PINNED_CANDIDATE : r.commit, actual,
+  }));
+  process.exit(0);
+}
+const cwd = args[0] === '-C' ? args[1] : process.cwd();
+const command = args[0] === '-C' ? args.slice(2) : args;
+const pinFile = path.join(cwd, '.git', 'simulated-pin.json');
+if (fs.existsSync(pinFile)) {
+  const { expected, actual } = JSON.parse(fs.readFileSync(pinFile));
+  if (command[0] === 'rev-parse' && command[1] === 'HEAD') { console.log(expected); process.exit(0); }
+  if (command[0] === 'checkout' && command.at(-1) !== expected) throw Error('wrong candidate checkout');
+  args = args.map(v => v === expected ? actual : v === `${expected}^{commit}` ? `${actual}^{commit}` : v);
+}
+process.exit(run(args));
+GIT
+  chmod +x "$sim/bin/git"
+  # The first invocation's owned daemon is stopped by its EXIT trap. Wait
+  # for its listener to close before starting a separate resumed invocation.
+  for _ in $(seq 1 100); do
+    curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
+  pinned_manifest="$script_dir/real-repos.json"
+  if invoke_mac pinned --resume; then echo 'pinned simulation became release evidence' >&2; exit 1; fi
+  assert_pinned_run() {
+    local case_name=$1 manifest=$2 source=$3
+    node -e '
+    const fs = require("fs"); const path = require("path");
+    const [evidence, manifest, argvFile, gitFile, source, commit] = process.argv.slice(1);
+    const e = JSON.parse(fs.readFileSync(evidence));
+    const repos = JSON.parse(fs.readFileSync(manifest)).repos;
+    const calls = fs.readFileSync(argvFile, "utf8").trim().split("\n").map(JSON.parse);
+    const git = fs.readFileSync(gitFile, "utf8").trim().split("\n").map(JSON.parse);
+    const failed = e.steps.filter(s => s.status !== "pass");
+    if (failed.length !== 1 || !failed[0].name.startsWith("simulation:")) throw Error(JSON.stringify(failed));
+    const runs = calls.filter(c => c.argv[0] === "run");
+    if (runs.length !== repos.length) throw Error(`ran ${runs.length}, expected ${repos.length}`);
+    for (const r of repos) {
+      const run = runs.find(c => path.basename(c.cwd) === `real-${r.name}`);
+      if (!run || run.argv[run.argv.indexOf("--task") + 1] !== r.task || !r.task.trim()) throw Error(`task changed for ${r.name}: ${JSON.stringify(run)}`);
+      for (const name of [`run fix on ${r.name} (verdict 0, 1 or 2, not infrastructure)`,
+        `receipt verify on ${r.name} (documented command)`, `no tool-call markup in the accepted output of the run on ${r.name}`]) {
+        if (!e.steps.some(s => s.name === name && s.status === "pass")) throw Error(`missing ${name}`);
+      }
+      for (const file of ["receipt.json", "run.axorecord.jsonl", "junit.xml"]) {
+        if (!e.attachments.includes(`C1-real-repo/${r.name}/${file}`)) throw Error(`missing ${r.name}/${file}`);
+      }
+      const clone = git.find(c => c.argv[0] === "clone" && path.basename(c.argv.at(-1)) === `real-${r.name}`);
+      if (!clone || clone.argv.at(-2) !== (r.url === "self" ? source : r.url)) throw Error(`wrong clone for ${r.name}`);
+      if (r.url === "self") {
+        if (!git.some(c => c.argv[0] === "-C" && c.argv[1] === run.cwd && c.argv[2] === "checkout" && c.argv.at(-1) === commit)) throw Error("self did not check out the candidate");
+      } else {
+        if (clone.argv[clone.argv.indexOf("--branch") + 1] !== r.ref
+          || !e.steps.some(s => s.name === `${r.name} is at the pinned commit ${r.commit.slice(0, 12)}` && s.status === "pass")) throw Error("external pin was not verified");
+      }
+    }
+    if (!e.steps.some(s => s.name === "a timed run on every pinned real repository ended with a verdict, its receipt verified" && s.status === "pass")) throw Error("pinned loop did not finish");
+    if (!e.attachments.includes("C1-real-repo/logs/dev.log") || !e.attachments.includes("C1-real-repo/resume-candidate.json")) throw Error("relative output root lost logs or provenance");
+    const manifestCopy = path.join(path.dirname(evidence), "C1-real-repo", "real-repos.json");
+    if (!e.attachments.includes("C1-real-repo/real-repos.json") || !fs.readFileSync(manifestCopy).equals(fs.readFileSync(manifest))) throw Error("pinned task provenance changed");
+    ' "$sim/$case_name-evidence/$version/$commit/C1-real-repo.json" "$manifest" \
+      "$sim/$case_name.argv.jsonl" "$sim/$case_name.git.jsonl" "$source" "$commit"
+  }
+  assert_pinned_run pinned "$pinned_manifest" "$gate_repo"
+
+  # A copied gate changes only the manifest fixture. Run the same parser and
+  # loop with literal whitespace/shell text, then a partially valid manifest
+  # with an empty task and malformed JSON. None may become a shell command or
+  # a silently successful empty loop.
+  test_gate_repo="$sim/manifest-copy"
+  mkdir -p "$test_gate_repo/scripts"
+  cp -R "$script_dir" "$test_gate_repo/scripts/release-gate"
+  test_gate_script="$test_gate_repo/scripts/release-gate/newuser-mac.sh"
+  pinned_manifest="$test_gate_repo/scripts/release-gate/real-repos.json"
+  node -e '
+    const fs = require("fs"); const p = process.argv[1]; const doc = JSON.parse(fs.readFileSync(p));
+    doc.repos[1].task = "  Literal\ttab\nnewline; \\ backslash; $(touch SHOULD_NOT_EXIST); `false`; \"quote\"  ";
+    fs.writeFileSync(p, JSON.stringify(doc));
+  ' "$pinned_manifest"
+  for case_name in literal invalid-task malformed; do
+    for _ in $(seq 1 100); do
+      curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    case "$case_name" in
+      invalid-task)
+        node -e 'const fs=require("fs"),p=process.argv[1],d=JSON.parse(fs.readFileSync(p));d.repos[1].task="";fs.writeFileSync(p,JSON.stringify(d))' "$pinned_manifest" ;;
+      malformed) printf '{ invalid json\n' >"$pinned_manifest" ;;
+    esac
+    if invoke_mac "$case_name" --resume; then echo "$case_name simulation passed" >&2; exit 1; fi
+    if [ "$case_name" = literal ]; then
+      assert_pinned_run "$case_name" "$pinned_manifest" "$test_gate_repo"
+      [ ! -e "$sim/home/axocoatl-gate-work/repos/real-rust-axocoatl/SHOULD_NOT_EXIST" ] || { echo 'literal task was executed by the shell' >&2; exit 1; }
+    else
+      node -e '
+        const fs=require("fs");const e=JSON.parse(fs.readFileSync(process.argv[1]));
+        if (!e.steps.some(s=>s.name==="read the pinned real-repository tasks" && s.status==="fail")) throw Error("manifest did not fail");
+        if (e.steps.some(s=>/^(clone |run fix |a timed run on every)/.test(s.name))) throw Error("invalid manifest started repository work");
+        const calls=fs.readFileSync(process.argv[2],"utf8").trim().split("\n").map(JSON.parse);
+        if (calls.some(c=>c.argv[0]==="run")) throw Error("invalid manifest admitted a model task");
+      ' "$sim/$case_name-evidence/$version/$commit/C1-real-repo.json" "$sim/$case_name.argv.jsonl"
+      [ ! -s "$sim/$case_name.git.jsonl" ] || { echo 'invalid manifest invoked git' >&2; exit 1; }
+    fi
+  done
 )
 mac_resume_status=$?
 if [ "$mac_resume_status" = 0 ]; then
-  pass "newuser-mac.sh --resume: exact installed candidate runs and verifies a real-repo task; mismatched archive, binary, version, absent install or unowned daemon stop before work; old evidence is preserved; clean-install and sign-in paths stay prohibited; default stays fresh"
+  pass "newuser-mac.sh --resume: exact installed candidate runs and verifies custom and pinned real-repo tasks with relative evidence paths; mismatched archive, binary, version, absent install or unowned daemon stop before work; old evidence is preserved; clean-install and sign-in paths stay prohibited; default stays fresh"
 else
   fail "newuser-mac.sh resume simulation"
 fi
