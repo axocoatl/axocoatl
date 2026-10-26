@@ -239,8 +239,9 @@ images come from Docker Hub, which limits pulls without a sign-in per address;
   offers to switch it to rootless. On Linux, Podman runs containers directly and needs
   no machine: install Podman 4.3 or later (the 1.5.0 release gate runs Ubuntu
   24.04's; Ubuntu 22.04 ships 3.4.4, which onboarding refuses, so Ubuntu 22.04 is
-  not yet verified), for example `sudo apt-get install -y podman`; onboarding runs
-  that, after asking, with apt, dnf, pacman or zypper, and names what to install on other distributions. For the subordinate ids rootless Podman needs, run `axocoatl
+  not yet verified), for example `sudo apt-get update && sudo apt-get install -y podman`.
+  Onboarding asks separately before refreshing apt's package lists and installing Podman;
+  it also installs with dnf, pacman or zypper, and names what to install on other distributions. For the subordinate ids rootless Podman needs, run `axocoatl
   onboard` or `axocoatl doctor` and use the exact command it prints: when your user has
   no range in `/etc/subuid` and `/etc/subgid`, or fewer than 65536 ids, onboarding
   offers to run it and doctor fails "User ID ranges" with it. It is `sudo usermod

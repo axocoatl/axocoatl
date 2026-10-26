@@ -27,7 +27,10 @@ the current working directory. On macOS these live under
 `~/Library/Application Support/Axocoatl/`; Linux and WSL use XDG configuration and data
 directories. `axocoatl onboard` configures that user-level product and creates no
 repository folder. An explicit `--config` retains project-local operator mode and uses
-data beside that configuration unless `AXOCOATL_DATA_DIR` overrides it.
+data beside that configuration unless `AXOCOATL_DATA_DIR` overrides it. When Podman is
+missing on an apt-based Linux distribution, onboarding asks separately to refresh the
+package lists and install Podman; a declined or failed refresh stops that setup step.
+Refreshing package lists changes no apt sources and upgrades no installed packages.
 
 The browser app at `/` is the operational face of the runtime and the only supported
 interactive browser route. A Workspace is a durable, user-named identity for one authorized

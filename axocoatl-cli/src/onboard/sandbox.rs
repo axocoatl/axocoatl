@@ -17,7 +17,7 @@ use axocoatl_isolation::podman_report::{
     TESTED_LINUX_PODMAN,
 };
 
-use super::detect::Os;
+use super::detect::{Os, PackageManager};
 use super::host::Cmd;
 use super::id_map_attempt::Outcome;
 use super::ui::joined;
@@ -310,6 +310,32 @@ async fn install(o: &mut Onboarding) -> bool {
             } else {
                 ""
             };
+            if manager == PackageManager::Apt {
+                let refresh = Cmd::sudo("apt-get", &["update"]);
+                if !o.ui.consent(
+                    &format!(
+                        "Refresh apt package lists now with `{}`{wsl_note}? This downloads current \
+                         package metadata from your configured repositories and asks for your password.",
+                        refresh.display()
+                    ),
+                    true,
+                    true,
+                ) {
+                    o.step_left(format!(
+                        "Refresh package lists, then install Podman: {} && {}",
+                        refresh.display(),
+                        cmd.display()
+                    ));
+                    return false;
+                }
+                if let Err(error) = o.ui.execute_showing_output(&o.host, &refresh).await {
+                    o.step_left(format!(
+                        "{error}; Podman was not installed. Fix the package-list refresh, then run \
+                         `axocoatl onboard` again"
+                    ));
+                    return false;
+                }
+            }
             if !o.ui.consent(
                 &format!(
                     "Axocoatl runs every Session in a rootless Podman sandbox. Install Podman now \

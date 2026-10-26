@@ -360,7 +360,14 @@ pub(crate) fn podman_install_route(
         Os::MacOs { apple_silicon, .. } => InstallRoute::for_mac(*apple_silicon, homebrew),
         Os::Linux { release, .. } if release.podman_too_old() => InstallRoute::LinuxTooOld,
         Os::Linux { release, .. } => match release.package_manager() {
-            Some(manager) => InstallRoute::LinuxPackage(manager.install(&["podman"]).display()),
+            Some(manager) => {
+                let install = manager.install(&["podman"]).display();
+                InstallRoute::LinuxPackage(if manager == detect::PackageManager::Apt {
+                    format!("sudo apt-get update && {install}")
+                } else {
+                    install
+                })
+            }
             None => InstallRoute::LinuxOther,
         },
     }
@@ -3496,7 +3503,10 @@ mod tests {
         };
         for homebrew in [true, false] {
             let fix = podman_install_fix(&ubuntu, homebrew);
-            assert!(fix.ends_with("`sudo apt-get install -y podman`"), "{fix}");
+            assert!(
+                fix.ends_with("`sudo apt-get update && sudo apt-get install -y podman`"),
+                "{fix}"
+            );
             assert!(!fix.contains("brew"), "{fix}");
         }
         // Onboarding refuses Ubuntu 22.04's Podman, so doctor does not say it

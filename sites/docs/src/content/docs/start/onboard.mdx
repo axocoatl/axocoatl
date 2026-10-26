@@ -144,10 +144,15 @@ On **Linux and WSL2**:
 
   | Distribution | Command |
   | --- | --- |
-  | Ubuntu, Debian and derivatives | `sudo apt-get install -y podman` |
+  | Ubuntu, Debian and derivatives | `sudo apt-get update` then `sudo apt-get install -y podman` |
   | Fedora, RHEL and derivatives | `sudo dnf install -y podman` |
   | Arch | `sudo pacman -S --noconfirm podman` |
   | openSUSE, SLES | `sudo zypper install -y podman` |
+
+  With apt, onboarding asks separately before refreshing package lists and before
+  installing Podman. Refreshing downloads metadata from your configured repositories;
+  it changes no sources and upgrades no installed packages. If the refresh is declined
+  or fails, Podman setup stops there. `--plan` shows both commands without running them.
 
 - Ubuntu 22.04 ships Podman 3.4.4. Axocoatl runs need Podman 4.3 or later (the 1.5.0
   release gate runs Ubuntu 24.04's), so onboarding stops there and asks for Ubuntu 24.04

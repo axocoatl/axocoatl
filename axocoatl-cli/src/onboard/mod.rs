@@ -122,7 +122,8 @@ impl WriterChoice {
 pub enum PodmanChoice {
     /// Set up a missing Podman: on a Mac, install it with Homebrew (Apple
     /// silicon) and create and start its machine; on Linux, install it with
-    /// apt-get, dnf, pacman or zypper (with sudo), except on Ubuntu 22.04,
+    /// apt-get (refreshing package lists first), dnf, pacman or zypper (with
+    /// sudo), except on Ubuntu 22.04,
     /// whose Podman 3.4.4 is too old (onboarding refuses it and says to use
     /// Ubuntu 24.04 or newer); elsewhere, say how
     Create,

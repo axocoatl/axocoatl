@@ -25,8 +25,9 @@ axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo 
 ```
 
 Onboarding installs Podman after asking where it can: with Homebrew on an Apple-silicon
-Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. On an Apple-silicon Mac
-without Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
+Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. Before an apt install,
+it asks separately to refresh the package lists with `sudo apt-get update`. On an
+Apple-silicon Mac without Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
 package, and on another Linux distribution it names what to install; Ubuntu 22.04 and
 older are refused, since their Podman is too old. On a Mac it then creates and starts
 the Podman machine, after asking.

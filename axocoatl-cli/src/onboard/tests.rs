@@ -548,7 +548,7 @@ async fn yes_without_allow_sudo_lists_the_sudo_steps_and_runs_none() {
     assert!(o
         .steps
         .iter()
-        .any(|step| step == "Install Podman: sudo apt-get install -y podman"));
+        .any(|step| step == "Refresh package lists, then install Podman: sudo apt-get update && sudo apt-get install -y podman"));
     assert!(
         o.steps
             .iter()
@@ -577,7 +577,8 @@ async fn linux_uses_apt_usermod_and_a_systemd_drop_in_with_allow_sudo() {
         "sudo",
         &format!(
             r#"case "$*" in
-  "apt-get install -y podman") cp "{dir}/podman.real" "{dir}/podman"; chmod +x "{dir}/podman"; touch "{dir}/machine" "{dir}/running" "{dir}/no-ids" ;;
+  "apt-get update") touch "{dir}/apt-refreshed" ;;
+  "apt-get install -y podman") [ -f "{dir}/apt-refreshed" ] || {{ echo "E: Package podman has no installation candidate" >&2; exit 100; }}; cp "{dir}/podman.real" "{dir}/podman"; chmod +x "{dir}/podman"; touch "{dir}/machine" "{dir}/running" "{dir}/no-ids" ;;
   usermod*) rm -f "{dir}/no-ids"; echo "alex:100000:65536" >> "{etc}/subuid"; echo "alex:100000:65536" >> "{etc}/subgid" ;;
   tee*) cat > "{dir}/drop-in" ;;
   "systemctl restart ollama") [ -f "{dir}/drop-in" ] && grep -q OLLAMA_NO_CLOUD "{dir}/drop-in" && touch "{dir}/no-cloud" ;;
@@ -631,7 +632,15 @@ esac"#
     let output = o.ui.output();
     let calls = shims.calls();
     assert_eq!(code, exit::READY, "{output}\n{calls:?}\n{:?}", o.steps);
+    assert!(
+        calls.iter().position(|call| call == "sudo apt-get update")
+            < calls
+                .iter()
+                .position(|call| call == "sudo apt-get install -y podman"),
+        "{calls:?}"
+    );
     for expected in [
+        "sudo apt-get update",
         "sudo apt-get install -y podman",
         "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 alex",
         "podman system migrate",
@@ -651,6 +660,104 @@ esac"#
     );
     assert!(!shims.home.path().join(".ollama/server.json").exists());
     assert!(!calls.iter().any(|call| call.contains("launchctl")));
+}
+
+/// Refreshing apt's lists and installing Podman are distinct changes. A
+/// declined or failed refresh never reaches installation; accepting refresh
+/// still does not consent to installation. Plan mode executes neither.
+#[cfg(unix)]
+#[tokio::test]
+async fn apt_podman_refresh_requires_consent_and_success_before_install() {
+    for case in [
+        "decline-refresh",
+        "decline-install",
+        "refresh-fails",
+        "plan",
+    ] {
+        let shims = Shims::new();
+        shims.add(
+            "sudo",
+            if case == "refresh-fails" {
+                "echo 'E: Failed to fetch package indexes' >&2; exit 100"
+            } else {
+                "exit 0"
+            },
+        );
+        let facts = facts(
+            ubuntu(),
+            64,
+            no_podman(),
+            &shims,
+            "http://127.0.0.1:9",
+            OllamaService::Manual,
+        )
+        .await;
+        let ui = match case {
+            "decline-refresh" => Ui::scripted(vec![Answer::No]),
+            "decline-install" => Ui::scripted(vec![Answer::Yes, Answer::No]),
+            "refresh-fails" => Ui::scripted(vec![Answer::Yes]),
+            _ => Ui::new(Mode::Plan, false, None),
+        };
+        let mut o = onboarding(&shims, ui, facts, OnboardArgs::default());
+        let log = std::sync::Arc::new(host::Log::create(shims.home.path(), "apt").unwrap());
+        o.ui.log = Some(log.clone());
+        o.host.log = Some(log.clone());
+        let before = tree(shims.home.path());
+        let ready = sandbox::run(&mut o).await;
+        let output = o.ui.output();
+        let calls = shims.calls();
+        assert_eq!(ready, case == "plan", "{case}: {output}\n{:?}", o.steps);
+        assert!(
+            !calls.iter().any(|call| call.contains("apt-get install")),
+            "{case}: {calls:?}"
+        );
+        assert!(o.ui.answers.lock().unwrap().is_empty(), "{case}");
+        let logged = std::fs::read_to_string(log.path()).unwrap();
+        match case {
+            "decline-refresh" => {
+                assert!(calls.is_empty(), "{calls:?}");
+                assert!(
+                    o.steps[0].contains("sudo apt-get update && sudo apt-get install -y podman")
+                );
+                assert!(!output.contains("Install Podman now"), "{output}");
+            }
+            "decline-install" => {
+                assert_eq!(calls, ["sudo apt-get update"]);
+                assert_eq!(o.steps, ["Install Podman: sudo apt-get install -y podman"]);
+                assert!(logged.contains("$ sudo apt-get update"), "{logged}");
+                assert!(logged.contains("exit 0"), "{logged}");
+            }
+            "refresh-fails" => {
+                assert_eq!(calls, ["sudo apt-get update"]);
+                assert!(o.steps[0].contains("`sudo apt-get update` failed (exit 100)"));
+                assert!(o.steps[0].contains("Podman was not installed"));
+                assert!(logged.contains("exit 100"), "{logged}");
+                assert!(!output.contains("Install Podman now"), "{output}");
+            }
+            _ => {
+                assert!(calls.is_empty(), "{calls:?}");
+                for command in ["sudo apt-get update", "sudo apt-get install -y podman"] {
+                    assert!(
+                        output.contains(&format!("would run: {command}")),
+                        "{output}"
+                    );
+                }
+                assert!(
+                    output.find("would run: sudo apt-get update")
+                        < output.find("would run: sudo apt-get install -y podman"),
+                    "{output}"
+                );
+                // The test's transcript is the only file the plan changes.
+                let without_log = |entries: Vec<(PathBuf, Vec<u8>)>| {
+                    entries
+                        .into_iter()
+                        .filter(|(path, _)| path != log.path())
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(without_log(tree(shims.home.path())), without_log(before));
+            }
+        }
+    }
 }
 
 /// Ubuntu 24.04 with a ready rootless Podman (the shim's `podman info`

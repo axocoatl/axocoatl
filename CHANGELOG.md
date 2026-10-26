@@ -918,6 +918,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sessions left.
 
 ### Fixed
+
+- **Apt refreshes package lists before onboarding installs Podman.** Fresh Ubuntu
+  images can have package sources enabled but incomplete cached indexes, so installation
+  reported no Podman candidate. Onboarding asks separately before `sudo apt-get update`
+  and installation, and stops Podman setup if the refresh is declined or fails. Doctor
+  and the workbench's manual install command include the refresh too.
 - **Cancelled macOS command I/O closes its pipe ends.** Child pipes are created
   close-on-exec so unrelated programs cannot inherit them. The parent's FIFO ends
   use nonblocking reads and writes that yield to deadlines; cancellation releases

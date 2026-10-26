@@ -867,8 +867,8 @@ pub enum InstallRoute {
     /// macOS on Intel, which Podman 6 and Homebrew's Podman no longer
     /// support: onboarding installs nothing.
     IntelMac,
-    /// Linux whose package manager onboarding knows: onboarding runs this
-    /// command after asking.
+    /// Linux whose package manager onboarding knows: onboarding runs these
+    /// commands after asking separately for each change.
     LinuxPackage(String),
     /// Ubuntu 22.04 or older, whose Podman (3.4.4 on 22.04) Axocoatl
     /// cannot use: onboarding installs nothing.
@@ -945,7 +945,7 @@ impl InstallRoute {
             return Self::LinuxTooOld;
         }
         let command = if is("debian") || is("ubuntu") {
-            "sudo apt-get install -y podman"
+            "sudo apt-get update && sudo apt-get install -y podman"
         } else if is("fedora") || is("rhel") || is("centos") {
             "sudo dnf install -y podman"
         } else if is("arch") {
@@ -1197,12 +1197,14 @@ mod tests {
             "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID=\"24.04\"\n";
         assert_eq!(
             fix(InstallRoute::for_linux(ubuntu)),
-            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get install \
-             -y podman`"
+            "Run `axocoatl onboard` (it installs Podman after asking), or: `sudo apt-get update && \
+             sudo apt-get install -y podman`"
         );
         assert_eq!(
             InstallRoute::for_linux("ID=debian\nVERSION_ID=\"12\"\n"),
-            InstallRoute::LinuxPackage("sudo apt-get install -y podman".into())
+            InstallRoute::LinuxPackage(
+                "sudo apt-get update && sudo apt-get install -y podman".into()
+            )
         );
         assert_eq!(
             InstallRoute::for_linux("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n"),
@@ -1225,7 +1227,9 @@ mod tests {
             InstallRoute::MacHomebrew,
             InstallRoute::MacInstaller,
             InstallRoute::IntelMac,
-            InstallRoute::LinuxPackage("sudo apt-get install -y podman".into()),
+            InstallRoute::LinuxPackage(
+                "sudo apt-get update && sudo apt-get install -y podman".into(),
+            ),
             InstallRoute::LinuxTooOld,
             InstallRoute::LinuxOther,
             InstallRoute::Windows,
