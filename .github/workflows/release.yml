@@ -225,9 +225,9 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: axocoatl-server/browser-tests/package-lock.json
-      - name: Pull Docker Hub images through mirror.gcr.io
+      - name: Pull pinned images from their origins
         if: matrix.podman
-        run: ./scripts/ci-registry-mirror.sh
+        run: ./scripts/ci-registry.sh
       # The same images, pins and requirements as ci.yml's product-browser
       # legs, so the Preview, native turn and reference journeys run here
       # instead of being skipped.
@@ -579,8 +579,8 @@ jobs:
           run-id: ${{ github.run_id }}
       - name: Install Podman when the runner image lacks it
         run: command -v podman >/dev/null || { sudo apt-get update && sudo apt-get install -y podman; }
-      - name: Pull Docker Hub images through mirror.gcr.io
-        run: ./scripts/ci-registry-mirror.sh
+      - name: Pull pinned images from their origins
+        run: ./scripts/ci-registry.sh
       - name: A brand-new user, from the install command to a passing signed run
         env:
           TARGET: ${{ matrix.target }}

@@ -599,8 +599,8 @@ ci = YAML.load_file(ROOT.join(".github/workflows/ci.yml"))
   end
 end
 
-# Every job that pulls with Podman or runs the new-user gate first points
-# Podman at the Docker Hub mirror, so anonymous pulls meet no rate limit.
+# Every job that pulls with Podman or runs the new-user gate first removes
+# CI mirror routing, so pinned manifests cannot select an incomplete cache.
 { "ci.yml" => ci, "release.yml" => release }.each do |file, document|
   document.fetch("jobs").each do |job_name, job|
     steps = Array(job["steps"])
@@ -610,9 +610,9 @@ end
         || text.include?("test-exec-supervisor-runtime.sh prepare")
     end
     next unless pulls
-    mirror = steps.index { |step| step["run"].to_s.include?("./scripts/ci-registry-mirror.sh") }
-    unless mirror && mirror < pulls
-      errors << ".github/workflows/#{file}: #{job_name} pulls images before ./scripts/ci-registry-mirror.sh"
+    registry = steps.index { |step| step["run"].to_s.include?("./scripts/ci-registry.sh") }
+    unless registry && registry < pulls
+      errors << ".github/workflows/#{file}: #{job_name} pulls images before ./scripts/ci-registry.sh"
     end
   end
 end

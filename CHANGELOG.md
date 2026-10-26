@@ -586,7 +586,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The workflows pin the Node 24 releases of their GitHub Actions** (checkout 5.1.0,
   setup-node 6.5.0, setup-go 6.5.0, upload-artifact 7.0.2, download-artifact 8.0.2,
   wrangler-action 4.1.3 with Wrangler 3.90.0 kept). So do the receipts page's examples.
-- CI pulls Docker Hub images through mirror.gcr.io.
+- CI pulls Docker Hub images directly from their origin, preserving digest pins and
+  avoiding incomplete cached images.
 - The macOS plumbing CI gate's admission step uses a short `HOME` under `/tmp`, so the
   daemon's socket path fits macOS's 104-byte limit.
 - **The tests pass under Ubuntu's login umask, whatever Podman connection the shell

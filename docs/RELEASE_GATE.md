@@ -563,11 +563,12 @@ helpers are accounted for explicitly rather than reported as automatic passes:
 Each removal the `node_modules` mount point tests assert runs while an
 unrelated container exists, and each keep of the empty mount point they
 assert names why, so a broken `podman container inspect` fails them. Every
-CI job that pulls images first configures `scripts/ci-registry-mirror.sh`.
-Official `docker.io/library` images use Google's `mirror.gcr.io` cache to
-reduce anonymous Docker Hub pulls; third-party images use their origin.
-This preserves pinned digests while avoiding a cache that serves a
-multi-architecture index but lacks its selected child manifest.
+CI job that pulls images first configures `scripts/ci-registry.sh`.
+Docker Hub images use their origin with unchanged digest pins and TLS
+verification. Opportunistic caches can serve the pinned index and child
+manifest while lacking a required layer, including for official images.
+Podman 4.9 does not fall back after that layer failure, so CI does not route
+pulls through a cache.
 
 ### Manual Ollama timeout diagnostics
 

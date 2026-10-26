@@ -12,7 +12,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-bash "$script_dir/test-ci-registry-mirror.sh"
+bash "$script_dir/test-ci-registry.sh"
 bash "$script_dir/test-product-browser-gate.sh"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-workflow-contracts.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
@@ -185,9 +185,9 @@ with_change refused 'a release browser gate without the macOS WebKit leg' \
   "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"runner: macos-26\", \"runner: ubuntu-24.04\") or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/release.yml
 
-with_change refused 'a Podman pull before the Docker Hub mirror' \
-  'new-user-linux pulls images before ./scripts/ci-registry-mirror.sh' \
-  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"        run: ./scripts/ci-registry-mirror.sh\\n      - name: A brand-new user\", \"        run: echo no mirror\\n      - name: A brand-new user\") or abort(\"no anchor\"); File.write(p, s)'" \
+with_change refused 'a Podman pull before origin routing' \
+  'new-user-linux pulls images before ./scripts/ci-registry.sh' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/release.yml\"; s = File.read(p); s.sub!(\"        run: ./scripts/ci-registry.sh\\n      - name: A brand-new user\", \"        run: echo no registry setup\\n      - name: A brand-new user\") or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/release.yml
 
 with_change refused 'a Podman suite group left out of CI' \
