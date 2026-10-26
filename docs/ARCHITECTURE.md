@@ -564,7 +564,12 @@ unusable response, or one the budget cannot ask again, fails the activation with
 instead of settling as a final answer, classed `unrunnable_tool_call` for a call written as text
 and `no_answer` otherwise. The actor has no
 text-to-tool path of its own; other providers leave response text non-actionable because their
-native ids, signatures, and block structure cannot be fabricated safely. Every completed provider
+native ids, signatures, and block structure cannot be fabricated safely. Native OpenRouter also
+refuses a complete standalone Qwen function/parameter envelope ending a response that returned
+no native calls, when it names an offered tool: the existing unusable-response retry asks for a
+native call instead. It never executes the envelope or invents replay metadata. This conservative
+refusal leaves quoted examples, colon-ended prose introductions, structured/stopped output, and responses
+with real native calls unchanged; its text inspection is bounded to 256 KiB. Every completed provider
 response is recorded in the activation stream as `provider_response` (finish reason, offered
 tools, returned calls). Concurrent dispatch preserves each original call identity and order even
 when one spawned task panics.

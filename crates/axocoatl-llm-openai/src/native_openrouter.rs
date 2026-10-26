@@ -41,6 +41,8 @@ mod money;
 mod observation;
 #[path = "native_openrouter/stream.rs"]
 mod stream;
+#[path = "native_openrouter/text_call.rs"]
+mod text_call;
 pub use failover::{NativeOpenRouterServed, ServedOpenRouterEndpoint};
 pub use observation::{
     catalog_call_floor, observe_native_openrouter_endpoints, observe_native_openrouter_profiles,

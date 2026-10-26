@@ -843,10 +843,9 @@ pub struct ExecutionActivationView {
     pub failure: Option<ActivationFailureView>,
 }
 
-/// How an Ollama provider's refusal of a tool call written as answer text
-/// starts, after `LLM provider error: ` (`ProviderError::RefusedResponse`).
-const TEXT_CALL_REFUSAL: &str = "ollama returned a response that was refused: the model wrote a \
-                                 call to ";
+/// How a provider's refusal of a tool call written as answer text starts
+/// after [`REFUSED_RESPONSE`] (`ProviderError::UnusableResponse`).
+const TEXT_CALL_REFUSAL: &str = "the model wrote a call to ";
 
 /// How a provider's refusal of a completed response begins, after `LLM
 /// provider error: ` and the provider's id (`ollama`, `openrouter`).
@@ -870,9 +869,17 @@ const LEGACY_NO_ANSWER: &str =
 /// Whether a provider error (after `LLM provider error: `) refused a
 /// completed response with no answer and no tool call that can run.
 fn names_no_answer(rest: &str) -> bool {
-    if rest.starts_with(LEGACY_NO_ANSWER) {
-        return true;
-    }
+    rest.starts_with(LEGACY_NO_ANSWER)
+        || refused_response_reason(rest).is_some_and(|said| {
+            NO_ANSWER_REFUSALS
+                .iter()
+                .any(|prefix| said.starts_with(prefix))
+        })
+}
+
+/// Only the host's provider-id-prefixed refusal, never a matching phrase
+/// embedded in some other error message, supplies a refusal reason.
+fn refused_response_reason(rest: &str) -> Option<&str> {
     rest.split_once(REFUSED_RESPONSE)
         .filter(|(provider, _)| {
             !provider.is_empty()
@@ -880,11 +887,7 @@ fn names_no_answer(rest: &str) -> bool {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         })
-        .is_some_and(|(_, said)| {
-            NO_ANSWER_REFUSALS
-                .iter()
-                .any(|prefix| said.starts_with(prefix))
-        })
+        .map(|(_, said)| said)
 }
 
 /// How the host's failure line begins for a writer stopped before its
@@ -929,12 +932,15 @@ pub fn classify_activation_failure(text: &str) -> Option<ActivationFailureView> 
         http_status,
         refusal,
     };
-    // An Ollama provider refused an answer that calls an offered tool as
+    // A provider refused an answer that calls an offered tool as
     // text it cannot run (a malformed or unoffered call, JSON, prose after
     // it, a call after other text on its line): the model's own output, not
     // the provider's failure. Decided before the rest of the line, which
     // names a tool and parameter the model wrote.
-    if provider.is_some_and(|rest| rest.starts_with(TEXT_CALL_REFUSAL)) {
+    if provider
+        .and_then(refused_response_reason)
+        .is_some_and(|said| said.starts_with(TEXT_CALL_REFUSAL))
+    {
         return Some(ActivationFailureView {
             class: "unrunnable_tool_call",
             explanation: "The model wrote a tool call as answer text that Axocoatl cannot run, \
@@ -5481,6 +5487,7 @@ mod tests {
         // model's output and not a provider failure, whatever tool or
         // parameter name the model wrote into the line.
         for line in [
+            "Activation failed: LLM provider error: openrouter returned a response that was refused: the model wrote a call to bash as answer text that Axocoatl cannot run: OpenRouter returned no native tool call. Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 7 tools offered",
             "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to glob as answer text that Axocoatl cannot run: text follows the call markup, so it does not end the answer. Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 7 tools offered",
             "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to bash as JSON in its answer, which Axocoatl never runs: only calls Ollama returns as tool calls, or that begin a line and end the answer in Qwen3-Coder's <function=…> format, run. Nothing from this response ran; Ollama ended it with finish_reason \"stop\" and 1 tool offered",
             "Activation failed: LLM provider error: ollama returned a response that was refused: the model wrote a call to read_file as answer text that Axocoatl cannot run: read_file has a parameter content_filter it does not declare. Nothing from this response ran; Ollama ended it with done_reason \"stop\" and 7 tools offered",
@@ -5502,6 +5509,17 @@ mod tests {
                 view.explanation
             );
         }
+        // A later line, another error's quoted text, or an invalid
+        // provider id cannot claim the host's textual-call failure class.
+        for line in [
+            "Activation failed: LLM provider error: network error\nopenrouter returned a response that was refused: the model wrote a call to bash",
+            "Activation failed: LLM provider error: network error: openrouter returned a response that was refused: the model wrote a call to bash",
+            "Activation failed: LLM provider error: openrouter.extra returned a response that was refused: the model wrote a call to bash",
+            "Activation failed: LLM provider error: openrouter returned a response that was refused: other failure mentions the model wrote a call to bash",
+        ] {
+            assert_eq!(class(line), Some(("provider_error", "continue")), "{line}");
+        }
+        assert_eq!(class("The model said: Activation failed: LLM provider error: openrouter returned a response that was refused: the model wrote a call to bash"), None);
         // A response with no answer and no tool call that can run, as the
         // native providers word it, and as Axocoatl 1.2.0 to 1.4.0 worded an
         // empty native Ollama response: the model's output, not a provider

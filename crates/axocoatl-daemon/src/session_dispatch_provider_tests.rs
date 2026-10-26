@@ -2653,3 +2653,194 @@ async fn openrouter_live_failover_moves_a_call_to_the_next_endpoint() {
     assert_eq!(charged.tokens, usage.tokens.usage.total() as u64);
     assert_eq!(charged.cost_microunits, usage.cost_microunits);
 }
+
+/// A real native OpenRouter adapter and Session activation: first return
+/// the captured live response as text. Only the host's retry note may
+/// produce a native call; a model repeating the bad answer must stop.
+#[derive(Clone)]
+struct OpenRouterTextCallReply {
+    repeats: bool,
+}
+impl wiremock::Respond for OpenRouterTextCallReply {
+    fn respond(&self, request: &wiremock::Request) -> wiremock::ResponseTemplate {
+        let body: serde_json::Value = request.body_json().unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let asked_again = messages.iter().any(|message| {
+            message["content"].as_str().is_some_and(|text| {
+                text.starts_with("[Note from the host: your last response could not be used")
+            })
+        });
+        let (delta, finish) = if messages.last().unwrap()["role"] == "tool" {
+            (serde_json::json!({"content":"verified"}), "stop")
+        } else if asked_again && !self.repeats {
+            (
+                serde_json::json!({"tool_calls":[{"index":0,"id":"native-bash-1","type":"function",
+                "function":{"name":"bash","arguments":"{\"command\":\"printf checked\"}"}}]}),
+                "tool_calls",
+            )
+        } else {
+            (
+                serde_json::json!({"content":include_str!("../../axocoatl-llm-openai/src/native_openrouter/fixtures/qwen-text-call.txt")}),
+                "stop",
+            )
+        };
+        let first = serde_json::json!({"id":"gen-fixture","model":OPENROUTER_MODEL,"provider":"FiniteProvider","choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+        let usage = serde_json::json!({"id":"gen-fixture","model":OPENROUTER_MODEL,"provider":"FiniteProvider","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6,"cost":0.000008,"is_byok":false}});
+        wiremock::ResponseTemplate::new(200).set_body_raw(
+            format!("data: {first}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+            "text/event-stream",
+        )
+    }
+}
+
+#[tokio::test]
+async fn native_openrouter_text_call_retries_once_and_only_runs_a_native_call() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer};
+    for repeats in [false, true] {
+        let server = MockServer::start().await;
+        openrouter_metadata(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(OpenRouterTextCallReply { repeats })
+            .mount(&server)
+            .await;
+        let profiles = axocoatl_llm_openai::observe_native_openrouter_profiles(
+            &server.uri(),
+            "fixture-inference-key",
+            OPENROUTER_MODEL,
+        )
+        .await
+        .unwrap();
+        let provider = axocoatl_llm_openai::NativeOpenRouterProvider::connect_observed_endpoints(
+            profiles,
+            "fixture-inference-key",
+            32,
+            65536,
+            None,
+        )
+        .await
+        .unwrap();
+        let fixture = fixture_with_config(
+            GrantLimits {
+                activations: 8,
+                invocations: 32,
+                tokens: 100_000,
+                cost_microunits: 100_000,
+            },
+            "in-process",
+            AgentConfig {
+                id: AgentId::new("conversation"),
+                name: "Writer".into(),
+                provider: "openrouter".into(),
+                model: OPENROUTER_MODEL.into(),
+                tools: vec!["bash".into()],
+                sampling: axocoatl_core::SamplingConfig {
+                    max_tokens: Some(32),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            "Paging skips the last item",
+        );
+        let tool = Arc::new(CountingTool::default());
+        let mut executor = axocoatl_tools::ToolExecutor::new();
+        executor.register_builtin("bash", tool.clone());
+        let resources = AutonomousActivationResources {
+            config: fixture.config.clone(),
+            profile: fixture.profile.clone(),
+            provider: Arc::new(provider),
+            counter: Arc::new(Counter),
+            tools: Arc::new(executor),
+        };
+        let settled = fixture
+            .controller
+            .prepare_autonomous_activation(fixture.activation.clone(), resources)
+            .unwrap()
+            .run()
+            .await
+            .unwrap();
+        let requests: Vec<serde_json::Value> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "POST")
+            .map(|request| request.body_json().unwrap())
+            .collect();
+        assert_eq!(settled.accepted, !repeats, "{:?}", settled.failure);
+        assert_eq!(tool.count.load(Ordering::SeqCst), usize::from(!repeats));
+        assert_eq!(requests.len(), if repeats { 2 } else { 3 });
+        let note = requests[1]["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_str()
+            .unwrap();
+        assert!(
+            note.contains("call to bash as answer text instead of a native tool call"),
+            "{note}"
+        );
+        if repeats {
+            let failure = settled.failure.as_deref().unwrap();
+            assert!(
+                failure.contains("That was its answer when Axocoatl asked it once more"),
+                "{failure}"
+            );
+            let view = axocoatl_session::execution_content::classify_activation_failure(
+                &settled.output.content().output.text,
+            )
+            .unwrap();
+            assert_eq!(
+                (view.class, view.next_step),
+                ("unrunnable_tool_call", "continue")
+            );
+        } else {
+            assert_eq!(settled.output.content().output.text, "verified");
+            let messages = requests[2]["messages"].as_array().unwrap();
+            assert!(!messages.iter().any(|message| message["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("Note from the host"))));
+            assert_eq!(messages.last().unwrap()["tool_call_id"], "native-bash-1");
+            let call = &messages[messages.len() - 2]["tool_calls"][0];
+            assert_eq!(call["id"], "native-bash-1");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    call["function"]["arguments"].as_str().unwrap()
+                )
+                .unwrap(),
+                serde_json::json!({"command":"printf checked"})
+            );
+        }
+        let usage = fixture
+            .controller
+            .activation_provider_usage(&fixture.activation)
+            .unwrap();
+        let count = if repeats { 2 } else { 3 };
+        assert_eq!((usage.calls, usage.unsettled_calls), (count, 0));
+        assert_eq!(
+            usage.tokens.usage,
+            TokenUsageStats::new(count as usize * 4, count as usize * 2)
+        );
+        assert!(usage.tokens.complete);
+        assert!(usage.cost_known);
+        assert_eq!(usage.cost_microunits, count as u64 * 8);
+        let retries: Vec<String> = {
+            use axocoatl_session::execution_content::ActivationStreamPayload;
+            let state = fixture.controller.lock().unwrap();
+            let snapshot = state.canonical.snapshot(&state.turn_id).unwrap();
+            state
+                .content
+                .activation_stream(&snapshot, &fixture.activation)
+                .unwrap()
+                .into_iter()
+                .filter_map(|view| match view.content.payload {
+                    ActivationStreamPayload::ProviderRetry { reason } => Some(reason),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(retries.len(), 1, "{retries:?}");
+        assert!(
+            retries[0].contains("call to bash as answer text"),
+            "{retries:?}"
+        );
+    }
+}

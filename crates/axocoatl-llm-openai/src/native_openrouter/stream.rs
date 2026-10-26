@@ -182,6 +182,9 @@ pub(super) fn decode(
         // The response wrote answer text (not only blank space), or
         // reasoning.
         let mut answered = false;
+        // Keep only bounded text for refusing a terminal call envelope. It
+        // is never parsed into executable calls or replay metadata.
+        let mut text_call = text_call::Detector::new(&request);
         let mut reasoned = false;
         // Reasoning text not yet yielded; every other event flushes it first
         // so the stream keeps its order.
@@ -334,6 +337,7 @@ pub(super) fn decode(
                             Err(protocol("content after terminal completion"))?;
                         }
                         answered |= !text.trim().is_empty();
+                        text_call.push(text);
                         if !text.is_empty() {
                             if !pending_reasoning.is_empty() {
                                 yield StreamEvent::ReasoningDelta {
@@ -507,6 +511,26 @@ pub(super) fn decode(
                 tools: request.tools.len(),
             }
             .refusal(PROVIDER))?;
+        }
+        if ids.is_empty()
+            && matches!(finish_reason, FinishReason::Stop | FinishReason::MaxTokens)
+        {
+            if let Some(name) = text_call.called_tool(&request) {
+                Err(ProviderError::UnusableResponse {
+                    provider: PROVIDER.into(),
+                    message: format!(
+                        "the model wrote a call to {name} as answer text that Axocoatl cannot run: \
+                         OpenRouter returned no native tool call. Nothing from this response ran; \
+                         OpenRouter ended it with finish_reason \"{}\" and {} offered",
+                        if finish_reason == FinishReason::MaxTokens { "length" } else { "stop" },
+                        axocoatl_llm::unusable::count_of(request.tools.len(), "tool")
+                    ),
+                    note: format!(
+                        "you wrote a call to {name} as answer text instead of a native tool call; \
+                         it did not run"
+                    ),
+                })?;
+            }
         }
         yield StreamEvent::Done { finish_reason };
     })

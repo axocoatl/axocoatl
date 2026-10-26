@@ -2782,3 +2782,160 @@ async fn a_retained_endpoint_that_changed_is_named_with_the_remedy() {
         .await;
     assert!(retained.contract_change(KEY).await.is_err());
 }
+
+/// The live 1.5 service-onboarding failure: Qwen/SiliconFlow returned a
+/// function envelope as content, ended with stop, with seven offered tools
+/// but no native call. The prose must not make it a usable final answer.
+#[tokio::test]
+async fn a_textual_openrouter_tool_call_is_unusable_and_keeps_its_spend() {
+    let mut request = ChatRequest::simple("Paging skips the last item");
+    for name in [
+        "bash",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "search",
+    ] {
+        request.tools.push(axocoatl_llm::ToolDefinition {
+            name: name.into(),
+            description: String::new(),
+            parameters: json!({"type":"object"}),
+            concurrency: Default::default(),
+        });
+    }
+    // Split inside a tag as real SSE token deltas do.
+    let text = include_str!("fixtures/qwen-text-call.txt");
+    let split = text.find("function=").unwrap() + 4;
+    let events = finite_events(
+        &[
+            (json!({"content":&text[..split]}), None),
+            (json!({"content":&text[split..]}), Some("stop")),
+        ],
+        3,
+        0,
+        request,
+    )
+    .await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(Err(ProviderError::UnusableResponse { .. }))
+        ),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::Done { .. }
+            | StreamEvent::ToolCallDelta { .. }
+            | StreamEvent::ToolCallMetadata { .. })
+    )));
+    assert!(events.iter().any(|event| matches!(event, Ok(StreamEvent::UsageObservation(usage)) if usage.complete && usage.usage.total() == 7)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(StreamEvent::CostObservation { cost_microunits: 8 })
+    )));
+    let Some(Err(ProviderError::UnusableResponse { message, note, .. })) = events.last() else {
+        unreachable!()
+    };
+    assert!(message.contains("call to bash as answer text"), "{message}");
+    assert!(message.contains("7 tools offered"), "{message}");
+    assert!(note.contains("native tool call"), "{note}");
+}
+
+/// Refusal must not turn documentation/examples into tool intent, affect a
+/// real native call, or reinterpret text when the request offered no tools.
+#[tokio::test]
+async fn quoted_openrouter_calls_and_native_calls_keep_their_meaning() {
+    let block =
+        "<function=read_file>\n<parameter=path>\na.js\n</parameter>\n</function>\n</tool_call>";
+    for text in [
+        format!("The syntax is:\n{block}"),
+        format!("Example:\n```xml\n{block}\n```"),
+        format!("```\n{block}"),
+        format!("~~~\n{block}\n~~~"),
+        format!("<pre>\n{block}\n</pre>"),
+        format!("<pre>\n{block}"),
+        block.lines().map(|line| format!("    {line}\n")).collect(),
+        block.lines().map(|line| format!("> {line}\n")).collect(),
+        format!("The call looks like `{block}`."),
+        "Qwen writes <function=read_file> to name a function.".into(),
+        format!("{block}\nThat was an example, not a request."),
+        block.replace("read_file", "not_offered"),
+    ] {
+        let events = finite_events(
+            &[(json!({"content":text}), Some("stop"))],
+            3,
+            0,
+            read_file_request(),
+        )
+        .await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(Ok(StreamEvent::Done {
+                    finish_reason: FinishReason::Stop
+                }))
+            ),
+            "{text}: {events:?}"
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { .. }))));
+    }
+    for request in [
+        ChatRequest::simple("Explain this format"),
+        {
+            let mut request = read_file_request();
+            request.stop_sequences.push("cut here".into());
+            request
+        },
+        {
+            let mut request = read_file_request();
+            request.response_format = Some(axocoatl_core::ResponseFormat::Json);
+            request
+        },
+    ] {
+        // This fixture endpoint does not support stop/JSON requests, so
+        // check those admission exclusions at the detector boundary.
+        let mut detector = text_call::Detector::new(&request);
+        detector.push(block);
+        assert_eq!(detector.called_tool(&request), None);
+        if request.tools.is_empty() {
+            let events =
+                finite_events(&[(json!({"content":block}), Some("stop"))], 3, 0, request).await;
+            assert!(
+                matches!(
+                    events.last(),
+                    Some(Ok(StreamEvent::Done {
+                        finish_reason: FinishReason::Stop
+                    }))
+                ),
+                "{events:?}"
+            );
+        }
+    }
+    let events = finite_events(
+        &[(
+            json!({"content":block, "tool_calls":[{"index":0,"id":"native-read-1","type":"function",
+        "function":{"name":"read_file","arguments":"{\"path\":\"b.js\"}"}}]}),
+            Some("tool_calls"),
+        )],
+        3,
+        0,
+        read_file_request(),
+    )
+    .await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(Ok(StreamEvent::Done {
+                finish_reason: FinishReason::ToolUse
+            }))
+        ),
+        "{events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(event, Ok(StreamEvent::ToolCallDelta { id, name: Some(name), .. }) if id == "native-read-1" && name == "read_file")));
+    assert!(events.iter().any(|event| matches!(event, Ok(StreamEvent::ToolCallMetadata { id, metadata, .. }) if id == "native-read-1" && metadata["axocoatl.openrouter.endpoint"] == "finite/exact")));
+}
