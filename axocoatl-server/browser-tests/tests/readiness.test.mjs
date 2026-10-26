@@ -54,7 +54,7 @@ function linuxInstallFix(osRelease) {
   if (id === 'ubuntu' && Number.parseInt(field('VERSION_ID').split('.')[0], 10) <= 22) {
     return "This Ubuntu's Podman is too old (22.04 ships 3.4.4; Axocoatl runs need 4.3 or later, 4.9 tested): use Ubuntu 24.04 or newer.";
   }
-  if (is('debian') || is('ubuntu')) return onboard('sudo apt-get install -y podman');
+  if (is('debian') || is('ubuntu')) return onboard('sudo apt-get update && sudo apt-get install -y podman');
   if (is('fedora') || is('rhel') || is('centos')) return onboard('sudo dnf install -y podman');
   if (is('arch')) return onboard('sudo pacman -S --noconfirm podman');
   if (is('suse') || id.startsWith('opensuse') || is('sles')) return onboard('sudo zypper install -y podman');

@@ -28,7 +28,7 @@ Podman — native on Linux/WSL, a managed VM on macOS/Windows:
 
 ```
 # Linux / WSL
-sudo apt-get install -y podman          # or dnf / pacman / zypper
+sudo apt-get update && sudo apt-get install -y podman  # or dnf / pacman / zypper
 
 # macOS
 brew install podman && podman machine init && podman machine start
