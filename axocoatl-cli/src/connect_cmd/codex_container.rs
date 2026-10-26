@@ -287,7 +287,8 @@ pub(crate) fn timed_out(lifetime: Duration) -> String {
 /// retrieving exec session ID from container ID: … no such container` (or
 /// `… no such exec session`), or `Error: no exec session with ID ID found`,
 /// with or without Podman's `: no such exec session` after it, or
-/// `Error: container has already been removed` (pure).
+/// `Error: container has already been removed` (pure), or
+/// `Error: no container with ID <64 hex digits> found in database: no such container`.
 pub(crate) fn lost_exec_session(line: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(line) else {
         return false;
@@ -300,7 +301,12 @@ pub(crate) fn lost_exec_session(line: &[u8]) -> bool {
         return false;
     };
     let gone = said.ends_with(": no such container") || said.ends_with(": no such exec session");
+    let container_gone = said
+        .strip_prefix("no container with ID ")
+        .and_then(|id| id.strip_suffix(" found in database: no such container"))
+        .is_some_and(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
     said == "container has already been removed"
+        || container_gone
         || (said.starts_with("retrieving exec session ") && gone)
         || (said.starts_with("no exec session with ID ") && (gone || said.ends_with(" found")))
 }

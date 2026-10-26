@@ -2920,6 +2920,9 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
     const NO_SESSION: &str = "Error: no exec session with ID 0123abcd found\r\n";
     const NOT_RETRIEVED: &str = "Error: retrieving exec session 0123abcd from container \
         4567ef: no container with ID 4567ef found in database: no such container\r\n";
+    const DIRECT: &str = "Error: no container with ID \
+        517f5a5d1fca5de0db5bb227f115fa6622d23b903258d64bb9fa58e930d0d008 \
+        found in database: no such container\r\r\n";
     const REMOVED: &str = "Error: container has already been removed\r\r\n";
     const OTHER: &str =
         "Error: read unixpacket @->/proc/self/fd/7/attach: read: connection reset by peer\r\n";
@@ -2931,18 +2934,29 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         ("timeout-other", second),
         ("timeout-retrieving", codex_container::DEFAULT_LIFETIME),
         ("timeout-removed", codex_container::DEFAULT_LIFETIME),
+        ("timeout-direct", second),
+        ("timeout-direct", codex_container::DEFAULT_LIFETIME),
     ]
     .map(|(mode, lifetime)| (ContainerFixture::new(mode), lifetime));
     let run = |index: usize| {
         let (fixture, lifetime) = &fixtures[index];
         run_container_login(fixture, fixture.login(None, *lifetime), false, CODEX_PROMPT)
     };
-    let (no_session, not_retrieved, removed, other, early, removed_early) =
-        tokio::join!(run(0), run(1), run(2), run(3), run(4), run(5));
+    let (no_session, not_retrieved, removed, other, early, removed_early, direct, direct_early) = tokio::join!(
+        run(0),
+        run(1),
+        run(2),
+        run(3),
+        run(4),
+        run(5),
+        run(6),
+        run(7)
+    );
     for (name, (result, screen)) in [
         ("no session", no_session),
         ("not retrieved", not_retrieved),
         ("removed", removed),
+        ("direct", direct),
     ] {
         let terminal = with_outcome(&screen, &result);
         let failure = result.expect_err(name);
@@ -2981,7 +2995,11 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         )),
         "{terminal:?}"
     );
-    for ((result, screen), said) in [(early, NOT_RETRIEVED), (removed_early, REMOVED)] {
+    for ((result, screen), said) in [
+        (early, NOT_RETRIEVED),
+        (removed_early, REMOVED),
+        (direct_early, DIRECT),
+    ] {
         let terminal = with_outcome(&screen, &result);
         let failure = result.expect_err("early");
         assert_eq!(failure.message, codex_container::ended_early());
@@ -2998,7 +3016,7 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         assert!(fixture.stored().is_none());
     }
 
-    for lost in [NO_SESSION, NOT_RETRIEVED, REMOVED] {
+    for lost in [NO_SESSION, NOT_RETRIEVED, REMOVED, DIRECT] {
         assert!(
             codex_container::lost_exec_session(lost.as_bytes()),
             "{lost}"
@@ -3037,6 +3055,28 @@ async fn only_podmans_lost_exec_session_error_after_the_lifetime_is_not_shown() 
         "Error: container has already been removed, retrying\n",
         "Error logging in: container has already been removed\n",
         "Error: container has already been removed\nmore\n",
+    ] {
+        assert!(
+            !codex_container::lost_exec_session(kept.as_bytes()),
+            "{kept:?}"
+        );
+    }
+    for kept in [
+        DIRECT.replace(
+            "517f5a5d1fca5de0db5bb227f115fa6622d23b903258d64bb9fa58e930d0d008",
+            "",
+        ),
+        DIRECT.replace(
+            "517f5a5d1fca5de0db5bb227f115fa6622d23b903258d64bb9fa58e930d0d008",
+            "517f5a5d",
+        ),
+        DIRECT.replace("517f", "xxxx"),
+        DIRECT.replace("found in database", "found elsewhere"),
+        format!("{} more", DIRECT.trim_end()),
+        format!("{DIRECT}more\n"),
+        format!(" {DIRECT}"),
+        format!("\x1b[31m{DIRECT}\x1b[0m"),
+        DIRECT.replace("Error:", "Error logging in:"),
     ] {
         assert!(
             !codex_container::lost_exec_session(kept.as_bytes()),

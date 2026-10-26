@@ -15,6 +15,7 @@
 #             `container exists` find no container
 #   timeout-retrieving   the same, with Podman's other message for it (it
 #             cannot retrieve the exec session: no such container)
+#   timeout-direct       the same, with Podman's direct missing-container message
 #   timeout-removed      the same, with Podman's already-removed message
 #   timeout-other        the same, with another Podman error instead
 #   timeout-settling     as Podman 6.1 does at the lifetime: the login is
@@ -102,6 +103,9 @@ case "${1:-}" in
               ;;
             timeout-retrieving)
               printf 'Error: retrieving exec session 0123abcd from container 4567ef: no container with ID 4567ef found in database: no such container\n' >&2
+              ;;
+            timeout-direct)
+              printf 'Error: no container with ID 517f5a5d1fca5de0db5bb227f115fa6622d23b903258d64bb9fa58e930d0d008 found in database: no such container\r\n' >&2
               ;;
             timeout-removed)
               printf 'Error: container has already been removed\r\n' >&2
