@@ -20,6 +20,7 @@ needs_podman=(
   tests/loadout-fix-run.test.mjs
   tests/loadouts.test.mjs
   tests/session-team-route.test.mjs
+  tests/skill-automation.test.mjs
   tests/workbench.test.mjs
 )
 

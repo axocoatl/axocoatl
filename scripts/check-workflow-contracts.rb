@@ -625,7 +625,13 @@ end
 unless Array(ci.dig("jobs", "supervisor-runtime", "strategy", "matrix", "include")).map { |leg| leg["arch"] }.sort == %w[aarch64 x86_64]
   errors << ".github/workflows/ci.yml: supervisor-runtime must run on x86_64 and aarch64"
 end
-unless Array(ci.dig("jobs", "ollama-suites", "steps")).any? { |step| step["run"].to_s.include?("./scripts/test-podman-suites.sh run ollama") }
+ollama_steps = Array(ci.dig("jobs", "ollama-suites", "steps"))
+ollama_run = ollama_steps.index { |step| step["run"].to_s.include?("./scripts/test-podman-suites.sh run ollama") }
+ollama_prepare = ollama_steps.index { |step| step["run"].to_s.include?("./scripts/test-podman-suites.sh prepare ollama") }
+unless ollama_prepare && ollama_run && ollama_prepare < ollama_run
+  errors << ".github/workflows/ci.yml: ollama-suites must prepare its Podman images before running tests"
+end
+unless ollama_run
   errors << ".github/workflows/ci.yml: ollama-suites must run ./scripts/test-podman-suites.sh run ollama"
 end
 

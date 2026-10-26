@@ -76,15 +76,29 @@ exempt=(
   "axocoatl-daemon session_dispatch::tests::provider_tests::openrouter_live_failover_moves_a_call_to_the_next_endpoint|OpenRouter credit and a key; verified separately in the paid live provider gate"
   "axocoatl-daemon session_dispatch::tests::run_tests::input_tests::openrouter_live_tests::openrouter_live_gpt_oss_reasoning_goes_back_to_another_endpoint|OpenRouter credit and a key; verified separately in the paid live provider gate"
   "axocoatl-daemon lock_inheritance_tests::background_pty_loop|a stress harness the lock tests start with AXOCOATL_TEST_PTY_LOOP_MS"
+  "axocoatl-cli onboard::tests::fake_daemon_that_stops_when_asked|a helper the_first_run_stops_another_daemon_through_its_ipc_socket runs"
+  "axocoatl-cli onboard::tests::start_a_machine_while_ctrl_c_is_typed|a helper a_ctrl_c_or_a_closed_terminal_leaves_a_machine_onboarding_started_running runs"
   "axocoatl-cli connect_cmd::tests::start_podman_commands_while_ctrl_c_is_typed|a helper podman_commands_started_while_ctrl_c_is_typed runs"
   "axocoatl-session ownership_crash_child|a helper the crash-cut test runs"
   "axocoatl-session provision_disposable_ownership_fixture|a helper of a private released-binary probe"
 )
 
+# Manual diagnostics need dedicated model state and hardware whose load/prefill
+# exceeds their fixed deadlines. A shared CI runner cannot establish that by
+# choosing a model size. Keep the unchanged assertions and explicit invocations
+# in docs/RELEASE_GATE.md; these are accounted for, not automatic CI passes.
+manual_ollama_tests=(
+  "axocoatl-llm-ollama giving_up_on_a_load_makes_a_live_ollama_abort_it|manual large-model diagnostic: dedicated Ollama with an unloaded model whose cold load exceeds one second; see docs/RELEASE_GATE.md#manual-ollama-timeout-diagnostics"
+  "axocoatl-llm-ollama giving_up_on_an_answer_makes_a_live_ollama_stop_it|manual large-model diagnostic: dedicated Ollama with the model already loaded at the selected context and prompt processing exceeding two seconds; see docs/RELEASE_GATE.md#manual-ollama-timeout-diagnostics"
+)
+exempt+=("${manual_ollama_tests[@]}")
+
 # The live Ollama tests, which the ollama group runs and the others leave out.
 ollama_tests=(
   "axocoatl-daemon session_egress::host_ollama_tests::actual_ollama_cloud_mode_decides_each_request_on_the_host_route"
+  "axocoatl-daemon bootstrap::session_repository::tests::activation_tests::runtime_policy_tests::actual_egress_to_real_ollama_keeps_to_cloud_off_servers_and_local_models"
   "axocoatl-llm-ollama native::observed_context::watch::the_contract_probes_hold_on_a_live_ollama"
+  "axocoatl-llm-ollama native::observed_context::watch::a_reasoning_disabled_json_request_reads_on_a_live_ollama"
   "axocoatl-daemon session_dispatch::tests::ollama_tests::native_ollama_real_model_refuses_over_long_input_and_stops_at_its_limit"
   "axocoatl-daemon session_dispatch::tests::ollama_tests::native_ollama_real_model_through_durable_controller"
 )
@@ -148,6 +162,7 @@ pull_pinned() {
   for entry in "${pinned_images[@]}"; do
     reference=${entry%% *}
     name=${entry#* }
+    [[ $# -eq 0 || $name == "$1" ]] || continue
     podman pull -q "$reference" >/dev/null
     podman tag "$reference" "$name"
     echo "pulled $name ($reference)"
@@ -193,7 +208,12 @@ prepare() {
     cli)
       pull_pinned
       ;;
-    other | ollama) ;;
+    ollama)
+      # The real Session-to-Ollama route needs git in its supervisor image.
+      pull_pinned docker.io/library/alpine:3.20
+      build_supervisor_images
+      ;;
+    other) ;;
   esac
 }
 
@@ -344,9 +364,10 @@ tally() {
 
 # Every #[ignore]d test in the tree, as "crate file name" lines.
 ignored_tests() {
+  local requirement=${1:-}
   git ls-files -- 'crates/*.rs' 'axocoatl-cli/*.rs' 'examples/*.rs' | while IFS= read -r file; do
-    awk -v file="$file" '
-      /^[[:space:]]*#\[ignore/ { pending = 1; next }
+    awk -v file="$file" -v requirement="$requirement" '
+      /^[[:space:]]*#\[ignore/ { pending = (tolower($0) ~ tolower(requirement)); next }
       pending && /fn [A-Za-z0-9_]+/ {
         match($0, /fn [A-Za-z0-9_]+/)
         print file, substr($0, RSTART + 3, RLENGTH - 3)
@@ -365,6 +386,7 @@ ignored_tests() {
 
 check() {
   bash "$script_dir/test-podman-suites-parser.sh"
+  python3 "$script_dir/test-podman-suites-routing.py"
   local problems=0 crate file name group covered entry found
   local -a groups=(isolation daemon cli other ollama)
   local tests
@@ -393,6 +415,21 @@ check() {
       problems=$((problems + 1))
     fi
   done
+  # Crate-level coverage is insufficient: the Ollama group uses exact
+  # filters, and other groups lack its servers. Every declared live-Ollama
+  # prerequisite must be automatic here or an explicitly reasoned manual case.
+  # The entire llm-ollama crate is exact-filtered, regardless of annotation text.
+  while read -r crate file name; do
+    covered=''
+    for entry in "${ollama_tests[@]}" "${manual_ollama_tests[@]%%|*}"; do
+      [[ ${entry%% *} == "$crate" && ${entry##*::} == "$name" ]] && covered=ollama
+      [[ $entry == "$crate $name" ]] && covered=ollama
+    done
+    if [[ -z $covered ]]; then
+      echo "test-podman-suites: $file: $name has no explicit Ollama group or manual diagnostic assignment" >&2
+      problems=$((problems + 1))
+    fi
+  done < <({ ignored_tests 'ollama'; awk '$1 == "axocoatl-llm-ollama"' <<<"$tests"; } | sort -u)
   for entry in "${exempt[@]}"; do
     [[ $entry == *'|'?* ]] || { echo "test-podman-suites: ${entry%%|*} is left out without a reason" >&2; problems=$((problems + 1)); }
   done

@@ -518,9 +518,11 @@ Supporting checks, run in CI's workflow-contracts job:
   Podman, models or a release build. A simulated path always records a
   failed step and can never be evidence.
 
-Every test that is `#[ignore]`d by default because it needs Podman, prepared
-images, the internet or a live Ollama runs in CI, against the ubuntu-24.04
-runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
+`scripts/test-podman-suites.sh check` inventories every test that is
+`#[ignore]`d by default because it needs Podman, prepared images, the internet
+or a live Ollama. Automatic suites run on ubuntu-24.04 with rootless Podman
+4.9.3. Manual diagnostics, unavailable hosted services and child-process
+helpers are accounted for explicitly rather than reported as automatic passes:
 
 - "Podman and live suites" runs four groups, one job each: `isolation`
   (`axocoatl-isolation`, among them the Session sandbox, the `node_modules`
@@ -533,31 +535,79 @@ runners' rootless Podman 4.9.3, through `scripts/test-podman-suites.sh`:
   (`axocoatl-cli`) and `other` (`axocoatl-memory` and `axocoatl-session`).
   `prepare` pulls the images pinned by digest and builds the supervisor test
   images, the browser image and the recipe images with this commit's CLI;
-  `run` lists every ignored test of the group's crates and fails unless every
-  one of them ran and passed, so a renamed test cannot pass by matching
-  nothing. `list GROUP` prints what `run` would run, with no Podman.
+  `run` lists the selected ignored tests after the explicit exclusions and
+  fails unless all expected results pass and Cargo succeeds. `list GROUP`
+  prints what `run` would run, with no Podman.
 - "Execution supervisor runtime" runs `scripts/test-exec-supervisor-runtime.sh`
   on x86_64 and on aarch64: the supervisor suite in Alpine and Debian images,
   as root and as a non-root user, on a kernel of each architecture.
 - "Live Ollama suites" installs Ollama 0.40.6, the audited release, serves it
   with cloud models off and runs the contract probes and a native Session's
   provider against `qwen3:0.6b`: plain, JSON, a tool round-trip and an
-  over-long input. It also serves a second Ollama with its cloud features on,
-  for the live test that the host route to Ollama refuses such a server.
-- `test-podman-suites.sh check`, in the "Workflow contracts" job, fails when
-  an ignored test is in no group or one is left out without a reason. Left
-  out: the four live E2B tests (E2B's hosted service with a key; the project
-  has no E2B account), the four live OpenRouter tests (credit and a key; the
-  `C1-openrouter` and `D1` paths run OpenRouter models live) and four helpers
-  that other tests, or a private probe of released binaries, start.
+  over-long input, plus the reasoning-disabled JSON case. It prepares the
+  pinned Alpine supervisor tools image and serves a second Ollama with its
+  cloud features on. The host route and the same route from inside a real
+  Session container must both refuse that server and cloud-model paths.
+- `test-podman-suites.sh check`, in the "Workflow contracts" job and local
+  preflight, rejects an unassigned ignored test or an exclusion without a
+  reason. Tests whose ignore annotation requires Ollama must be in its exact
+  automatic selection or the explicit manual diagnostic list. The same
+  rule covers every ignored test in `axocoatl-llm-ollama`, whose selection is
+  exact, regardless of its annotation; crate-level membership is insufficient.
+  The exclusions name E2B tests (no
+  project account), OpenRouter tests (paid live release paths), child helpers
+  invoked by their parent tests or a private released-binary probe, and the
+  manual timeout diagnostics below. A helper's standalone early return is
+  not counted as live coverage.
 
 Each removal the `node_modules` mount point tests assert runs while an
 unrelated container exists, and each keep of the empty mount point they
 assert names why, so a broken `podman container inspect` fails them. Every
-CI job that pulls images first points Podman at `mirror.gcr.io`, Google's
-public cache of Docker Hub (`scripts/ci-registry-mirror.sh`), so the
-anonymous pulls of many jobs at once meet no Docker Hub rate limit; a digest
-pull is the same bytes from either.
+CI job that pulls images first configures `scripts/ci-registry-mirror.sh`.
+Official `docker.io/library` images use Google's `mirror.gcr.io` cache to
+reduce anonymous Docker Hub pulls; third-party images use their origin.
+This preserves pinned digests while avoiding a cache that serves a
+multi-architecture index but lacks its selected child manifest.
+
+### Manual Ollama timeout diagnostics
+
+The `manual_ollama_tests` inventory names two unchanged live diagnostics in
+`crates/axocoatl-llm-ollama/tests/stream_timeouts.rs`. They need a dedicated
+Ollama and known model state: a cold load taking more than one second, or
+an already loaded model whose long-prompt processing takes more than two
+seconds. A shared runner and a small probe model cannot guarantee those
+preconditions. Run them separately on suitable local hardware with cached
+models; do not weaken their deadlines or count a missing run as a pass.
+
+Use a dedicated local-only server, not one serving other work. The commands
+below assume it listens on port 11510 and already has the named models.
+Preserve its version, model digests, `/api/ps` state and server logs alongside
+each test result. The cold case starts with the model unloaded:
+
+```bash
+export AXOCOATL_LIVE_OLLAMA_URL=http://127.0.0.1:11510
+export AXOCOATL_LIVE_OLLAMA_MODEL=gpt-oss:20b
+OLLAMA_HOST="$AXOCOATL_LIVE_OLLAMA_URL" ollama stop "$AXOCOATL_LIVE_OLLAMA_MODEL"
+cargo test --locked -p axocoatl-llm-ollama --test stream_timeouts -- \
+  --ignored --exact giving_up_on_a_load_makes_a_live_ollama_abort_it --nocapture
+```
+
+For the answer case, preload the model at the exact context with `shift:false`
+to match the native request without reloading it. Do not feed it the test's
+long prompt. Confirm `/api/ps` reports that model and context
+before running the test; unload it afterwards:
+
+```bash
+export AXOCOATL_LIVE_OLLAMA_MODEL=qwen3-coder:30b
+export AXOCOATL_LIVE_OLLAMA_CONTEXT=32768
+curl --fail --silent --show-error "$AXOCOATL_LIVE_OLLAMA_URL/api/generate" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3-coder:30b","stream":false,"shift":false,"options":{"num_ctx":32768},"keep_alive":"10m"}'
+curl --fail --silent --show-error "$AXOCOATL_LIVE_OLLAMA_URL/api/ps"
+cargo test --locked -p axocoatl-llm-ollama --test stream_timeouts -- \
+  --ignored --exact giving_up_on_an_answer_makes_a_live_ollama_stop_it --nocapture
+OLLAMA_HOST="$AXOCOATL_LIVE_OLLAMA_URL" ollama stop "$AXOCOATL_LIVE_OLLAMA_MODEL"
+```
 
 The "New user (Linux)" job also runs `scripts/release-gate/test-fixtures.sh`
 with `GATE_REQUIRE_ALL_TOOLCHAINS=1`, which proves each fixture in
@@ -899,7 +949,7 @@ account; any account of the gate Mac with Node 22 will do.
   aarch64, all against the release build; `release.yml`'s browser gate runs
   the same four legs, and a failing one blocks the release. A hosted macOS
   runner has no Podman, so its leg sets `AXO_BROWSER_WITHOUT_PODMAN=1`: it
-  leaves out the five journey files that start a Session on Podman (listed in
+  leaves out the journey files that start a Session on Podman (listed in
   `scripts/verify-product-browser-gate.sh`), and the Preview journeys skip;
   the macOS journeys of the signed-out and readiness files run there, and
   `C1-browser-webkit` runs every journey in WebKit on the gate Mac with

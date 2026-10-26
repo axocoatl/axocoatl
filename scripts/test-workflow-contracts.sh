@@ -13,6 +13,7 @@ set -euo pipefail
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 bash "$script_dir/test-ci-registry-mirror.sh"
+bash "$script_dir/test-product-browser-gate.sh"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-workflow-contracts.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 copy="$work_dir/checkout"
@@ -192,6 +193,11 @@ with_change refused 'a Podman pull before the Docker Hub mirror' \
 with_change refused 'a Podman suite group left out of CI' \
   'podman-suites must run the isolation, daemon, cli and other groups' \
   "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/ci.yml\"; s = File.read(p); s.sub!(\"group: [isolation, daemon, cli, other]\", \"group: [isolation, cli, other]\") or abort(\"no anchor\"); File.write(p, s)'" \
+  .github/workflows/ci.yml
+
+with_change refused 'the live Ollama job without its Session image preparation' \
+  'ollama-suites must prepare its Podman images before running tests' \
+  "ruby -EUTF-8:UTF-8 -e 'p = \".github/workflows/ci.yml\"; s = File.read(p); s.sub!(\"run: ./scripts/test-podman-suites.sh prepare ollama\", \"run: echo missing image preparation\") or abort(\"no anchor\"); File.write(p, s)'" \
   .github/workflows/ci.yml
 
 if ((failures)); then
