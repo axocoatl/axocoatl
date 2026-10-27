@@ -22,3 +22,4 @@ pnpm-debug.log*
 
 # Generated copies of the canonical marketing walkthrough
 public/assets/dashboard-task-1.5/
+public/assets/ax-video-chapters.js

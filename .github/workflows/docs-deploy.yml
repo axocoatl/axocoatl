@@ -9,6 +9,7 @@ on:
     paths:
       - 'sites/docs/**'
       - 'sites/marketing/assets/demo/dashboard-task-1.5/**'
+      - 'sites/marketing/components/ax-video-chapters.js'
       - 'docs/**'
       - 'branding/**'
       - '.github/workflows/docs-deploy.yml'

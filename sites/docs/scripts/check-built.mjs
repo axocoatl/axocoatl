@@ -81,6 +81,12 @@ for (const name of taskMediaFiles) {
   }
 }
 
+const canonicalChapterModule = readTaskMedia(path.resolve(docsRoot, '../marketing/components/ax-video-chapters.js'));
+const builtChapterModule = readTaskMedia(path.join(distRoot, 'assets/ax-video-chapters.js'));
+if (canonicalChapterModule && builtChapterModule && !canonicalChapterModule.equals(builtChapterModule)) {
+  failures.push('built chapter controls differ from the canonical marketing module: assets/ax-video-chapters.js');
+}
+
 const htmlFiles = walk(distRoot).filter((file) => file.endsWith('.html'));
 for (const file of htmlFiles) {
   const html = fs.readFileSync(file, 'utf8');
@@ -103,4 +109,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${taskMediaFiles.length} canonical dashboard task media files.`);
+console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${taskMediaFiles.length} canonical dashboard task media files plus their shared chapter controls.`);

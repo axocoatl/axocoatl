@@ -11,6 +11,7 @@ h1, h2, h3, h4 {
 
 /* Keep the first-run recording within the prose column at every viewport. */
 .dashboard-walkthrough video {
+  scroll-margin-top: 5rem;
   display: block;
   width: 100%;
   height: auto;
@@ -22,4 +23,32 @@ h1, h2, h3, h4 {
   margin-top: .75rem;
   font-size: var(--sl-text-sm);
   color: var(--sl-color-gray-2);
+}
+
+/* Chapter timestamps remain distinct from the adjacent written-step links. */
+.dashboard-chapter-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 3.5rem;
+  padding: .375rem .625rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: .375rem;
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-text-accent);
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-underline-offset: .15em;
+  cursor: pointer;
+}
+.dashboard-chapter-button:hover {
+  border-color: var(--sl-color-text-accent);
+  background: var(--sl-color-gray-5);
+}
+.dashboard-chapter-button:focus-visible {
+  outline: 2px solid var(--sl-color-text-accent);
+  outline-offset: 3px;
 }

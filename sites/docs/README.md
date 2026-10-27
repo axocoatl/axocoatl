@@ -31,6 +31,11 @@ built task-media files to match their canonical source bytes and the SHA-256 and
 size entries in the canonical `provenance.json`. These inexpensive file checks do
 not repeat the source-frame decoding already performed by the marketing media gate.
 
+The first-Session guide's timestamp buttons use the shared chapter module from
+`sites/marketing/components/ax-video-chapters.js`. Prebuild copies it to the ignored
+`public/assets/ax-video-chapters.js`; the built checker requires byte identity with
+the canonical module. The adjacent written-step links remain ordinary guide links.
+
 ## Dependency audit exceptions
 
 `scripts/audit-gate.mjs` audits the site's dependencies. The documentation gate

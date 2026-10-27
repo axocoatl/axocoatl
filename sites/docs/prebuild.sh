@@ -20,3 +20,5 @@ for asset in dashboard-task.mp4 result.jpg captions.vtt chapters.vtt; do
   cp -v "$TASK_SOURCE/$asset" "$TASK_DESTINATION/$asset"
 done
 echo "Synced canonical dashboard task media → $TASK_DESTINATION"
+
+cp -v "$ROOT/sites/marketing/components/ax-video-chapters.js" "$DST/assets/ax-video-chapters.js"

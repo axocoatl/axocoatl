@@ -26,13 +26,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles/tokens.css">
-  <link rel="stylesheet" href="/styles/base.css?v=20261027-dashboard-task">
+  <link rel="stylesheet" href="/styles/base.css?v=20261027-video-chapters">
   <link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
   <script type="module" src="/components/ax-site-nav.js?v=20261013-run"></script>
   <script type="module" src="/components/ax-footer.js?v=20261027-clarity"></script>
   <script type="module" src="/components/ax-theme-toggle.js"></script>
   <script type="module" src="/components/ax-cli-snippet.js"></script>
   <script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
+  <script type="module" src="/components/ax-video-chapters.js"></script>
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"macOS 11 or newer (the 1.5.0 release gate requires runs end to end on Apple silicon); GNU/Linux with glibc 2.35 or newer (the 1.5.0 release gate requires runs end to end on Linux, and in CI on Ubuntu 24.04 on x86_64 and arm64; Ubuntu 22.04, Debian 12 and Fedora with SELinux not yet verified); Windows inside WSL2 (not yet verified)","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Runs coding agents (Claude Code, Codex or a model you choose) unattended in a sandbox. Built-in fix loadouts require host-run checks and review on the final files, with an exit code and signed receipt to verify."}
   </script>
@@ -103,10 +104,10 @@
         <figcaption id="dashboard-task-caption">A four-turn pagination fix, including recovery and test restoration. The host's final check passed all 8 tests; all 4 original tests were retained and the artifact passed independent review.</figcaption>
       </figure>
       <ol class="dashboard-chapters" aria-label="Task chapters">
-        <li><span class="dashboard-chapter-number" aria-hidden="true">01</span><span>Open workspace<time datetime="PT0S">0:00</time></span></li>
-        <li><span class="dashboard-chapter-number" aria-hidden="true">02</span><span>Send request<time datetime="PT22.554S">0:23</time></span></li>
-        <li><span class="dashboard-chapter-number" aria-hidden="true">03</span><span>Follow agents &amp; recover<time datetime="PT31.488S">0:31</time></span></li>
-        <li><span class="dashboard-chapter-number" aria-hidden="true">04</span><span>Review and correct<time datetime="PT81.788S">1:22</time></span></li>
+        <li><button type="button" data-video-target="dashboard-task-video" data-video-time="0" aria-controls="dashboard-task-video" aria-label="Play from 0:00: Open workspace"><span class="dashboard-chapter-number" aria-hidden="true">01</span><span>Open workspace<time datetime="PT0S">0:00</time></span></button></li>
+        <li><button type="button" data-video-target="dashboard-task-video" data-video-time="22.554" aria-controls="dashboard-task-video" aria-label="Play from 0:23: Send request"><span class="dashboard-chapter-number" aria-hidden="true">02</span><span>Send request<time datetime="PT22.554S">0:23</time></span></button></li>
+        <li><button type="button" data-video-target="dashboard-task-video" data-video-time="31.488" aria-controls="dashboard-task-video" aria-label="Play from 0:31: Follow agents &amp; recover"><span class="dashboard-chapter-number" aria-hidden="true">03</span><span>Follow agents &amp; recover<time datetime="PT31.488S">0:31</time></span></button></li>
+        <li><button type="button" data-video-target="dashboard-task-video" data-video-time="81.788" aria-controls="dashboard-task-video" aria-label="Play from 1:22: Review and correct"><span class="dashboard-chapter-number" aria-hidden="true">04</span><span>Review and correct<time datetime="PT81.788S">1:22</time></span></button></li>
       </ol>
       <details class="dashboard-task-details">
         <summary>Models, recovery, and recording edits</summary>

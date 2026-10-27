@@ -35,7 +35,7 @@ watch the Agents work, then review and correct the result. Pause the video as yo
 work through the steps below in your own repository.
 
 <figure class="dashboard-walkthrough">
-  <video controls muted playsinline preload="metadata" width="1280" height="720"
+  <video id="dashboard-task-video" controls muted playsinline preload="metadata" width="1280" height="720"
     poster="/assets/dashboard-task-1.5/result.jpg"
     src="/assets/dashboard-task-1.5/dashboard-task.mp4"
     aria-label="A task from workspace setup to reviewed changes in Axocoatl 1.5"
@@ -51,10 +51,12 @@ work through the steps below in your own repository.
   </figcaption>
 </figure>
 
-- **0:00** — [Open a Workspace and create a Session](#1-open-your-repository-and-create-a-session).
-- **0:23** — [Send the request](#3-ask-for-one-result-in-conversation).
-- **0:31** — [Follow the Agents and handle a failed turn](#follow-the-work).
-- **1:22** — [Review the files and correct the result](#4-inspect-the-files-and-review-the-diff).
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="0" aria-controls="dashboard-task-video" aria-label="Play from 0:00: Open workspace">0:00</button> — [Open a Workspace and create a Session](#1-open-your-repository-and-create-a-session).
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="22.554" aria-controls="dashboard-task-video" aria-label="Play from 0:23: Send request">0:23</button> — [Send the request](#3-ask-for-one-result-in-conversation).
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="31.488" aria-controls="dashboard-task-video" aria-label="Play from 0:31: Follow agents and recover">0:31</button> — [Follow the Agents and handle a failed turn](#follow-the-work).
+- <button type="button" class="dashboard-chapter-button" data-video-target="dashboard-task-video" data-video-time="81.788" aria-controls="dashboard-task-video" aria-label="Play from 1:22: Review and correct">1:22</button> — [Review the files and correct the result](#4-inspect-the-files-and-review-the-diff).
+
+<script is:inline type="module" src="/assets/ax-video-chapters.js?v=20261027-chapters"></script>
 
 <details>
   <summary>The recording's team and recovery</summary>

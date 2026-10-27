@@ -68,6 +68,7 @@ const files = [
   'components/ax-site-nav.js', 'components/ax-footer.js',
   'components/ax-theme-toggle.js', 'components/ax-cli-snippet.js',
   'components/ax-comparison-row.js', 'components/ax-product-film.js',
+  'components/ax-video-chapters.js',
   'styles/tokens.css', 'styles/base.css', 'styles/finder.css',
 ];
 
