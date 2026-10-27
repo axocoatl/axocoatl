@@ -1,0 +1,884 @@
+---
+name: Recover v1.5.0 publication after oversized release notes
+'on':
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: PUBLISH v1.5.0 19e3c89ca7b4d02cd742bccd671f7274e68b95d7 40439869836
+          CONTROL <full main SHA>
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: axocoatl-production-release
+  queue: max
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_TAG: v1.5.0
+  RELEASE_VERSION: 1.5.0
+  RELEASE_COMMIT: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+  SOURCE_RUN_ID: '40439869836'
+defaults:
+  run:
+    shell: bash
+    working-directory: release-source
+jobs:
+  preflight:
+    name: Bind publication recovery to the verified v1.5.0 source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+        path: release-source
+        fetch-depth: 0
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: "${{ github.sha }}"
+        path: recovery-control
+        fetch-depth: 0
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      with:
+        node-version: '22'
+    - name: Verify frozen source, original successful gates, and publishing repair
+      env:
+        GH_TOKEN: "${{ github.token }}"
+        DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}"
+        RECOVERY_CONFIRMATION: "${{ inputs.confirmation }}"
+      run: |
+        set -euo pipefail
+        test "$GITHUB_REPOSITORY" = axocoatl/axocoatl
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch
+        test "$GITHUB_REF" = refs/heads/main
+        test "$DEFAULT_BRANCH" = main
+        test "$RECOVERY_CONFIRMATION" = "PUBLISH v1.5.0 19e3c89ca7b4d02cd742bccd671f7274e68b95d7 40439869836 CONTROL $GITHUB_SHA"
+        test "$(git rev-parse 'HEAD^{commit}')" = "$RELEASE_COMMIT"
+        test -z "$(git status --porcelain)"
+        git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+        test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_SHA"
+        git merge-base --is-ancestor "$RELEASE_COMMIT" "$GITHUB_SHA"
+        git fetch --no-tags origin "+refs/tags/$RELEASE_TAG:refs/axocoatl-release/recovery-v150-tag"
+        test "$(git rev-parse 'refs/axocoatl-release/recovery-v150-tag^{commit}')" = "$RELEASE_COMMIT"
+        # Only publication-control files may differ from the already tested product.
+        git diff --name-only "$RELEASE_COMMIT" "$GITHUB_SHA" > /tmp/recovery-changed-files
+        python3 - <<'PY'
+        from pathlib import Path
+        allowed={'.github/workflows/recover-v1.5.0.yml',
+         'scripts/release-notes.py','scripts/test-release-notes.py',
+         'scripts/verify-v150-recovery-source.py','scripts/test-v150-recovery-source.py',
+         'scripts/test-recover-v1.5.0-workflow.py',
+         'docs/internal/RELEASE_1_5_PUBLICATION_RECOVERY.md'}
+        changed=set(Path('/tmp/recovery-changed-files').read_text().splitlines())
+        assert changed and changed<=allowed, f'Unexpected product changes: {sorted(changed-allowed)}'
+        PY
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > /tmp/v150-source-run.json
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/1/jobs?per_page=100" > /tmp/v150-source-jobs.json
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" > /tmp/v150-source-artifacts.json
+        python3 ../recovery-control/scripts/verify-v150-recovery-source.py  /tmp/v150-source-run.json /tmp/v150-source-jobs.json /tmp/v150-source-artifacts.json
+        python3 ../recovery-control/scripts/test-release-notes.py
+        python3 ../recovery-control/scripts/test-v150-recovery-source.py
+        python3 ../recovery-control/scripts/test-recover-v1.5.0-workflow.py
+        node scripts/release-gate/check-evidence.mjs --version "$RELEASE_VERSION" --tag-commit "$RELEASE_COMMIT"
+        ./scripts/verify-release-order.sh "$RELEASE_TAG"
+  prepare-release:
+    name: Create and verify GitHub draft
+    needs:
+    - preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+      attestations: read
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+        path: release-source
+        fetch-depth: 0
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: "${{ github.sha }}"
+        path: recovery-control
+        fetch-depth: 0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        path: release-source/dist
+        github-token: "${{ github.token }}"
+        run-id: '40439869836'
+        artifact-ids: '12711066172'
+    - name: Reverify downloaded release set
+      run: ./scripts/release-artifact.sh verify-set "$RELEASE_TAG" dist x86_64-unknown-linux-gnu
+        aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin
+    - name: Prove every archive's attestation verifies
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        for target in \
+          x86_64-unknown-linux-gnu \
+          aarch64-unknown-linux-gnu \
+          x86_64-apple-darwin \
+          aarch64-apple-darwin
+        do
+          gh attestation verify "dist/axocoatl-$RELEASE_TAG-$target.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$(git rev-parse "$RELEASE_COMMIT^{commit}")" \
+            --deny-self-hosted-runners
+        done
+    - name: Extract matching changelog section
+      run: |
+        set -euo pipefail
+        python3 ../recovery-control/scripts/release-notes.py CHANGELOG.md "$RELEASE_VERSION" "$RELEASE_COMMIT" release-notes.md
+        test -s release-notes.md
+    - name: Require the remote tag to still identify this release commit
+      run: |
+        set -euo pipefail
+        remote_ref=refs/axocoatl-release/remote-tag
+        git fetch --no-tags --force origin \
+          "+refs/tags/$RELEASE_TAG:$remote_ref"
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+        remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+        test "$remote_commit" = "$expected_commit" || {
+          echo "Remote tag $RELEASE_TAG moved from $expected_commit to $remote_commit; refusing to mutate the release." >&2
+          exit 1
+        }
+    - name: Reprove release order before draft mutation
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: ./scripts/verify-release-order.sh "$RELEASE_TAG"
+    - name: Create or reconcile the exact release without overwriting
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+        remote_ref=refs/axocoatl-release/remote-tag
+        require_remote_tag() {
+          git fetch --no-tags --force origin \
+            "+refs/tags/$RELEASE_TAG:$remote_ref"
+          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+          test "$remote_commit" = "$expected_commit" || {
+            echo "Remote tag $RELEASE_TAG moved from $expected_commit to $remote_commit." >&2
+            exit 1
+          }
+        }
+        refresh_releases() {
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq 'add // []' > releases.json
+        }
+        expected_assets="$({
+          for target in \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
+          do
+            archive="axocoatl-${RELEASE_TAG}-${target}.tar.gz"
+            printf '%s\n%s\n' "$archive" "$archive.sha256"
+          done
+        } | LC_ALL=C sort)"
+        verify_release_metadata() {
+          local expected_draft=$1
+          jq --exit-status \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$expected_commit" \
+            --argjson expected_draft "$expected_draft" '
+              .tag_name == $tag
+              and .name == $tag
+              and .target_commitish == $commit
+              and .draft == $expected_draft
+              and .prerelease == false
+              and (.assets | type) == "array"
+              and all(.assets[]; .state == "uploaded" and .size > 0)
+            ' release.json >/dev/null
+          jq --join-output '.body // ""' release.json > actual-notes.md
+          cmp -s release-notes.md actual-notes.md || {
+            echo "Existing release notes differ from the reviewed changelog." >&2
+            exit 1
+          }
+          actual_assets="$(jq --raw-output '.assets[].name' release.json | LC_ALL=C sort)"
+          unexpected_assets="$(comm -23 \
+            <(printf '%s\n' "$actual_assets" | sed '/^$/d') \
+            <(printf '%s\n' "$expected_assets"))"
+          test -z "$unexpected_assets" || {
+            echo "Existing release contains unexpected assets:" >&2
+            printf '%s\n' "$unexpected_assets" >&2
+            exit 1
+          }
+        }
+
+        refresh_releases
+        release_count="$(jq --arg tag "$RELEASE_TAG" \
+          '[.[] | select(.tag_name == $tag)] | length' releases.json)"
+        test "$release_count" -le 1
+        if [ "$release_count" = 0 ]; then
+          require_remote_tag
+          ./scripts/verify-release-order.sh "$RELEASE_TAG" >/dev/null
+          jq -n \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$expected_commit" \
+            --rawfile body release-notes.md '
+              {
+                tag_name: $tag,
+                target_commitish: $commit,
+                name: $tag,
+                body: $body,
+                draft: true,
+                prerelease: false
+              }
+            ' > create-release.json
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            --input create-release.json > release.json
+        else
+          jq --arg tag "$RELEASE_TAG" \
+            '[.[] | select(.tag_name == $tag)][0]' releases.json > release.json
+        fi
+        release_draft="$(jq --raw-output .draft release.json)"
+        case "$release_draft" in true|false) ;; *) exit 1 ;; esac
+        verify_release_metadata "$release_draft"
+        release_id="$(jq --raw-output .id release.json)"
+        [[ "$release_id" =~ ^[0-9]+$ ]]
+
+        mkdir existing-assets
+        while IFS= read -r name; do
+          count="$(jq --arg name "$name" \
+            '[.assets[] | select(.name == $name)] | length' release.json)"
+          test "$count" -le 1
+          if [ "$count" = 1 ]; then
+            asset_id="$(jq --exit-status --raw-output --arg name "$name" \
+              '[.assets[] | select(.name == $name)][0].id' release.json)"
+            curl --fail --location --retry 3 --retry-all-errors \
+              --connect-timeout 10 --max-time 180 \
+              --header 'Accept: application/octet-stream' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --output "existing-assets/$name" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            cmp -s "dist/$name" "existing-assets/$name" || {
+              echo "Existing release asset $name differs; refusing to overwrite it." >&2
+              exit 1
+            }
+          fi
+        done <<<"$expected_assets"
+
+        while IFS= read -r name; do
+          count="$(jq --arg name "$name" \
+            '[.assets[] | select(.name == $name)] | length' release.json)"
+          if [ "$count" = 0 ]; then
+            test "$release_draft" = true || {
+              echo "Published release $RELEASE_TAG is missing $name; refusing to mutate it." >&2
+              exit 1
+            }
+            require_remote_tag
+            ./scripts/verify-release-order.sh "$RELEASE_TAG" >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
+            verify_release_metadata true
+            test "$(jq --arg name "$name" \
+              '[.assets[] | select(.name == $name)] | length' release.json)" = 0 || {
+              echo "Asset $name changed during reconciliation; rerun to byte-prove it." >&2
+              exit 1
+            }
+            upload_status="$(curl --connect-timeout 10 --max-time 300 \
+              --silent --show-error \
+              --output uploaded-asset.json --write-out '%{http_code}' \
+              --request POST \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Content-Type: application/octet-stream' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --data-binary "@dist/$name" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$name")"
+            test "$upload_status" = 201
+            jq --exit-status --arg name "$name" '
+              .name == $name and .state == "uploaded" and .size > 0
+            ' uploaded-asset.json >/dev/null
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > release.json
+            verify_release_metadata true
+          fi
+        done <<<"$expected_assets"
+
+        test "$(jq '.assets | length' release.json)" = 8
+        test "$(jq --raw-output '.assets[].name' release.json | LC_ALL=C sort)" \
+          = "$expected_assets"
+        mkdir uploaded
+        while IFS= read -r name; do
+          asset_id="$(jq --exit-status --raw-output --arg name "$name" \
+            '[.assets[] | select(.name == $name)][0].id' release.json)"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 180 \
+            --header 'Accept: application/octet-stream' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "uploaded/$name" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          cmp -s "dist/$name" "uploaded/$name" || {
+            echo "Uploaded release asset $name differs from the reviewed artifact." >&2
+            exit 1
+          }
+        done <<<"$expected_assets"
+        ./scripts/release-artifact.sh verify-set \
+          "$RELEASE_TAG" \
+          uploaded \
+          x86_64-unknown-linux-gnu \
+          aarch64-unknown-linux-gnu \
+          x86_64-apple-darwin \
+          aarch64-apple-darwin
+        if [ "$release_draft" = false ]; then
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)" \
+            = "$release_id" || {
+              echo "Published release $RELEASE_TAG is no longer latest; refusing a stale rerun." >&2
+              exit 1
+            }
+        fi
+  publish-crates:
+    name: Publish and prove crates.io packages
+    needs: prepare-release
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+        path: release-source
+        fetch-depth: 0
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+      with:
+        toolchain: 1.95.0
+    - name: Reprove release order before crates.io publication
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: ./scripts/verify-release-order.sh "$RELEASE_TAG"
+    - name: Publish in dependency order
+      env:
+        CARGO_REGISTRY_TOKEN: "${{ secrets.CRATES_IO_TOKEN }}"
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        version="${RELEASE_TAG#v}"
+        test -n "${CARGO_REGISTRY_TOKEN:-}" || {
+          echo "The CRATES_IO_TOKEN Actions secret is required." >&2
+          exit 1
+        }
+        registry_token=$CARGO_REGISTRY_TOKEN
+        unset CARGO_REGISTRY_TOKEN
+        readonly registry_token
+        workspace_version="$(awk '
+          $0 == "[workspace.package]" { workspace_package = 1; next }
+          workspace_package && /^\[/ { exit }
+          workspace_package && $1 == "version" {
+            gsub(/"/, "", $3)
+            print $3
+            exit
+          }
+        ' Cargo.toml)"
+        test -n "$workspace_version" || {
+          echo "Could not read workspace.package.version from Cargo.toml." >&2
+          exit 1
+        }
+        metadata_file="$(mktemp)"
+        package_changes_file="$(mktemp)"
+        plan_file="$(mktemp)"
+        cargo metadata --locked --no-deps --format-version 1 > "$metadata_file"
+        : > "$package_changes_file"
+        if [ "$version" != "$workspace_version" ]; then
+          # Only the complete public stable GitHub Release frontier may define
+          # the package-change baseline. Local, merged, RC, and internal tags
+          # are deliberately irrelevant.
+          previous_tag="$(./scripts/resolve-previous-public-release.sh "$RELEASE_TAG")"
+          previous_ref=refs/axocoatl-release/previous-public-tag
+          git fetch --no-tags --force origin \
+            "+refs/tags/$previous_tag:$previous_ref"
+          previous_commit="$(git rev-parse "$previous_ref^{commit}")"
+          git merge-base --is-ancestor "$previous_commit" "$RELEASE_COMMIT^{commit}" || {
+            echo "Prior public release $previous_tag is not an ancestor of $RELEASE_COMMIT." >&2
+            exit 1
+          }
+          # The aggregate notice ships beside native binaries and must track
+          # the current lockfile even when no library crate is republished.
+          git diff --name-only \
+            "$previous_commit" "$RELEASE_COMMIT^{commit}" -- \
+            Cargo.toml axocoatl-server crates packages \
+            > "$package_changes_file"
+        fi
+        ./scripts/release-plan.sh \
+          "$RELEASE_TAG" \
+          "$workspace_version" \
+          "$metadata_file" \
+          "$package_changes_file" \
+          > "$plan_file"
+        mapfile -t release_crates < "$plan_file"
+        test "${#release_crates[@]}" -gt 0
+        package_args=()
+        for c in "${release_crates[@]}"; do
+          package_args+=(-p "$c")
+        done
+        # Stable Cargo verifies the selected release package set against its
+        # temporary registry before any irreversible upload.
+        python3 scripts/test-exec-supervisor-artifact.py verify-embedded .
+        cargo package --locked "${package_args[@]}"
+        for c in "${release_crates[@]}"; do
+          archive="target/package/${c}-${version}.crate"
+          test -f "$archive" || {
+            echo "Package preflight did not create $archive." >&2
+            exit 1
+          }
+        done
+        if printf '%s\n' "${release_crates[@]}" | grep -Fxq axocoatl-isolation; then
+          python3 scripts/test-exec-supervisor-artifact.py verify-packages \
+            "target/package/axocoatl-exec-${version}.crate" \
+            "target/package/axocoatl-isolation-${version}.crate" --source-root .
+        fi
+        if printf '%s\n' "${release_crates[@]}" | grep -Fxq axocoatl-server; then
+          server_archive="target/package/axocoatl-server-${version}.crate"
+          server_prefix="axocoatl-server-${version}"
+          server_archive_bytes="$(wc -c < "$server_archive" | tr -d '[:space:]')"
+          server_archive_ceiling=9500000
+          test "$server_archive_bytes" -le "$server_archive_ceiling" || {
+            echo "The axocoatl-server crate is $server_archive_bytes bytes, above the reviewed $server_archive_ceiling-byte release ceiling." >&2
+            exit 1
+          }
+          test "$(tar -tzf "$server_archive" | grep -Fxc "$server_prefix/LICENSE")" = 1
+          test "$(tar -tzf "$server_archive" | grep -Fxc "$server_prefix/THIRD_PARTY_LICENSES.txt")" = 1
+          tar -xOf "$server_archive" "$server_prefix/LICENSE" | cmp -s LICENSE -
+          tar -xOf "$server_archive" "$server_prefix/THIRD_PARTY_LICENSES.txt" |
+            cmp -s axocoatl-server/THIRD_PARTY_LICENSES.txt -
+        fi
+        : > crate-checksums.sha256
+        for c in "${release_crates[@]}"; do
+          sha256sum "target/package/${c}-${version}.crate" >> crate-checksums.sha256
+        done
+        test "$(wc -l < crate-checksums.sha256 | tr -d '[:space:]')" = "${#release_crates[@]}"
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+
+        fetch_crate() {
+          local c=$1 response=$2
+          curl --retry 3 --retry-all-errors --connect-timeout 10 --max-time 30 \
+            --user-agent "axocoatl-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+            --silent --show-error --output "$response" --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/${c}/${version}"
+        }
+
+        reviewed_checksum() {
+          local c=$1
+          local archive="target/package/${c}-${version}.crate"
+          awk -v archive="$archive" '$2 == archive { print $1 }' crate-checksums.sha256
+        }
+
+        verify_published_crate() {
+          local c=$1 response=$2 local_checksum
+          local_checksum="$(reviewed_checksum "$c")"
+          test -n "$local_checksum"
+          jq --exit-status \
+            --arg version "$version" \
+            --arg checksum "$local_checksum" \
+            '
+              .version.num == $version
+              and .version.checksum == $checksum
+              and .version.yanked == false
+            ' "$response" >/dev/null || {
+              echo "$c $version differs from the packaged release or is yanked." >&2
+              exit 1
+            }
+        }
+
+        require_remote_tag() {
+          local remote_ref=refs/axocoatl-release/remote-tag
+          local remote_commit
+          git fetch --no-tags --force origin \
+            "+refs/tags/$RELEASE_TAG:$remote_ref"
+          remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+          test "$remote_commit" = "$expected_commit" || {
+            echo "Remote tag $RELEASE_TAG moved from $expected_commit to $remote_commit; refusing to publish crates." >&2
+            exit 1
+          }
+        }
+
+        # Discover every pre-existing version before the first upload. This
+        # prevents a divergent later package from being found only after
+        # earlier missing packages have already been published.
+        for c in "${release_crates[@]}"; do
+          response="$(mktemp)"
+          status="$(fetch_crate "$c" "$response")"
+          case "$status" in
+            200)
+              verify_published_crate "$c" "$response"
+              ./scripts/prove-crate-index.sh \
+                "$c" "$version" "$(reviewed_checksum "$c")"
+              ;;
+            404) ;;
+            *)
+              echo "Unexpected crates.io status $status while checking $c $version." >&2
+              exit 1
+              ;;
+          esac
+          rm -f "$response"
+        done
+
+        for c in "${release_crates[@]}"; do
+          echo "::group::publish $c"
+          archive="target/package/${c}-${version}.crate"
+          original_checksum="$(reviewed_checksum "$c")"
+          # Recheck the public GitHub frontier before every crate. The helper
+          # repeats this immediately before each upload retry, revalidates the
+          # remote tag, and blocks dependents until the sparse index agrees
+          # with the reviewed package archive.
+          ./scripts/verify-release-order.sh "$RELEASE_TAG" >/dev/null
+          CARGO_REGISTRY_TOKEN="$registry_token" \
+            ./scripts/publish-crate-resilient.sh \
+              "$c" \
+              "$version" \
+              "$archive" \
+              "$original_checksum" \
+              "$RELEASE_TAG" \
+              "$expected_commit"
+          echo "::endgroup::"
+        done
+
+        ./scripts/verify-release-order.sh "$RELEASE_TAG" >/dev/null
+        require_remote_tag
+        for c in "${release_crates[@]}"; do
+          response="$(mktemp)"
+          status="$(fetch_crate "$c" "$response")"
+          test "$status" = "200" || {
+            echo "$c $version is not public after publication (HTTP $status)." >&2
+            exit 1
+          }
+          verify_published_crate "$c" "$response"
+          rm -f "$response"
+        done
+        cp "$plan_file" release-crates.txt
+        ./scripts/prove-release-crates.sh \
+          "$version" release-crates.txt crate-checksums.sha256
+    - name: Prove any prior-attempt crate proof is byte-identical
+      env:
+        ARTIFACT_NAME: published-crates-${{ github.run_id }}-v1.5.0
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        gh api --paginate --slurp \
+          "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+          > run-artifacts.json
+        jq --arg name "$ARTIFACT_NAME" \
+          '[.[].artifacts[] | select(.name == $name and .expired == false)]' \
+          run-artifacts.json > matching-artifacts.json
+        count="$(jq 'length' matching-artifacts.json)"
+        test "$count" -le 1
+        if [ "$count" = 1 ]; then
+          mkdir prior-crate-proof
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" --dir prior-crate-proof
+          test "$(find prior-crate-proof -type f | wc -l | tr -d '[:space:]')" = 2
+          test "$(find . -maxdepth 1 -type f \
+            \( -name release-crates.txt -o -name crate-checksums.sha256 \) \
+            | wc -l | tr -d '[:space:]')" = 2
+          cmp -s release-crates.txt prior-crate-proof/release-crates.txt
+          cmp -s crate-checksums.sha256 prior-crate-proof/crate-checksums.sha256 || {
+            echo "Prior-attempt crate proof $ARTIFACT_NAME is not byte-identical." >&2
+            exit 1
+          }
+        fi
+    - name: Preserve the reviewed crate publication proof
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: published-crates-${{ github.run_id }}-v1.5.0
+        path: |
+          release-source/release-crates.txt
+          release-source/crate-checksums.sha256
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 7
+        overwrite: true
+  release:
+    name: Reverify and publish GitHub Release
+    needs:
+    - prepare-release
+    - publish-crates
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+        path: release-source
+        fetch-depth: 0
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        ref: "${{ github.sha }}"
+        path: recovery-control
+        fetch-depth: 0
+    - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      with:
+        node-version: '22'
+    - name: Require signed new-user evidence again before publishing
+      env:
+        NEW_USER_GATE_OVERRIDE: ''
+        EVENT_NAME: "${{ github.event_name }}"
+        ACTOR: "${{ github.actor }}"
+        TRIGGERING_ACTOR: "${{ github.triggering_actor }}"
+      run: |
+        set -euo pipefail
+        node scripts/release-gate/check-evidence.mjs \
+          --version "${RELEASE_TAG#v}" \
+          --tag-commit "$(git rev-parse "$RELEASE_COMMIT^{commit}")" \
+          --override "${NEW_USER_GATE_OVERRIDE:-}" \
+          --event "$EVENT_NAME" \
+          --actor "$ACTOR" \
+          --triggering-actor "$TRIGGERING_ACTOR"
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        path: release-source/reviewed
+        github-token: "${{ github.token }}"
+        run-id: '40439869836'
+        artifact-ids: '12711066172'
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: published-crates-${{ github.run_id }}-v1.5.0
+        path: release-source/crate-state
+        github-token: "${{ github.token }}"
+        run-id: "${{ github.run_id }}"
+    - name: Inspect release state, download, and reverify assets
+      id: release-state
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        release_json="$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease,tagName)"
+        test "$(jq --raw-output .tagName <<<"$release_json")" = "$RELEASE_TAG"
+        test "$(jq --raw-output .isPrerelease <<<"$release_json")" = "false"
+        draft="$(jq --raw-output .isDraft <<<"$release_json")"
+        case "$draft" in true|false) ;; *) exit 1 ;; esac
+        echo "draft=$draft" >> "$GITHUB_OUTPUT"
+        mkdir uploaded
+        gh release download "$RELEASE_TAG" --dir uploaded
+        test "$(find reviewed -type f | wc -l | tr -d '[:space:]')" = 8
+        test "$(find uploaded -type f | wc -l | tr -d '[:space:]')" = 8
+        diff -r --no-dereference reviewed uploaded >/dev/null || {
+          echo "Draft assets differ from this run's immutable verified release set." >&2
+          exit 1
+        }
+        ./scripts/release-artifact.sh verify-set \
+          "$RELEASE_TAG" \
+          uploaded \
+          x86_64-unknown-linux-gnu \
+          aarch64-unknown-linux-gnu \
+          x86_64-apple-darwin \
+          aarch64-apple-darwin
+    - name: Require the remote tag to still identify this release commit
+      run: |
+        set -euo pipefail
+        remote_ref=refs/axocoatl-release/remote-tag
+        git fetch --no-tags --force origin \
+          "+refs/tags/$RELEASE_TAG:$remote_ref"
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+        remote_commit="$(git rev-parse "$remote_ref^{commit}")"
+        test "$remote_commit" = "$expected_commit" || {
+          echo "Remote tag $RELEASE_TAG moved from $expected_commit to $remote_commit; refusing to publish the GitHub Release." >&2
+          exit 1
+        }
+    - name: Reprove release order immediately before latest mutation
+      if: steps.release-state.outputs.draft == 'true'
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        version="${RELEASE_TAG#v}"
+        ./scripts/prove-release-crates.sh \
+          "$version" \
+          crate-state/release-crates.txt \
+          crate-state/crate-checksums.sha256
+        ./scripts/verify-release-order.sh "$RELEASE_TAG"
+    - name: Publish verified release
+      if: steps.release-state.outputs.draft == 'true'
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+        python3 ../recovery-control/scripts/release-notes.py CHANGELOG.md "$RELEASE_VERSION" "$RELEASE_COMMIT" release-notes.md
+        test -s release-notes.md
+
+        # Reconcile the exact remote bytes only after every long registry
+        # proof, then prove that neither the release nor its assets changed
+        # while the release frontier was refreshed.
+        # GitHub's release-by-tag endpoint never returns drafts; find the
+        # one draft for this tag in the release list instead.
+        gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+          | jq --slurp --exit-status --arg tag "$RELEASE_TAG" '
+              [add[] | select(.tag_name == $tag and .draft == true)]
+              | if length == 1 then .[0] else error("expected exactly one draft for \($tag)") end
+            ' > before-publish-release.json
+        jq --exit-status \
+          --arg tag "$RELEASE_TAG" --arg commit "$expected_commit" '
+            .tag_name == $tag
+            and .name == $tag
+            and .target_commitish == $commit
+            and .draft == true
+            and .prerelease == false
+            and (.assets | length == 8)
+            and all(.assets[]; .state == "uploaded" and .size > 0)
+          ' before-publish-release.json >/dev/null
+        jq --join-output '.body // ""' before-publish-release.json > before-publish-notes.md
+        cmp -s release-notes.md before-publish-notes.md || {
+          echo "Draft notes changed after review; refusing to publish." >&2
+          exit 1
+        }
+
+        expected_assets="$({
+          for target in \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin \
+            aarch64-apple-darwin
+          do
+            archive="axocoatl-${RELEASE_TAG}-${target}.tar.gz"
+            printf '%s\n%s\n' "$archive" "$archive.sha256"
+          done
+        } | LC_ALL=C sort)"
+        test "$(jq --raw-output '.assets[].name' before-publish-release.json | LC_ALL=C sort)" \
+          = "$expected_assets"
+        mkdir before-publish-assets
+        while IFS= read -r name; do
+          asset_id="$(jq --exit-status --raw-output --arg name "$name" \
+            '[.assets[] | select(.name == $name)] | if length == 1 then .[0].id else empty end' \
+            before-publish-release.json)"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 180 \
+            --header 'Accept: application/octet-stream' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "before-publish-assets/$name" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          cmp -s "reviewed/$name" "before-publish-assets/$name" || {
+            echo "Draft asset $name changed after review; refusing to publish." >&2
+            exit 1
+          }
+        done <<<"$expected_assets"
+        ./scripts/release-artifact.sh verify-set \
+          "$RELEASE_TAG" before-publish-assets \
+          x86_64-unknown-linux-gnu \
+          aarch64-unknown-linux-gnu \
+          x86_64-apple-darwin \
+          aarch64-apple-darwin
+
+        ./scripts/verify-release-order.sh "$RELEASE_TAG"
+        release_id="$(jq --raw-output .id before-publish-release.json)"
+        [[ "$release_id" =~ ^[0-9]+$ ]]
+        gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+          > before-publish-recheck.json
+        for file in before-publish-release.json before-publish-recheck.json; do
+          jq --sort-keys '{
+            id, tag_name, name, target_commitish, body, draft, prerelease,
+            assets: ([.assets[] | {id, name, size, state}] | sort_by(.name))
+          }' "$file" > "$file.state"
+        done
+        cmp -s before-publish-release.json.state before-publish-recheck.json.state || {
+          echo "Draft metadata or asset identity changed during the final guard." >&2
+          exit 1
+        }
+
+        remote_ref=refs/axocoatl-release/remote-tag
+        git fetch --no-tags --force origin \
+          "+refs/tags/$RELEASE_TAG:$remote_ref"
+        test "$(git rev-parse "$remote_ref^{commit}")" = "$expected_commit" || {
+          echo "Remote tag $RELEASE_TAG moved; refusing to publish." >&2
+          exit 1
+        }
+
+        gh api --method PATCH \
+          "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+          -F draft=false \
+          -F prerelease=false \
+          -f make_latest=true > published-release.json
+        test "$(jq --raw-output .id published-release.json)" = "$release_id"
+    - name: Prove the release is public and not a prerelease
+      env:
+        GH_TOKEN: "${{ github.token }}"
+      run: |
+        set -euo pipefail
+        version="${RELEASE_TAG#v}"
+        expected_commit="$(git rev-parse "$RELEASE_COMMIT^{commit}")"
+        python3 ../recovery-control/scripts/release-notes.py CHANGELOG.md "$RELEASE_VERSION" "$RELEASE_COMMIT" release-notes.md
+        gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+          > public-release.json
+        jq --exit-status \
+          --arg tag "$RELEASE_TAG" --arg commit "$expected_commit" '
+            .tag_name == $tag
+            and .name == $tag
+            and .target_commitish == $commit
+            and .draft == false
+            and .prerelease == false
+            and (.assets | length == 8)
+            and all(.assets[]; .state == "uploaded" and .size > 0)
+          ' public-release.json >/dev/null
+        jq --join-output '.body // ""' public-release.json > public-release-notes.md
+        cmp -s release-notes.md public-release-notes.md
+
+        expected_assets="$(jq --raw-output '.assets[].name' public-release.json | LC_ALL=C sort)"
+        test "$(printf '%s\n' "$expected_assets" | sed '/^$/d' | wc -l | tr -d '[:space:]')" = 8
+        mkdir public-assets
+        while IFS= read -r name; do
+          asset_id="$(jq --exit-status --raw-output --arg name "$name" \
+            '[.assets[] | select(.name == $name)] | if length == 1 then .[0].id else empty end' \
+            public-release.json)"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --connect-timeout 10 --max-time 180 \
+            --header 'Accept: application/octet-stream' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --output "public-assets/$name" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          cmp -s "reviewed/$name" "public-assets/$name"
+        done <<<"$expected_assets"
+        diff -r --no-dereference reviewed public-assets >/dev/null
+        ./scripts/prove-release-crates.sh \
+          "$version" \
+          crate-state/release-crates.txt \
+          crate-state/crate-checksums.sha256
+        release_id="$(jq --raw-output .id public-release.json)"
+        latest_id="$(gh api \
+          "repos/$GITHUB_REPOSITORY/releases/latest" --jq .id)"
+        test "$latest_id" = "$release_id" || {
+          echo "Published release $RELEASE_TAG is not GitHub's latest release." >&2
+          exit 1
+        }
+  deploy-marketing:
+    name: Deploy marketing after the product release is public
+    needs:
+    - release
+    permissions:
+      contents: read
+      deployments: write
+    uses: "./.github/workflows/marketing-deploy.yml"
+    with:
+      release_tag: v1.5.0
+      release_sha: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+    secrets:
+      CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+      CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+  deploy-docs:
+    name: Deploy docs after the product release is public
+    needs: release
+    permissions:
+      contents: read
+      deployments: write
+    uses: "./.github/workflows/docs-deploy.yml"
+    with:
+      release_tag: v1.5.0
+      release_sha: 19e3c89ca7b4d02cd742bccd671f7274e68b95d7
+    secrets:
+      CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}"
+      CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
