@@ -4,6 +4,8 @@
 //
 //   readme-run <README.md>          the README's `axocoatl run fix` command
 //   install <file>                  the first `curl … install.sh | sh` command
+//   install-page <index.html>       the local install page linked from the home page
+//   output-path <command> <flag> <repo> <evidence-dir>  resolve a run output without eval
 //   commands <file.md|.mdx|.html>   every shell command in code blocks, in order
 //   first <file> <prefix>           the first such command starting with prefix
 //   has <file> <command>...         exit 0 when every command is shown exactly
@@ -113,11 +115,43 @@ export function readmeRunCommand(file, source) {
   return command;
 }
 
+/** Follow the home page's local Install link, never an external or inferred page. */
+export function installPage(file, source = readFileSync(file, 'utf8')) {
+  const visible = source.replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|template)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '');
+  const linked = [...visible.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi)].some(([, attributes, label]) => {
+    const href = attributes.match(/(?:^|\s)href\s*=\s*(["'])(.*?)\1/i)?.[2];
+    return href && /^\/install(?:\/index\.html|\/)?(?:[?#].*)?$/.test(decodeEntities(href))
+      && decodeEntities(label.replace(/<[^>]+>/g, '')).trim();
+  });
+  if (!linked) throw new Error(`${file} has no local link to /install`);
+  const page = path.join(path.dirname(path.resolve(file)), 'install', 'index.html');
+  // Do not count a link whose target was left out of the staged site.
+  readFileSync(page, 'utf8');
+  return page;
+}
+
 /** The published install command: the first `curl … install.sh | sh`. */
 export function installCommand(file, source) {
   const command = commandsOf(file, source).find((line) => /^curl\b[^|]*\binstall\.sh\b[^|]*\|\s*(?:sh|bash)$/.test(line));
   if (!command) throw new Error(`${file} shows no \`curl … install.sh | sh\` command in a code block`);
   return command;
+}
+
+/** Resolve one published output path; only the documented AXO_EVIDENCE variable is allowed. */
+export function outputPath(command, flag, repo, evidenceDir) {
+  if (!['--junit', '--record', '--receipt'].includes(flag)) throw new Error(`not an output flag: ${flag}`);
+  const values = [...command.matchAll(new RegExp(`(?:^|\\s)${flag}\\s+("[^"\\n]*"|'[^'\\n]*'|[^\\s]+)`, 'g'))];
+  if (values.length !== 1) throw new Error(`expected exactly one ${flag} output`);
+  const word = values[0][1];
+  let value = /^["']/.test(word) ? word.slice(1, -1) : word;
+  const variable = /^(?:\$AXO_EVIDENCE|\$\{AXO_EVIDENCE\})(?=\/|$)/;
+  const remainder = value.replace(variable, '');
+  if (!value || /[$`\\]/.test(remainder) || (word.startsWith("'") && variable.test(value))) {
+    throw new Error(`unsupported shell expression in ${flag} output`);
+  }
+  value = value.replace(variable, () => path.resolve(evidenceDir));
+  return path.resolve(repo, value);
 }
 
 /** Which of `wanted` the file does not show as a command, exactly. */
@@ -137,6 +171,12 @@ function main([command, file, ...rest]) {
   switch (command) {
     case 'readme-run':
       console.log(readmeRunCommand(file));
+      return 0;
+    case 'output-path':
+      console.log(outputPath(file, extra, rest[1], rest[2]));
+      return 0;
+    case 'install-page':
+      console.log(installPage(file));
       return 0;
     case 'install':
       console.log(installCommand(file));
@@ -162,7 +202,7 @@ function main([command, file, ...rest]) {
       process.stdout.write(yamlBlock(file, extra));
       return 0;
     default:
-      console.error('usage: published-commands.mjs readme-run|install|commands|first|has|yaml-block FILE [ARG...]');
+      console.error('usage: published-commands.mjs readme-run|install|install-page|output-path|commands|first|has|yaml-block FILE [ARG...]');
       return 2;
   }
 }

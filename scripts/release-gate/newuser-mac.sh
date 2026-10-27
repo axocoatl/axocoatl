@@ -5,7 +5,7 @@
 # right after reset-mac-account.sh, on the release candidate: it reads the
 # staged site's commands and runs them as published: the install command
 # exactly as written, then (after checking the site shows them)
-# `axocoatl onboard` with every consent prompt answered live,
+# `axocoatl onboard --start none` with every consent prompt answered live,
 # `axocoatl doctor` and `axocoatl dev`, then the site's and README's run
 # commands. Before the install it records that the account has no Axocoatl,
 # Podman or Ollama, and after each setup what onboarding installed, created
@@ -113,8 +113,8 @@ gate_valid_commit "$commit" || gate_die "--commit must be a full 40-character co
 gate_valid_version "$version" || gate_die "no X.Y.Z version in the tarball name ${tarball##*/}"
 # The staged site's own commands, read once and run as written.
 site_page=$site/index.html
-install_command=$(node "$gate_commands_js" install "$site_page" 2>/dev/null \
-  || node "$gate_commands_js" install "$site/install/index.html" 2>/dev/null) || install_command=''
+site_install_page=$site/install/index.html
+install_command=$(node "$gate_commands_js" install "$site_install_page" 2>/dev/null) || install_command=''
 if [ -z "$paths" ]; then
   if [ "$machine" = C1 ]; then
     paths=local,claude-code,codex,openrouter,service,workbench,workbench-chromium,recovery,real-repo
@@ -430,6 +430,21 @@ resume_install() {
   gate_record "$name" pass '' '' '' "$resume_binary; $reported; binary sha256 $installed; archive sha256 $actual; continued existing installation, no clean-install claim"
 }
 
+site_setup_commands() {
+  gate_check "the staged homepage links to its install page" \
+    "$(node "$gate_commands_js" install-page "$site_page" 2>&1 | tr '\n' ' ')" -- \
+    node "$gate_commands_js" install-page "$site_page" || return
+  if [ -z "$install_command" ]; then
+    gate_record "the staged site shows the install command" fail '' '' '' "no \`curl … install.sh | sh\` in $site_install_page"
+    return 1
+  fi
+  # These are the exact setup commands the gate executes. --start none
+  # returns control to the first terminal before doctor and foreground dev.
+  gate_check "the staged site shows axocoatl onboard, doctor and dev" \
+    "$(node "$gate_commands_js" has "$site_install_page" 'axocoatl onboard --start none' 'axocoatl doctor' 'axocoatl dev' 2>&1 | tr '\n' ' ')" -- \
+    node "$gate_commands_js" has "$site_install_page" 'axocoatl onboard --start none' 'axocoatl doctor' 'axocoatl dev'
+}
+
 install_once() {
   if [ "$resume" = 1 ]; then
     resume_install
@@ -447,15 +462,7 @@ install_once() {
     /bin/zsh -ilc 'command -v axocoatl' </dev/null 2>/dev/null | tail -n 1)
   gate_check "no axocoatl on this account's PATH before the install" \
     "$other is on this account's login PATH (another install); move it aside for the gate" -- test -z "$other"
-  if [ -z "$install_command" ]; then
-    gate_record "the staged site shows the install command" fail '' '' '' "no \`curl … install.sh | sh\` in $site_page or install/index.html"
-    return 1
-  fi
-  # The rest of the site's sequence, which the gate runs (onboard with
-  # --start none; doctor and dev as written).
-  gate_check "the staged site shows axocoatl onboard, doctor and dev" \
-    "$(node "$gate_commands_js" has "$site_page" 'axocoatl onboard' 'axocoatl doctor' 'axocoatl dev' 2>&1 | tr '\n' ' ')" -- \
-    node "$gate_commands_js" has "$site_page" 'axocoatl onboard' 'axocoatl doctor' 'axocoatl dev'
+  site_setup_commands || return
   local stage="$work/release"
   rm -rf "$stage"
   gate_stage_release "$tarball" "$stage" >/dev/null

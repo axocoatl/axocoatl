@@ -14,6 +14,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 bash "$script_dir/test-ci-registry.sh"
 bash "$script_dir/test-product-browser-gate.sh"
+ruby "$script_dir/test-marketing-deploy.rb"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-workflow-contracts.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 copy="$work_dir/checkout"

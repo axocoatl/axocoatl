@@ -408,6 +408,21 @@ src/a.js
   printf 'b\n' >>"$repo/a.txt"
   # The record is left out as the record, the others as outputs.
   gate_markup_check clean "$repo" "$repo/run.axorecord.jsonl" receipt.json axocoatl-junit.xml 2>/dev/null
+  # README reports now live outside the checkout, leaving no Git exclusion
+  # array. Exercise actual Bash nounset behavior, including the default macOS
+  # Bash 3.2, and prove a new repository file is still checked.
+  external="$work/external-output"
+  mkdir -p "$external"
+  mv "$repo/run.axorecord.jsonl" "$repo/receipt.json" "$repo/axocoatl-junit.xml" "$external/"
+  (set -u; gate_markup_check external-clean "$repo" "$external/run.axorecord.jsonl" "$external/receipt.json" "$external/axocoatl-junit.xml") \
+    || { echo 'external reports broke the markup check' >&2; exit 1; }
+  printf 'new </tool_call>\n' >"$repo/external-check.txt"
+  if (set -u; gate_markup_check external-new-file "$repo" "$external/run.axorecord.jsonl" "$external/receipt.json" "$external/axocoatl-junit.xml"); then
+    echo 'external reports hid tool-call markup in a new repository file' >&2
+    exit 1
+  fi
+  rm "$repo/external-check.txt"
+  mv "$external/run.axorecord.jsonl" "$external/receipt.json" "$external/axocoatl-junit.xml" "$repo/"
   write_record "$work/slip.jsonl" pass "$slip" 'VERDICT: APPROVE' "$start"
   check slipped "$work/slip.jsonl"
   write_record "$work/qwen.jsonl" pass 'Fixed it.' 'VERDICT: APPROVE </tool_call>' "$start"
@@ -436,7 +451,7 @@ src/a.js
   node -e '
     const steps = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
     const got = steps.map((s) => `${s.name.replace(/^no tool-call markup in the accepted output of the run on /, "")}: ${s.status}`);
-    const want = ["clean: pass", "slipped: fail", "tool-call-tag: fail", "api-shape: fail", "none-accepted: fail",
+    const want = ["clean: pass", "external-clean: pass", "external-new-file: fail", "slipped: fail", "tool-call-tag: fail", "api-shape: fail", "none-accepted: fail",
       "attention-none-accepted: pass", "unknown-start: fail", "cut-off: fail", "no-record: fail", "in-a-file: fail",
       "in-a-new-file: fail", "in-a-commit: fail"];
     if (got.join("\n") !== want.join("\n")) { console.error(got.join("\n")); process.exit(1); }
@@ -825,7 +840,9 @@ exec "$(command -v curl)" "\$@"
 CURL
   printf '#!/bin/sh\nexit 1\n' >"$sim/bin/podman"
   chmod +x "$sim/bin/"*
-  printf '<pre>curl -fsSL https://axocoatl.ai/install.sh | sh\naxocoatl onboard\naxocoatl doctor\naxocoatl dev</pre>\n' >"$sim/site/index.html"
+  mkdir -p "$sim/site/install"
+  printf '<a href="/install">Install</a>\n' >"$sim/site/index.html"
+  printf '<pre>curl -fsSL https://axocoatl.ai/install.sh | sh\naxocoatl onboard --start none\naxocoatl doctor\naxocoatl dev</pre>\n' >"$sim/site/install/index.html"
   printf '#!/bin/sh\necho TEST_INSTALLER_REFUSED >&2\nexit 85\n' >"$sim/site/install.sh"
   node_dir=$(dirname "$(command -v node)")
   test_path="$sim/bin:$sim/installed:$node_dir:/usr/bin:/bin:/usr/sbin:/sbin"

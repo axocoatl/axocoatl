@@ -983,9 +983,11 @@ gate_markup_check() {
     esac
     outside+=(":(exclude,literal)$file")
   done
-  if ! git -C "$repo" diff --no-color --no-ext-diff --no-textconv -U0 "$start" -- . "${outside[@]}" \
+  # Bash 3.2 with nounset cannot expand an empty array: external reports
+  # need no exclusions, but the repository must still be checked.
+  if ! git -C "$repo" diff --no-color --no-ext-diff --no-textconv -U0 "$start" -- . ${outside[@]+"${outside[@]}"} \
     >"$GATE_TMP/markup.diff" 2>"$GATE_TMP/markup.err" \
-    || ! git -C "$repo" ls-files --others --exclude-standard -z -- . "${outside[@]}" \
+    || ! git -C "$repo" ls-files --others --exclude-standard -z -- . ${outside[@]+"${outside[@]}"} \
       >"$GATE_TMP/markup.new" 2>>"$GATE_TMP/markup.err" \
     || ! (cd "$repo" && xargs -0 sh -c '
       # A symlink is read as its link text, as Git records it; a regular
@@ -1028,7 +1030,7 @@ gate_markup_check() {
 # accepted output holds tool-call markup (gate_markup_check). Records each
 # check; returns 0 only when the run and all of them passed.
 gate_run_fixture() {
-  local fixture=$1 published=$2 repo=$3 label=${4:-$1} command record receipt junit keep
+  local fixture=$1 published=$2 repo=$3 label=${4:-$1} command record receipt junit keep outputs file
   keep="$GATE_ATTACH/$label"
   if ! gate_fixture_repo "$fixture" "$repo"; then
     gate_record "fixture $fixture exists" fail '' '' '' "tests/fixtures/newuser/$fixture is missing"
@@ -1039,16 +1041,23 @@ gate_run_fixture() {
     return 1
   fi
   command=$(gate_with_outputs "$published")
-  record=$(gate_flag_value "$command" --record)
-  receipt=$(gate_flag_value "$command" --receipt)
-  junit=$(gate_flag_value "$command" --junit)
-  mkdir -p "$keep"
+  # The public README keeps reports outside the checkout. Bind its documented
+  # variable per fixture, without executing or inferring arbitrary shell setup.
+  outputs="$GATE_TMP/fixture-outputs/$label"
+  mkdir -p "$keep" "$outputs"
+  if ! record=$(node "$gate_commands_js" output-path "$command" --record "$repo" "$outputs") \
+    || ! receipt=$(node "$gate_commands_js" output-path "$command" --receipt "$repo" "$outputs") \
+    || ! junit=$(node "$gate_commands_js" output-path "$command" --junit "$repo" "$outputs"); then
+    gate_record "run fix on $label" fail '' '' '' 'cannot resolve the published output paths without shell evaluation'
+    return 1
+  fi
   printf '%s\n' "$command" >"$keep/command.txt"
+  printf '%s\n' "$outputs" >"$keep/evidence-directory.txt"
   local status=0
-  gate_step "run fix on $label" -- /bin/bash -c "cd \"\$1\" && $command" gate-run "$repo" || status=1
+  gate_step "run fix on $label" -- /bin/bash -c "export AXO_EVIDENCE=\"\$2\"; cd \"\$1\" && $command" gate-run "$repo" "$outputs" || status=1
   cp "$GATE_ATTACH/logs/$(gate_slug "run fix on $label").log" "$keep/run.log" 2>/dev/null || true
   for file in "$receipt" "$record" "$junit"; do
-    [ -n "$file" ] && [ -f "$repo/$file" ] && cp "$repo/$file" "$keep/"
+    [ -n "$file" ] && [ -f "$file" ] && cp "$file" "$keep/"
   done
   (cd "$repo" && git status --porcelain && git diff) >"$keep/changes.txt" 2>&1 || true
   # The run says which image and setup it chose (fixtures.json).
@@ -1067,13 +1076,13 @@ gate_run_fixture() {
   fi
   # The documented verify commands, run in the repository.
   gate_step "receipt verify on $label (documented command)" -- /bin/bash -c \
-    "cd \"\$1\" && axocoatl receipt verify \"\$2\" --key \"\$(axocoatl receipt key)\" --repo ." \
-    gate-verify "$repo" "$receipt" || status=1
+    "cd \"\$1\" && axocoatl receipt verify \"\$2\" --key \"\$(axocoatl receipt key)\" --repo . --record \"\$3\" --require-pass" \
+    gate-verify "$repo" "$receipt" "$record" || status=1
   gate_step "record verify on $label" -- /bin/bash -c 'cd "$1" && axocoatl record verify "$2"' \
     gate-verify "$repo" "$record" || status=1
   gate_step "receipt matches the record on $label" -- /bin/bash -c \
     "cd \"\$1\" && axocoatl receipt verify \"\$2\" --key \"\$(axocoatl receipt key)\" --record \"\$3\"" \
     gate-verify "$repo" "$receipt" "$record" || status=1
-  gate_markup_check "$label" "$repo" "$repo/$record" "$receipt" "$junit" || status=1
+  gate_markup_check "$label" "$repo" "$record" "$receipt" "$junit" || status=1
   return "$status"
 }
