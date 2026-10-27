@@ -19,3 +19,6 @@ pnpm-debug.log*
 
 # macOS-specific files
 .DS_Store
+
+# Generated copies of the canonical marketing walkthrough
+public/assets/dashboard-task-1.5/

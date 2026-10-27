@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEmailOff } from './email-off.mjs';
 
@@ -32,6 +33,54 @@ if (!fs.existsSync(path.join(distRoot, 'favicon.png'))) {
   failures.push('built favicon is missing: dist/favicon.png');
 }
 
+// Serve the walkthrough and tracks from the docs origin, retaining the exact
+// already-verified canonical bytes. Frame decoding belongs to the media gate.
+const taskMediaFiles = ['dashboard-task.mp4', 'result.jpg', 'captions.vtt', 'chapters.vtt'];
+const canonicalTaskRoot = path.resolve(docsRoot, '../marketing/assets/demo/dashboard-task-1.5');
+const builtTaskRoot = path.join(distRoot, 'assets/dashboard-task-1.5');
+let taskProvenance;
+try {
+  taskProvenance = JSON.parse(fs.readFileSync(path.join(canonicalTaskRoot, 'provenance.json'), 'utf8'));
+  if (taskProvenance.schema !== 'axocoatl.dashboard-task-provenance/1' || !Array.isArray(taskProvenance.files)) {
+    throw new Error('unexpected provenance schema or file inventory');
+  }
+} catch (error) {
+  failures.push(`canonical dashboard task provenance is unavailable or invalid: ${error.message}`);
+  taskProvenance = null;
+}
+
+function readTaskMedia(file) {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('expected a regular, non-symlink file');
+    return fs.readFileSync(file);
+  } catch (error) {
+    failures.push(`${path.relative(docsRoot, file)}: ${error.message}`);
+    return null;
+  }
+}
+
+for (const name of taskMediaFiles) {
+  const source = readTaskMedia(path.join(canonicalTaskRoot, name));
+  const built = readTaskMedia(path.join(builtTaskRoot, name));
+  const entries = taskProvenance?.files.filter((entry) => entry?.file === name) ?? [];
+  const expected = entries[0];
+  if (entries.length !== 1 || !/^[a-f0-9]{64}$/.test(expected?.sha256 ?? '')
+      || !Number.isSafeInteger(expected?.bytes) || expected.bytes < 1) {
+    failures.push(`canonical dashboard task provenance needs one valid entry for ${name}`);
+    continue;
+  }
+  for (const [label, bytes] of [['canonical', source], ['built', built]]) {
+    if (bytes && (bytes.length !== expected.bytes
+        || createHash('sha256').update(bytes).digest('hex') !== expected.sha256)) {
+      failures.push(`${label} dashboard task media differs from provenance: ${name}`);
+    }
+  }
+  if (source && built && !source.equals(built)) {
+    failures.push(`built dashboard task media differs from its canonical source: ${name}`);
+  }
+}
+
 const htmlFiles = walk(distRoot).filter((file) => file.endsWith('.html'));
 for (const file of htmlFiles) {
   const html = fs.readFileSync(file, 'utf8');
@@ -39,7 +88,7 @@ for (const file of htmlFiles) {
     failures.push(`${path.relative(docsRoot, file)} does not wrap its body in <!--email_off-->, so Cloudflare can rewrite text such as verify-receipt@v1.4.0 into "[email protected]"`);
   }
   const pagePath = `/${path.relative(distRoot, file).replace(/index\.html$/, '').replaceAll(path.sep, '/')}`;
-  for (const match of html.matchAll(/\b(?:href|src)=["']([^"']+)["']/g)) {
+  for (const match of html.matchAll(/\b(?:href|src|poster)=["']([^"']+)["']/g)) {
     const raw = match[1];
     if (!raw || /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(raw)) continue;
     const resolved = raw.startsWith('/') ? raw : new URL(raw, `https://docs.axocoatl.ai${pagePath}`).pathname;
@@ -54,4 +103,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${htmlFiles.length} built pages and the canonical favicon.`);
+console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${taskMediaFiles.length} canonical dashboard task media files.`);

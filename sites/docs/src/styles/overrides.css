@@ -8,3 +8,18 @@ h1, h2, h3, h4 {
 
 .site-title { font-weight: 600; letter-spacing: -.01em; }
 .card .icon { color: var(--axo-jade); }
+
+/* Keep the first-run recording within the prose column at every viewport. */
+.dashboard-walkthrough video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: .5rem;
+}
+.dashboard-walkthrough figcaption {
+  margin-top: .75rem;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+}

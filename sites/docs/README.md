@@ -17,10 +17,19 @@ npm run check:links
 npm run preview
 ```
 
-`prebuild.sh` copies the canonical brand assets from `branding/` into the ignored
-`public/` output before a build. Do not edit those generated copies.
-The built-link check verifies internal `href`/`src` targets and fails when the
-canonical favicon was not copied into `dist/`.
+`prebuild.sh` copies the canonical brand assets from `branding/` into generated
+`public/` output before a build. It also copies `dashboard-task.mp4`, `result.jpg`,
+`captions.vtt` and `chapters.vtt` from
+`sites/marketing/assets/demo/dashboard-task-1.5/` into the ignored
+`public/assets/dashboard-task-1.5/` folder. Do not edit these generated copies.
+The video, poster and text tracks are served from the docs origin; links to the
+recording's provenance and artifact evidence use the canonical marketing site.
+
+The built-link check verifies internal `href`, `src` and `poster` targets and fails
+when the canonical favicon was not copied into `dist/`. It also requires all four
+built task-media files to match their canonical source bytes and the SHA-256 and
+size entries in the canonical `provenance.json`. These inexpensive file checks do
+not repeat the source-frame decoding already performed by the marketing media gate.
 
 ## Dependency audit exceptions
 

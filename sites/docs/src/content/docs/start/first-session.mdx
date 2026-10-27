@@ -23,22 +23,57 @@ Codex during onboarding, the dashboard's team uses your reviewer's native model.
 axocoatl dev
 ```
 
-Leave that terminal open. Open the printed **Sign in:** link in your browser.
-If onboarding or the Always-On Service already started the daemon, use its link
-instead of starting a second copy. To print the link again, run `axocoatl url`.
+Leave that terminal running. In a second terminal, run `axocoatl url` and open
+the sign-in link in your browser. If onboarding or the Always-On Service already
+started the daemon, use that existing daemon and run `axocoatl url` for its link.
 Keep the sign-in link private.
 
-<figure>
-  <a href="/assets/workbench-1.5/conversation.jpg" aria-label="Open the full-size Conversation screenshot (1600 × 1408)">
-    <img src="/assets/workbench-1.5/conversation.jpg" width="1600" height="1408"
-      alt="Actual Axocoatl 1.5 dashboard in Safari showing a completed paging fix, the Conversation, Team and budget controls, Files, Preview and History." />
-  </a>
-  <figcaption>
-    A real Axocoatl 1.5 Session in Safari: one OpenRouter Agent completed a paging fix.
-    <a href="/assets/workbench-1.5/provenance.json">Capture and result provenance</a>.
-    Select the image to view it at full size.
+## Watch the dashboard flow
+
+Follow the same flow shown on the website: open a Workspace, send a request,
+watch the Agents work, then review and correct the result. Pause the video as you
+work through the steps below in your own repository.
+
+<figure class="dashboard-walkthrough">
+  <video controls muted playsinline preload="metadata" width="1280" height="720"
+    poster="/assets/dashboard-task-1.5/result.jpg"
+    src="/assets/dashboard-task-1.5/dashboard-task.mp4"
+    aria-label="A task from workspace setup to reviewed changes in Axocoatl 1.5"
+    aria-describedby="walkthrough-caption">
+    <track kind="captions" src="/assets/dashboard-task-1.5/captions.vtt" srclang="en" label="Walkthrough captions" default />
+    <track kind="chapters" src="/assets/dashboard-task-1.5/chapters.vtt" srclang="en" label="Task chapters" />
+    <a href="/assets/dashboard-task-1.5/dashboard-task.mp4">Download the walkthrough</a>.
+  </video>
+  <figcaption id="walkthrough-caption">
+    An actual Axocoatl 1.5 task on a prepared pagination project. Four requests,
+    model failures, recovery and test restoration lead to a checked result.
+    Waiting is shortened and the recording combines captured UI segments.
   </figcaption>
 </figure>
+
+- **0:00** — [Open a Workspace and create a Session](#1-open-your-repository-and-create-a-session).
+- **0:23** — [Send the request](#3-ask-for-one-result-in-conversation).
+- **0:31** — [Follow the Agents and handle a failed turn](#follow-the-work).
+- **1:22** — [Review the files and correct the result](#4-inspect-the-files-and-review-the-diff).
+
+<details>
+  <summary>The recording's team and recovery</summary>
+
+The task starts with a local Qwen3-Coder 30B Lead and read-only GPT-OSS 20B Scout.
+It finishes with GPT-OSS 20B as the Lead and helpers off. The host requires
+`npm test`; no model review is required. The steps below start with one Agent;
+helpers remain optional.
+
+Malformed responses needed recovery. Review found removed original tests and
+requested their restoration. Scout also claimed tests it had not run: use the
+host's check output and the actual files as evidence. The final correction passed
+the host check and independent artifact review. This is one prepared task, not a
+model comparison, and an ordinary Session does not produce a signed receipt.
+
+[Recording sources and edits](https://axocoatl.ai/assets/demo/dashboard-task-1.5/provenance.json) ·
+[Actual patch and artifact review](https://axocoatl.ai/assets/demo/dashboard-task-1.5/artifact-evidence.json)
+
+</details>
 
 ## 1. Open your repository and create a Session
 
@@ -62,16 +97,20 @@ or authorized this folder. **Open workspace…** is that deliberate authorizatio
 ## 2. Review Team & budget
 
 The first Send button reads **Set budget**. Select it to open **Team & budget**.
-Choose **Edit**, inspect the selected Agent, model and limits, then **Preview**
-and **Apply**. Nothing is approved until you apply it.
+Choose **Edit** and inspect the selected Agent, model and limits. Open
+**Required checks** and add the command that verifies your task. For the Node
+project in the video, that is `npm test`; use your repository's own check command.
+Then choose **Preview changes → Apply to this Session**. Nothing is approved until
+you apply it.
 
 Keep one Agent for a small first task. Read-only helpers, required checks and a
 required review are opt-in. They are separate choices: asking a helper to review
 is not the same as requiring the host to run a review before the turn completes.
 See [Agents and budgets](/configure/agents/) when you want those controls.
 
-The pictured example uses one OpenRouter Agent. Helpers, required host checks and
-required review were not enabled; those are controls you can choose for your own task.
+A required check makes the host run the command after the Agents finish. Asking
+the Lead to run tests in your message does not configure that requirement.
+[How required checks work →](/configure/agents/#required-checks)
 
 ## 3. Ask for one result in Conversation
 
@@ -81,19 +120,30 @@ repository you have not explored yet, start with:
 ```text
 Inspect this repository without changing files. Identify its purpose, the command
 used for its automated checks, and the three files most relevant to a small first fix.
-Report any uncertainty explicitly.
+If you can verify a small issue, report its reproduction too. State uncertainty explicitly.
 ```
 
-Then ask for a small change:
+Choose a specific issue from that report. Name the behavior to fix, what must stay
+unchanged and how to check it. Adapt this example from the video to your project:
 
 ```text
-Fix the smallest verified issue you found. Run the repository's documented check
-command, summarize the result, and do not commit.
+Fix pagination losing the final page when the item count is an exact multiple
+of the page size. Preserve the public API and all existing tests. Add regression
+tests for one full page and page size one. Run npm test, summarize the actual
+result, and do not commit.
 ```
 
-Watch the response and expand tool calls to see the files and commands used.
-**Stop** addresses the active turn. A failed or interrupted turn remains in
-**History**; read its reason before deciding whether to continue.
+### Follow the work
+
+Watch Conversation and expand tool calls to see the files and commands used.
+Open **More → Agent graph** to follow the Lead and any helpers you enabled;
+select an Agent to inspect its recorded work. Return to Conversation for the result.
+
+**Stop** addresses the active turn. If a turn fails, read its reason and inspect
+what already changed before using **Turn controls → Continue**. Failed and
+interrupted work remains in **History**. The recording includes recovery requests
+and a later model change; these are responses to that task's failures, not setup
+steps to repeat. [Recovery controls →](/workbench/history/#control-native-work)
 
 ## 4. Inspect the files and review the diff
 
@@ -101,23 +151,31 @@ The final answer is a starting point for review. Inspect the result in the dashb
 
 1. Open **Files** and read the edited file.
 2. Open **Source Control → Last turn** to see the paths attributed to the most
-   recent Agent turn. It shows their current diff, not a frozen copy.
-3. Read the check output in Conversation, or run the repository check in the
-   dashboard's **Terminal** if it has not been checked.
+   recent Agent turn. It shows their current diff, not a frozen copy. After several
+   requests or recovery, also select **All changes** to review the full working diff.
+   Check that original tests and behavior you asked to preserve are still present.
+3. Open **More → Agent graph → Turn controls → Required checks** to read the
+   host's check output and exit code. If no required check was configured, inspect
+   the actual tool output in Conversation or run the repository check in the
+   dashboard's **Terminal**. A model saying “tests pass” is not the check result.
 4. Use **Preview** when the task changes a running web app.
 5. Stage and commit only after the diff and check results satisfy your request.
 
 <figure>
-  <a href="/assets/workbench-1.5/diff.jpg" aria-label="Open the full-size changed-file diff screenshot (1600 × 1408)">
-    <img src="/assets/workbench-1.5/diff.jpg" width="1600" height="1408" loading="lazy"
-      alt="Actual Axocoatl 1.5 Files view showing the one-line paging fix as a red and green Git diff, marked changed this turn." />
+  <a href="/assets/dashboard-task-1.5/result.jpg" aria-label="Open the full-size result from the walkthrough (1280 × 720)">
+    <img src="/assets/dashboard-task-1.5/result.jpg" width="1280" height="720" loading="lazy"
+      alt="The walkthrough's final Axocoatl Files view, showing the pagination fix and test file in Source Control with All changes selected." />
   </a>
   <figcaption>
-    The same Session's actual diff. The final-page calculation now keeps a full page
-    when the item count is an exact multiple of the page size.
-    Select the image to view it at full size.
+    The walkthrough's final diff. The pagination fix and regression tests stay
+    uncommitted; the original tests have been restored. Select the image to view
+    it at full size.
   </figcaption>
 </figure>
+
+If review finds a missing requirement, send a specific correction in Conversation
+and repeat the checks and diff review. In the video, that meant restoring the
+original tests before accepting the fix.
 
 <Aside type="note" title="You decide what to commit">
 The normal result leaves edits in the Session working tree. Source Control offers

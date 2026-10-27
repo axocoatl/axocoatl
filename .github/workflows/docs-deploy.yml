@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'sites/docs/**'
+      - 'sites/marketing/assets/demo/dashboard-task-1.5/**'
       - 'docs/**'
       - 'branding/**'
       - '.github/workflows/docs-deploy.yml'

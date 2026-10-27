@@ -30,8 +30,9 @@ Once doctor is ready, start it explicitly:
 axocoatl dev
 ```
 
-Leave that terminal open and open the printed **Sign in:** link. In the dashboard,
-[open your repository and create a Session](/start/first-session/). If a daemon or
+Leave that terminal running. In a second terminal, run `axocoatl url` and open
+the sign-in link. [Follow the dashboard walkthrough](/start/first-session/#watch-the-dashboard-flow)
+to open your repository, send a request and review the result. If a daemon or
 service already runs with this configuration, use it instead of starting another.
 A configuration change requires restarting that existing daemon.
 
@@ -747,13 +748,13 @@ If you used `--start none`, start the daemon now:
 axocoatl dev
 ```
 
-If onboarding already started `dev`, keep that terminal open and use the sign-in link
-it printed. If the Always-On Service is running, use `axocoatl url` for its link;
-neither case needs another daemon.
+If onboarding already started `dev`, keep that terminal running. If the Always-On
+Service is running, use it. In either case, run `axocoatl url` in another terminal
+for the sign-in link; neither case needs another daemon.
 
 The app is at `http://127.0.0.1:8080`, or the port onboarding wrote to `server.port`.
 `dev` holds the port before it starts; when another program already listens there,
 it says which port and how to choose another, and exits. Keep this process running,
-open the `Sign in:` link it prints (or run `axocoatl url`), and choose
+run `axocoatl url` in a second terminal, open its sign-in link, and choose
 **Open workspace…** to authorize the repository you want to use. Then
 [create your first Session →](/start/first-session/).
