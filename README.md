@@ -34,6 +34,24 @@ and a signed receipt.
 
 </details>
 
+## A required review, on screen
+
+[![Axocoatl 1.5 in Dark mode showing the corrected invoice-validation task](sites/marketing/assets/demo/required-review-1.5/result.jpg)](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)
+
+**[Watch the required-review walkthrough](https://docs.axocoatl.ai/configure/cross-model-review/#watch-a-required-review)**
+
+Two requests with a local GPT-OSS 20B lead, a read-only Qwen3-Coder 30B reviewer,
+and required `npm test` checks. The first review approved a change that let an
+oversized price become `Infinity`; independent checks caught it, and a follow-up
+restored the guard and passed fresh checks and review. An AI assistant operated the
+actual dashboard in Dark mode; waits are trimmed and sped up. This prepared task
+is separate from the historical benchmark. A reviewer is evidence, not a guarantee.
+
+[0:00 · Set requirements](https://docs.axocoatl.ai/configure/cross-model-review/?t=0#required-review-video) ·
+[0:35 · Watch review](https://docs.axocoatl.ai/configure/cross-model-review/?t=35.345#required-review-video) ·
+[0:45 · Check independently](https://docs.axocoatl.ai/configure/cross-model-review/?t=44.645#required-review-video) ·
+[1:15 · Review corrected result](https://docs.axocoatl.ai/configure/cross-model-review/?t=74.77#required-review-video)
+
 ## Open your first Session
 
 ```bash

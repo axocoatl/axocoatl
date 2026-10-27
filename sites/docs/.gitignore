@@ -20,6 +20,7 @@ pnpm-debug.log*
 # macOS-specific files
 .DS_Store
 
-# Generated copies of the canonical marketing walkthrough
+# Generated copies of the canonical marketing recordings
 public/assets/dashboard-task-1.5/
+public/assets/required-review-1.5/
 public/assets/ax-video-chapters.js

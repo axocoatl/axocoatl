@@ -33,23 +33,17 @@ if (!fs.existsSync(path.join(distRoot, 'favicon.png'))) {
   failures.push('built favicon is missing: dist/favicon.png');
 }
 
-// Serve the walkthrough and tracks from the docs origin, retaining the exact
+// Serve the recordings and tracks from the docs origin, retaining the exact
 // already-verified canonical bytes. Frame decoding belongs to the media gate.
-const taskMediaFiles = ['dashboard-task.mp4', 'result.jpg', 'captions.vtt', 'chapters.vtt'];
-const canonicalTaskRoot = path.resolve(docsRoot, '../marketing/assets/demo/dashboard-task-1.5');
-const builtTaskRoot = path.join(distRoot, 'assets/dashboard-task-1.5');
-let taskProvenance;
-try {
-  taskProvenance = JSON.parse(fs.readFileSync(path.join(canonicalTaskRoot, 'provenance.json'), 'utf8'));
-  if (taskProvenance.schema !== 'axocoatl.dashboard-task-provenance/1' || !Array.isArray(taskProvenance.files)) {
-    throw new Error('unexpected provenance schema or file inventory');
-  }
-} catch (error) {
-  failures.push(`canonical dashboard task provenance is unavailable or invalid: ${error.message}`);
-  taskProvenance = null;
-}
+const recordings = [
+  { directory: 'dashboard-task-1.5', label: 'dashboard task',
+    schema: 'axocoatl.dashboard-task-provenance/1', video: 'dashboard-task.mp4' },
+  { directory: 'required-review-1.5', label: 'required review',
+    schema: 'axocoatl.required-review-provenance/1', video: 'required-review.mp4' },
+];
+const sharedMediaFiles = ['result.jpg', 'captions.vtt', 'chapters.vtt'];
 
-function readTaskMedia(file) {
+function readMedia(file) {
   try {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('expected a regular, non-symlink file');
@@ -60,29 +54,47 @@ function readTaskMedia(file) {
   }
 }
 
-for (const name of taskMediaFiles) {
-  const source = readTaskMedia(path.join(canonicalTaskRoot, name));
-  const built = readTaskMedia(path.join(builtTaskRoot, name));
-  const entries = taskProvenance?.files.filter((entry) => entry?.file === name) ?? [];
-  const expected = entries[0];
-  if (entries.length !== 1 || !/^[a-f0-9]{64}$/.test(expected?.sha256 ?? '')
-      || !Number.isSafeInteger(expected?.bytes) || expected.bytes < 1) {
-    failures.push(`canonical dashboard task provenance needs one valid entry for ${name}`);
-    continue;
-  }
-  for (const [label, bytes] of [['canonical', source], ['built', built]]) {
-    if (bytes && (bytes.length !== expected.bytes
-        || createHash('sha256').update(bytes).digest('hex') !== expected.sha256)) {
-      failures.push(`${label} dashboard task media differs from provenance: ${name}`);
+for (const recording of recordings) {
+  const canonicalRoot = path.resolve(docsRoot, '../marketing/assets/demo', recording.directory);
+  const builtRoot = path.join(distRoot, 'assets', recording.directory);
+  const provenanceBytes = readMedia(path.join(canonicalRoot, 'provenance.json'));
+  let provenance = null;
+  if (provenanceBytes) {
+    try {
+      const parsed = JSON.parse(provenanceBytes.toString('utf8'));
+      if (parsed.schema !== recording.schema || !Array.isArray(parsed.files)) {
+        throw new Error('unexpected provenance schema or file inventory');
+      }
+      provenance = parsed;
+    } catch (error) {
+      failures.push(`canonical ${recording.label} provenance is invalid: ${error.message}`);
     }
   }
-  if (source && built && !source.equals(built)) {
-    failures.push(`built dashboard task media differs from its canonical source: ${name}`);
+
+  for (const name of [recording.video, ...sharedMediaFiles]) {
+    const source = readMedia(path.join(canonicalRoot, name));
+    const built = readMedia(path.join(builtRoot, name));
+    const entries = provenance?.files.filter((entry) => entry?.file === name) ?? [];
+    const expected = entries[0];
+    if (entries.length !== 1 || !/^[a-f0-9]{64}$/.test(expected?.sha256 ?? '')
+        || !Number.isSafeInteger(expected?.bytes) || expected.bytes < 1) {
+      failures.push(`canonical ${recording.label} provenance needs one valid entry for ${name}`);
+      continue;
+    }
+    for (const [label, bytes] of [['canonical', source], ['built', built]]) {
+      if (bytes && (bytes.length !== expected.bytes
+          || createHash('sha256').update(bytes).digest('hex') !== expected.sha256)) {
+        failures.push(`${label} ${recording.label} media differs from provenance: ${name}`);
+      }
+    }
+    if (source && built && !source.equals(built)) {
+      failures.push(`built ${recording.label} media differs from its canonical source: ${name}`);
+    }
   }
 }
 
-const canonicalChapterModule = readTaskMedia(path.resolve(docsRoot, '../marketing/components/ax-video-chapters.js'));
-const builtChapterModule = readTaskMedia(path.join(distRoot, 'assets/ax-video-chapters.js'));
+const canonicalChapterModule = readMedia(path.resolve(docsRoot, '../marketing/components/ax-video-chapters.js'));
+const builtChapterModule = readMedia(path.join(distRoot, 'assets/ax-video-chapters.js'));
 if (canonicalChapterModule && builtChapterModule && !canonicalChapterModule.equals(builtChapterModule)) {
   failures.push('built chapter controls differ from the canonical marketing module: assets/ax-video-chapters.js');
 }
@@ -109,4 +121,4 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${taskMediaFiles.length} canonical dashboard task media files plus their shared chapter controls.`);
+console.log(`Checked ${htmlFiles.length} built pages, the canonical favicon, and ${recordings.length * (1 + sharedMediaFiles.length)} canonical recording media files plus their shared chapter controls.`);
