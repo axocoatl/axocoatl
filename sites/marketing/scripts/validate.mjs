@@ -60,6 +60,19 @@ const expectedMediaContract = {
 
 function fail(file, message) { errors.push(`${file}: ${message}`); }
 function warn(file, message) { warnings.push(`${file}: ${message}`); }
+// Keep literal evidence (including package@version text) out of Cloudflare's
+// email-obfuscation rewrite. Check the complete demo, not just its first panel.
+function checkVerifiedFixProtection(html, label) {
+  for (const match of html.matchAll(/<ax-verified-fix\b[\s\S]*?<\/ax-verified-fix>/g)) {
+    const before = html.slice(0, match.index);
+    const after = html.slice(match.index + match[0].length);
+    if (!/<!--email_off-->\s*$/.test(before)
+        || !/^\s*<!--\/email_off-->/.test(after)
+        || /<!--\/?email_off-->/.test(match[0])) {
+      fail(label, 'verified-fix evidence must be enclosed by <!--email_off--> and <!--/email_off-->');
+    }
+  }
+}
 function isRecord(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function isNonEmptyString(value) { return typeof value === 'string' && value.trim().length > 0; }
 function isSha256(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value); }
@@ -462,6 +475,13 @@ if (builtRoot && !filmsPending) {
   }
 }
 
+// The source-only fallback is copied literally into the homepage; protect it
+// too so a future embed refresh cannot reintroduce the production rewrite.
+const verifiedFixEmbed = join(sourceRoot, 'assets/demo/verified-fix-1.5/embed.html');
+if (existsSync(verifiedFixEmbed)) {
+  checkVerifiedFixProtection(readFileSync(verifiedFixEmbed, 'utf8'), 'assets/demo/verified-fix-1.5/embed.html');
+}
+
 const declaredFilmMedia = new Set(films.filter(isRecord).flatMap((film) => [
   `/assets/films/${recordingPrefix}${film.slug}.mp4`,
   `/assets/films/${recordingPrefix}${film.slug}.jpg`,
@@ -483,6 +503,7 @@ for (const page of builtPages) {
     for (const error of demos.errors) fail(page, error.slice(`${page}: `.length));
     html = demos.html;
   }
+  checkVerifiedFixProtection(html, page);
   const h1s = html.match(/<h1\b/gi) || [];
   if (h1s.length !== 1) fail(page, `expected one h1, found ${h1s.length}`);
   if (!/<html\s+lang="en"/i.test(html)) fail(page, 'missing html language');
