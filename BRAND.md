@@ -93,6 +93,10 @@ and workflow; never turn a headless run into a claim that the dashboard launched
 or imply that an ordinary Session produces a signed receipt. A tour of saved work
 must be labelled as such rather than presented as live model execution.
 
+Public product videos and their poster frames must use the app's explicit **Dark**
+setting, not **System**. Select Dark and verify the visible app theme before starting
+each capture; keep it dark throughout the recording and poster capture.
+
 ### Claims come only from measured results
 
 A performance or quality claim needs a measured result behind it, stated with its

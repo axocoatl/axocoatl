@@ -1,0 +1,41 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:08.853
+Require npm test and a separate read-only review.
+Actual dark UI, sampled at 2 fps; waits shortened.
+
+00:00:08.853 --> 00:00:21.111
+Request strict invoice validation.
+Local GPT-OSS 20B writes; Qwen3-Coder 30B reviews.
+
+00:00:21.111 --> 00:00:35.345
+Follow the Lead in the Agent graph.
+Selected waits play at 12×; other waits are cut.
+
+00:00:35.345 --> 00:00:44.645
+The host runs npm test, then the required reviewer.
+The first review approves.
+
+00:00:44.645 --> 00:00:52.192
+Approval missed a regression: non-finite prices
+were no longer rejected.
+
+00:00:52.192 --> 00:01:09.058
+Independent inspection catches it.
+Send a second request to restore the guard.
+
+00:01:09.058 --> 00:01:14.770
+The Lead works on the corrective request.
+Repeated waits are omitted.
+
+00:01:14.770 --> 00:01:23.952
+Inspect the final code: the finite-price guard is back.
+Independent artifact checks pass.
+
+00:01:23.952 --> 00:01:30.474
+The final required review approves.
+Host checks pass on the final files.
+
+00:01:30.474 --> 00:01:38.611
+Two requests, including a missed regression.
+This prepared task is not the historical benchmark.

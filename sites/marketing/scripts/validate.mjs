@@ -516,6 +516,27 @@ if (existsSync(dashboardTaskDirectory)) {
   }
 }
 
+// Required-review media is a separate actual run, not a replay of the historical
+// benchmark. Once any assets are staged, enforce the full dark-capture proof in
+// both source and built payloads, including while the portfolio films are pending.
+const requiredReviewDirectory = join(root, 'assets/demo/required-review-1.5');
+if (existsSync(requiredReviewDirectory)) {
+  const required = ['required-review.mp4', 'result.jpg', 'chapters.vtt', 'captions.vtt', 'provenance.json',
+    'source-capture.tar.gz', 'timeline.json', 'verify-review.mjs', 'artifact-evidence.json'];
+  const missing = required.filter((name) => !existsSync(join(requiredReviewDirectory, name)));
+  if (missing.length) {
+    fail('required review', `incomplete capture assets: ${missing.join(', ')}`);
+  } else {
+    const result = spawnSync(process.execPath, [join(requiredReviewDirectory, 'verify-review.mjs'),
+      '--dir', requiredReviewDirectory, '--repo', repositoryRoot, '--probe'], {
+      encoding: 'utf8', timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) {
+      fail('required review', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
+    }
+  }
+}
+
 // Retain protection on the historical literal excerpt source as well; a future
 // reuse must not reintroduce Cloudflare rewriting of evidence bytes.
 const verifiedFixEmbed = join(sourceRoot, 'assets/demo/verified-fix-1.5/embed.html');

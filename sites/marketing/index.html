@@ -181,15 +181,26 @@
       <p><a href="https://docs.axocoatl.ai/understand/what-we-measured/">The method, the full results, and their limits →</a></p>
     </section>
 
-    <section class="container section section-rule" id="cross-model-review">
-      <div class="section-head"><span class="eyebrow">Historical recording · Axocoatl 1.1.0</span><h2>The measured review, on screen.</h2><p>The benchmark used a local gpt-oss 120B reviewer. Neither gpt-oss 20B nor reviewers through OpenRouter have been measured in that comparison. Reviewers can raise false alarms; a fix writer must answer each finding with a reason. <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Configure a reviewer →</a></p></div>
-      <!-- optional-demo: assets/demo/cross-model-review.mp4 assets/demo/cross-model-review.jpg -->
-      <figure class="demo-video">
-        <video controls playsinline preload="none" poster="/assets/demo/cross-model-review.jpg" src="/assets/demo/cross-model-review.mp4" aria-label="A local lead's change reviewed by gpt-oss 120B in an Axocoatl Session"></video>
-        <figcaption>A real Axocoatl 1.1.0 Session from the benchmark above, recorded in the browser workbench, trimmed and cropped to the conversation and agent graph (the workbench's header and sidebar are cut out) but otherwise not edited: a local writer makes the change, a Required review by gpt-oss 120B reads the exact result and asks for fixes, the writer fixes them, and the second review approves.</figcaption>
+    <!-- optional-demo: assets/demo/required-review-1.5/required-review.mp4 assets/demo/required-review-1.5/result.jpg assets/demo/required-review-1.5/captions.vtt assets/demo/required-review-1.5/chapters.vtt assets/demo/required-review-1.5/provenance.json assets/demo/required-review-1.5/artifact-evidence.json assets/demo/required-review-1.5/source-capture.tar.gz assets/demo/required-review-1.5/timeline.json assets/demo/required-review-1.5/verify-review.mjs -->
+    <section class="container section section-rule" id="cross-model-review" aria-labelledby="required-review-title">
+      <div class="section-head"><span class="eyebrow">Recorded in Axocoatl 1.5</span><h2 id="required-review-title">A required review, on screen.</h2><p>A local GPT-OSS 20B Lead works on invoice input validation. Its team requires the project’s tests to pass and a read-only review by local Qwen3-Coder 30B. This separate demonstration shows the configured review workflow; the historical comparison above retains its own models, results and limits. <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Configure a reviewer →</a></p></div>
+      <figure class="dashboard-tour dashboard-task-video">
+        <video id="required-review-video" controls muted playsinline preload="metadata" poster="/assets/demo/required-review-1.5/result.jpg" src="/assets/demo/required-review-1.5/required-review.mp4" aria-label="An invoice-validation task with a required review in Axocoatl 1.5" aria-describedby="required-review-caption">
+          <track kind="captions" src="/assets/demo/required-review-1.5/captions.vtt" srclang="en" label="Required review captions" default>
+          <track kind="chapters" src="/assets/demo/required-review-1.5/chapters.vtt" srclang="en" label="Required review chapters">
+          Your browser cannot play this video. <a href="/assets/demo/required-review-1.5/required-review.mp4">Download the required-review recording</a>.
+        </video>
+        <figcaption id="required-review-caption">An AI assistant operated the actual dashboard in Dark mode: after the first review approved, independent checks caught an oversized price becoming Infinity, prompting a follow-up to restore the finite-price guard and repeat checks and review. The corrected result passed fresh tests and review. Waits are trimmed and sped up; a reviewer is evidence, not a guarantee.</figcaption>
       </figure>
-      <!-- /optional-demo -->
+      <ol class="dashboard-chapters" aria-label="Required review chapters">
+        <li><button type="button" data-video-target="required-review-video" data-video-time="0" aria-controls="required-review-video" aria-label="Play from 0:00: Set requirements"><span class="dashboard-chapter-number" aria-hidden="true">01</span><span>Set requirements<time datetime="PT0S">0:00</time></span></button></li>
+        <li><button type="button" data-video-target="required-review-video" data-video-time="35.345" aria-controls="required-review-video" aria-label="Play from 0:35: Watch review"><span class="dashboard-chapter-number" aria-hidden="true">02</span><span>Watch review<time datetime="PT35.345S">0:35</time></span></button></li>
+        <li><button type="button" data-video-target="required-review-video" data-video-time="44.645" aria-controls="required-review-video" aria-label="Play from 0:45: Check independently"><span class="dashboard-chapter-number" aria-hidden="true">03</span><span>Check independently<time datetime="PT44.645S">0:45</time></span></button></li>
+        <li><button type="button" data-video-target="required-review-video" data-video-time="74.77" aria-controls="required-review-video" aria-label="Play from 1:15: Review corrected result"><span class="dashboard-chapter-number" aria-hidden="true">04</span><span>Review corrected result<time datetime="PT74.77S">1:15</time></span></button></li>
+      </ol>
+      <p class="dashboard-task-links"><a href="/assets/demo/required-review-1.5/result.jpg" target="_blank" rel="noopener">Open the result at full size ↗</a> · <a href="/assets/demo/required-review-1.5/provenance.json">Recording sources and limitations</a> · <a href="/assets/demo/required-review-1.5/artifact-evidence.json">Task evidence and artifact review</a></p>
     </section>
+    <!-- /optional-demo -->
 
     <section class="container section section-rule" id="workbench">
       <div class="section-head"><span class="eyebrow">Work interactively</span><h2>The same work, in your browser.</h2><p>The same daemon serves a workbench: one folder-anchored Session keeps chat beside Files, Terminal, Preview and Source Control. You can also inspect CLI-launched run Outcomes here; ordinary workbench turns have no receipt. Start with one lead under limits you approve. Helpers, required checks and required review are opt-in; helpers cost extra tokens. History retains completed, failed and interrupted work. Review the Git changes and commit deliberately.</p><p><a href="https://docs.axocoatl.ai/workbench/session/">Open a workspace Session →</a> · <a href="/concepts/#checks-review">Checks and review →</a> · <a href="https://docs.axocoatl.ai/workbench/ways/">Explore several ways →</a></p></div>

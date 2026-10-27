@@ -123,10 +123,35 @@ enabled by default and the separate chapter track remains available. Use native
 video controls without autoplay and keep the result available at full size. This ordinary workbench turn
 must not be presented as producing a signed receipt.
 
-The separate historical video slot names `assets/demo/cross-model-review.mp4` and
-`assets/demo/cross-model-review.jpg`. It is explicitly labelled Axocoatl 1.1.0 and
-retains the benchmark's scope and limitations. `.gitignore` keeps MP4 and JPEG files
-under `assets/demo/` tracked.
+The `required-review-1.5` slot replaces the historical review clip on the homepage.
+It requires all nine files before the whole section appears: `required-review.mp4`,
+`result.jpg`, `captions.vtt`, `chapters.vtt`, `provenance.json`,
+`artifact-evidence.json`, `source-capture.tar.gz`, `timeline.json`, and
+`verify-review.mjs`. The complete set must reach the built payload for verification.
+The new invoice input-validation task uses a local GPT-OSS 20B Lead, a read-only
+local Qwen3-Coder 30B required reviewer, and the host-required `npm test` check.
+It is separate from the unchanged Axocoatl 1.1.0 comparison above it: its models and
+outcomes must not be attributed to that benchmark.
+
+The first required review approved, but independent artifact checks found that the
+Lead had removed a finite-price guard, allowing an oversized price to become
+Infinity. A dashboard follow-up requests restoration and another cycle of required
+checks and review. A reviewer is evidence, not a guarantee. Preserve the first
+approved-but-defective result alongside the follow-up; add a final pass claim only
+after the follow-up and its independent acceptance finish.
+
+Capture the actual app with its explicit Dark setting, including the poster.
+Name the AI assistant as the UI operator and disclose trimmed or accelerated waits
+in the caption and provenance. Keep default captions, native video controls and a
+full-size result link. Add outcome claims only after inspecting the completed run
+and independent artifact assessment; preserve failed attempts and interventions.
+This native Session has no signed run receipt. Add chapter buttons only once their
+timestamps match the final recording.
+
+The retired `cross-model-review.mp4` and `cross-model-review.jpg` remain historical
+Axocoatl 1.1.0 evidence in the repository, with their original benchmark attribution
+in `docs/CLAIMS.md` R11. They are no longer included by the homepage's optional slot.
+`.gitignore` keeps MP4 and JPEG files under `assets/demo/` tracked.
 
 ## Deployment payload
 

@@ -1,0 +1,423 @@
+{
+  "schema": "axocoatl.required-review-artifact-evidence/1",
+  "created_at": "2026-10-27T21:45:40.931460+00:00",
+  "baseline_commit": "1a702917829accf88207a6a91ca2fefacaa33000",
+  "baseline_files": [
+    {
+      "path": "invoice.js",
+      "content": "/** Return a two-decimal total from an ASCII decimal price and a positive integer quantity. */\nexport function invoiceTotal(unitPrice, quantity) {\n  if (typeof unitPrice !== 'string') throw new TypeError('Invalid unit price');\n  const priceText = unitPrice.normalize('NFKC');\n  if (!/^[0-9]+(?:\\.[0-9]{1,2})?$/.test(priceText)) {\n    throw new TypeError('Invalid unit price');\n  }\n  const price = Number(priceText);\n  const count = Number(quantity);\n  if (!Number.isFinite(price) || !Number.isFinite(count) || count <= 0) {\n    throw new TypeError('Invalid invoice input');\n  }\n  return (price * count).toFixed(2);\n}\n",
+      "bytes": 617,
+      "sha256": "65502d98a5e015a3c9d92aec1b6cccb63eaea7b5c999f860b385e1454695a1d2"
+    },
+    {
+      "path": "invoice.test.js",
+      "content": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { invoiceTotal } from './invoice.js';\n\ntest('formats ordinary decimal amounts', () => {\n  assert.equal(invoiceTotal('12.50', 2), '25.00');\n});\ntest('preserves two decimal places for whole amounts', () => {\n  assert.equal(invoiceTotal('7', 1), '7.00');\n});\ntest('formats a small fractional price', () => {\n  assert.equal(invoiceTotal('0.10', 3), '0.30');\n});\ntest('rejects clearly invalid input', () => {\n  assert.throws(() => invoiceTotal('not a price', 2), TypeError);\n  assert.throws(() => invoiceTotal('2.00', 0), TypeError);\n  assert.throws(() => invoiceTotal('2.00', Infinity), TypeError);\n});\n",
+      "bytes": 677,
+      "sha256": "ab8f8f91ffb0cdf02dc486cc7191bf7ee34e762c2ccf6c0a7494e84e2fa5246f"
+    },
+    {
+      "path": "package.json",
+      "content": "{\n  \"name\": \"invoice-input-validation\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+      "bytes": 148,
+      "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+    }
+  ],
+  "cases": [
+    {
+      "name": "first-request",
+      "turn_id": "turn-38f41e63-e571-4523-a05e-a1a48492f379",
+      "assessment": {
+        "verdict": "FAILED",
+        "patch_sha256": "7b12f4bc176218fbf53f766087ce405d2cf0362a642c92dec65ef85516b33b36",
+        "files": [
+          {
+            "path": "invoice.js",
+            "bytes": 633,
+            "sha256": "deff78bc92fcb3594a01250344699c3fc16fa4a59208f98511081320c5f21792"
+          },
+          {
+            "path": "invoice.test.js",
+            "bytes": 2895,
+            "sha256": "ee44c0e03b30099efedda371ea33708971975b7968b4630c5584c1705135af4f"
+          },
+          {
+            "path": "package.json",
+            "bytes": 148,
+            "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+          }
+        ],
+        "original_test_block_retained_byte_exact": true,
+        "original_tests": 4,
+        "original_suite_exit": 0,
+        "predeclared_independent_groups": 3,
+        "predeclared_independent_exit": 0,
+        "manual_diff_review": "All four baseline tests remain verbatim at the beginning of invoice.test.js. New cases exercise requested price/quantity syntax and valid formatting. package.json is unchanged; only invoice.js and invoice.test.js changed. The supplemental guard test verifies preservation of an existing rejection, not a new numeric-range policy.",
+        "original_assessment": {
+          "schema": 1,
+          "recorded_at": "2026-10-27T21:37:43.086667+00:00",
+          "baseline_commit": "1a702917829accf88207a6a91ca2fefacaa33000",
+          "baseline_files": {
+            "invoice.js": "65502d98a5e015a3c9d92aec1b6cccb63eaea7b5c999f860b385e1454695a1d2",
+            "invoice.test.js": "ab8f8f91ffb0cdf02dc486cc7191bf7ee34e762c2ccf6c0a7494e84e2fa5246f",
+            "package.json": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+          },
+          "final_files": {
+            "invoice.js": {
+              "sha256": "deff78bc92fcb3594a01250344699c3fc16fa4a59208f98511081320c5f21792",
+              "bytes": 633
+            },
+            "invoice.test.js": {
+              "sha256": "ee44c0e03b30099efedda371ea33708971975b7968b4630c5584c1705135af4f",
+              "bytes": 2895
+            },
+            "package.json": {
+              "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b",
+              "bytes": 148
+            }
+          },
+          "commands": [
+            {
+              "label": "original-tests",
+              "argv": [
+                "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+                "--test",
+                "invoice.test.js"
+              ],
+              "exit_code": 0,
+              "output_sha256": "ab5eba47890c52d54ffea615a3f4346bacbb119c61984341b84edba8606416d9"
+            },
+            {
+              "label": "independent-tests",
+              "argv": [
+                "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+                "--test",
+                "/private/tmp/axocoatl-review-redo/artifact-first/independent.test.mjs"
+              ],
+              "exit_code": 0,
+              "output_sha256": "ab0fcd24655aa012fc4b07c70c556285738278476d1320a61623e956ef4e0f12"
+            }
+          ],
+          "source_unchanged_during_audit": true,
+          "host_suites_passed": true,
+          "original_test_file_byte_identical": false,
+          "artifact_review": "Pending manual diff review: verify all four original tests remain, additions are relevant, and no unrelated artifacts or weakened checks. Original-suite pass alone does not prove test retention.",
+          "scope": "Independent host artifact acceptance only; native Session review/check states are separately collected. No model call or receipt assertion."
+        },
+        "original_assessment_sha256": "2dfe727d4895fe6ccbbe6d4cc0f62220310daf571d79e1c62f4fb6b792a6ec92",
+        "later_counterexample_status": "FAILED: removed finite-price guard",
+        "manual_result": "FAILED despite original suites and required reviewer approval; an existing TypeError rejection became the string Infinity."
+      },
+      "patch": "diff --git a/invoice.js b/invoice.js\nindex afdd6d2..9604eee 100644\n--- a/invoice.js\n+++ b/invoice.js\n@@ -1,14 +1,14 @@\n /** Return a two-decimal total from an ASCII decimal price and a positive integer quantity. */\n export function invoiceTotal(unitPrice, quantity) {\n   if (typeof unitPrice !== 'string') throw new TypeError('Invalid unit price');\n-  const priceText = unitPrice.normalize('NFKC');\n+  const priceText = unitPrice;\n   if (!/^[0-9]+(?:\\.[0-9]{1,2})?$/.test(priceText)) {\n     throw new TypeError('Invalid unit price');\n   }\n   const price = Number(priceText);\n-  const count = Number(quantity);\n-  if (!Number.isFinite(price) || !Number.isFinite(count) || count <= 0) {\n+  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity <= 0) {\n     throw new TypeError('Invalid invoice input');\n   }\n+  const count = quantity;\n   return (price * count).toFixed(2);\n }\ndiff --git a/invoice.test.js b/invoice.test.js\nindex da3f363..1e33b13 100644\n--- a/invoice.test.js\n+++ b/invoice.test.js\n@@ -16,3 +16,81 @@ test('rejects clearly invalid input', () => {\n   assert.throws(() => invoiceTotal('2.00', 0), TypeError);\n   assert.throws(() => invoiceTotal('2.00', Infinity), TypeError);\n });\n+\n+// Additional tests for validation\n+\n+test('accepts zero unit price', () => {\n+  assert.equal(invoiceTotal('0', 1), '0.00');\n+});\n+\n+test('preserves two decimal places for fractional unit price', () => {\n+  assert.equal(invoiceTotal('0.10', 3), '0.30');\n+});\n+\n+test('preserves two decimal places for one decimal unit price', () => {\n+  assert.equal(invoiceTotal('12.5', 2), '25.00');\n+});\n+\n+// invalid unit price cases\n+\n+test('rejects unit price with too many decimal places', () => {\n+  assert.throws(() => invoiceTotal('12.501', 1), TypeError);\n+});\n+\n+test('rejects unit price ending with a decimal point', () => {\n+  assert.throws(() => invoiceTotal('12.', 1), TypeError);\n+});\n+\n+test('rejects unit price with trailing text', () => {\n+  assert.throws(() => invoiceTotal('12.5a', 1), TypeError);\n+});\n+\n+test('rejects unit price with comma', () => {\n+  assert.throws(() => invoiceTotal('12,5', 1), TypeError);\n+});\n+\n+test('rejects unit price with full-width digits', () => {\n+  assert.throws(() => invoiceTotal('１２３', 1), TypeError);\n+});\n+\n+test('rejects unit price with Unicode numeric characters', () => {\n+  assert.throws(() => invoiceTotal('Ⅳ', 1), TypeError);\n+});\n+\n+// invalid quantity cases\n+\n+test('rejects quantity as string', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5'), TypeError);\n+});\n+\n+test('rejects quantity string with leading whitespace', () => {\n+  assert.throws(() => invoiceTotal('12.50', ' 5'), TypeError);\n+});\n+\n+test('rejects negative quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', -5), TypeError);\n+});\n+\n+test('rejects zero quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', 0), TypeError);\n+});\n+\n+test('rejects fractional numeric quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', 5.5), TypeError);\n+});\n+\n+test('rejects Infinity quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', Infinity), TypeError);\n+});\n+\n+test('rejects NaN quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', NaN), TypeError);\n+});\n+\n+test('rejects quantity string with exponent', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5e3'), TypeError);\n+});\n+\n+test('rejects quantity string with decimal point', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5.0'), TypeError);\n+});\n",
+      "files": [
+        {
+          "path": "invoice.js",
+          "content": "/** Return a two-decimal total from an ASCII decimal price and a positive integer quantity. */\nexport function invoiceTotal(unitPrice, quantity) {\n  if (typeof unitPrice !== 'string') throw new TypeError('Invalid unit price');\n  const priceText = unitPrice;\n  if (!/^[0-9]+(?:\\.[0-9]{1,2})?$/.test(priceText)) {\n    throw new TypeError('Invalid unit price');\n  }\n  const price = Number(priceText);\n  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity <= 0) {\n    throw new TypeError('Invalid invoice input');\n  }\n  const count = quantity;\n  return (price * count).toFixed(2);\n}\n",
+          "bytes": 633,
+          "sha256": "deff78bc92fcb3594a01250344699c3fc16fa4a59208f98511081320c5f21792"
+        },
+        {
+          "path": "invoice.test.js",
+          "content": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { invoiceTotal } from './invoice.js';\n\ntest('formats ordinary decimal amounts', () => {\n  assert.equal(invoiceTotal('12.50', 2), '25.00');\n});\ntest('preserves two decimal places for whole amounts', () => {\n  assert.equal(invoiceTotal('7', 1), '7.00');\n});\ntest('formats a small fractional price', () => {\n  assert.equal(invoiceTotal('0.10', 3), '0.30');\n});\ntest('rejects clearly invalid input', () => {\n  assert.throws(() => invoiceTotal('not a price', 2), TypeError);\n  assert.throws(() => invoiceTotal('2.00', 0), TypeError);\n  assert.throws(() => invoiceTotal('2.00', Infinity), TypeError);\n});\n\n// Additional tests for validation\n\ntest('accepts zero unit price', () => {\n  assert.equal(invoiceTotal('0', 1), '0.00');\n});\n\ntest('preserves two decimal places for fractional unit price', () => {\n  assert.equal(invoiceTotal('0.10', 3), '0.30');\n});\n\ntest('preserves two decimal places for one decimal unit price', () => {\n  assert.equal(invoiceTotal('12.5', 2), '25.00');\n});\n\n// invalid unit price cases\n\ntest('rejects unit price with too many decimal places', () => {\n  assert.throws(() => invoiceTotal('12.501', 1), TypeError);\n});\n\ntest('rejects unit price ending with a decimal point', () => {\n  assert.throws(() => invoiceTotal('12.', 1), TypeError);\n});\n\ntest('rejects unit price with trailing text', () => {\n  assert.throws(() => invoiceTotal('12.5a', 1), TypeError);\n});\n\ntest('rejects unit price with comma', () => {\n  assert.throws(() => invoiceTotal('12,5', 1), TypeError);\n});\n\ntest('rejects unit price with full-width digits', () => {\n  assert.throws(() => invoiceTotal('１２３', 1), TypeError);\n});\n\ntest('rejects unit price with Unicode numeric characters', () => {\n  assert.throws(() => invoiceTotal('Ⅳ', 1), TypeError);\n});\n\n// invalid quantity cases\n\ntest('rejects quantity as string', () => {\n  assert.throws(() => invoiceTotal('12.50', '5'), TypeError);\n});\n\ntest('rejects quantity string with leading whitespace', () => {\n  assert.throws(() => invoiceTotal('12.50', ' 5'), TypeError);\n});\n\ntest('rejects negative quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', -5), TypeError);\n});\n\ntest('rejects zero quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', 0), TypeError);\n});\n\ntest('rejects fractional numeric quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', 5.5), TypeError);\n});\n\ntest('rejects Infinity quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', Infinity), TypeError);\n});\n\ntest('rejects NaN quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', NaN), TypeError);\n});\n\ntest('rejects quantity string with exponent', () => {\n  assert.throws(() => invoiceTotal('12.50', '5e3'), TypeError);\n});\n\ntest('rejects quantity string with decimal point', () => {\n  assert.throws(() => invoiceTotal('12.50', '5.0'), TypeError);\n});\n",
+          "bytes": 2895,
+          "sha256": "ee44c0e03b30099efedda371ea33708971975b7968b4630c5584c1705135af4f"
+        },
+        {
+          "path": "package.json",
+          "content": "{\n  \"name\": \"invoice-input-validation\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+          "bytes": 148,
+          "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+        }
+      ],
+      "runtime_observation": {
+        "content": "{\n  \"session_id\": \"ses-694a3ad8-cb75-4e87-bcd7-a9337da08d49\",\n  \"turn_id\": \"turn-38f41e63-e571-4523-a05e-a1a48492f379\",\n  \"required_review\": {\n    \"reviewer\": \"reviewer\",\n    \"state\": \"approved\",\n    \"reason\": \"The reviewer approved this result in round 1 of 2.\",\n    \"verdict\": \"approve\",\n    \"findings\": \"Now let me analyze what the implementation is doing against the requirements:\\n\\n## Analysis\\n\\nLooking at the requirements:\\n1. `invoiceTotal(unitPrice, quantity)` must accept only ASCII decimal price strings (digits, optionally followed by a decimal point and one or two digits)\\n2. Quantities must be actual positive finite integer numbers\\n3. Reject Unicode numeric strings, numeric quantity strings, fractional quantities, whitespace, signs, exponents and trailing text with TypeError\\n4. Preserve valid totals as strings with exactly two decimal places\\n5. Keep all four existing tests and add regression coverage for invalid cases\\n\\n## Review of Current Implementation\\n\\nLet me check the changes against the requirements:\\n\\n**F1: invoice.js line 4**\\nThe implementation correctly removed NFKC normalization to enforce ASCII-only unit prices.\\nHowever, it's missing a critical check - the regex pattern should specifically validate that only ASCII digits are allowed, not Unicode digits.\\n\\n**F2: invoice.js line 5**\\nThe regex `/^[0-9]+(?:\\\\.[0-9]{1,2})?$/` correctly enforces:\\n- Only ASCII digits (0-9)\\n- Optionally followed by a decimal point and 1-2 digits\\n- This correctly rejects full-width digits like '１２３' and Unicode numeric characters like 'Ⅳ'\\n\\n**F3: invoice.js line 8**\\nThe quantity validation now properly checks for:\\n- `typeof quantity !== 'number'` - rejects string quantities \\n- `!Number.isFinite(quantity)` - rejects Infinity, NaN\\n- `!Number.isInteger(quantity)` - rejects fractional numbers\\n- `quantity <= 0` - rejects zero and negative numbers\\n\\nThis correctly enforces that quantity must be a positive integer.\\n\\n**F4: invoice.js line 9**\\nThe variable assignment `const count = quantity;` is correct now, after the validation.\\n\\n## Testing Analysis\\n\\nAll 22 tests pass, which is good. Let me look more carefully at some edge cases:\\n\\n1. The regex correctly rejects full-width digits like '１２３' (F3)\\n2. The regex correctly rejects Unicode numeric characters like 'Ⅳ' (F3)\\n3. The quantity validation properly rejects string quantities (F4)\\n4. The quantity validation properly rejects fractional quantities (F4)\\n\\nHowever, there's one potential issue with the implementation:\\n\\n**F5: invoice.js line 3**\\nThe change from `const priceText = unitPrice.normalize('NFKC');` to `const priceText = unitPrice;` is correct as requested, but we should verify this is sufficient.\\n\\nActually, looking more carefully at the existing tests and requirements:\\n\\nThe original implementation had:\\n- NFKC normalization that would normalize Unicode digits to ASCII\\n- This was changed to directly use unitPrice\\n\\nThis is correct - the requirement is to accept only ASCII decimal price strings, not to normalize Unicode to ASCII.\\n\\nLet me double-check if there are any edge cases I missed by reviewing the test coverage more carefully:\\n\\n**F6: invoice.test.js - missing explicit test for negative quantity rejection**\\nLooking at the tests, we do have `test('rejects negative quantity', () => { assert.throws(() => invoiceTotal('12.50', -5), TypeError); });` which is good.\\n\\n## Summary of Findings\\n\\nThe implementation appears to correctly address all requirements:\\n1. ✅ ASCII decimal price strings only (digits, optionally followed by . and 1-2 digits)\\n2. ✅ Quantities must be positive finite integers \\n3. ✅ Rejects Unicode numeric strings, fractional quantities, whitespace, signs, exponents, trailing text\\n4. ✅ Preserves valid totals as strings with exactly two decimal places\\n5. ✅ All existing tests pass and new regression tests added\\n\\nThe implementation correctly addresses all requirements in the request.\",\n    \"round\": 1,\n    \"max_rounds\": 2,\n    \"current\": true,\n    \"candidate_sha256\": \"959f45500fc0ed771db61533423c7e3665f6ce9c614ee9cbf0b522ea03b1b0e7\"\n  },\n  \"required_checks\": [\n    {\n      \"argv\": [\n        \"sh\",\n        \"-c\",\n        \"npm test\"\n      ],\n      \"state\": \"passed\",\n      \"run_id\": \"required-check-d60e6eece981b9619369a4a752e6a52cac980ada1c82478b96d1808488fe481f\",\n      \"process_status\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"effect_disposition\": \"outcome_recorded\",\n      \"primary_exit\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"quiescent\": true,\n      \"reason\": null,\n      \"evidence\": \"content-2607cccf5b10a4362961a1bd490356e851db1a50d1e5321574f0a0393eeec1b4\",\n      \"candidate_sha256\": null,\n      \"exit_code\": 0,\n      \"stdout\": \"\\n> invoice-input-validation@1.0.0 test\\n> node --test\\n\\nTAP version 13\\n# Subtest: formats ordinary decimal amounts\\nok 1 - formats ordinary decimal amounts\\n  ---\\n  duration_ms: 1.499417\\n  ...\\n# Subtest: preserves two decimal places for whole amounts\\nok 2 - preserves two decimal places for whole amounts\\n  ---\\n  duration_ms: 0.143584\\n  ...\\n# Subtest: formats a small fractional price\\nok 3 - formats a small fractional price\\n  ---\\n  duration_ms: 0.048333\\n  ...\\n# Subtest: rejects clearly invalid input\\nok 4 - rejects clearly invalid input\\n  ---\\n  duration_ms: 0.173959\\n  ...\\n# Subtest: accepts zero unit price\\nok 5 - accepts zero unit price\\n  ---\\n  duration_ms: 0.118917\\n  ...\\n# Subtest: preserves two decimal places for fractional unit price\\nok 6 - preserves two decimal places for fractional unit price\\n  ---\\n  duration_ms: 0.03925\\n  ...\\n# Subtest: preserves two decimal places for one decimal unit price\\nok 7 - preserves two decimal places for one decimal unit price\\n  ---\\n  duration_ms: 0.072875\\n  ...\\n# Subtest: rejects unit price with too many decimal places\\nok 8 - rejects unit price with too many decimal places\\n  ---\\n  duration_ms: 0.04175\\n  ...\\n# Subtest: rejects unit price ending with a decimal point\\nok 9 - rejects unit price ending with a decimal point\\n  ---\\n  duration_ms: 0.134208\\n  ...\\n# Subtest: rejects unit price with trailing text\\nok 10 - rejects unit price with trailing text\\n  ---\\n  duration_ms: 0.104084\\n  ...\\n# Subtest: rejects unit price with comma\\nok 11 - rejects unit price with comma\\n  ---\\n  duration_ms: 0.066\\n  ...\\n# Subtest: rejects unit price with full-width digits\\nok 12 - rejects unit price with full-width digits\\n  ---\\n  duration_ms: 0.060833\\n  ...\\n# Subtest: rejects unit price with Unicode numeric characters\\nok 13 - rejects unit price with Unicode numeric characters\\n  ---\\n  duration_ms: 0.037417\\n  ...\\n# Subtest: rejects quantity as string\\nok 14 - rejects quantity as string\\n  ---\\n  duration_ms: 0.08475\\n  ...\\n# Subtest: rejects quantity string with leading whitespace\\nok 15 - rejects quantity string with leading whitespace\\n  ---\\n  duration_ms: 0.040125\\n  ...\\n# Subtest: rejects negative quantity\\nok 16 - rejects negative quantity\\n  ---\\n  duration_ms: 0.109042\\n  ...\\n# Subtest: rejects zero quantity\\nok 17 - rejects zero quantity\\n  ---\\n  duration_ms: 0.04325\\n  ...\\n# Subtest: rejects fractional numeric quantity\\nok 18 - rejects fractional numeric quantity\\n  ---\\n  duration_ms: 0.107208\\n  ...\\n# Subtest: rejects Infinity quantity\\nok 19 - rejects Infinity quantity\\n  ---\\n  duration_ms: 0.04775\\n  ...\\n# Subtest: rejects NaN quantity\\nok 20 - rejects NaN quantity\\n  ---\\n  duration_ms: 0.556959\\n  ...\\n# Subtest: rejects quantity string with exponent\\nok 21 - rejects quantity string with exponent\\n  ---\\n  duration_ms: 0.083666\\n  ...\\n# Subtest: rejects quantity string with decimal point\\nok 22 - rejects quantity string with decimal point\\n  ---\\n  duration_ms: 0.046084\\n  ...\\n1..22\\n# tests 22\\n# suites 0\\n# pass 22\\n# fail 0\\n# cancelled 0\\n# skipped 0\\n# todo 0\\n# duration_ms 47.212023\\n\",\n      \"stderr\": \"\",\n      \"stdout_truncated\": false,\n      \"stderr_truncated\": false\n    }\n  ]\n}\n",
+        "bytes": 8020,
+        "sha256": "48ec1f25310dc1300083a529406f21189d9ff21a27018f21bb784b2ecfc7bd17",
+        "source_response_sha256": "2e6f92e5300356a9195aa7f3c06809de24ff72118f062272e1cd1ae62ecf2af5"
+      },
+      "recorded_tool_failures": [
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "c03ee71b22a54f7b9cb6ed90ff1f45ee71a2b192c639548409715f11c0ba4edc"
+        }
+      ],
+      "acceptance_outputs": {
+        "original_suite": {
+          "content": "TAP version 13\n# Subtest: formats ordinary decimal amounts\nok 1 - formats ordinary decimal amounts\n  ---\n  duration_ms: 0.514083\n  type: 'test'\n  ...\n# Subtest: preserves two decimal places for whole amounts\nok 2 - preserves two decimal places for whole amounts\n  ---\n  duration_ms: 0.064167\n  type: 'test'\n  ...\n# Subtest: formats a small fractional price\nok 3 - formats a small fractional price\n  ---\n  duration_ms: 0.035375\n  type: 'test'\n  ...\n# Subtest: rejects clearly invalid input\nok 4 - rejects clearly invalid input\n  ---\n  duration_ms: 0.141542\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 43.603083\n",
+          "bytes": 680,
+          "sha256": "ab5eba47890c52d54ffea615a3f4346bacbb119c61984341b84edba8606416d9"
+        },
+        "predeclared_independent_suite": {
+          "content": "TAP version 13\n# Subtest: valid prices preserve formatting\nok 1 - valid prices preserve formatting\n  ---\n  duration_ms: 0.334667\n  type: 'test'\n  ...\n# Subtest: price syntax is ASCII and exact\nok 2 - price syntax is ASCII and exact\n  ---\n  duration_ms: 0.673125\n  type: 'test'\n  ...\n# Subtest: quantity is a positive finite integer number\nok 3 - quantity is a positive finite integer number\n  ---\n  duration_ms: 0.075459\n  type: 'test'\n  ...\n1..3\n# tests 3\n# suites 0\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 35.950875\n",
+          "bytes": 545,
+          "sha256": "ab0fcd24655aa012fc4b07c70c556285738278476d1320a61623e956ef4e0f12"
+        },
+        "supplemental_suite": {
+          "content": "TAP version 13\n# Subtest: preserves rejection when a syntactically valid price converts to Infinity\nnot ok 1 - preserves rejection when a syntactically valid price converts to Infinity\n  ---\n  duration_ms: 0.993208\n  type: 'test'\n  location: '/private/tmp/axocoatl-review-redo/supplemental-finite-price.test.mjs:9:1'\n  failureType: 'testCodeFailure'\n  error: 'Missing expected exception (TypeError).'\n  code: 'ERR_ASSERTION'\n  name: 'AssertionError'\n  stack: |-\n    TestContext.<anonymous> (file:///private/tmp/axocoatl-review-redo/supplemental-finite-price.test.mjs:12:10)\n    Test.runInAsyncScope (node:async_hooks:214:14)\n    Test.run (node:internal/test_runner/test:1047:25)\n    Test.start (node:internal/test_runner/test:944:17)\n    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 43.189083\n",
+          "bytes": 917,
+          "sha256": "10277c9a5e7ca8bdf448cef369f6dde1afa54d3a4bb90051c9bc251025a898de"
+        }
+      },
+      "supplemental_assessment": {
+        "schema": 1,
+        "created_at": "2026-10-27T21:39:22.154974+00:00",
+        "classification": "FAILED_ARTIFACT_FIRST_ATTEMPT",
+        "test_scope": "Supplemental counterexample added after original predeclared suites passed; not a rewrite of their scores. It preserves existing finite-conversion rejection rather than introducing a new huge-value policy.",
+        "test_sha256": "ea9cb350c4ea02c81b62d82fada6fcc1845541d00566ff0bb904cca887bffb58",
+        "commands": [
+          {
+            "label": "baseline",
+            "exit_code": 0,
+            "log": "baseline.log",
+            "log_sha256": "ecd86fee9ab6911fc3b8914776a4aa00d437fad587dcd490bbcd2981087f755e",
+            "invoice_sha256": "65502d98a5e015a3c9d92aec1b6cccb63eaea7b5c999f860b385e1454695a1d2"
+          },
+          {
+            "label": "first-attempt",
+            "exit_code": 1,
+            "log": "first-attempt.log",
+            "log_sha256": "10277c9a5e7ca8bdf448cef369f6dde1afa54d3a4bb90051c9bc251025a898de",
+            "invoice_sha256": "deff78bc92fcb3594a01250344699c3fc16fa4a59208f98511081320c5f21792"
+          }
+        ],
+        "observed_regression": "The first attempt removed Number.isFinite(price). A 400-digit ASCII price then returns Infinity instead of the baseline TypeError.",
+        "runtime_distinction": "The first native turn completed, host npm test passed, and the required reviewer approved round 1; independent manual review found this regression afterward.",
+        "original_assessment_sha256": "2dfe727d4895fe6ccbbe6d4cc0f62220310daf571d79e1c62f4fb6b792a6ec92",
+        "original_independent_test_sha256": "4a9945a4f818ad858e374a8439948c932c3b553da4418047f6c2eaaeff02b0c5",
+        "final_attempt": "pending"
+      }
+    },
+    {
+      "name": "finite-guard-correction",
+      "turn_id": "turn-fda481fe-29bb-4a06-8397-926ad7995232",
+      "assessment": {
+        "verdict": "ACCEPTED",
+        "patch_sha256": "8ddfd31f077ed22c75bb0f57e28b7980da426fd5c5ca50dc18205073ed317680",
+        "files": [
+          {
+            "path": "invoice.js",
+            "bytes": 720,
+            "sha256": "9a411f167a5da9d861042a6f753334da0050896d264064f7049869edf3590901"
+          },
+          {
+            "path": "invoice.test.js",
+            "bytes": 3097,
+            "sha256": "95490afc93984d0167ddec1900acb41dce2c636e20f5b0184ccc9d7ff60e865e"
+          },
+          {
+            "path": "package.json",
+            "bytes": 148,
+            "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+          }
+        ],
+        "original_test_block_retained_byte_exact": true,
+        "original_tests": 4,
+        "original_suite_exit": 0,
+        "predeclared_independent_groups": 3,
+        "predeclared_independent_exit": 0,
+        "manual_diff_review": "All four baseline tests remain verbatim at the beginning of invoice.test.js. New cases exercise requested price/quantity syntax and valid formatting. package.json is unchanged; only invoice.js and invoice.test.js changed. The supplemental guard test verifies preservation of an existing rejection, not a new numeric-range policy.",
+        "original_assessment": {
+          "schema": 1,
+          "recorded_at": "2026-10-27T21:43:59.548781+00:00",
+          "baseline_commit": "1a702917829accf88207a6a91ca2fefacaa33000",
+          "baseline_files": {
+            "invoice.js": "65502d98a5e015a3c9d92aec1b6cccb63eaea7b5c999f860b385e1454695a1d2",
+            "invoice.test.js": "ab8f8f91ffb0cdf02dc486cc7191bf7ee34e762c2ccf6c0a7494e84e2fa5246f",
+            "package.json": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+          },
+          "final_files": {
+            "invoice.js": {
+              "sha256": "9a411f167a5da9d861042a6f753334da0050896d264064f7049869edf3590901",
+              "bytes": 720
+            },
+            "invoice.test.js": {
+              "sha256": "95490afc93984d0167ddec1900acb41dce2c636e20f5b0184ccc9d7ff60e865e",
+              "bytes": 3097
+            },
+            "package.json": {
+              "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b",
+              "bytes": 148
+            }
+          },
+          "commands": [
+            {
+              "label": "original-tests",
+              "argv": [
+                "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+                "--test",
+                "invoice.test.js"
+              ],
+              "exit_code": 0,
+              "output_sha256": "f515e918501fca1cdc94f6cc1e2ae506220eedef5e640b78aadf23a81476384b"
+            },
+            {
+              "label": "independent-tests",
+              "argv": [
+                "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+                "--test",
+                "/private/tmp/axocoatl-review-redo/artifact-final/independent.test.mjs"
+              ],
+              "exit_code": 0,
+              "output_sha256": "27800786e5d7a2dc2176c99c32727d2d9937a381f08704d78b79503a67df8a0f"
+            }
+          ],
+          "source_unchanged_during_audit": true,
+          "host_suites_passed": true,
+          "original_test_file_byte_identical": false,
+          "artifact_review": "Pending manual diff review: verify all four original tests remain, additions are relevant, and no unrelated artifacts or weakened checks. Original-suite pass alone does not prove test retention.",
+          "scope": "Independent host artifact acceptance only; native Session review/check states are separately collected. No model call or receipt assertion."
+        },
+        "original_assessment_sha256": "7812a97013b8adfaa8635df7304903ed17c1f031f80163b222b565098226d077",
+        "later_counterexample_status": "PASS: finite-price guard restored and regression added",
+        "manual_result": "ACCEPTED within the stated small invoice-validation task; no unrelated behavior or test removal found."
+      },
+      "patch": "diff --git a/invoice.js b/invoice.js\nindex afdd6d2..8b312c5 100644\n--- a/invoice.js\n+++ b/invoice.js\n@@ -1,14 +1,17 @@\n /** Return a two-decimal total from an ASCII decimal price and a positive integer quantity. */\n export function invoiceTotal(unitPrice, quantity) {\n   if (typeof unitPrice !== 'string') throw new TypeError('Invalid unit price');\n-  const priceText = unitPrice.normalize('NFKC');\n+  const priceText = unitPrice;\n   if (!/^[0-9]+(?:\\.[0-9]{1,2})?$/.test(priceText)) {\n     throw new TypeError('Invalid unit price');\n   }\n   const price = Number(priceText);\n-  const count = Number(quantity);\n-  if (!Number.isFinite(price) || !Number.isFinite(count) || count <= 0) {\n+  if (!Number.isFinite(price)) {\n     throw new TypeError('Invalid invoice input');\n   }\n+  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity <= 0) {\n+    throw new TypeError('Invalid invoice input');\n+  }\n+  const count = quantity;\n   return (price * count).toFixed(2);\n }\ndiff --git a/invoice.test.js b/invoice.test.js\nindex da3f363..df966ec 100644\n--- a/invoice.test.js\n+++ b/invoice.test.js\n@@ -16,3 +16,87 @@ test('rejects clearly invalid input', () => {\n   assert.throws(() => invoiceTotal('2.00', 0), TypeError);\n   assert.throws(() => invoiceTotal('2.00', Infinity), TypeError);\n });\n+\n+// Additional tests for validation\n+\n+test('accepts zero unit price', () => {\n+  assert.equal(invoiceTotal('0', 1), '0.00');\n+});\n+\n+test('preserves two decimal places for fractional unit price', () => {\n+  assert.equal(invoiceTotal('0.10', 3), '0.30');\n+});\n+\n+test('preserves two decimal places for one decimal unit price', () => {\n+  assert.equal(invoiceTotal('12.5', 2), '25.00');\n+});\n+\n+// invalid unit price cases\n+\n+test('rejects unit price with too many decimal places', () => {\n+  assert.throws(() => invoiceTotal('12.501', 1), TypeError);\n+});\n+\n+test('rejects unit price ending with a decimal point', () => {\n+  assert.throws(() => invoiceTotal('12.', 1), TypeError);\n+});\n+\n+test('rejects unit price with trailing text', () => {\n+  assert.throws(() => invoiceTotal('12.5a', 1), TypeError);\n+});\n+\n+test('rejects unit price with comma', () => {\n+  assert.throws(() => invoiceTotal('12,5', 1), TypeError);\n+});\n+\n+test('rejects unit price with full-width digits', () => {\n+  assert.throws(() => invoiceTotal('１２３', 1), TypeError);\n+});\n+\n+test('rejects unit price with Unicode numeric characters', () => {\n+  assert.throws(() => invoiceTotal('Ⅳ', 1), TypeError);\n+});\n+\n+// invalid quantity cases\n+\n+test('rejects quantity as string', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5'), TypeError);\n+});\n+\n+test('rejects quantity string with leading whitespace', () => {\n+  assert.throws(() => invoiceTotal('12.50', ' 5'), TypeError);\n+});\n+\n+test('rejects negative quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', -5), TypeError);\n+});\n+\n+test('rejects zero quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', 0), TypeError);\n+});\n+\n+test('rejects fractional numeric quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', 5.5), TypeError);\n+});\n+\n+test('rejects Infinity quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', Infinity), TypeError);\n+});\n+\n+test('rejects NaN quantity', () => {\n+  assert.throws(() => invoiceTotal('12.50', NaN), TypeError);\n+});\n+\n+test('rejects quantity string with exponent', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5e3'), TypeError);\n+});\n+\n+test('rejects quantity string with decimal point', () => {\n+  assert.throws(() => invoiceTotal('12.50', '5.0'), TypeError);\n+});\n+\n+// regression test for very long unit price\n+ test('rejects very long unit price that overflows', () => {\n+   const long = '9'.repeat(400);\n+   assert.throws(() => invoiceTotal(long, 2), TypeError);\n+ });\n",
+      "files": [
+        {
+          "path": "invoice.js",
+          "content": "/** Return a two-decimal total from an ASCII decimal price and a positive integer quantity. */\nexport function invoiceTotal(unitPrice, quantity) {\n  if (typeof unitPrice !== 'string') throw new TypeError('Invalid unit price');\n  const priceText = unitPrice;\n  if (!/^[0-9]+(?:\\.[0-9]{1,2})?$/.test(priceText)) {\n    throw new TypeError('Invalid unit price');\n  }\n  const price = Number(priceText);\n  if (!Number.isFinite(price)) {\n    throw new TypeError('Invalid invoice input');\n  }\n  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity <= 0) {\n    throw new TypeError('Invalid invoice input');\n  }\n  const count = quantity;\n  return (price * count).toFixed(2);\n}\n",
+          "bytes": 720,
+          "sha256": "9a411f167a5da9d861042a6f753334da0050896d264064f7049869edf3590901"
+        },
+        {
+          "path": "invoice.test.js",
+          "content": "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { invoiceTotal } from './invoice.js';\n\ntest('formats ordinary decimal amounts', () => {\n  assert.equal(invoiceTotal('12.50', 2), '25.00');\n});\ntest('preserves two decimal places for whole amounts', () => {\n  assert.equal(invoiceTotal('7', 1), '7.00');\n});\ntest('formats a small fractional price', () => {\n  assert.equal(invoiceTotal('0.10', 3), '0.30');\n});\ntest('rejects clearly invalid input', () => {\n  assert.throws(() => invoiceTotal('not a price', 2), TypeError);\n  assert.throws(() => invoiceTotal('2.00', 0), TypeError);\n  assert.throws(() => invoiceTotal('2.00', Infinity), TypeError);\n});\n\n// Additional tests for validation\n\ntest('accepts zero unit price', () => {\n  assert.equal(invoiceTotal('0', 1), '0.00');\n});\n\ntest('preserves two decimal places for fractional unit price', () => {\n  assert.equal(invoiceTotal('0.10', 3), '0.30');\n});\n\ntest('preserves two decimal places for one decimal unit price', () => {\n  assert.equal(invoiceTotal('12.5', 2), '25.00');\n});\n\n// invalid unit price cases\n\ntest('rejects unit price with too many decimal places', () => {\n  assert.throws(() => invoiceTotal('12.501', 1), TypeError);\n});\n\ntest('rejects unit price ending with a decimal point', () => {\n  assert.throws(() => invoiceTotal('12.', 1), TypeError);\n});\n\ntest('rejects unit price with trailing text', () => {\n  assert.throws(() => invoiceTotal('12.5a', 1), TypeError);\n});\n\ntest('rejects unit price with comma', () => {\n  assert.throws(() => invoiceTotal('12,5', 1), TypeError);\n});\n\ntest('rejects unit price with full-width digits', () => {\n  assert.throws(() => invoiceTotal('１２３', 1), TypeError);\n});\n\ntest('rejects unit price with Unicode numeric characters', () => {\n  assert.throws(() => invoiceTotal('Ⅳ', 1), TypeError);\n});\n\n// invalid quantity cases\n\ntest('rejects quantity as string', () => {\n  assert.throws(() => invoiceTotal('12.50', '5'), TypeError);\n});\n\ntest('rejects quantity string with leading whitespace', () => {\n  assert.throws(() => invoiceTotal('12.50', ' 5'), TypeError);\n});\n\ntest('rejects negative quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', -5), TypeError);\n});\n\ntest('rejects zero quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', 0), TypeError);\n});\n\ntest('rejects fractional numeric quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', 5.5), TypeError);\n});\n\ntest('rejects Infinity quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', Infinity), TypeError);\n});\n\ntest('rejects NaN quantity', () => {\n  assert.throws(() => invoiceTotal('12.50', NaN), TypeError);\n});\n\ntest('rejects quantity string with exponent', () => {\n  assert.throws(() => invoiceTotal('12.50', '5e3'), TypeError);\n});\n\ntest('rejects quantity string with decimal point', () => {\n  assert.throws(() => invoiceTotal('12.50', '5.0'), TypeError);\n});\n\n// regression test for very long unit price\n test('rejects very long unit price that overflows', () => {\n   const long = '9'.repeat(400);\n   assert.throws(() => invoiceTotal(long, 2), TypeError);\n });\n",
+          "bytes": 3097,
+          "sha256": "95490afc93984d0167ddec1900acb41dce2c636e20f5b0184ccc9d7ff60e865e"
+        },
+        {
+          "path": "package.json",
+          "content": "{\n  \"name\": \"invoice-input-validation\",\n  \"private\": true,\n  \"version\": \"1.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"node --test\"\n  }\n}\n",
+          "bytes": 148,
+          "sha256": "a4a033680c0d5c37881a73bd6420dbf1ec080ff89324fbb8a1ef28a8aee4258b"
+        }
+      ],
+      "runtime_observation": {
+        "content": "{\n  \"session_id\": \"ses-694a3ad8-cb75-4e87-bcd7-a9337da08d49\",\n  \"turn_id\": \"turn-fda481fe-29bb-4a06-8397-926ad7995232\",\n  \"required_review\": {\n    \"reviewer\": \"reviewer\",\n    \"state\": \"approved\",\n    \"reason\": \"The reviewer approved this result in round 1 of 2.\",\n    \"verdict\": \"approve\",\n    \"findings\": \"\",\n    \"round\": 1,\n    \"max_rounds\": 2,\n    \"current\": true,\n    \"candidate_sha256\": \"6ff2247cecab94a31b6f2529839c7fcc3253be21a97037142dca4506ead2961d\"\n  },\n  \"required_checks\": [\n    {\n      \"argv\": [\n        \"sh\",\n        \"-c\",\n        \"npm test\"\n      ],\n      \"state\": \"passed\",\n      \"run_id\": \"required-check-8fbab7fb9c4837692ff435f0bc90e1787d11f885ba3a48f74a010814f2bc84b1\",\n      \"process_status\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"effect_disposition\": \"outcome_recorded\",\n      \"primary_exit\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"quiescent\": true,\n      \"reason\": null,\n      \"evidence\": \"content-ead784556d6f55f2b80c71694ac16a5fa97244f045cecfe6320e763779653ed3\",\n      \"candidate_sha256\": null,\n      \"exit_code\": 0,\n      \"stdout\": \"\\n> invoice-input-validation@1.0.0 test\\n> node --test\\n\\nTAP version 13\\n# Subtest: formats ordinary decimal amounts\\nok 1 - formats ordinary decimal amounts\\n  ---\\n  duration_ms: 0.477834\\n  ...\\n# Subtest: preserves two decimal places for whole amounts\\nok 2 - preserves two decimal places for whole amounts\\n  ---\\n  duration_ms: 0.067542\\n  ...\\n# Subtest: formats a small fractional price\\nok 3 - formats a small fractional price\\n  ---\\n  duration_ms: 0.049584\\n  ...\\n# Subtest: rejects clearly invalid input\\nok 4 - rejects clearly invalid input\\n  ---\\n  duration_ms: 0.141584\\n  ...\\n# Subtest: accepts zero unit price\\nok 5 - accepts zero unit price\\n  ---\\n  duration_ms: 0.080583\\n  ...\\n# Subtest: preserves two decimal places for fractional unit price\\nok 6 - preserves two decimal places for fractional unit price\\n  ---\\n  duration_ms: 0.040958\\n  ...\\n# Subtest: preserves two decimal places for one decimal unit price\\nok 7 - preserves two decimal places for one decimal unit price\\n  ---\\n  duration_ms: 0.068458\\n  ...\\n# Subtest: rejects unit price with too many decimal places\\nok 8 - rejects unit price with too many decimal places\\n  ---\\n  duration_ms: 0.044292\\n  ...\\n# Subtest: rejects unit price ending with a decimal point\\nok 9 - rejects unit price ending with a decimal point\\n  ---\\n  duration_ms: 0.119584\\n  ...\\n# Subtest: rejects unit price with trailing text\\nok 10 - rejects unit price with trailing text\\n  ---\\n  duration_ms: 0.101667\\n  ...\\n# Subtest: rejects unit price with comma\\nok 11 - rejects unit price with comma\\n  ---\\n  duration_ms: 0.047083\\n  ...\\n# Subtest: rejects unit price with full-width digits\\nok 12 - rejects unit price with full-width digits\\n  ---\\n  duration_ms: 0.054042\\n  ...\\n# Subtest: rejects unit price with Unicode numeric characters\\nok 13 - rejects unit price with Unicode numeric characters\\n  ---\\n  duration_ms: 0.03775\\n  ...\\n# Subtest: rejects quantity as string\\nok 14 - rejects quantity as string\\n  ---\\n  duration_ms: 0.082542\\n  ...\\n# Subtest: rejects quantity string with leading whitespace\\nok 15 - rejects quantity string with leading whitespace\\n  ---\\n  duration_ms: 0.041917\\n  ...\\n# Subtest: rejects negative quantity\\nok 16 - rejects negative quantity\\n  ---\\n  duration_ms: 0.075084\\n  ...\\n# Subtest: rejects zero quantity\\nok 17 - rejects zero quantity\\n  ---\\n  duration_ms: 0.042833\\n  ...\\n# Subtest: rejects fractional numeric quantity\\nok 18 - rejects fractional numeric quantity\\n  ---\\n  duration_ms: 0.112291\\n  ...\\n# Subtest: rejects Infinity quantity\\nok 19 - rejects Infinity quantity\\n  ---\\n  duration_ms: 0.050083\\n  ...\\n# Subtest: rejects NaN quantity\\nok 20 - rejects NaN quantity\\n  ---\\n  duration_ms: 0.36\\n  ...\\n# Subtest: rejects quantity string with exponent\\nok 21 - rejects quantity string with exponent\\n  ---\\n  duration_ms: 0.049208\\n  ...\\n# Subtest: rejects quantity string with decimal point\\nok 22 - rejects quantity string with decimal point\\n  ---\\n  duration_ms: 0.037417\\n  ...\\n# Subtest: rejects very long unit price that overflows\\nok 23 - rejects very long unit price that overflows\\n  ---\\n  duration_ms: 0.039626\\n  ...\\n1..23\\n# tests 23\\n# suites 0\\n# pass 23\\n# fail 0\\n# cancelled 0\\n# skipped 0\\n# todo 0\\n# duration_ms 36.4424\\n\",\n      \"stderr\": \"\",\n      \"stdout_truncated\": false,\n      \"stderr_truncated\": false\n    }\n  ]\n}\n",
+        "bytes": 4488,
+        "sha256": "acfa7c1b00561fc8ac6b1ac3ccd212991612b56b70c5cc9e617365ecb7f00760",
+        "source_response_sha256": "81c477c40cf0e343ba7d3ebeaa2ae29c53bbe8a1f305ea506a7a4898b32e10be"
+      },
+      "recorded_tool_failures": [
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "a6437ed9540c6804b51d0b0fe24e0c4dc684f976eae7efcf4aeae96ac9ceff01"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        },
+        {
+          "preceding_tool": "edit_file",
+          "outcome": "failed",
+          "result_sha256": "cee9c3082ee1b46dde8cb11d951137363722170c9c10b23d06b659d526ac6437"
+        }
+      ],
+      "acceptance_outputs": {
+        "original_suite": {
+          "content": "TAP version 13\n# Subtest: formats ordinary decimal amounts\nok 1 - formats ordinary decimal amounts\n  ---\n  duration_ms: 0.5775\n  type: 'test'\n  ...\n# Subtest: preserves two decimal places for whole amounts\nok 2 - preserves two decimal places for whole amounts\n  ---\n  duration_ms: 0.068708\n  type: 'test'\n  ...\n# Subtest: formats a small fractional price\nok 3 - formats a small fractional price\n  ---\n  duration_ms: 0.034833\n  type: 'test'\n  ...\n# Subtest: rejects clearly invalid input\nok 4 - rejects clearly invalid input\n  ---\n  duration_ms: 0.143667\n  type: 'test'\n  ...\n1..4\n# tests 4\n# suites 0\n# pass 4\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 40.62575\n",
+          "bytes": 677,
+          "sha256": "f515e918501fca1cdc94f6cc1e2ae506220eedef5e640b78aadf23a81476384b"
+        },
+        "predeclared_independent_suite": {
+          "content": "TAP version 13\n# Subtest: valid prices preserve formatting\nok 1 - valid prices preserve formatting\n  ---\n  duration_ms: 0.367584\n  type: 'test'\n  ...\n# Subtest: price syntax is ASCII and exact\nok 2 - price syntax is ASCII and exact\n  ---\n  duration_ms: 0.549084\n  type: 'test'\n  ...\n# Subtest: quantity is a positive finite integer number\nok 3 - quantity is a positive finite integer number\n  ---\n  duration_ms: 0.077208\n  type: 'test'\n  ...\n1..3\n# tests 3\n# suites 0\n# pass 3\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 33.363958\n",
+          "bytes": 545,
+          "sha256": "27800786e5d7a2dc2176c99c32727d2d9937a381f08704d78b79503a67df8a0f"
+        },
+        "supplemental_suite": {
+          "content": "TAP version 13\n# Subtest: preserves rejection when a syntactically valid price converts to Infinity\nok 1 - preserves rejection when a syntactically valid price converts to Infinity\n  ---\n  duration_ms: 0.581583\n  type: 'test'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 39.322\n",
+          "bytes": 332,
+          "sha256": "caa8bcb66be3cc9ce33e8f83e0e9e4630b30e797fdbac67342b9e80527e162d6"
+        }
+      },
+      "supplemental_assessment": {
+        "schema": 1,
+        "created_at": "2026-10-27T21:45:06.666539+00:00",
+        "test_sha256": "ea9cb350c4ea02c81b62d82fada6fcc1845541d00566ff0bb904cca887bffb58",
+        "invoice_sha256": "9a411f167a5da9d861042a6f753334da0050896d264064f7049869edf3590901",
+        "exit_code": 0,
+        "log_sha256": "caa8bcb66be3cc9ce33e8f83e0e9e4630b30e797fdbac67342b9e80527e162d6",
+        "scope": "The unchanged supplemental counterexample from the first attempt, executed once on the preserved final snapshot. Original predeclared tests are unchanged."
+      }
+    }
+  ],
+  "final_case": "finite-guard-correction",
+  "runtime_observation": {
+    "content": "{\n  \"session_id\": \"ses-694a3ad8-cb75-4e87-bcd7-a9337da08d49\",\n  \"turn_id\": \"turn-fda481fe-29bb-4a06-8397-926ad7995232\",\n  \"required_review\": {\n    \"reviewer\": \"reviewer\",\n    \"state\": \"approved\",\n    \"reason\": \"The reviewer approved this result in round 1 of 2.\",\n    \"verdict\": \"approve\",\n    \"findings\": \"\",\n    \"round\": 1,\n    \"max_rounds\": 2,\n    \"current\": true,\n    \"candidate_sha256\": \"6ff2247cecab94a31b6f2529839c7fcc3253be21a97037142dca4506ead2961d\"\n  },\n  \"required_checks\": [\n    {\n      \"argv\": [\n        \"sh\",\n        \"-c\",\n        \"npm test\"\n      ],\n      \"state\": \"passed\",\n      \"run_id\": \"required-check-8fbab7fb9c4837692ff435f0bc90e1787d11f885ba3a48f74a010814f2bc84b1\",\n      \"process_status\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"effect_disposition\": \"outcome_recorded\",\n      \"primary_exit\": {\n        \"kind\": \"exited\",\n        \"code\": 0\n      },\n      \"quiescent\": true,\n      \"reason\": null,\n      \"evidence\": \"content-ead784556d6f55f2b80c71694ac16a5fa97244f045cecfe6320e763779653ed3\",\n      \"candidate_sha256\": null,\n      \"exit_code\": 0,\n      \"stdout\": \"\\n> invoice-input-validation@1.0.0 test\\n> node --test\\n\\nTAP version 13\\n# Subtest: formats ordinary decimal amounts\\nok 1 - formats ordinary decimal amounts\\n  ---\\n  duration_ms: 0.477834\\n  ...\\n# Subtest: preserves two decimal places for whole amounts\\nok 2 - preserves two decimal places for whole amounts\\n  ---\\n  duration_ms: 0.067542\\n  ...\\n# Subtest: formats a small fractional price\\nok 3 - formats a small fractional price\\n  ---\\n  duration_ms: 0.049584\\n  ...\\n# Subtest: rejects clearly invalid input\\nok 4 - rejects clearly invalid input\\n  ---\\n  duration_ms: 0.141584\\n  ...\\n# Subtest: accepts zero unit price\\nok 5 - accepts zero unit price\\n  ---\\n  duration_ms: 0.080583\\n  ...\\n# Subtest: preserves two decimal places for fractional unit price\\nok 6 - preserves two decimal places for fractional unit price\\n  ---\\n  duration_ms: 0.040958\\n  ...\\n# Subtest: preserves two decimal places for one decimal unit price\\nok 7 - preserves two decimal places for one decimal unit price\\n  ---\\n  duration_ms: 0.068458\\n  ...\\n# Subtest: rejects unit price with too many decimal places\\nok 8 - rejects unit price with too many decimal places\\n  ---\\n  duration_ms: 0.044292\\n  ...\\n# Subtest: rejects unit price ending with a decimal point\\nok 9 - rejects unit price ending with a decimal point\\n  ---\\n  duration_ms: 0.119584\\n  ...\\n# Subtest: rejects unit price with trailing text\\nok 10 - rejects unit price with trailing text\\n  ---\\n  duration_ms: 0.101667\\n  ...\\n# Subtest: rejects unit price with comma\\nok 11 - rejects unit price with comma\\n  ---\\n  duration_ms: 0.047083\\n  ...\\n# Subtest: rejects unit price with full-width digits\\nok 12 - rejects unit price with full-width digits\\n  ---\\n  duration_ms: 0.054042\\n  ...\\n# Subtest: rejects unit price with Unicode numeric characters\\nok 13 - rejects unit price with Unicode numeric characters\\n  ---\\n  duration_ms: 0.03775\\n  ...\\n# Subtest: rejects quantity as string\\nok 14 - rejects quantity as string\\n  ---\\n  duration_ms: 0.082542\\n  ...\\n# Subtest: rejects quantity string with leading whitespace\\nok 15 - rejects quantity string with leading whitespace\\n  ---\\n  duration_ms: 0.041917\\n  ...\\n# Subtest: rejects negative quantity\\nok 16 - rejects negative quantity\\n  ---\\n  duration_ms: 0.075084\\n  ...\\n# Subtest: rejects zero quantity\\nok 17 - rejects zero quantity\\n  ---\\n  duration_ms: 0.042833\\n  ...\\n# Subtest: rejects fractional numeric quantity\\nok 18 - rejects fractional numeric quantity\\n  ---\\n  duration_ms: 0.112291\\n  ...\\n# Subtest: rejects Infinity quantity\\nok 19 - rejects Infinity quantity\\n  ---\\n  duration_ms: 0.050083\\n  ...\\n# Subtest: rejects NaN quantity\\nok 20 - rejects NaN quantity\\n  ---\\n  duration_ms: 0.36\\n  ...\\n# Subtest: rejects quantity string with exponent\\nok 21 - rejects quantity string with exponent\\n  ---\\n  duration_ms: 0.049208\\n  ...\\n# Subtest: rejects quantity string with decimal point\\nok 22 - rejects quantity string with decimal point\\n  ---\\n  duration_ms: 0.037417\\n  ...\\n# Subtest: rejects very long unit price that overflows\\nok 23 - rejects very long unit price that overflows\\n  ---\\n  duration_ms: 0.039626\\n  ...\\n1..23\\n# tests 23\\n# suites 0\\n# pass 23\\n# fail 0\\n# cancelled 0\\n# skipped 0\\n# todo 0\\n# duration_ms 36.4424\\n\",\n      \"stderr\": \"\",\n      \"stdout_truncated\": false,\n      \"stderr_truncated\": false\n    }\n  ]\n}\n",
+    "bytes": 4488,
+    "sha256": "acfa7c1b00561fc8ac6b1ac3ccd212991612b56b70c5cc9e617365ecb7f00760",
+    "source_response_sha256": "81c477c40cf0e343ba7d3ebeaa2ae29c53bbe8a1f305ea506a7a4898b32e10be"
+  },
+  "supplemental_test": {
+    "content": "// Supplemental case added after manual review; original acceptance stays unchanged.\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { pathToFileURL } from 'node:url';\nimport { resolve } from 'node:path';\nconst workspace = process.env.AXO_REVIEW_WORKSPACE;\nif (!workspace) throw new Error('Set AXO_REVIEW_WORKSPACE to the preserved artifact');\nconst { invoiceTotal } = await import(pathToFileURL(resolve(workspace, 'invoice.js')).href);\ntest('preserves rejection when a syntactically valid price converts to Infinity', () => {\n  const price = '9'.repeat(400);\n  assert.equal(Number(price), Infinity);\n  assert.throws(() => invoiceTotal(price, 2), TypeError);\n});\n",
+    "bytes": 693,
+    "sha256": "ea9cb350c4ea02c81b62d82fada6fcc1845541d00566ff0bb904cca887bffb58"
+  },
+  "supplemental_baseline_output": {
+    "content": "TAP version 13\n# Subtest: preserves rejection when a syntactically valid price converts to Infinity\nok 1 - preserves rejection when a syntactically valid price converts to Infinity\n  ---\n  duration_ms: 1.387542\n  type: 'test'\n  ...\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 54.103917\n",
+    "bytes": 335,
+    "sha256": "ecd86fee9ab6911fc3b8914776a4aa00d437fad587dcd490bbcd2981087f755e"
+  },
+  "guidance_commands": [
+    {
+      "command_id": "human-ffddbab0-16ad-48ae-ba77-21479e5aeb4b",
+      "issued_at_ms": 1793137406324,
+      "parameters_kind": "steer_activation",
+      "mode": "next_safe_boundary",
+      "state": "rejected",
+      "last_transition": {
+        "state": "rejected",
+        "failure": {
+          "code": "control_rejected",
+          "message": "Session dispatch: control targets stale or closed canonical state",
+          "evidence": null,
+          "blocker": null
+        }
+      },
+      "operator": "assistant via actual dashboard controls; product source kind human is its UI classification, not a claim that a person operated it",
+      "causality": "Rejected as stale/closed; not delivered and not credited for the repair."
+    }
+  ],
+  "interventions": [
+    "After first required review approved, independent artifact inspection found the removed finite-price guard. A second dashboard request asked to restore it and add a regression.",
+    "The second turn temporarily wrote literal plus prefixes in source. Later attempted UI guidance was rejected as stale/closed; the completed artifact was already corrected. No causal credit is assigned to that rejected guidance."
+  ],
+  "limitations": [
+    "Prepared small fixture, not a production repository or comparative benchmark.",
+    "The first required review missed a real regression; a passing review and configured tests do not establish correctness.",
+    "Hashes establish byte identity, not model correctness or comparative quality. This native Session has no loadout receipt; the successful final artifact required a follow-up request.",
+    "Private raw runtime responses are retained separately; public observations are projections hashed against those source bytes, not cryptographically authenticated server attestations."
+  ]
+}

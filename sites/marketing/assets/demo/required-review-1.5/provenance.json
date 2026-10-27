@@ -1,0 +1,201 @@
+{
+  "product": {
+    "version": "1.5.0",
+    "release_commit": "19e3c89ca7b4d02cd742bccd671f7274e68b95d7",
+    "runtime_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+    "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+    "session_id": "ses-694a3ad8-cb75-4e87-bcd7-a9337da08d49",
+    "turn_ids": [
+      "turn-38f41e63-e571-4523-a05e-a1a48492f379",
+      "turn-fda481fe-29bb-4a06-8397-926ad7995232"
+    ]
+  },
+  "capture": {
+    "human_operator": false,
+    "operator": "Codex assistant using the actual browser UI",
+    "theme": "dark",
+    "theme_verification": "Dark mode selected and observed in the actual DOM and screenshots before capture. Original JPEG pixels are retained.",
+    "mode": "Awaited screenshot segments, approximately two samples per second; actual timestamps retained and uncaptured gaps disclosed."
+  },
+  "presentation": {
+    "new_inference": true,
+    "run_started_from": "dashboard",
+    "label": "Actual Axocoatl 1.5 required-review task, recorded in dark mode",
+    "disclosure": "Prepared Node invoice-validation fixture. This is a new actual local run, not a replay or rerun of the historical 1.1 benchmark. Two requests are shown. Selected recorded waits are accelerated 12x, repeated waiting and a rejected late-guidance interval are cut, and unrecorded gaps are removed. No synthetic UI or motion interpolation. The first reviewer approval missed a real regression; independent inspection led to a corrective request."
+  },
+  "configuration": {
+    "lead": "ollama:gpt-oss:20b",
+    "required_reviewer": "ollama:qwen3-coder:30b",
+    "reviewer_scope": "Read-only Worker",
+    "helpers": [],
+    "required_checks": [
+      "npm test"
+    ],
+    "max_review_rounds": 2,
+    "max_output_tokens": 4096,
+    "lead_limits": {
+      "activations": 2,
+      "invocations": 80,
+      "tokens": 1000000,
+      "cost_usd": 0
+    },
+    "reviewer_limits": {
+      "activations": 2,
+      "invocations": 40,
+      "tokens": 524288,
+      "cost_usd": 0
+    },
+    "hosted_model_calls": 0
+  },
+  "task": {
+    "baseline_commit": "1a702917829accf88207a6a91ca2fefacaa33000",
+    "request": "Tighten invoice input validation while preserving valid totals and existing tests; reject invalid price and quantity representations and add regression coverage. Run npm test, inspect the diff, and do not commit."
+  },
+  "outcome": {
+    "status": "accepted",
+    "changes_committed": false,
+    "final_turn_id": "turn-fda481fe-29bb-4a06-8397-926ad7995232",
+    "first_case": "FAILED: first approval missed removal of the finite-price guard.",
+    "final_case": "ACCEPTED: the follow-up restored the guard; required host checks and review approved, with independent artifact checks passing.",
+    "required_review": "approved",
+    "required_host_checks": "passed",
+    "receipt": "Native workbench Session; no loadout receipt."
+  },
+  "interventions_observed": [
+    "After first required review approved, independent artifact inspection found the removed finite-price guard. A second dashboard request asked to restore it and add a regression.",
+    "The second turn temporarily wrote literal plus prefixes in source. Later attempted UI guidance was rejected as stale/closed; the completed artifact was already corrected. No causal credit is assigned to that rejected guidance."
+  ],
+  "pre_capture_setup": [
+    "Initial socket directory was rejected for root ownership; socket moved inside the demonstration root, then a control subdirectory for workspace isolation.",
+    "Custom cached image was refused as untrusted; selected the curated Node20 preset.",
+    "Preparation per-call context limit4096 was insufficient; changed the isolated demonstration configuration to131072 and restarted before the first request.",
+    "No product source change was made."
+  ],
+  "evidence_limits": [
+    "Prepared small fixture, not a production repository or comparative benchmark.",
+    "The first required review missed a real regression; a passing review and configured tests do not establish correctness.",
+    "Hashes establish byte identity, not model correctness or comparative quality. This native Session has no loadout receipt; the successful final artifact required a follow-up request.",
+    "Private raw runtime responses are retained separately; public observations are projections hashed against those source bytes, not cryptographically authenticated server attestations."
+  ],
+  "private_evidence": {
+    "original_capture_sha256": "93d3e3f4b41e13cefe628d6f888dd7476fd2d7bcd70eeb1a1b74fb912e5f9586",
+    "final_runtime_source_sha256": "81c477c40cf0e343ba7d3ebeaa2ae29c53bbe8a1f305ea506a7a4898b32e10be",
+    "disclosure": "Original runtime responses remain private. Public projections retain actual outcomes and hash references, not server attestations. No raw reasoning/session export is published."
+  },
+  "schema": "axocoatl.required-review-provenance/1",
+  "files": [
+    {
+      "file": "required-review.mp4",
+      "sha256": "7405f7b862381afc69e68eae8fe5611c11c91facc913cd89b88f239f80d4e256",
+      "bytes": 1509216
+    },
+    {
+      "file": "result.jpg",
+      "sha256": "8553c9fcc1b3a4f9adef980e50e523f6ce28ffe74838a8770c56eafc0e80af86",
+      "bytes": 60428
+    },
+    {
+      "file": "chapters.vtt",
+      "sha256": "dd8790ea068ed8aca060c7b5d253abfea93031a665c1c9c363ea904ab30402b7",
+      "bytes": 205
+    },
+    {
+      "file": "source-capture.tar.gz",
+      "sha256": "8481141cefd29ea71a482229b73f4263108988ee5aaf66e11d8902ba5f3db750",
+      "bytes": 19757119
+    },
+    {
+      "file": "timeline.json",
+      "sha256": "1eaad65b4920c5c7f00eb68412a3791dd5b97bcbc781266040ab46f321b0570e",
+      "bytes": 222517
+    },
+    {
+      "file": "artifact-evidence.json",
+      "sha256": "8ecd9bc035a2a6148ef31b56585118f3f3043d81bd17bac0ac8705a3d7ac7975",
+      "bytes": 58684
+    },
+    {
+      "file": "captions.vtt",
+      "sha256": "087e9b0eb9ab25d9357171c8a076c0b3cbaa2a3d6841ccd8ba3633e7caf7cf61",
+      "bytes": 1151
+    }
+  ],
+  "captions": [
+    {
+      "source_ms": 1,
+      "text": "Require npm test and a separate read-only review.\nActual dark UI, sampled at 2 fps; waits shortened.",
+      "playback_start_ms": 0.0,
+      "playback_end_ms": 8853.0
+    },
+    {
+      "source_ms": 17500,
+      "text": "Request strict invoice validation.\nLocal GPT-OSS 20B writes; Qwen3-Coder 30B reviews.",
+      "playback_start_ms": 8853.0,
+      "playback_end_ms": 21110.833333333336
+    },
+    {
+      "source_ms": 61668,
+      "text": "Follow the Lead in the Agent graph.\nSelected waits play at 12\u00d7; other waits are cut.",
+      "playback_start_ms": 21110.833333333336,
+      "playback_end_ms": 35344.5
+    },
+    {
+      "source_ms": 166452,
+      "text": "The host runs npm test, then the required reviewer.\nThe first review approves.",
+      "playback_start_ms": 35344.5,
+      "playback_end_ms": 44644.75
+    },
+    {
+      "source_ms": 195627,
+      "text": "Approval missed a regression: non-finite prices\nwere no longer rejected.",
+      "playback_start_ms": 44644.75,
+      "playback_end_ms": 52191.75
+    },
+    {
+      "source_ms": 234893,
+      "text": "Independent inspection catches it.\nSend a second request to restore the guard.",
+      "playback_start_ms": 52191.75,
+      "playback_end_ms": 69057.75
+    },
+    {
+      "source_ms": 328280,
+      "text": "The Lead works on the corrective request.\nRepeated waits are omitted.",
+      "playback_start_ms": 69057.75,
+      "playback_end_ms": 74770.33333333337
+    },
+    {
+      "source_ms": 608807,
+      "text": "Inspect the final code: the finite-price guard is back.\nIndependent artifact checks pass.",
+      "playback_start_ms": 74770.33333333337,
+      "playback_end_ms": 83952.33333333337
+    },
+    {
+      "source_ms": 664640,
+      "text": "The final required review approves.\nHost checks pass on the final files.",
+      "playback_start_ms": 83952.33333333337,
+      "playback_end_ms": 90474.33333333337
+    },
+    {
+      "source_ms": 703764,
+      "text": "Two requests, including a missed regression.\nThis prepared task is not the historical benchmark.",
+      "playback_start_ms": 90474.33333333337,
+      "playback_end_ms": 98611.33333333337
+    }
+  ],
+  "source_frames": 408,
+  "actual_duration_ms": 711902,
+  "playback_duration_ms": 98611.33333333337,
+  "encoding": {
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "fps": 24,
+    "audio": false,
+    "frames": "All retained original samples, chronological; privacy or editorial omissions declared; repeated frames only, no interpolation or generated UI.",
+    "timing": "Explicit privacy omissions, uncaptured segment gaps and declared speedups are mapped in the timeline; every retained sample is preserved.",
+    "encoder_sha256": "61112f9643326f84f59d5eb4fb3b5db850c2482d41ddae39c7d44d9e5262cacf",
+    "color_range": "tv",
+    "verification": "Every retained JPEG must match the encoded frame at SSIM>=0.99 within one 24fps frame of its mapped midpoint; hashes and timeline mappings remain exact.",
+    "vtt_rounding": "Chapter and caption boundaries round to the nearest millisecond, half up, consistently with the verifier."
+  },
+  "outcome_scope": "Recorded task only; no comparative evaluation or general reliability inference."
+}
