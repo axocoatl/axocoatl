@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe",
+  "verdict": "pass",
+  "statement_sha256": "sha256:dae0282636268bba3d7150511e1afe54bdff6f83c6eee83e3fdb47f91e6079a9",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-service-smoke-retry-20261027/public/sample/repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-service-smoke-retry-20261027/public/sample/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-75f75840-f929-4fee-bdd7-5c55a7daf19f, finished at 1793067006311 ms",
+    "Base commit 592c14cb256afd84c2a99eb0935a489a3097a6a5",
+    "Agent writer (writer): native openrouter endpoint deepinfra/fp4 (DeepInfra), openrouter:deepseek/deepseek-chat-v3.1",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paging.js  sha256:c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 512 processes; not applied, this host does not delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)"
+  ]
+}

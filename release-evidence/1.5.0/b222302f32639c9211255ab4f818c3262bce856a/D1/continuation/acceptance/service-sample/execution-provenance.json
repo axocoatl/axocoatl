@@ -1,0 +1,21 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "os_account": "d1gate",
+  "operator": "Codex",
+  "vm": "axo-d1-recovery-20261026-043450",
+  "run_id": "run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe",
+  "sample_repo": "/tmp/axo-d1-service-smoke-retry.KshcU7/repo",
+  "sample_initial_commit": "592c14cb256afd84c2a99eb0935a489a3097a6a5",
+  "outcome": "pass; one targeted retry of prior failed429-to502 service smoke; tests and required review passed; receipt/record/markup verified; service stopped/uninstalled; config unchanged; independent original-test acceptance pending",
+  "copied_at": "2026-10-27T02:11:21.077751+00:00",
+  "omitted_dependency_caches": [
+    "/tmp/axo-d1-service-smoke-retry.KshcU7/repo/node_modules"
+  ],
+  "raw_http_or_private_store_included": false,
+  "key_status_exit": 0,
+  "service_status_exit": 0,
+  "script_sha256": "e3ba93873bec8a437b152ab7d76b2326f0bfde760386784993de2b249762d4db",
+  "configuration": "unchanged writer openrouter:deepseek/deepseek-chat-v3.1, reviewer openrouter:openai/gpt-oss-120b; existing secret openrouter with $2TOTAL cap"
+}

@@ -1,0 +1,7 @@
+{
+  "collector_patterns": "clear",
+  "callback_credential_query_scan": "clear",
+  "private_names": "clear",
+  "matched_files": 0,
+  "raw_values_emitted": false
+}

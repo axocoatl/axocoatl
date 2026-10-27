@@ -1,0 +1,611 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "D1-continuation2",
+  "tier": "D",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-27T01:34:57Z",
+  "finished_at": "2026-10-27T02:05:02.958Z",
+  "steps": [
+    {
+      "name": "existing OpenRouter key and same writer/reviewer for targeted retry",
+      "status": "pass",
+      "required": true,
+      "detail": "no authentication; previous cap $2TOTAL nonresetting, prior usage $0.004036"
+    },
+    {
+      "name": "onboard targeted sample retry (existing key; same models and required review)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 143.8,
+      "bytes_downloaded": 35338223
+    },
+    {
+      "name": "targeted onboarding sample answered live",
+      "status": "pass",
+      "required": true,
+      "detail": "Codex operator; existing key, no new authentication; all earlier failed outcomes retained"
+    },
+    {
+      "name": "onboarding did not install Ollama",
+      "status": "pass",
+      "required": true,
+      "detail": "no ollama on PATH, no ollama service"
+    },
+    {
+      "name": "onboarding wrote /home/d1gate/.config/axocoatl/config.yaml",
+      "status": "pass",
+      "required": true,
+      "detail": "server.port 8080; writer openrouter:qwen/qwen3-coder-30b-a3b-instruct; reviewer openrouter:openai/gpt-oss-120b"
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 66
+    },
+    {
+      "name": "doctor: ready, no FAIL in sandbox, models, writers, daemon",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 198
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl dev serves on its configured port",
+      "status": "pass",
+      "required": true,
+      "detail": "port 8080"
+    },
+    {
+      "name": "run fix on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 103.4,
+      "bytes_downloaded": 28557366
+    },
+    {
+      "name": "run on node-plain chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "receipt verify on node-plain (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "record verify on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198
+    },
+    {
+      "name": "receipt matches the record on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-plain",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 5b4d68caf042 holds any"
+    },
+    {
+      "name": "run fix on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 181.4,
+      "bytes_downloaded": 37678779
+    },
+    {
+      "name": "run on node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "record verify on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198
+    },
+    {
+      "name": "receipt matches the record on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since be2e869ba3a3 holds any"
+    },
+    {
+      "name": "run fix on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 161.7,
+      "bytes_downloaded": 84509405
+    },
+    {
+      "name": "run on python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "record verify on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "receipt matches the record on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since fe6a3073143d holds any"
+    },
+    {
+      "name": "run fix on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 283.1,
+      "bytes_downloaded": 340523862
+    },
+    {
+      "name": "run on rust chose a rust image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-rust:0e5acf3d40e2"
+    },
+    {
+      "name": "run on rust ran setup (cargo fetch)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on rust (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198
+    },
+    {
+      "name": "record verify on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "receipt matches the record on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on rust",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since df071b9d3374 holds any"
+    },
+    {
+      "name": "run fix on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 127.9,
+      "bytes_downloaded": 339301842
+    },
+    {
+      "name": "run on go chose a go image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-go:6063b3e9fdc6"
+    },
+    {
+      "name": "run on go ran setup (go mod download)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on go (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 264
+    },
+    {
+      "name": "record verify on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "receipt matches the record on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on go",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 9835aa68e01b holds any"
+    },
+    {
+      "name": "the README's command passed on every fixture, each receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "fixtures: node-plain node-deps python-pytest rust go"
+    },
+    {
+      "name": "negative cases with the scripted model server",
+      "status": "skip",
+      "required": false,
+      "detail": "a live run (Tier D) has no stub"
+    },
+    {
+      "name": "copy-paste lint (scripts/check-copy-paste.mjs)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "Ctrl+C stops axocoatl dev with exit 0",
+      "status": "pass",
+      "required": false
+    },
+    {
+      "name": "this login has a systemd user session (the service needs one)",
+      "status": "pass",
+      "required": true,
+      "detail": "d1gate"
+    },
+    {
+      "name": "onboard --update: Step 6, the Always-On Service (interactive)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 87.9,
+      "bytes_downloaded": 2667149
+    },
+    {
+      "name": "axocoatl service status (onboarding installed and started the Always-On Service (Step 6))",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 300
+    },
+    {
+      "name": "onboarding installed and started the Always-On Service (Step 6)",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; MainPID=40831"
+    },
+    {
+      "name": "the service answers on port 8080",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard --update --writer-model openrouter:deepseek/deepseek-chat-v3.1 --smoke-test (the configuration changes while the service runs)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 488.4,
+      "bytes_downloaded": 26343118,
+      "detail": "exit 1, expected 0: interactive step; see the transcript (exit 1) "
+    },
+    {
+      "name": "onboarding restarted the service after the configuration changed (Step 7)",
+      "status": "pass",
+      "required": true,
+      "detail": "onboarding asked to restart it, and an Axocoatl daemon on port 8080 runs the current configuration"
+    },
+    {
+      "name": "run fix on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 221.7,
+      "bytes_downloaded": 40126691
+    },
+    {
+      "name": "run on service-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on service-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on service-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "record verify on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "receipt matches the record on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 7a1a6d2f05e6 holds any"
+    },
+    {
+      "name": "a fix through the Always-On Service passed, its receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "node-deps, writer openrouter:deepseek/deepseek-chat-v3.1, port 8080"
+    },
+    {
+      "name": "axocoatl service status (axocoatl service status: installed and running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service status: installed and running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; MainPID=41489"
+    },
+    {
+      "name": "axocoatl service stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service status (axocoatl service stop: the service is not running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service stop: the service is not running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: no; installed, not running (inactive)"
+    },
+    {
+      "name": "nothing answers on port 8080 after the service stopped",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl service uninstall",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service uninstall: not installed, its unit removed",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: no, running: no; not installed"
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 24.04",
+    "kernel": "6.8.0-142-generic",
+    "arch": "aarch64",
+    "runner": "local Linux D1 continuation; Codex operator, d1gate OS account",
+    "memory_bytes": 4094377984,
+    "cpus": 2,
+    "user": "d1gate"
+  },
+  "tools": {
+    "podman": "4.9.3",
+    "git": "2.43.0",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "D1-continuation2/continuation-provenance.json",
+    "D1-continuation2/doctor.json",
+    "D1-continuation2/go/axocoatl-junit.xml",
+    "D1-continuation2/go/changes.txt",
+    "D1-continuation2/go/command.txt",
+    "D1-continuation2/go/run.axorecord.jsonl",
+    "D1-continuation2/go/run.log",
+    "D1-continuation2/go/run.receipt.json",
+    "D1-continuation2/key-status-before.txt",
+    "D1-continuation2/logs/axocoatl-service-status--axocoatl-service-status--installed-and-running-.log",
+    "D1-continuation2/logs/axocoatl-service-status--axocoatl-service-stop--the-service-is-not-running-.log",
+    "D1-continuation2/logs/axocoatl-service-status--axocoatl-service-uninstall--not-installed--its-unit-rem.log",
+    "D1-continuation2/logs/axocoatl-service-status--onboarding-installed-and-started-the-Always-On-Service-.log",
+    "D1-continuation2/logs/axocoatl-service-stop.log",
+    "D1-continuation2/logs/axocoatl-service-uninstall.log",
+    "D1-continuation2/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+    "D1-continuation2/logs/dev.log",
+    "D1-continuation2/logs/doctor---json-says-ready.log",
+    "D1-continuation2/logs/doctor-exits-0.log",
+    "D1-continuation2/logs/guard.log",
+    "D1-continuation2/logs/onboard---update---writer-model-openrouter-deepseek-deepseek-chat-v3.1---smoke-t.log",
+    "D1-continuation2/logs/onboard---update--Step-6--the-Always-On-Service--interactive-.log",
+    "D1-continuation2/logs/onboard-targeted-sample-retry--existing-key--same-models-and-required-review-.log",
+    "D1-continuation2/logs/onboarding/onboard-20261027-013458.log",
+    "D1-continuation2/logs/onboarding/onboard-20261027-015143.log",
+    "D1-continuation2/logs/onboarding/onboard-20261027-015311.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-go.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-node-deps.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-node-plain.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-python-pytest.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-rust.log",
+    "D1-continuation2/logs/receipt-matches-the-record-on-service-node-deps.log",
+    "D1-continuation2/logs/receipt-verify-on-go--documented-command-.log",
+    "D1-continuation2/logs/receipt-verify-on-node-deps--documented-command-.log",
+    "D1-continuation2/logs/receipt-verify-on-node-plain--documented-command-.log",
+    "D1-continuation2/logs/receipt-verify-on-python-pytest--documented-command-.log",
+    "D1-continuation2/logs/receipt-verify-on-rust--documented-command-.log",
+    "D1-continuation2/logs/receipt-verify-on-service-node-deps--documented-command-.log",
+    "D1-continuation2/logs/record-verify-on-go.log",
+    "D1-continuation2/logs/record-verify-on-node-deps.log",
+    "D1-continuation2/logs/record-verify-on-node-plain.log",
+    "D1-continuation2/logs/record-verify-on-python-pytest.log",
+    "D1-continuation2/logs/record-verify-on-rust.log",
+    "D1-continuation2/logs/record-verify-on-service-node-deps.log",
+    "D1-continuation2/logs/run-fix-on-go.log",
+    "D1-continuation2/logs/run-fix-on-node-deps.log",
+    "D1-continuation2/logs/run-fix-on-node-plain.log",
+    "D1-continuation2/logs/run-fix-on-python-pytest.log",
+    "D1-continuation2/logs/run-fix-on-rust.log",
+    "D1-continuation2/logs/run-fix-on-service-node-deps.log",
+    "D1-continuation2/node-deps/axocoatl-junit.xml",
+    "D1-continuation2/node-deps/changes.txt",
+    "D1-continuation2/node-deps/command.txt",
+    "D1-continuation2/node-deps/run.axorecord.jsonl",
+    "D1-continuation2/node-deps/run.log",
+    "D1-continuation2/node-deps/run.receipt.json",
+    "D1-continuation2/node-plain/axocoatl-junit.xml",
+    "D1-continuation2/node-plain/changes.txt",
+    "D1-continuation2/node-plain/command.txt",
+    "D1-continuation2/node-plain/receipt.json",
+    "D1-continuation2/node-plain/run.axorecord.jsonl",
+    "D1-continuation2/node-plain/run.log",
+    "D1-continuation2/operator-initial.json",
+    "D1-continuation2/prior-failed-attempt-manifest.json",
+    "D1-continuation2/prior-failed-continuation.json",
+    "D1-continuation2/python-pytest/axocoatl-junit.xml",
+    "D1-continuation2/python-pytest/changes.txt",
+    "D1-continuation2/python-pytest/command.txt",
+    "D1-continuation2/python-pytest/run.axorecord.jsonl",
+    "D1-continuation2/python-pytest/run.log",
+    "D1-continuation2/python-pytest/run.receipt.json",
+    "D1-continuation2/readme-command.txt",
+    "D1-continuation2/rust/axocoatl-junit.xml",
+    "D1-continuation2/rust/changes.txt",
+    "D1-continuation2/rust/command.txt",
+    "D1-continuation2/rust/run.axorecord.jsonl",
+    "D1-continuation2/rust/run.log",
+    "D1-continuation2/rust/run.receipt.json",
+    "D1-continuation2/service-node-deps/axocoatl-junit.xml",
+    "D1-continuation2/service-node-deps/changes.txt",
+    "D1-continuation2/service-node-deps/command.txt",
+    "D1-continuation2/service-node-deps/run.axorecord.jsonl",
+    "D1-continuation2/service-node-deps/run.log",
+    "D1-continuation2/service-node-deps/run.receipt.json",
+    "D1-continuation2/transcript.txt"
+  ]
+}

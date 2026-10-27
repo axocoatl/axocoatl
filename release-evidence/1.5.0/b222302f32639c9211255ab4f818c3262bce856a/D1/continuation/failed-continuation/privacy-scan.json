@@ -1,0 +1,8 @@
+{
+  "collector_pattern_scan": "clear",
+  "collector_source_sha256": "0c78c120e134835d08e0b945efaaa4b57685233bbcf0912f895b7d8bbc6178b2",
+  "callback_credential_query_scan": "clear",
+  "private_file_names_scan": "clear",
+  "matched_files": 0,
+  "raw_values_emitted": false
+}

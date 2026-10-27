@@ -1,0 +1,2633 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "D1",
+  "tier": "D",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-27T00:43:31.124523+00:00",
+  "finished_at": "2026-10-27T02:10:07.206Z",
+  "steps": [
+    {
+      "name": "start without axocoatl on PATH",
+      "status": "pass",
+      "required": true,
+      "detail": "HOME=/home/d1gate",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 0,
+          "step_name": "start without axocoatl on PATH",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "the account started without Axocoatl, its data or stored secrets",
+      "status": "pass",
+      "required": true,
+      "detail": "none of /home/d1gate/.config/axocoatl/config.yaml, /home/d1gate/.local/share/axocoatl, /home/d1gate/.local/state/axocoatl, ~/.axocoatl or ~/.local/bin/axocoatl exists",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 1,
+          "step_name": "the account started without Axocoatl, its data or stored secrets",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "the account started without Podman",
+      "status": "pass",
+      "required": true,
+      "detail": "no podman on PATH, no podman package",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 2,
+          "step_name": "the account started without Podman",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "Lima forwards this VM's loopback ports to the Mac (its guest agent runs)",
+      "status": "pass",
+      "required": false,
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 3,
+          "step_name": "Lima forwards this VM's loopback ports to the Mac (its guest agent runs)",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "the gate removed this account's subordinate ids; another user's range overlaps 100000-165535",
+      "status": "pass",
+      "required": true,
+      "detail": "d1gate has no line in /etc/subuid:/etc/subgid now (backup: /tmp/axo-gate.Db5c62/own-subids); erick's range overlaps 100000-165535",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 4,
+          "step_name": "the gate removed this account's subordinate ids; another user's range overlaps 100000-165535",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "install with the published command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.5,
+      "bytes_downloaded": 66,
+      "detail": "curl -fsSL https://axocoatl.ai/install.sh | sh",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 5,
+          "step_name": "install with the published command",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "installed binary is where the installer said",
+      "status": "pass",
+      "required": true,
+      "detail": "/home/d1gate/.local/bin/axocoatl",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 6,
+          "step_name": "installed binary is where the installer said",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "a new shell finds axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "bash -lc: /home/d1gate/.local/bin/axocoatl; bash -ic: /home/d1gate/.local/bin/axocoatl",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 7,
+          "step_name": "a new shell finds axocoatl",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "installed binary is the tarball's",
+      "status": "pass",
+      "required": true,
+      "detail": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 8,
+          "step_name": "installed binary is the tarball's",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl --version names 1.5.0",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl 1.5.0",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 9,
+          "step_name": "axocoatl --version names 1.5.0",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "the sign-in browser reached a loopback port of this account, as OpenRouter's callback must",
+      "status": "pass",
+      "required": true,
+      "detail": "the gate's listener on 127.0.0.1:44377 received the request (GET /<the gate path> Host 127.0.0.1:44377), and the operator (d1gate) answered yes",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 10,
+          "step_name": "the sign-in browser reached a loopback port of this account, as OpenRouter's callback must",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "every prompt was answered by the operator (d1gate); the transcript holds each",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 12,
+          "step_name": "onboarding was answered live in the terminal",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "onboarding installed Podman with apt",
+      "status": "pass",
+      "required": true,
+      "detail": "podman 4.9.3+ds1-1ubuntu0.2",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 13,
+          "step_name": "onboarding installed Podman with apt",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "onboarding added a subordinate id range that no other user's overlaps",
+      "status": "pass",
+      "required": true,
+      "detail": "d1gate:165536:65536 d1gate:165536:65536 ",
+      "observations": [
+        {
+          "file": "D1/continuation/fresh-prefix/original-steps.jsonl",
+          "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+          "step_index": 14,
+          "step_name": "onboarding added a subordinate id range that no other user's overlaps",
+          "observed_status": "pass",
+          "format": "jsonl"
+        }
+      ]
+    },
+    {
+      "name": "OpenRouter was connected through the browser sign-in during onboarding",
+      "status": "pass",
+      "required": true,
+      "detail": "Actual fresh secret absence, browser callback, and key stored are recorded in the first continuation. That command later failed required review; its failure is retained. Subsequent sample retry used this same key and completed the remaining unchanged criteria.",
+      "observations": [
+        {
+          "file": "D1/continuation/failed-continuation/gate/D1-continuation.json",
+          "sha256": "6a40f891e998efa2c43628092dca9f2d27fede1ae2a50e74fcaa6a7d99fc4487",
+          "step_index": 0,
+          "step_name": "no OpenRouter secret before controlled onboarding retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        },
+        {
+          "file": "D1/continuation/failed-continuation/gate/D1-continuation/logs/onboarding/onboard-20261027-011403.log",
+          "sha256": "4fa4c835e8de110444de559e83c5d5050cbd92eba7a4c213bcb1d5ecb614b605"
+        }
+      ]
+    },
+    {
+      "name": "existing OpenRouter key and same writer/reviewer for targeted retry",
+      "status": "pass",
+      "required": true,
+      "detail": "no authentication; previous cap $2TOTAL nonresetting, prior usage $0.004036",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 0,
+          "step_name": "existing OpenRouter key and same writer/reviewer for targeted retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboard targeted sample retry (existing key; same models and required review)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 143.8,
+      "bytes_downloaded": 35338223,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 1,
+          "step_name": "onboard targeted sample retry (existing key; same models and required review)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "targeted onboarding sample answered live",
+      "status": "pass",
+      "required": true,
+      "detail": "Codex operator; existing key, no new authentication; all earlier failed outcomes retained",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 2,
+          "step_name": "targeted onboarding sample answered live",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboarding did not install Ollama",
+      "status": "pass",
+      "required": true,
+      "detail": "no ollama on PATH, no ollama service",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 3,
+          "step_name": "onboarding did not install Ollama",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboarding wrote /home/d1gate/.config/axocoatl/config.yaml",
+      "status": "pass",
+      "required": true,
+      "detail": "server.port 8080; writer openrouter:qwen/qwen3-coder-30b-a3b-instruct; reviewer openrouter:openai/gpt-oss-120b",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 4,
+          "step_name": "onboarding wrote /home/d1gate/.config/axocoatl/config.yaml",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 66,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 5,
+          "step_name": "doctor --json says ready",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "doctor: ready, no FAIL in sandbox, models, writers, daemon",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 6,
+          "step_name": "doctor: ready, no FAIL in sandbox, models, writers, daemon",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "doctor exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 198,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 7,
+          "step_name": "doctor exits 0",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 8,
+          "step_name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl dev serves on its configured port",
+      "status": "pass",
+      "required": true,
+      "detail": "port 8080",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 9,
+          "step_name": "axocoatl dev serves on its configured port",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 103.4,
+      "bytes_downloaded": 28557366,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 10,
+          "step_name": "run fix on node-plain",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on node-plain chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 11,
+          "step_name": "run on node-plain chose a node image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on node-plain (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 12,
+          "step_name": "receipt verify on node-plain (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 13,
+          "step_name": "record verify on node-plain",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 14,
+          "step_name": "receipt matches the record on node-plain",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-plain",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 5b4d68caf042 holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 15,
+          "step_name": "no tool-call markup in the accepted output of the run on node-plain",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 181.4,
+      "bytes_downloaded": 37678779,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 16,
+          "step_name": "run fix on node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 17,
+          "step_name": "run on node-deps chose a node image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 18,
+          "step_name": "run on node-deps ran setup (npm ci)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 19,
+          "step_name": "receipt verify on node-deps (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 20,
+          "step_name": "record verify on node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 21,
+          "step_name": "receipt matches the record on node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since be2e869ba3a3 holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 22,
+          "step_name": "no tool-call markup in the accepted output of the run on node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 161.7,
+      "bytes_downloaded": 84509405,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 23,
+          "step_name": "run fix on python-pytest",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 24,
+          "step_name": "run on python-pytest chose a python image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 25,
+          "step_name": "run on python-pytest ran setup (pip install)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 26,
+          "step_name": "receipt verify on python-pytest (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 27,
+          "step_name": "record verify on python-pytest",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 28,
+          "step_name": "receipt matches the record on python-pytest",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since fe6a3073143d holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 29,
+          "step_name": "no tool-call markup in the accepted output of the run on python-pytest",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 283.1,
+      "bytes_downloaded": 340523862,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 30,
+          "step_name": "run fix on rust",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on rust chose a rust image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-rust:0e5acf3d40e2",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 31,
+          "step_name": "run on rust chose a rust image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on rust ran setup (cargo fetch)",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 32,
+          "step_name": "run on rust ran setup (cargo fetch)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on rust (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 33,
+          "step_name": "receipt verify on rust (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 34,
+          "step_name": "record verify on rust",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 35,
+          "step_name": "receipt matches the record on rust",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on rust",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since df071b9d3374 holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 36,
+          "step_name": "no tool-call markup in the accepted output of the run on rust",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 127.9,
+      "bytes_downloaded": 339301842,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 37,
+          "step_name": "run fix on go",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on go chose a go image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-go:6063b3e9fdc6",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 38,
+          "step_name": "run on go chose a go image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on go ran setup (go mod download)",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 39,
+          "step_name": "run on go ran setup (go mod download)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on go (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 264,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 40,
+          "step_name": "receipt verify on go (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 41,
+          "step_name": "record verify on go",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 42,
+          "step_name": "receipt matches the record on go",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on go",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 9835aa68e01b holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 43,
+          "step_name": "no tool-call markup in the accepted output of the run on go",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "the README's command passed on every fixture, each receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "fixtures: node-plain node-deps python-pytest rust go",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 44,
+          "step_name": "the README's command passed on every fixture, each receipt and record verified",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "negative cases with the scripted model server",
+      "status": "skip",
+      "required": false,
+      "detail": "a live run (Tier D) has no stub",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 45,
+          "step_name": "negative cases with the scripted model server",
+          "observed_status": "skip",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "copy-paste lint (scripts/check-copy-paste.mjs)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 46,
+          "step_name": "copy-paste lint (scripts/check-copy-paste.mjs)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "Ctrl+C stops axocoatl dev with exit 0",
+      "status": "pass",
+      "required": false,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 47,
+          "step_name": "Ctrl+C stops axocoatl dev with exit 0",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "this login has a systemd user session (the service needs one)",
+      "status": "pass",
+      "required": true,
+      "detail": "d1gate",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 48,
+          "step_name": "this login has a systemd user session (the service needs one)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboard --update: Step 6, the Always-On Service (interactive)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 87.9,
+      "bytes_downloaded": 2667149,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 49,
+          "step_name": "onboard --update: Step 6, the Always-On Service (interactive)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (onboarding installed and started the Always-On Service (Step 6))",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 300,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 50,
+          "step_name": "axocoatl service status (onboarding installed and started the Always-On Service (Step 6))",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboarding installed and started the Always-On Service (Step 6)",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; MainPID=40831",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 51,
+          "step_name": "onboarding installed and started the Always-On Service (Step 6)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "the service answers on port 8080",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 52,
+          "step_name": "the service answers on port 8080",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "onboarding restarted the service after the configuration changed (Step 7)",
+      "status": "pass",
+      "required": true,
+      "detail": "onboarding asked to restart it, and an Axocoatl daemon on port 8080 runs the current configuration",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 54,
+          "step_name": "onboarding restarted the service after the configuration changed (Step 7)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run fix on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 221.7,
+      "bytes_downloaded": 40126691,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 55,
+          "step_name": "run fix on service-node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on service-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 56,
+          "step_name": "run on service-node-deps chose a node image",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "run on service-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 57,
+          "step_name": "run on service-node-deps ran setup (npm ci)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt verify on service-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 58,
+          "step_name": "receipt verify on service-node-deps (documented command)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "record verify on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 59,
+          "step_name": "record verify on service-node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "receipt matches the record on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 198,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 60,
+          "step_name": "receipt matches the record on service-node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on service-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 7a1a6d2f05e6 holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 61,
+          "step_name": "no tool-call markup in the accepted output of the run on service-node-deps",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "a fix through the Always-On Service passed, its receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "node-deps, writer openrouter:deepseek/deepseek-chat-v3.1, port 8080",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 62,
+          "step_name": "a fix through the Always-On Service passed, its receipt and record verified",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (axocoatl service status: installed and running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 63,
+          "step_name": "axocoatl service status (axocoatl service status: installed and running)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status: installed and running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: yes; MainPID=41489",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 64,
+          "step_name": "axocoatl service status: installed and running",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 65,
+          "step_name": "axocoatl service stop",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (axocoatl service stop: the service is not running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 66,
+          "step_name": "axocoatl service status (axocoatl service stop: the service is not running)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service stop: the service is not running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: no; installed, not running (inactive)",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 67,
+          "step_name": "axocoatl service stop: the service is not running",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "nothing answers on port 8080 after the service stopped",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 68,
+          "step_name": "nothing answers on port 8080 after the service stopped",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service uninstall",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 69,
+          "step_name": "axocoatl service uninstall",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 70,
+          "step_name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service uninstall: not installed, its unit removed",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: no, running: no; not installed",
+      "observations": [
+        {
+          "file": "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+          "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182",
+          "step_index": 71,
+          "step_name": "axocoatl service uninstall: not installed, its unit removed",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "new pristine copy of exact original sample",
+      "status": "pass",
+      "required": true,
+      "detail": "baseline592c14cb256afd84c2a99eb0935a489a3097a6a5; no prior failed edits copied",
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 0,
+          "step_name": "new pristine copy of exact original sample",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "install unchanged systemd definition for isolated retry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 1,
+          "step_name": "install unchanged systemd definition for isolated retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "start same systemd service",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.4,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 2,
+          "step_name": "start same systemd service",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "current systemd daemon answers before retry",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 3,
+          "step_name": "current systemd daemon answers before retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "one retry of exact changed-model sample command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 78,
+      "bytes_downloaded": 31865384,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 4,
+          "step_name": "one retry of exact changed-model sample command",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "sample receipt verifies against original repository",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 5,
+          "step_name": "sample receipt verifies against original repository",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "sample record verifies",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 6,
+          "step_name": "sample record verifies",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "sample receipt matches record",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 7,
+          "step_name": "sample receipt matches record",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on service-smoke-retry",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 592c14cb256a holds any",
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 8,
+          "step_name": "no tool-call markup in the accepted output of the run on service-smoke-retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 9,
+          "step_name": "axocoatl service stop",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (axocoatl service stop: the service is not running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 10,
+          "step_name": "axocoatl service status (axocoatl service stop: the service is not running)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service stop: the service is not running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: no; installed, not running (inactive)",
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 11,
+          "step_name": "axocoatl service stop: the service is not running",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "nothing answers on port 8080 after the service stopped",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 12,
+          "step_name": "nothing answers on port 8080 after the service stopped",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service uninstall",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 13,
+          "step_name": "axocoatl service uninstall",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 14,
+          "step_name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "axocoatl service uninstall: not installed, its unit removed",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: no, running: no; not installed",
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 15,
+          "step_name": "axocoatl service uninstall: not installed, its unit removed",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    },
+    {
+      "name": "original configuration unchanged by targeted retry",
+      "status": "pass",
+      "required": true,
+      "observations": [
+        {
+          "file": "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+          "sha256": "5c9008b8fab94880d934f7bbea96d57b1fd236ee4d6d00276b9641e8c69d79df",
+          "step_index": 16,
+          "step_name": "original configuration unchanged by targeted retry",
+          "observed_status": "pass",
+          "format": "path-json"
+        }
+      ]
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 24.04",
+    "kernel": "6.8.0-142-generic",
+    "arch": "aarch64",
+    "runner": "local Linux D1 continuation; Codex operator, d1gate OS account",
+    "memory_bytes": 4094377984,
+    "cpus": 2,
+    "user": "d1gate"
+  },
+  "tools": {
+    "podman": "4.9.3",
+    "git": "2.43.0",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "D1/continuation/acceptance/go/accepted-answers.stderr",
+    "D1/continuation/acceptance/go/accepted-answers.stdout",
+    "D1/continuation/acceptance/go/activation-summary.json",
+    "D1/continuation/acceptance/go/assessment.json",
+    "D1/continuation/acceptance/go/audit-inputs.json",
+    "D1/continuation/acceptance/go/axocoatl-junit.xml",
+    "D1/continuation/acceptance/go/changes.txt",
+    "D1/continuation/acceptance/go/command.txt",
+    "D1/continuation/acceptance/go/commands.json",
+    "D1/continuation/acceptance/go/execution-provenance.json",
+    "D1/continuation/acceptance/go/final/README.md",
+    "D1/continuation/acceptance/go/final/go.mod",
+    "D1/continuation/acceptance/go/final/go.sum",
+    "D1/continuation/acceptance/go/final/pages.go",
+    "D1/continuation/acceptance/go/final/pages_test.go",
+    "D1/continuation/acceptance/go/gate-output-exclusions.json",
+    "D1/continuation/acceptance/go/git-status-after.txt",
+    "D1/continuation/acceptance/go/git-status-before.txt",
+    "D1/continuation/acceptance/go/host-check/README.md",
+    "D1/continuation/acceptance/go/host-check/go.mod",
+    "D1/continuation/acceptance/go/host-check/go.sum",
+    "D1/continuation/acceptance/go/host-check/pages.go",
+    "D1/continuation/acceptance/go/host-check/pages_test.go",
+    "D1/continuation/acceptance/go/host-dependency-provenance.json",
+    "D1/continuation/acceptance/go/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/go/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/go/independent-record-verify.stderr",
+    "D1/continuation/acceptance/go/independent-record-verify.stdout",
+    "D1/continuation/acceptance/go/negative-evidence.json",
+    "D1/continuation/acceptance/go/network-events.json",
+    "D1/continuation/acceptance/go/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/go/original-tests.stderr",
+    "D1/continuation/acceptance/go/original-tests.stdout",
+    "D1/continuation/acceptance/go/original/README.md",
+    "D1/continuation/acceptance/go/original/go.mod",
+    "D1/continuation/acceptance/go/original/go.sum",
+    "D1/continuation/acceptance/go/original/pages.go",
+    "D1/continuation/acceptance/go/original/pages_test.go",
+    "D1/continuation/acceptance/go/outcome.json",
+    "D1/continuation/acceptance/go/patch.diff",
+    "D1/continuation/acceptance/go/receipt-statement.json",
+    "D1/continuation/acceptance/go/run.axorecord.jsonl",
+    "D1/continuation/acceptance/go/run.log",
+    "D1/continuation/acceptance/go/run.receipt.json",
+    "D1/continuation/acceptance/go/runtime-version.stderr",
+    "D1/continuation/acceptance/go/runtime-version.stdout",
+    "D1/continuation/acceptance/go/team-configuration.json",
+    "D1/continuation/acceptance/go/trusted-public-key.txt",
+    "D1/continuation/acceptance/node-deps/accepted-answers.stderr",
+    "D1/continuation/acceptance/node-deps/accepted-answers.stdout",
+    "D1/continuation/acceptance/node-deps/activation-summary.json",
+    "D1/continuation/acceptance/node-deps/assessment.json",
+    "D1/continuation/acceptance/node-deps/audit-inputs.json",
+    "D1/continuation/acceptance/node-deps/axocoatl-junit.xml",
+    "D1/continuation/acceptance/node-deps/changes.txt",
+    "D1/continuation/acceptance/node-deps/command.txt",
+    "D1/continuation/acceptance/node-deps/commands.json",
+    "D1/continuation/acceptance/node-deps/execution-provenance.json",
+    "D1/continuation/acceptance/node-deps/final/.gitignore",
+    "D1/continuation/acceptance/node-deps/final/README.md",
+    "D1/continuation/acceptance/node-deps/final/package-lock.json",
+    "D1/continuation/acceptance/node-deps/final/package.json",
+    "D1/continuation/acceptance/node-deps/final/src/paginate.js",
+    "D1/continuation/acceptance/node-deps/final/test/paginate.test.js",
+    "D1/continuation/acceptance/node-deps/fixture-contract-readme-original.md",
+    "D1/continuation/acceptance/node-deps/formal-gate-qualification-correction.json",
+    "D1/continuation/acceptance/node-deps/formal-gate-qualification.json",
+    "D1/continuation/acceptance/node-deps/gate-output-exclusions.json",
+    "D1/continuation/acceptance/node-deps/git-status-after.txt",
+    "D1/continuation/acceptance/node-deps/git-status-before.txt",
+    "D1/continuation/acceptance/node-deps/host-check/.gitignore",
+    "D1/continuation/acceptance/node-deps/host-check/README.md",
+    "D1/continuation/acceptance/node-deps/host-check/package-lock.json",
+    "D1/continuation/acceptance/node-deps/host-check/package.json",
+    "D1/continuation/acceptance/node-deps/host-check/src/paginate.js",
+    "D1/continuation/acceptance/node-deps/host-check/test/paginate.test.js",
+    "D1/continuation/acceptance/node-deps/host-dependency-provenance.json",
+    "D1/continuation/acceptance/node-deps/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/node-deps/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/node-deps/independent-record-verify.stderr",
+    "D1/continuation/acceptance/node-deps/independent-record-verify.stdout",
+    "D1/continuation/acceptance/node-deps/negative-evidence.json",
+    "D1/continuation/acceptance/node-deps/network-events.json",
+    "D1/continuation/acceptance/node-deps/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/node-deps/original-tests.stderr",
+    "D1/continuation/acceptance/node-deps/original-tests.stdout",
+    "D1/continuation/acceptance/node-deps/original/.gitignore",
+    "D1/continuation/acceptance/node-deps/original/README.md",
+    "D1/continuation/acceptance/node-deps/original/package-lock.json",
+    "D1/continuation/acceptance/node-deps/original/package.json",
+    "D1/continuation/acceptance/node-deps/original/src/paginate.js",
+    "D1/continuation/acceptance/node-deps/original/test/paginate.test.js",
+    "D1/continuation/acceptance/node-deps/outcome.json",
+    "D1/continuation/acceptance/node-deps/patch.diff",
+    "D1/continuation/acceptance/node-deps/receipt-statement.json",
+    "D1/continuation/acceptance/node-deps/run.axorecord.jsonl",
+    "D1/continuation/acceptance/node-deps/run.log",
+    "D1/continuation/acceptance/node-deps/run.receipt.json",
+    "D1/continuation/acceptance/node-deps/runtime-version.stderr",
+    "D1/continuation/acceptance/node-deps/runtime-version.stdout",
+    "D1/continuation/acceptance/node-deps/team-configuration.json",
+    "D1/continuation/acceptance/node-deps/trusted-public-key.txt",
+    "D1/continuation/acceptance/node-plain/accepted-answers.stderr",
+    "D1/continuation/acceptance/node-plain/accepted-answers.stdout",
+    "D1/continuation/acceptance/node-plain/activation-summary.json",
+    "D1/continuation/acceptance/node-plain/assessment.json",
+    "D1/continuation/acceptance/node-plain/audit-inputs.json",
+    "D1/continuation/acceptance/node-plain/axocoatl-junit.xml",
+    "D1/continuation/acceptance/node-plain/changes.txt",
+    "D1/continuation/acceptance/node-plain/command.txt",
+    "D1/continuation/acceptance/node-plain/commands.json",
+    "D1/continuation/acceptance/node-plain/execution-provenance.json",
+    "D1/continuation/acceptance/node-plain/final/.gitignore",
+    "D1/continuation/acceptance/node-plain/final/README.md",
+    "D1/continuation/acceptance/node-plain/final/package.json",
+    "D1/continuation/acceptance/node-plain/final/src/paging.js",
+    "D1/continuation/acceptance/node-plain/final/test/paging.test.js",
+    "D1/continuation/acceptance/node-plain/gate-output-exclusions.json",
+    "D1/continuation/acceptance/node-plain/git-status-after.txt",
+    "D1/continuation/acceptance/node-plain/git-status-before.txt",
+    "D1/continuation/acceptance/node-plain/host-check/.gitignore",
+    "D1/continuation/acceptance/node-plain/host-check/README.md",
+    "D1/continuation/acceptance/node-plain/host-check/package.json",
+    "D1/continuation/acceptance/node-plain/host-check/src/paging.js",
+    "D1/continuation/acceptance/node-plain/host-check/test/paging.test.js",
+    "D1/continuation/acceptance/node-plain/host-dependency-provenance.json",
+    "D1/continuation/acceptance/node-plain/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/node-plain/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/node-plain/independent-record-verify.stderr",
+    "D1/continuation/acceptance/node-plain/independent-record-verify.stdout",
+    "D1/continuation/acceptance/node-plain/negative-evidence.json",
+    "D1/continuation/acceptance/node-plain/network-events.json",
+    "D1/continuation/acceptance/node-plain/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/node-plain/original-tests.stderr",
+    "D1/continuation/acceptance/node-plain/original-tests.stdout",
+    "D1/continuation/acceptance/node-plain/original/.gitignore",
+    "D1/continuation/acceptance/node-plain/original/README.md",
+    "D1/continuation/acceptance/node-plain/original/package.json",
+    "D1/continuation/acceptance/node-plain/original/src/paging.js",
+    "D1/continuation/acceptance/node-plain/original/test/paging.test.js",
+    "D1/continuation/acceptance/node-plain/outcome.json",
+    "D1/continuation/acceptance/node-plain/patch.diff",
+    "D1/continuation/acceptance/node-plain/receipt-statement.json",
+    "D1/continuation/acceptance/node-plain/receipt.json",
+    "D1/continuation/acceptance/node-plain/run.axorecord.jsonl",
+    "D1/continuation/acceptance/node-plain/run.log",
+    "D1/continuation/acceptance/node-plain/runtime-version.stderr",
+    "D1/continuation/acceptance/node-plain/runtime-version.stdout",
+    "D1/continuation/acceptance/node-plain/team-configuration.json",
+    "D1/continuation/acceptance/node-plain/trusted-public-key.txt",
+    "D1/continuation/acceptance/python-pytest/accepted-answers.stderr",
+    "D1/continuation/acceptance/python-pytest/accepted-answers.stdout",
+    "D1/continuation/acceptance/python-pytest/activation-summary.json",
+    "D1/continuation/acceptance/python-pytest/assessment.json",
+    "D1/continuation/acceptance/python-pytest/audit-inputs.json",
+    "D1/continuation/acceptance/python-pytest/axocoatl-junit.xml",
+    "D1/continuation/acceptance/python-pytest/changes.txt",
+    "D1/continuation/acceptance/python-pytest/command.txt",
+    "D1/continuation/acceptance/python-pytest/commands.json",
+    "D1/continuation/acceptance/python-pytest/execution-provenance.json",
+    "D1/continuation/acceptance/python-pytest/final/.gitignore",
+    "D1/continuation/acceptance/python-pytest/final/README.md",
+    "D1/continuation/acceptance/python-pytest/final/pages.py",
+    "D1/continuation/acceptance/python-pytest/final/pyproject.toml",
+    "D1/continuation/acceptance/python-pytest/final/tests/test_pages.py",
+    "D1/continuation/acceptance/python-pytest/gate-output-exclusions.json",
+    "D1/continuation/acceptance/python-pytest/git-status-after.txt",
+    "D1/continuation/acceptance/python-pytest/git-status-before.txt",
+    "D1/continuation/acceptance/python-pytest/host-check/.gitignore",
+    "D1/continuation/acceptance/python-pytest/host-check/README.md",
+    "D1/continuation/acceptance/python-pytest/host-check/pages.py",
+    "D1/continuation/acceptance/python-pytest/host-check/pyproject.toml",
+    "D1/continuation/acceptance/python-pytest/host-check/tests/test_pages.py",
+    "D1/continuation/acceptance/python-pytest/host-dependency-provenance.json",
+    "D1/continuation/acceptance/python-pytest/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/python-pytest/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/python-pytest/independent-record-verify.stderr",
+    "D1/continuation/acceptance/python-pytest/independent-record-verify.stdout",
+    "D1/continuation/acceptance/python-pytest/module-selection.stderr",
+    "D1/continuation/acceptance/python-pytest/module-selection.stdout",
+    "D1/continuation/acceptance/python-pytest/negative-evidence.json",
+    "D1/continuation/acceptance/python-pytest/network-events.json",
+    "D1/continuation/acceptance/python-pytest/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/python-pytest/original-tests.stderr",
+    "D1/continuation/acceptance/python-pytest/original-tests.stdout",
+    "D1/continuation/acceptance/python-pytest/original/.gitignore",
+    "D1/continuation/acceptance/python-pytest/original/README.md",
+    "D1/continuation/acceptance/python-pytest/original/pages.py",
+    "D1/continuation/acceptance/python-pytest/original/pyproject.toml",
+    "D1/continuation/acceptance/python-pytest/original/tests/test_pages.py",
+    "D1/continuation/acceptance/python-pytest/outcome.json",
+    "D1/continuation/acceptance/python-pytest/patch.diff",
+    "D1/continuation/acceptance/python-pytest/receipt-statement.json",
+    "D1/continuation/acceptance/python-pytest/run.axorecord.jsonl",
+    "D1/continuation/acceptance/python-pytest/run.log",
+    "D1/continuation/acceptance/python-pytest/run.receipt.json",
+    "D1/continuation/acceptance/python-pytest/runtime-version.stderr",
+    "D1/continuation/acceptance/python-pytest/runtime-version.stdout",
+    "D1/continuation/acceptance/python-pytest/team-configuration.json",
+    "D1/continuation/acceptance/python-pytest/trusted-public-key.txt",
+    "D1/continuation/acceptance/rust/accepted-answers.stderr",
+    "D1/continuation/acceptance/rust/accepted-answers.stdout",
+    "D1/continuation/acceptance/rust/activation-summary.json",
+    "D1/continuation/acceptance/rust/assessment.json",
+    "D1/continuation/acceptance/rust/audit-inputs.json",
+    "D1/continuation/acceptance/rust/axocoatl-junit.xml",
+    "D1/continuation/acceptance/rust/changes.txt",
+    "D1/continuation/acceptance/rust/command.txt",
+    "D1/continuation/acceptance/rust/commands.json",
+    "D1/continuation/acceptance/rust/execution-provenance.json",
+    "D1/continuation/acceptance/rust/final/.gitignore",
+    "D1/continuation/acceptance/rust/final/Cargo.lock",
+    "D1/continuation/acceptance/rust/final/Cargo.toml",
+    "D1/continuation/acceptance/rust/final/README.md",
+    "D1/continuation/acceptance/rust/final/src/lib.rs",
+    "D1/continuation/acceptance/rust/gate-output-exclusions.json",
+    "D1/continuation/acceptance/rust/git-status-after.txt",
+    "D1/continuation/acceptance/rust/git-status-before.txt",
+    "D1/continuation/acceptance/rust/host-check/.gitignore",
+    "D1/continuation/acceptance/rust/host-check/Cargo.lock",
+    "D1/continuation/acceptance/rust/host-check/Cargo.toml",
+    "D1/continuation/acceptance/rust/host-check/README.md",
+    "D1/continuation/acceptance/rust/host-check/src/lib.rs",
+    "D1/continuation/acceptance/rust/host-dependency-provenance.json",
+    "D1/continuation/acceptance/rust/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/rust/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/rust/independent-record-verify.stderr",
+    "D1/continuation/acceptance/rust/independent-record-verify.stdout",
+    "D1/continuation/acceptance/rust/negative-evidence.json",
+    "D1/continuation/acceptance/rust/network-events.json",
+    "D1/continuation/acceptance/rust/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/rust/original-tests.stderr",
+    "D1/continuation/acceptance/rust/original-tests.stdout",
+    "D1/continuation/acceptance/rust/original/.gitignore",
+    "D1/continuation/acceptance/rust/original/Cargo.lock",
+    "D1/continuation/acceptance/rust/original/Cargo.toml",
+    "D1/continuation/acceptance/rust/original/README.md",
+    "D1/continuation/acceptance/rust/original/src/lib.rs",
+    "D1/continuation/acceptance/rust/outcome.json",
+    "D1/continuation/acceptance/rust/patch.diff",
+    "D1/continuation/acceptance/rust/receipt-statement.json",
+    "D1/continuation/acceptance/rust/run.axorecord.jsonl",
+    "D1/continuation/acceptance/rust/run.log",
+    "D1/continuation/acceptance/rust/run.receipt.json",
+    "D1/continuation/acceptance/rust/runtime-version.stderr",
+    "D1/continuation/acceptance/rust/runtime-version.stdout",
+    "D1/continuation/acceptance/rust/team-configuration.json",
+    "D1/continuation/acceptance/rust/trusted-public-key.txt",
+    "D1/continuation/acceptance/sample/accepted-answers.stderr",
+    "D1/continuation/acceptance/sample/accepted-answers.stdout",
+    "D1/continuation/acceptance/sample/activation-summary.json",
+    "D1/continuation/acceptance/sample/assessment.json",
+    "D1/continuation/acceptance/sample/audit-inputs.json",
+    "D1/continuation/acceptance/sample/commands.json",
+    "D1/continuation/acceptance/sample/daemon.log",
+    "D1/continuation/acceptance/sample/execution-provenance.json",
+    "D1/continuation/acceptance/sample/final/.gitignore",
+    "D1/continuation/acceptance/sample/final/README.md",
+    "D1/continuation/acceptance/sample/final/package.json",
+    "D1/continuation/acceptance/sample/final/src/paging.js",
+    "D1/continuation/acceptance/sample/final/test/paging.test.js",
+    "D1/continuation/acceptance/sample/formal-gate-qualification.json",
+    "D1/continuation/acceptance/sample/gate-output-exclusions.json",
+    "D1/continuation/acceptance/sample/git-status-after.txt",
+    "D1/continuation/acceptance/sample/git-status-before.txt",
+    "D1/continuation/acceptance/sample/host-check/.gitignore",
+    "D1/continuation/acceptance/sample/host-check/README.md",
+    "D1/continuation/acceptance/sample/host-check/package.json",
+    "D1/continuation/acceptance/sample/host-check/src/paging.js",
+    "D1/continuation/acceptance/sample/host-check/test/paging.test.js",
+    "D1/continuation/acceptance/sample/host-dependency-provenance.json",
+    "D1/continuation/acceptance/sample/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/sample/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/sample/independent-record-verify.stderr",
+    "D1/continuation/acceptance/sample/independent-record-verify.stdout",
+    "D1/continuation/acceptance/sample/negative-evidence.json",
+    "D1/continuation/acceptance/sample/network-events.json",
+    "D1/continuation/acceptance/sample/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/sample/original-tests.stderr",
+    "D1/continuation/acceptance/sample/original-tests.stdout",
+    "D1/continuation/acceptance/sample/original/.gitignore",
+    "D1/continuation/acceptance/sample/original/README.md",
+    "D1/continuation/acceptance/sample/original/package.json",
+    "D1/continuation/acceptance/sample/original/src/paging.js",
+    "D1/continuation/acceptance/sample/original/test/paging.test.js",
+    "D1/continuation/acceptance/sample/outcome.json",
+    "D1/continuation/acceptance/sample/patch.diff",
+    "D1/continuation/acceptance/sample/receipt-statement.json",
+    "D1/continuation/acceptance/sample/receipt.json",
+    "D1/continuation/acceptance/sample/record.jsonl",
+    "D1/continuation/acceptance/sample/run.log",
+    "D1/continuation/acceptance/sample/runtime-version.stderr",
+    "D1/continuation/acceptance/sample/runtime-version.stdout",
+    "D1/continuation/acceptance/sample/team-configuration.json",
+    "D1/continuation/acceptance/sample/trusted-public-key.txt",
+    "D1/continuation/acceptance/sample/unexpected-untracked/test_fix.js",
+    "D1/continuation/acceptance/service-node-deps/accepted-answers.stderr",
+    "D1/continuation/acceptance/service-node-deps/accepted-answers.stdout",
+    "D1/continuation/acceptance/service-node-deps/activation-summary.json",
+    "D1/continuation/acceptance/service-node-deps/assessment.json",
+    "D1/continuation/acceptance/service-node-deps/audit-inputs.json",
+    "D1/continuation/acceptance/service-node-deps/axocoatl-junit.xml",
+    "D1/continuation/acceptance/service-node-deps/changes.txt",
+    "D1/continuation/acceptance/service-node-deps/command.txt",
+    "D1/continuation/acceptance/service-node-deps/commands.json",
+    "D1/continuation/acceptance/service-node-deps/execution-provenance.json",
+    "D1/continuation/acceptance/service-node-deps/final/.gitignore",
+    "D1/continuation/acceptance/service-node-deps/final/README.md",
+    "D1/continuation/acceptance/service-node-deps/final/package-lock.json",
+    "D1/continuation/acceptance/service-node-deps/final/package.json",
+    "D1/continuation/acceptance/service-node-deps/final/src/paginate.js",
+    "D1/continuation/acceptance/service-node-deps/final/test/paginate.test.js",
+    "D1/continuation/acceptance/service-node-deps/gate-output-exclusions.json",
+    "D1/continuation/acceptance/service-node-deps/git-status-after.txt",
+    "D1/continuation/acceptance/service-node-deps/git-status-before.txt",
+    "D1/continuation/acceptance/service-node-deps/host-check/.gitignore",
+    "D1/continuation/acceptance/service-node-deps/host-check/README.md",
+    "D1/continuation/acceptance/service-node-deps/host-check/package-lock.json",
+    "D1/continuation/acceptance/service-node-deps/host-check/package.json",
+    "D1/continuation/acceptance/service-node-deps/host-check/src/paginate.js",
+    "D1/continuation/acceptance/service-node-deps/host-check/test/paginate.test.js",
+    "D1/continuation/acceptance/service-node-deps/host-dependency-provenance.json",
+    "D1/continuation/acceptance/service-node-deps/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/service-node-deps/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/service-node-deps/independent-record-verify.stderr",
+    "D1/continuation/acceptance/service-node-deps/independent-record-verify.stdout",
+    "D1/continuation/acceptance/service-node-deps/negative-evidence.json",
+    "D1/continuation/acceptance/service-node-deps/network-events.json",
+    "D1/continuation/acceptance/service-node-deps/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/service-node-deps/original-tests.stderr",
+    "D1/continuation/acceptance/service-node-deps/original-tests.stdout",
+    "D1/continuation/acceptance/service-node-deps/original/.gitignore",
+    "D1/continuation/acceptance/service-node-deps/original/README.md",
+    "D1/continuation/acceptance/service-node-deps/original/package-lock.json",
+    "D1/continuation/acceptance/service-node-deps/original/package.json",
+    "D1/continuation/acceptance/service-node-deps/original/src/paginate.js",
+    "D1/continuation/acceptance/service-node-deps/original/test/paginate.test.js",
+    "D1/continuation/acceptance/service-node-deps/outcome.json",
+    "D1/continuation/acceptance/service-node-deps/patch.diff",
+    "D1/continuation/acceptance/service-node-deps/receipt-statement.json",
+    "D1/continuation/acceptance/service-node-deps/run.axorecord.jsonl",
+    "D1/continuation/acceptance/service-node-deps/run.log",
+    "D1/continuation/acceptance/service-node-deps/run.receipt.json",
+    "D1/continuation/acceptance/service-node-deps/runtime-version.stderr",
+    "D1/continuation/acceptance/service-node-deps/runtime-version.stdout",
+    "D1/continuation/acceptance/service-node-deps/team-configuration.json",
+    "D1/continuation/acceptance/service-node-deps/trusted-public-key.txt",
+    "D1/continuation/acceptance/service-sample/accepted-answers.stderr",
+    "D1/continuation/acceptance/service-sample/accepted-answers.stdout",
+    "D1/continuation/acceptance/service-sample/activation-summary.json",
+    "D1/continuation/acceptance/service-sample/assessment.json",
+    "D1/continuation/acceptance/service-sample/audit-inputs.json",
+    "D1/continuation/acceptance/service-sample/commands.json",
+    "D1/continuation/acceptance/service-sample/execution-provenance.json",
+    "D1/continuation/acceptance/service-sample/final/.gitignore",
+    "D1/continuation/acceptance/service-sample/final/README.md",
+    "D1/continuation/acceptance/service-sample/final/package.json",
+    "D1/continuation/acceptance/service-sample/final/src/paging.js",
+    "D1/continuation/acceptance/service-sample/final/test/paging.test.js",
+    "D1/continuation/acceptance/service-sample/gate-output-exclusions.json",
+    "D1/continuation/acceptance/service-sample/git-status-after.txt",
+    "D1/continuation/acceptance/service-sample/git-status-before.txt",
+    "D1/continuation/acceptance/service-sample/host-check/.gitignore",
+    "D1/continuation/acceptance/service-sample/host-check/README.md",
+    "D1/continuation/acceptance/service-sample/host-check/package.json",
+    "D1/continuation/acceptance/service-sample/host-check/src/paging.js",
+    "D1/continuation/acceptance/service-sample/host-check/test/paging.test.js",
+    "D1/continuation/acceptance/service-sample/host-dependency-provenance.json",
+    "D1/continuation/acceptance/service-sample/independent-receipt-verify.stderr",
+    "D1/continuation/acceptance/service-sample/independent-receipt-verify.stdout",
+    "D1/continuation/acceptance/service-sample/independent-record-verify.stderr",
+    "D1/continuation/acceptance/service-sample/independent-record-verify.stdout",
+    "D1/continuation/acceptance/service-sample/negative-evidence.json",
+    "D1/continuation/acceptance/service-sample/network-events.json",
+    "D1/continuation/acceptance/service-sample/original-test-suite-provenance.json",
+    "D1/continuation/acceptance/service-sample/original-tests.stderr",
+    "D1/continuation/acceptance/service-sample/original-tests.stdout",
+    "D1/continuation/acceptance/service-sample/original/.gitignore",
+    "D1/continuation/acceptance/service-sample/original/README.md",
+    "D1/continuation/acceptance/service-sample/original/package.json",
+    "D1/continuation/acceptance/service-sample/original/src/paging.js",
+    "D1/continuation/acceptance/service-sample/original/test/paging.test.js",
+    "D1/continuation/acceptance/service-sample/outcome.json",
+    "D1/continuation/acceptance/service-sample/patch.diff",
+    "D1/continuation/acceptance/service-sample/receipt-statement.json",
+    "D1/continuation/acceptance/service-sample/receipt.json",
+    "D1/continuation/acceptance/service-sample/record.jsonl",
+    "D1/continuation/acceptance/service-sample/run.log",
+    "D1/continuation/acceptance/service-sample/runtime-version.stderr",
+    "D1/continuation/acceptance/service-sample/runtime-version.stdout",
+    "D1/continuation/acceptance/service-sample/team-configuration.json",
+    "D1/continuation/acceptance/service-sample/trusted-public-key.txt",
+    "D1/continuation/artifact-assessments.json",
+    "D1/continuation/candidate-source-hashes.json",
+    "D1/continuation/completed-continuation/execution-provenance.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/continuation-provenance.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/doctor.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/go/run.receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/key-status-before.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-status--axocoatl-service-status--installed-and-running-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-status--axocoatl-service-stop--the-service-is-not-running-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-status--axocoatl-service-uninstall--not-installed--its-unit-rem.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-status--onboarding-installed-and-started-the-Always-On-Service-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-stop.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/axocoatl-service-uninstall.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/dev.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/doctor---json-says-ready.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/doctor-exits-0.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/guard.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboard---update---writer-model-openrouter-deepseek-deepseek-chat-v3.1---smoke-t.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboard---update--Step-6--the-Always-On-Service--interactive-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboard-targeted-sample-retry--existing-key--same-models-and-required-review-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboarding/onboard-20261027-013458.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboarding/onboard-20261027-015143.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/onboarding/onboard-20261027-015311.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-go.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-node-plain.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-python-pytest.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-rust.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-matches-the-record-on-service-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-go--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-node-deps--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-node-plain--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-python-pytest--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-rust--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/receipt-verify-on-service-node-deps--documented-command-.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-go.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-node-plain.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-python-pytest.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-rust.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/record-verify-on-service-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-go.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-node-plain.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-python-pytest.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-rust.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/logs/run-fix-on-service-node-deps.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-deps/run.receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/node-plain/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/operator-initial.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/prior-failed-attempt-manifest.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/prior-failed-continuation.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/python-pytest/run.receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/readme-command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/rust/run.receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/changes.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/command.txt",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/run.log",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/service-node-deps/run.receipt.json",
+    "D1/continuation/completed-continuation/gate/D1-continuation2/transcript.txt",
+    "D1/continuation/completed-continuation/key-status-after-sample.txt",
+    "D1/continuation/completed-continuation/linux-receipt-public-key.txt",
+    "D1/continuation/completed-continuation/original-failed-steps.jsonl",
+    "D1/continuation/completed-continuation/original-fixtures/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/fixtures.json",
+    "D1/continuation/completed-continuation/original-fixtures/go/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/go/go.mod",
+    "D1/continuation/completed-continuation/original-fixtures/go/go.sum",
+    "D1/continuation/completed-continuation/original-fixtures/go/pages.go",
+    "D1/continuation/completed-continuation/original-fixtures/go/pages_test.go",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/.gitignore",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/package-lock.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/package.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/src/paginate.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-deps/test/paginate.test.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-plain/.gitignore",
+    "D1/continuation/completed-continuation/original-fixtures/node-plain/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/node-plain/package.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-plain/src/paging.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-plain/test/paging.test.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-pnpm/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/node-pnpm/package.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-pnpm/pnpm-lock.yaml",
+    "D1/continuation/completed-continuation/original-fixtures/node-pnpm/src/pager.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-pnpm/test/pager.test.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/.yarnrc.yml",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/lib/paginate.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/package.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/test/paginate.test.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn-berry/yarn.lock",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn/package.json",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn/src/pages.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn/test/pages.test.js",
+    "D1/continuation/completed-continuation/original-fixtures/node-yarn/yarn.lock",
+    "D1/continuation/completed-continuation/original-fixtures/python-hatch/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/python-hatch/pagebreak/__init__.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-hatch/pyproject.toml",
+    "D1/continuation/completed-continuation/original-fixtures/python-hatch/tests/test_pagebreak.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-pdm/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/python-pdm/pager/__init__.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-pdm/pyproject.toml",
+    "D1/continuation/completed-continuation/original-fixtures/python-pdm/tests/test_pager.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-poetry/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/python-poetry/paging/__init__.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-poetry/pyproject.toml",
+    "D1/continuation/completed-continuation/original-fixtures/python-poetry/tests/test_paging.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-pytest/.gitignore",
+    "D1/continuation/completed-continuation/original-fixtures/python-pytest/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/python-pytest/pages.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-pytest/pyproject.toml",
+    "D1/continuation/completed-continuation/original-fixtures/python-pytest/tests/test_pages.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-uv/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/python-uv/pagination/__init__.py",
+    "D1/continuation/completed-continuation/original-fixtures/python-uv/pyproject.toml",
+    "D1/continuation/completed-continuation/original-fixtures/python-uv/tests/test_pagination.py",
+    "D1/continuation/completed-continuation/original-fixtures/rust/.gitignore",
+    "D1/continuation/completed-continuation/original-fixtures/rust/Cargo.lock",
+    "D1/continuation/completed-continuation/original-fixtures/rust/Cargo.toml",
+    "D1/continuation/completed-continuation/original-fixtures/rust/README.md",
+    "D1/continuation/completed-continuation/original-fixtures/rust/src/lib.rs",
+    "D1/continuation/completed-continuation/private-prior-reference.json",
+    "D1/continuation/completed-continuation/redaction-report.json",
+    "D1/continuation/completed-continuation/repos/go/README.md",
+    "D1/continuation/completed-continuation/repos/go/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/go/go.mod",
+    "D1/continuation/completed-continuation/repos/go/go.sum",
+    "D1/continuation/completed-continuation/repos/go/pages.go",
+    "D1/continuation/completed-continuation/repos/go/pages_test.go",
+    "D1/continuation/completed-continuation/repos/go/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/go/run.receipt.json",
+    "D1/continuation/completed-continuation/repos/node-deps/.gitignore",
+    "D1/continuation/completed-continuation/repos/node-deps/README.md",
+    "D1/continuation/completed-continuation/repos/node-deps/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/node-deps/package-lock.json",
+    "D1/continuation/completed-continuation/repos/node-deps/package.json",
+    "D1/continuation/completed-continuation/repos/node-deps/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/node-deps/run.receipt.json",
+    "D1/continuation/completed-continuation/repos/node-deps/src/paginate.js",
+    "D1/continuation/completed-continuation/repos/node-deps/test/paginate.test.js",
+    "D1/continuation/completed-continuation/repos/node-plain/.gitignore",
+    "D1/continuation/completed-continuation/repos/node-plain/README.md",
+    "D1/continuation/completed-continuation/repos/node-plain/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/node-plain/package.json",
+    "D1/continuation/completed-continuation/repos/node-plain/receipt.json",
+    "D1/continuation/completed-continuation/repos/node-plain/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/node-plain/src/paging.js",
+    "D1/continuation/completed-continuation/repos/node-plain/test/paging.test.js",
+    "D1/continuation/completed-continuation/repos/python-pytest/.gitignore",
+    "D1/continuation/completed-continuation/repos/python-pytest/README.md",
+    "D1/continuation/completed-continuation/repos/python-pytest/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/python-pytest/pages.py",
+    "D1/continuation/completed-continuation/repos/python-pytest/pyproject.toml",
+    "D1/continuation/completed-continuation/repos/python-pytest/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/python-pytest/run.receipt.json",
+    "D1/continuation/completed-continuation/repos/python-pytest/tests/test_pages.py",
+    "D1/continuation/completed-continuation/repos/rust/.gitignore",
+    "D1/continuation/completed-continuation/repos/rust/Cargo.lock",
+    "D1/continuation/completed-continuation/repos/rust/Cargo.toml",
+    "D1/continuation/completed-continuation/repos/rust/README.md",
+    "D1/continuation/completed-continuation/repos/rust/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/rust/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/rust/run.receipt.json",
+    "D1/continuation/completed-continuation/repos/rust/src/lib.rs",
+    "D1/continuation/completed-continuation/repos/service-node-deps/.gitignore",
+    "D1/continuation/completed-continuation/repos/service-node-deps/README.md",
+    "D1/continuation/completed-continuation/repos/service-node-deps/axocoatl-junit.xml",
+    "D1/continuation/completed-continuation/repos/service-node-deps/package-lock.json",
+    "D1/continuation/completed-continuation/repos/service-node-deps/package.json",
+    "D1/continuation/completed-continuation/repos/service-node-deps/run.axorecord.jsonl",
+    "D1/continuation/completed-continuation/repos/service-node-deps/run.receipt.json",
+    "D1/continuation/completed-continuation/repos/service-node-deps/src/paginate.js",
+    "D1/continuation/completed-continuation/repos/service-node-deps/test/paginate.test.js",
+    "D1/continuation/completed-continuation/sample/receipt.json",
+    "D1/continuation/completed-continuation/sample/record.jsonl",
+    "D1/continuation/completed-continuation/sample/repo/.gitignore",
+    "D1/continuation/completed-continuation/sample/repo/README.md",
+    "D1/continuation/completed-continuation/sample/repo/package.json",
+    "D1/continuation/completed-continuation/sample/repo/src/paging.js",
+    "D1/continuation/completed-continuation/sample/repo/test/paging.test.js",
+    "D1/continuation/completed-continuation/sample/repo/test_additional.js",
+    "D1/continuation/completed-continuation/service-status-after.txt",
+    "D1/continuation/completed-continuation/targeted-sample/daemon.log",
+    "D1/continuation/completed-continuation/targeted-sample/receipt.json",
+    "D1/continuation/completed-continuation/targeted-sample/record.jsonl",
+    "D1/continuation/completed-continuation/targeted-sample/repo/.gitignore",
+    "D1/continuation/completed-continuation/targeted-sample/repo/README.md",
+    "D1/continuation/completed-continuation/targeted-sample/repo/package.json",
+    "D1/continuation/completed-continuation/targeted-sample/repo/src/paging.js",
+    "D1/continuation/completed-continuation/targeted-sample/repo/test/paging.test.js",
+    "D1/continuation/completed-continuation/targeted-sample/repo/test_fix.js",
+    "D1/continuation/composer.py",
+    "D1/continuation/failed-continuation/assessment.json",
+    "D1/continuation/failed-continuation/execution-provenance.json",
+    "D1/continuation/failed-continuation/gate/D1-continuation.json",
+    "D1/continuation/failed-continuation/gate/D1-continuation/continuation-provenance.json",
+    "D1/continuation/failed-continuation/gate/D1-continuation/logs/guard.log",
+    "D1/continuation/failed-continuation/gate/D1-continuation/logs/onboard-continuation--interactive----start-none-.log",
+    "D1/continuation/failed-continuation/gate/D1-continuation/logs/onboarding/onboard-20261027-011403.log",
+    "D1/continuation/failed-continuation/gate/D1-continuation/operator-initial.json",
+    "D1/continuation/failed-continuation/gate/D1-continuation/prior-failed-attempt-manifest.json",
+    "D1/continuation/failed-continuation/gate/D1-continuation/transcript.txt",
+    "D1/continuation/failed-continuation/key-status-after-sample.txt",
+    "D1/continuation/failed-continuation/linux-receipt-public-key.txt",
+    "D1/continuation/failed-continuation/manifest.json",
+    "D1/continuation/failed-continuation/offline-fixture-audit.py",
+    "D1/continuation/failed-continuation/original-failed-steps.jsonl",
+    "D1/continuation/failed-continuation/privacy-scan.json",
+    "D1/continuation/failed-continuation/private-prior-reference.json",
+    "D1/continuation/failed-continuation/redaction-report.json",
+    "D1/continuation/failed-continuation/sample-acceptance/accepted-answers.stderr",
+    "D1/continuation/failed-continuation/sample-acceptance/accepted-answers.stdout",
+    "D1/continuation/failed-continuation/sample-acceptance/activation-summary.json",
+    "D1/continuation/failed-continuation/sample-acceptance/assessment.json",
+    "D1/continuation/failed-continuation/sample-acceptance/audit-inputs.json",
+    "D1/continuation/failed-continuation/sample-acceptance/commands.json",
+    "D1/continuation/failed-continuation/sample-acceptance/daemon.log",
+    "D1/continuation/failed-continuation/sample-acceptance/execution-provenance.json",
+    "D1/continuation/failed-continuation/sample-acceptance/final/.gitignore",
+    "D1/continuation/failed-continuation/sample-acceptance/final/README.md",
+    "D1/continuation/failed-continuation/sample-acceptance/final/package.json",
+    "D1/continuation/failed-continuation/sample-acceptance/final/src/paging.js",
+    "D1/continuation/failed-continuation/sample-acceptance/final/test/paging.test.js",
+    "D1/continuation/failed-continuation/sample-acceptance/gate-output-exclusions.json",
+    "D1/continuation/failed-continuation/sample-acceptance/git-status-after.txt",
+    "D1/continuation/failed-continuation/sample-acceptance/git-status-before.txt",
+    "D1/continuation/failed-continuation/sample-acceptance/host-dependency-provenance.json",
+    "D1/continuation/failed-continuation/sample-acceptance/independent-receipt-verify.stderr",
+    "D1/continuation/failed-continuation/sample-acceptance/independent-receipt-verify.stdout",
+    "D1/continuation/failed-continuation/sample-acceptance/independent-record-verify.stderr",
+    "D1/continuation/failed-continuation/sample-acceptance/independent-record-verify.stdout",
+    "D1/continuation/failed-continuation/sample-acceptance/negative-evidence.json",
+    "D1/continuation/failed-continuation/sample-acceptance/network-events.json",
+    "D1/continuation/failed-continuation/sample-acceptance/original-test-suite-provenance.json",
+    "D1/continuation/failed-continuation/sample-acceptance/original-tests.stderr",
+    "D1/continuation/failed-continuation/sample-acceptance/original-tests.stdout",
+    "D1/continuation/failed-continuation/sample-acceptance/original/.gitignore",
+    "D1/continuation/failed-continuation/sample-acceptance/original/README.md",
+    "D1/continuation/failed-continuation/sample-acceptance/original/package.json",
+    "D1/continuation/failed-continuation/sample-acceptance/original/src/paging.js",
+    "D1/continuation/failed-continuation/sample-acceptance/original/test/paging.test.js",
+    "D1/continuation/failed-continuation/sample-acceptance/outcome.json",
+    "D1/continuation/failed-continuation/sample-acceptance/patch.diff",
+    "D1/continuation/failed-continuation/sample-acceptance/receipt-statement.json",
+    "D1/continuation/failed-continuation/sample-acceptance/receipt.json",
+    "D1/continuation/failed-continuation/sample-acceptance/record.jsonl",
+    "D1/continuation/failed-continuation/sample-acceptance/runtime-version.stderr",
+    "D1/continuation/failed-continuation/sample-acceptance/runtime-version.stdout",
+    "D1/continuation/failed-continuation/sample-acceptance/team-configuration.json",
+    "D1/continuation/failed-continuation/sample-acceptance/trusted-public-key.txt",
+    "D1/continuation/failed-service-smoke-acceptance/accepted-answers.stderr",
+    "D1/continuation/failed-service-smoke-acceptance/accepted-answers.stdout",
+    "D1/continuation/failed-service-smoke-acceptance/activation-summary.json",
+    "D1/continuation/failed-service-smoke-acceptance/assessment.json",
+    "D1/continuation/failed-service-smoke-acceptance/audit-inputs.json",
+    "D1/continuation/failed-service-smoke-acceptance/commands.json",
+    "D1/continuation/failed-service-smoke-acceptance/execution-provenance.json",
+    "D1/continuation/failed-service-smoke-acceptance/final/.gitignore",
+    "D1/continuation/failed-service-smoke-acceptance/final/README.md",
+    "D1/continuation/failed-service-smoke-acceptance/final/package.json",
+    "D1/continuation/failed-service-smoke-acceptance/final/src/paging.js",
+    "D1/continuation/failed-service-smoke-acceptance/final/test/paging.test.js",
+    "D1/continuation/failed-service-smoke-acceptance/gate-output-exclusions.json",
+    "D1/continuation/failed-service-smoke-acceptance/git-status-after.txt",
+    "D1/continuation/failed-service-smoke-acceptance/git-status-before.txt",
+    "D1/continuation/failed-service-smoke-acceptance/host-check/.gitignore",
+    "D1/continuation/failed-service-smoke-acceptance/host-check/README.md",
+    "D1/continuation/failed-service-smoke-acceptance/host-check/package.json",
+    "D1/continuation/failed-service-smoke-acceptance/host-check/src/paging.js",
+    "D1/continuation/failed-service-smoke-acceptance/host-check/test/paging.test.js",
+    "D1/continuation/failed-service-smoke-acceptance/host-dependency-provenance.json",
+    "D1/continuation/failed-service-smoke-acceptance/independent-receipt-verify.stderr",
+    "D1/continuation/failed-service-smoke-acceptance/independent-receipt-verify.stdout",
+    "D1/continuation/failed-service-smoke-acceptance/independent-record-verify.stderr",
+    "D1/continuation/failed-service-smoke-acceptance/independent-record-verify.stdout",
+    "D1/continuation/failed-service-smoke-acceptance/negative-evidence.json",
+    "D1/continuation/failed-service-smoke-acceptance/network-events.json",
+    "D1/continuation/failed-service-smoke-acceptance/original-test-suite-provenance.json",
+    "D1/continuation/failed-service-smoke-acceptance/original-tests.stderr",
+    "D1/continuation/failed-service-smoke-acceptance/original-tests.stdout",
+    "D1/continuation/failed-service-smoke-acceptance/original/.gitignore",
+    "D1/continuation/failed-service-smoke-acceptance/original/README.md",
+    "D1/continuation/failed-service-smoke-acceptance/original/package.json",
+    "D1/continuation/failed-service-smoke-acceptance/original/src/paging.js",
+    "D1/continuation/failed-service-smoke-acceptance/original/test/paging.test.js",
+    "D1/continuation/failed-service-smoke-acceptance/outcome.json",
+    "D1/continuation/failed-service-smoke-acceptance/patch.diff",
+    "D1/continuation/failed-service-smoke-acceptance/receipt-statement.json",
+    "D1/continuation/failed-service-smoke-acceptance/receipt.json",
+    "D1/continuation/failed-service-smoke-acceptance/record.jsonl",
+    "D1/continuation/failed-service-smoke-acceptance/run.log",
+    "D1/continuation/failed-service-smoke-acceptance/runtime-version.stderr",
+    "D1/continuation/failed-service-smoke-acceptance/runtime-version.stdout",
+    "D1/continuation/failed-service-smoke-acceptance/team-configuration.json",
+    "D1/continuation/failed-service-smoke-acceptance/trusted-public-key.txt",
+    "D1/continuation/failed-service-smoke-acceptance/unexpected-untracked/test_additional.js",
+    "D1/continuation/fresh-prefix/forward-check.log",
+    "D1/continuation/fresh-prefix/host.json",
+    "D1/continuation/fresh-prefix/initial-onboarding-commands.log",
+    "D1/continuation/fresh-prefix/install-curl-urls.log",
+    "D1/continuation/fresh-prefix/install.log",
+    "D1/continuation/fresh-prefix/operator.json",
+    "D1/continuation/fresh-prefix/original-steps.jsonl",
+    "D1/continuation/fresh-prefix/provenance.json",
+    "D1/continuation/operator-support/axo-or-diag-result.json",
+    "D1/continuation/operator-support/axocoatl-d1-b222-continue.sh",
+    "D1/continuation/operator-support/axocoatl-d1-b222-sample-retry-plan.json",
+    "D1/continuation/operator-support/axocoatl-d1-b222-sample-retry.sh",
+    "D1/continuation/operator-support/axocoatl-d1-b222-service-smoke-retry.sh",
+    "D1/continuation/operator-support/axocoatl-d1-incomplete-arguments-diagnosis.json",
+    "D1/continuation/operator-support/axocoatl-d1-service-retry-launch-correction.json",
+    "D1/continuation/service-smoke-retry/execution-provenance.json",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry.json",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/config-sha256-after.txt",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/config-sha256-before.txt",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/key-status-after.txt",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/key-status-before.txt",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/axocoatl-service-status--axocoatl-service-stop--the-service-is-not-running-.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/axocoatl-service-status--axocoatl-service-uninstall--not-installed--its-unit-rem.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/axocoatl-service-stop.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/axocoatl-service-uninstall.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/install-unchanged-systemd-definition-for-isolated-retry.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/one-retry-of-exact-changed-model-sample-command.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/sample-receipt-matches-record.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/sample-receipt-verifies-against-original-repository.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/sample-record-verifies.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/logs/start-same-systemd-service.log",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/prior-failed-continuation.json",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/provenance.json",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/receipt.json",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/record.jsonl",
+    "D1/continuation/service-smoke-retry/gate/D1-service-smoke-retry/work-path.txt",
+    "D1/continuation/service-smoke-retry/key-status-after-sample.txt",
+    "D1/continuation/service-smoke-retry/linux-receipt-public-key.txt",
+    "D1/continuation/service-smoke-retry/original-failed-steps.jsonl",
+    "D1/continuation/service-smoke-retry/original-fixtures/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/fixtures.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/go/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/go/go.mod",
+    "D1/continuation/service-smoke-retry/original-fixtures/go/go.sum",
+    "D1/continuation/service-smoke-retry/original-fixtures/go/pages.go",
+    "D1/continuation/service-smoke-retry/original-fixtures/go/pages_test.go",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/.gitignore",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/package-lock.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/package.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/src/paginate.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-deps/test/paginate.test.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-plain/.gitignore",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-plain/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-plain/package.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-plain/src/paging.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-plain/test/paging.test.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-pnpm/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-pnpm/package.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-pnpm/pnpm-lock.yaml",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-pnpm/src/pager.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-pnpm/test/pager.test.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/.yarnrc.yml",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/lib/paginate.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/package.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/test/paginate.test.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn-berry/yarn.lock",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn/package.json",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn/src/pages.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn/test/pages.test.js",
+    "D1/continuation/service-smoke-retry/original-fixtures/node-yarn/yarn.lock",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-hatch/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-hatch/pagebreak/__init__.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-hatch/pyproject.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-hatch/tests/test_pagebreak.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pdm/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pdm/pager/__init__.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pdm/pyproject.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pdm/tests/test_pager.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-poetry/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-poetry/paging/__init__.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-poetry/pyproject.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-poetry/tests/test_paging.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pytest/.gitignore",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pytest/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pytest/pages.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pytest/pyproject.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-pytest/tests/test_pages.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-uv/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-uv/pagination/__init__.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-uv/pyproject.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/python-uv/tests/test_pagination.py",
+    "D1/continuation/service-smoke-retry/original-fixtures/rust/.gitignore",
+    "D1/continuation/service-smoke-retry/original-fixtures/rust/Cargo.lock",
+    "D1/continuation/service-smoke-retry/original-fixtures/rust/Cargo.toml",
+    "D1/continuation/service-smoke-retry/original-fixtures/rust/README.md",
+    "D1/continuation/service-smoke-retry/original-fixtures/rust/src/lib.rs",
+    "D1/continuation/service-smoke-retry/private-prior-reference.json",
+    "D1/continuation/service-smoke-retry/redaction-report.json",
+    "D1/continuation/service-smoke-retry/sample/receipt.json",
+    "D1/continuation/service-smoke-retry/sample/record.jsonl",
+    "D1/continuation/service-smoke-retry/sample/repo/.gitignore",
+    "D1/continuation/service-smoke-retry/sample/repo/README.md",
+    "D1/continuation/service-smoke-retry/sample/repo/package.json",
+    "D1/continuation/service-smoke-retry/sample/repo/src/paging.js",
+    "D1/continuation/service-smoke-retry/sample/repo/test/paging.test.js",
+    "D1/continuation/service-smoke-retry/sample/run.log",
+    "D1/continuation/service-smoke-retry/service-status-after.txt",
+    "D1/continuation/service-smoke-retry/zero-inference-launch-correction.json",
+    "D1/continuation/source-copy-index.json",
+    "D1/continuation/step-provenance.json"
+  ],
+  "continuation": {
+    "schema": "axocoatl.recovery.operator-continuation/1",
+    "unsigned": true,
+    "operator": "Codex assistant; actual browser authorization coordinated by root after user permission",
+    "human_operator": false,
+    "single_uninterrupted_run": false,
+    "fresh_install_repeated": false,
+    "fresh_auth_preserved": true,
+    "original_gate_D1_json_existed": false,
+    "started_at_source": "D1/continuation/fresh-prefix/operator.json at (original recorded operator setup time; no original path record was finalized)",
+    "original_43_failures_preserved": true,
+    "previous_final_continuation": {
+      "pass": false,
+      "passed_steps": 70,
+      "failed_steps": 1,
+      "optional_skips": 1,
+      "affected_failed_step_index": 53,
+      "sha256": "5abf12710a74c5574720d8fd9a16b5535ee37fff750c04a973ea8e411adf5182"
+    },
+    "affected_phase_resolution": "The original changed-model onboarding command remains failed. Its configuration change and service restart passed in the original record. The later isolated retry reinstalled the identical service, ran the exact failed sample baseline and task with unchanged model/configuration, then stopped/uninstalled. This successor includes all passing original observations and the entire17step retry; no historical failed command exit is changed.",
+    "failed_first_review_preserved": true,
+    "strict_artifact_quality_failures_preserved": true,
+    "artifact_task_failure": {
+      "fixture": "node-deps",
+      "result": "FAILED",
+      "criterion": "No test changes. All 4 tests pass after the fix.",
+      "observed": "A valid additional regression test was added; original four assertions preserved and passed, but explicit no-test-changes instruction violated.",
+      "runtime_criterion_only": "Its successful command/check/review/receipt/record support the formal runtime criterion only. The artifact is not accepted.",
+      "earlier_wrong_qualification": "Preserved unchanged alongside explicit correction."
+    },
+    "candidate_binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+    "candidate_archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+    "historical_global_config_hash_known": false,
+    "configuration_identity": "Same candidate and d1gate account, actual writer/reviewer/checks/environment identities retained per record and receipt; the service writer change is the required D1 configuration-change criterion. No historical whole-YAML hash is invented.",
+    "source_of_success": "All unchanged required criteria observed across original fresh setup and continued same-account execution; each step references original bytes. No failed command is relabeled successful.",
+    "raw_private_archive_included": false,
+    "prior_private_archive_sha256": "51ec749cd0dc10163f951db0d70c8772b889729807b563852818e0a437f6b564",
+    "new_inference_by_composer": false
+  }
+}

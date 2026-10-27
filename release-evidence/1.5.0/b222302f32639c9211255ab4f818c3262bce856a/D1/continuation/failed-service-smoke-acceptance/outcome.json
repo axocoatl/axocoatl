@@ -1,0 +1,107 @@
+{
+  "adjudications": [],
+  "attention": [
+    "The required check tests did not run on the final result",
+    "The required review did not pass: The reviewer runs after the required Agents finish and the required checks pass.",
+    "1 area was not covered",
+    "A turn ended needing attention"
+  ],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "name": "tests",
+      "state": "not_run",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 2,
+  "findings": [],
+  "finished_at_ms": 1793066480236,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 0,
+    "events": 11,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [
+    {
+      "area": "writer",
+      "class": "provider_failure",
+      "detail": "Activation failed: LLM provider error: openrouter API error: 502 - native OpenRouter: endpoint siliconflow/fp8 (SiliconFlow) of deepseek/deepseek-chat-v3.1 reported an error in its answer: Network connection lost.; its accounting remains partial",
+      "node_id": "team-node-af81dce6031df6de4c77a91f",
+      "turn_id": "turn-c48745b6-cad1-4cda-b82b-5d6b7fb55f1d"
+    }
+  ],
+  "notes": [
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup none",
+    "The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.",
+    "deepseek/deepseek-chat-v3.1 on OpenRouter: 10 calls answered by endpoint siliconflow/fp8 (SiliconFlow); 1 call moved on from endpoint deepinfra/fp4 (DeepInfra), which failed them before answering"
+  ],
+  "openrouter_endpoints": {
+    "deepseek/deepseek-chat-v3.1": [
+      {
+        "calls": 0,
+        "endpoint": "deepinfra/fp4",
+        "moved": 1,
+        "provider": "DeepInfra"
+      },
+      {
+        "calls": 10,
+        "endpoint": "siliconflow/fp8",
+        "provider": "SiliconFlow"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": false,
+    "reason": "The reviewer runs after the required Agents finish and the required checks pass.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [],
+    "state": "not_run"
+  },
+  "run_id": "run-c0995674-0bc6-4e0d-8ed6-bdc04a976791",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-9627c0b6-0ac5-4698-9e7e-aacb82409274",
+  "started_at_ms": 1793066055977,
+  "task": "Fix the bug: paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "needs_attention",
+      "turn_id": "turn-c48745b6-cad1-4cda-b82b-5d6b7fb55f1d"
+    }
+  ],
+  "usage": {
+    "complete": false,
+    "cost_known": false,
+    "cost_microunits": 26327,
+    "input_tokens": 34118,
+    "output_tokens": 1726,
+    "retries": 1,
+    "unreported": [
+      "writer (generation 1): 1 of 12 model calls"
+    ]
+  },
+  "verdict": "needs_attention",
+  "warnings": [],
+  "workspace_id": "wsp-9219206f-a1e2-483e-823d-8de1a772b67d"
+}

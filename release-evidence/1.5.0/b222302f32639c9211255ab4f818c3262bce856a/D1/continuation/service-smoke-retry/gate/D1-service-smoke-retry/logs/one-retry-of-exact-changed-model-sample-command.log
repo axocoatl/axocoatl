@@ -1,0 +1,27 @@
+· starting loadout fix in /tmp/axo-d1-service-smoke-retry.KshcU7/repo
+· run run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe in Session ses-75f75840-f929-4fee-bdd7-5c55a7daf19f
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· note: The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-31543b08-85d0-4279-a802-aecf5a33f16d started (run)
+· turn turn-31543b08-85d0-4279-a802-aecf5a33f16d ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+  deepseek/deepseek-chat-v3.1 on OpenRouter: 12 calls answered by endpoint deepinfra/fp4 (DeepInfra)
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)
+Usage: 56798 input + 1371 output tokens, $0.0070
+Network: 13 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe
+· record written to /tmp/axo-d1-service-smoke-retry.KshcU7/record.jsonl
+· receipt written to /tmp/axo-d1-service-smoke-retry.KshcU7/receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)

@@ -1,0 +1,169 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "D1-service-smoke-retry",
+  "tier": "D",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-27T02:08:46Z",
+  "finished_at": "2026-10-27T02:10:07.206Z",
+  "steps": [
+    {
+      "name": "new pristine copy of exact original sample",
+      "status": "pass",
+      "required": true,
+      "detail": "baseline592c14cb256afd84c2a99eb0935a489a3097a6a5; no prior failed edits copied"
+    },
+    {
+      "name": "install unchanged systemd definition for isolated retry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "start same systemd service",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.4,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "current systemd daemon answers before retry",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "one retry of exact changed-model sample command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 78,
+      "bytes_downloaded": 31865384
+    },
+    {
+      "name": "sample receipt verifies against original repository",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "sample record verifies",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "sample receipt matches record",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on service-smoke-retry",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 592c14cb256a holds any"
+    },
+    {
+      "name": "axocoatl service stop",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service status (axocoatl service stop: the service is not running)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service stop: the service is not running",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: yes, running: no; installed, not running (inactive)"
+    },
+    {
+      "name": "nothing answers on port 8080 after the service stopped",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl service uninstall",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service status (axocoatl service uninstall: not installed, its unit removed)",
+      "status": "pass",
+      "required": false,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 132
+    },
+    {
+      "name": "axocoatl service uninstall: not installed, its unit removed",
+      "status": "pass",
+      "required": true,
+      "detail": "installed: no, running: no; not installed"
+    },
+    {
+      "name": "original configuration unchanged by targeted retry",
+      "status": "pass",
+      "required": true
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 24.04",
+    "kernel": "6.8.0-142-generic",
+    "arch": "aarch64",
+    "runner": "Linux D1 targeted service smoke retry; Codex operator, d1gate OS account",
+    "memory_bytes": 4094377984,
+    "cpus": 2,
+    "user": "d1gate"
+  },
+  "tools": {
+    "podman": "4.9.3",
+    "git": "2.43.0",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "D1-service-smoke-retry/config-sha256-after.txt",
+    "D1-service-smoke-retry/config-sha256-before.txt",
+    "D1-service-smoke-retry/key-status-after.txt",
+    "D1-service-smoke-retry/key-status-before.txt",
+    "D1-service-smoke-retry/logs/axocoatl-service-status--axocoatl-service-stop--the-service-is-not-running-.log",
+    "D1-service-smoke-retry/logs/axocoatl-service-status--axocoatl-service-uninstall--not-installed--its-unit-rem.log",
+    "D1-service-smoke-retry/logs/axocoatl-service-stop.log",
+    "D1-service-smoke-retry/logs/axocoatl-service-uninstall.log",
+    "D1-service-smoke-retry/logs/install-unchanged-systemd-definition-for-isolated-retry.log",
+    "D1-service-smoke-retry/logs/one-retry-of-exact-changed-model-sample-command.log",
+    "D1-service-smoke-retry/logs/sample-receipt-matches-record.log",
+    "D1-service-smoke-retry/logs/sample-receipt-verifies-against-original-repository.log",
+    "D1-service-smoke-retry/logs/sample-record-verifies.log",
+    "D1-service-smoke-retry/logs/start-same-systemd-service.log",
+    "D1-service-smoke-retry/prior-failed-continuation.json",
+    "D1-service-smoke-retry/provenance.json",
+    "D1-service-smoke-retry/receipt.json",
+    "D1-service-smoke-retry/record.jsonl",
+    "D1-service-smoke-retry/work-path.txt"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "schema": "axocoatl.recovery.artifact-qualification-correction/1",
+  "at": "2026-10-27T02:03:14.577020+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "fixture": "node-deps",
+  "superseded_qualification_file": "formal-gate-qualification.json",
+  "superseded_qualification_sha256": "0aaab2736d0eea333bbfe3fdb3879b9f6ea2b15ea4b1daa06e4bb2d460e7c363",
+  "superseded_bytes_preserved": true,
+  "assessment_sha256": "157337bed8cf3ed6be3f7efb91c435974349806d18567574d18f71091a724dda",
+  "original_strict_result": "FAILED",
+  "artifact_contract_result": "FAILED",
+  "criterion": "No test changes. All 4 tests pass after the fix.",
+  "criterion_source": "tests/fixtures/newuser/node-deps/README.md",
+  "criterion_source_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+  "correction": "The earlier qualification incorrectly said the fixture contract permits adding a test. It does not. The new regression test preserves the four original assertions, but still violates the explicit no-test-changes instruction. Runtime command/check/review and receipt/record success do not establish artifact task compliance.",
+  "observed_original_tests": {
+    "passed": 4,
+    "invocations": 1,
+    "original_assertions_preserved": true
+  },
+  "recorded_runtime_checks": {
+    "command_exit": 0,
+    "required_checks_passed": true,
+    "required_review_passed": true,
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0
+  },
+  "formal_D1_complete": false,
+  "overall_release_decision": "Not inferred by this audit; all failed attempts and this artifact counterexample remain retained. A valid negative result completes the experiment without turning its artifact into a passing one.",
+  "source_or_artifact_changes": false,
+  "new_test_or_inference_runs": false
+}

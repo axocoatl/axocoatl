@@ -1,0 +1,31 @@
+[2m2026-10-27T01:37:22.910710Z[0m [32m INFO[0m [2maxocoatl_daemon::ipc[0m[2m:[0m IPC server listening [3mpath[0m[2m=[0m/run/user/1001/axocoatl/axocoatl.sock
+Axocoatl dev mode
+  Config: /home/d1gate/.config/axocoatl/config.yaml
+  Agents: 4
+[2m2026-10-27T01:37:23.882482Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Registered OpenRouter provider
+[2m2026-10-27T01:37:23.882854Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Axocoatl daemon bootstrapped [3magents[0m[2m=[0m4
+[2m2026-10-27T01:37:23.929188Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m recovered canonical Session history without replaying execution [3msessions[0m[2m=[0m2
+[2m2026-10-27T01:37:24.133478Z[0m [32m INFO[0m [2maxocoatl_memory::neural[0m[2m:[0m neural embedder ready (minilm-l6-v2, 384-dim)
+[2m2026-10-27T01:37:24.137134Z[0m [32m INFO[0m [1mActor[0m[1m{[0m[3mid[0m[2m=[0m"0.0" [3mname[0m[2m=[0m"lead"[1m}[0m[2m:[0m [2maxocoatl_actor::actor_impl[0m[2m:[0m Agent started [3magent_id[0m[2m=[0mlead
+[2m2026-10-27T01:37:24.137166Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Agent spawned [3magent[0m[2m=[0mlead
+[2m2026-10-27T01:37:24.138347Z[0m [32m INFO[0m [1mActor[0m[1m{[0m[3mid[0m[2m=[0m"0.1" [3mname[0m[2m=[0m"assistant"[1m}[0m[2m:[0m [2maxocoatl_actor::actor_impl[0m[2m:[0m Agent started [3magent_id[0m[2m=[0massistant
+[2m2026-10-27T01:37:24.138363Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Agent spawned [3magent[0m[2m=[0massistant
+[2m2026-10-27T01:37:24.160629Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap::runtime_volumes[0m[2m:[0m checked leaked Session volumes: removed this daemon's runtime volumes of closed, deleted and unknown Sessions and Node dependency volumes of deleted and unknown Sessions [3mremoved[0m[2m=[0m0 [3mremoved_dependencies[0m[2m=[0m0 [3mkept_open[0m[2m=[0m6 [3mkept_dependencies[0m[2m=[0m2 [3mother_daemons[0m[2m=[0m0 [3mcopied_from[0m[2m=[0m0 [3munlabelled_kept[0m[2m=[0m0 [3mfailed[0m[2m=[0m0
+  Runtime: 2 agents spawned
+  IPC:    /run/user/1001/axocoatl/axocoatl.sock
+  Server: http://127.0.0.1:8080
+  Health: http://127.0.0.1:8080/health
+  Sign in: run `axocoatl url --config /home/d1gate/.config/axocoatl/config.yaml` for the browser sign-in link
+
+Axocoatl is running. Press Ctrl+C to stop.
+[2m2026-10-27T01:37:24.161110Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Axocoatl local API requires the per-daemon token; run `axocoatl url` for the sign-in link [3mhost[0m[2m=[0m"127.0.0.1"
+[2m2026-10-27T01:37:24.161115Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Starting Axocoatl API server [3maddr[0m[2m=[0m127.0.0.1:8080
+[2m2026-10-27T01:37:26.151399Z[0m [32m INFO[0m [2maxocoatl_isolation::dependency_mountpoint[0m[2m:[0m kept the empty Node dependency mount point Axocoatl made: a container it cannot see could have a mount on it, so it stays, empty and yours [3mpath[0m[2m=[0m/tmp/axo-d1-continuation2.X4rQlC/repos/node-plain/node_modules [3mwhy[0m[2m=[0mrootful Podman is installed (/run/podman exists), and the containers `sudo podman` runs are not listed to you
+[2m2026-10-27T01:39:09.525671Z[0m [32m INFO[0m [2maxocoatl_isolation::dependency_mountpoint[0m[2m:[0m kept the empty Node dependency mount point Axocoatl made: a container it cannot see could have a mount on it, so it stays, empty and yours [3mpath[0m[2m=[0m/tmp/axo-d1-continuation2.X4rQlC/repos/node-deps/node_modules [3mwhy[0m[2m=[0mrootful Podman is installed (/run/podman exists), and the containers `sudo podman` runs are not listed to you
+[2m2026-10-27T01:39:09.877726Z[0m [32m INFO[0m [2maxocoatl_isolation::session_sandbox[0m[2m:[0m running explicitly-approved project setup command [3mcontainer[0m[2m=[0maxo-ses-ses-b4e67f2e-8ec0-4e43-9900-38703f884054 [3mcommand[0m[2m=[0m"npm ci --prefer-offline --no-audit --no-fund"
+[2m2026-10-27T01:41:39.471944Z[0m [33m WARN[0m [2maxocoatl_actor::default_behavior[0m[2m:[0m Model called a tool that was not declared; answering it with a tool error [3magent[0m[2m=[0mreview-conversation-ab75e4698b5c576cfa2dbbf6991a78ceeea39dfa [3mtool[0m[2m=[0msearch
+[2m2026-10-27T01:41:52.799266Z[0m [33m WARN[0m [2maxocoatl_actor::default_behavior[0m[2m:[0m Model called a tool that was not declared; answering it with a tool error [3magent[0m[2m=[0mreview-conversation-ab75e4698b5c576cfa2dbbf6991a78ceeea39dfa [3mtool[0m[2m=[0msearch
+[2m2026-10-27T01:42:20.968240Z[0m [32m INFO[0m [2maxocoatl_isolation::session_sandbox[0m[2m:[0m running explicitly-approved project setup command [3mcontainer[0m[2m=[0maxo-ses-ses-44fc3954-fd8c-4f7a-950d-5a244c0a0193 [3mcommand[0m[2m=[0m"{ [ -x \"$VIRTUAL_ENV/bin/python\" ] || python3 -m venv \"$VIRTUAL_ENV\"; } && pip install -e '.[test]'"
+[2m2026-10-27T01:44:37.338873Z[0m [33m WARN[0m [2maxocoatl_actor::default_behavior[0m[2m:[0m Model called a tool that was not declared; answering it with a tool error [3magent[0m[2m=[0mreview-conversation-f8322c7fc41d0858f79be5f46c93fc4aea3dcf21 [3mtool[0m[2m=[0msearch
+[2m2026-10-27T01:45:11.571756Z[0m [32m INFO[0m [2maxocoatl_isolation::session_sandbox[0m[2m:[0m running explicitly-approved project setup command [3mcontainer[0m[2m=[0maxo-ses-ses-6471e8c3-1e6b-4458-b1f4-77631493494b [3mcommand[0m[2m=[0m"cargo fetch"
+[2m2026-10-27T01:49:51.041252Z[0m [32m INFO[0m [2maxocoatl_isolation::session_sandbox[0m[2m:[0m running explicitly-approved project setup command [3mcontainer[0m[2m=[0maxo-ses-ses-41d117f8-e4de-478e-99e9-f68abae538bb [3mcommand[0m[2m=[0m"GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download"

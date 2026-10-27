@@ -1,0 +1,365 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "execution_binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "verifier_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "assessed_at": "2026-10-27T01:50:33.901327+00:00",
+  "fixture": "rust",
+  "label": "d1-retry2-rust",
+  "repo": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+  "base_commit": "df071b9d337485b624d17d60db7fa766bb220d0c",
+  "run_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+  "result": "ACCEPTED",
+  "artifact_review": "The production paginator corrects the exact-multiple final-page length; original test block and manifest compared independently. The original four tests are run once with pinned Rust1.95 offline, using actual final production code and original test assertions.",
+  "changed_files": [
+    "src/lib.rs"
+  ],
+  "original_tests_unchanged": true,
+  "sample_original_assertions_preserved": null,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "run.axorecord.jsonl",
+    "run.receipt.json"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "final_sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "unchanged": true
+    },
+    "Cargo.lock": {
+      "original_sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "final_sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "unchanged": true
+    },
+    "Cargo.toml": {
+      "original_sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "final_sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "final_sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "unchanged": true
+    },
+    "src/lib.rs": {
+      "original_sha256": "0252b65275ba544b33e24f370dfb262339d40fd391095adbc1a50427523d111f",
+      "final_sha256": "691a76fb837839485c28a3fcca4c3177e58500aa80c2c4d9a4b4e7c920be84e9",
+      "unchanged": false
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.receipt.json",
+          "--key",
+          "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+          "--repo",
+          "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+          "--record",
+          "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+        "start": "2026-10-27T01:50:32.369648+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:50:32.381067+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "4670c0e855fb9b514e058096845aa813fe7ff4df1f49ea479448438d12ff81cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+        "start": "2026-10-27T01:50:32.381224+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:50:32.392270+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "0f5303144d19aaee9ecf45969a824bec0e56d093f9b5f34bf8fe14524641abf6",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+        "start": "2026-10-27T01:50:32.392432+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:50:32.422504+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.cargo/bin/cargo",
+          "+1.95.0",
+          "--version"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/host-check",
+        "start": "2026-10-27T01:50:32.422732+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:50:32.476054+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.cargo/bin/cargo",
+          "+1.95.0",
+          "test",
+          "--offline",
+          "--jobs",
+          "1"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/host-check",
+        "start": "2026-10-27T01:50:32.476492+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:50:33.882965+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+        "stderr_sha256": "644c16191e07f47f8277bd6cf62cc77046cec40dbe8d61ecd7e48c8a404d7267"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "expected_original_tests": 4,
+    "observed_passed_tests": 4,
+    "suite_count_verified": true,
+    "production_files_exact_final_copy": true,
+    "test_files_original_base_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "cargo test"
+      ],
+      "candidate_sha256": "0f718a02fdb7132f70c76b4add184d6dde5e6db4fbef92cfdbb29ce0289fe880",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\n     Running unittests src/lib.rs (/tmp/axocoatl-cargo-target/debug/deps/newuser_rust-50d5cd83481d83ad)\n   Doc-tests newuser_rust\n",
+      "stdout_tail": "\nrunning 4 tests\ntest tests::a_page_size_of_zero_is_refused - should panic ... ok\ntest tests::a_partial_last_page_keeps_the_items_left_over ... ok\ntest tests::no_items_make_no_pages ... ok\ntest tests::the_last_page_is_full_when_the_total_is_a_multiple_of_the_page_size ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "required_checks_passed": true,
+  "required_review_passed": true,
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "rust",
+      "reason": "Cargo.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-rust:0e5acf3d40e2",
+      "image_id": "c65211efb8ef8bb47d9a00b7e8743f16be1bf64cdb13388e7b415d760ad71736",
+      "recipes": [
+        "rust"
+      ],
+      "check": "cargo test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "cargo fetch",
+        "source": "detected",
+        "script_sha256": "471eeafc71b8d16620386f0a132facfc78168b25eaa54e05a50de4ac59e43732",
+        "exit_code": 0,
+        "duration_ms": 812,
+        "registry_hosts": [
+          "index.crates.io",
+          "static.crates.io",
+          "crates.io"
+        ],
+        "allowed_connections": 2,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-df4c8537b9900a86330910a0",
+      "probe": {
+        "program": "cargo",
+        "program_found": true,
+        "baseline_exit": 101,
+        "duration_ms": 588
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "rust",
+      "test_command": "cargo test",
+      "host_setup": null,
+      "image_contains": "rust",
+      "setup_contains": "cargo fetch"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "0f718a02fdb7132f70c76b4add184d6dde5e6db4fbef92cfdbb29ce0289fe880",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 216242,
+    "output_tokens": 5643,
+    "cost_microunits": 15478,
+    "cost_usd": 0.015478,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "writer",
+        "sequence": 109,
+        "payload": {
+          "call_id": "01a17b0978f894dbb33120d4f9e80fce",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "writer",
+        "sequence": 126,
+        "payload": {
+          "call_id": "01a17b0a2edae7949028a80cc86b7d77",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 21,
+        "payload": {
+          "call_id": "chatcmpl-tool-9ed2c38e15a8b735",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 25,
+        "payload": {
+          "call_id": "chatcmpl-tool-b4db233a771a1d28",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "cargo",
+      "program_found": true,
+      "baseline_exit": 101,
+      "duration_ms": 588
+    },
+    "failed_activations": []
+  },
+  "gate_scope": "Independent artifact acceptance only; original gate attempts and outcomes are never changed.",
+  "network": {
+    "events": 47,
+    "allowed_connections": 2,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Independent acceptance of a completed actual Mac or Linux b222 artifact; no fresh-authentication, clean-install, whole-gate, or release completion claim.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "run.receipt.json": "c1d6507c67284e8cd9cbbf851ec79d7845d629006ddb4d997bc25dac02c04001",
+    "run.axorecord.jsonl": "e8295df5224642bc2f2ca25db6e6d78c97cb64fbed1001a03f395d53a8e929fb",
+    "patch.diff": "a0dfbffafead10f56dbf34dc17ee623e1ffe4afd6e032accaba369248e0a75fc",
+    "negative-evidence.json": "0488329cab48eabe9d0dfefd2670321d1e1b9d7a06856df303e0a3e914f6e4c2",
+    "activation-summary.json": "75cce94678aa18227b9ca00105c527ecfd8e460d4b9b86afc8a7b3afd25107b1",
+    "outcome.json": "21fdeacfc80a0d5332ebec204e7bb7746b56954a5f3250e0d6c456a9f2704788",
+    "original-tests.stdout": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+    "original-tests.stderr": "644c16191e07f47f8277bd6cf62cc77046cec40dbe8d61ecd7e48c8a404d7267"
+  }
+}

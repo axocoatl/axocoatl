@@ -1,0 +1,10 @@
+{
+  "os": "Linux",
+  "release": "ubuntu 24.04",
+  "kernel": "6.8.0-142-generic",
+  "arch": "aarch64",
+  "runner": "local  ",
+  "memory_bytes": 4094377984,
+  "cpus": 2,
+  "user": "d1gate"
+}

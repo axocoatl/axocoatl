@@ -1,0 +1,18 @@
+[project]
+name = "newuser-python-hatch"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["pagebreak"]
+
+[tool.hatch.envs.test]
+dependencies = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"

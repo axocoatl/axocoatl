@@ -1,0 +1,12 @@
+✓ Always-On Service installed (systemd backend)
+  config: /home/d1gate/.config/axocoatl/config.yaml
+  podman: /usr/bin/podman
+  PATH=/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+  logs:   journalctl --user -u axocoatl
+
+For the daemon to keep running after you log out, enable linger:
+  loginctl enable-linger "$USER"
+
+Start it with:  axocoatl service start
+If it was already running, load the new definition with:  axocoatl service restart
+Then open the workbench with the link from:  axocoatl url --config /home/d1gate/.config/axocoatl/config.yaml

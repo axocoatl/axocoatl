@@ -1,0 +1,74 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 11,
+      "payload": {
+        "call_id": "chatcmpl-tool-aa6006391c000bb6",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 15,
+      "payload": {
+        "call_id": "chatcmpl-tool-9b1050c962789894",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 38,
+      "payload": {
+        "call_id": "call-42acc737-9db0-4090-828f-9440a151c7e9",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 68,
+        "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 46,
+      "payload": {
+        "call_id": "call-18f57788-87e7-4300-a9a7-277bcb051b8e",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 16,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    }
+  ],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 162
+  },
+  "failed_activations": []
+}

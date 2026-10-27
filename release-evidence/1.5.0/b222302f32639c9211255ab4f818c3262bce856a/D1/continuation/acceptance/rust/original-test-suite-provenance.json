@@ -1,0 +1,7 @@
+{
+  "original_tests_copied_from_base": "df071b9d337485b624d17d60db7fa766bb220d0c",
+  "paths": [
+    "src/lib.rs from #[cfg(test)] onward"
+  ],
+  "single_invocation": true
+}

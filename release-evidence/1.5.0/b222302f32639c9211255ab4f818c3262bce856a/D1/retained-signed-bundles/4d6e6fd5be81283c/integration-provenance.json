@@ -1,0 +1,37 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "source_signature_valid": true,
+  "source_files": 3935,
+  "source_manifest_sha256": "4d6e6fd5be81283cc16adadb06bd9641bfc079155b2aa71042990b81926544fd",
+  "checked_completions": [
+    "D1"
+  ],
+  "current_paths": {
+    "A-arm": true,
+    "A-x86-refusal": true,
+    "A-x86": true,
+    "B-arm": true,
+    "B-intel": true,
+    "C1-browser-webkit": true,
+    "C1-claude-code": true,
+    "C1-codex": true,
+    "C1-local": true,
+    "C1-openrouter": true,
+    "C1-real-repo": true,
+    "C1-recovery": true,
+    "C1-service": true,
+    "C1-workbench-webkit": true
+  },
+  "inputs_unchanged": true,
+  "scope": "Structural and cryptographic integration only; separately reviewed actual observations remain authoritative.",
+  "created_at": "2026-10-27T02:13:51.004218+00:00",
+  "source_bundle": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a",
+  "replacement_record_bytes": "Copied exactly; no observed step/pass/exit status/attachment reference changed",
+  "unsigned": true,
+  "no_auth_or_inference": true,
+  "no_source_or_input_mutation": true,
+  "active_completions": [
+    "D1"
+  ],
+  "original_failures": "All original signed files preserved byte-for-byte via retention-map.json"
+}

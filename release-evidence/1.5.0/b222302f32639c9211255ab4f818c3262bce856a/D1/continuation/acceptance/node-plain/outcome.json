@@ -1,0 +1,106 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.489083ms)\n\u2714 keeps the last item on a page of its own (0.068375ms)\n\u2714 refuses a page size below one (0.173875ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 27.505938\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793065147667,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 0,
+    "events": 11,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)",
+    "reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)",
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup none",
+    "openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)",
+    "qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 8 calls answered by endpoint siliconflow/fp8 (SiliconFlow)"
+  ],
+  "openrouter_endpoints": {
+    "openai/gpt-oss-120b": [
+      {
+        "calls": 8,
+        "endpoint": "near-ai/fp4",
+        "provider": "Near AI"
+      }
+    ],
+    "qwen/qwen3-coder-30b-a3b-instruct": [
+      {
+        "calls": 8,
+        "endpoint": "siliconflow/fp8",
+        "provider": "SiliconFlow"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b",
+  "started_at_ms": 1793065046743,
+  "task": "Fix the bug: paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-cb72741d-3ae4-453e-a23b-1c52ff0103ed"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 2622,
+    "input_tokens": 46974,
+    "output_tokens": 1432,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-391a5101-404f-458e-b6c4-23e7fc0ce8ec"
+}

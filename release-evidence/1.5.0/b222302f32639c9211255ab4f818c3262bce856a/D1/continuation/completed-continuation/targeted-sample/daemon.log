@@ -1,0 +1,16 @@
+[2m2026-10-27T01:35:19.340904Z[0m [32m INFO[0m [2maxocoatl_daemon::ipc[0m[2m:[0m IPC server listening [3mpath[0m[2m=[0m/run/user/1001/axocoatl/axocoatl.sock
+[2m2026-10-27T01:35:20.302369Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Registered OpenRouter provider
+[2m2026-10-27T01:35:20.302791Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Axocoatl daemon bootstrapped [3magents[0m[2m=[0m4
+[2m2026-10-27T01:35:20.326751Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m recovered canonical Session history without replaying execution [3msessions[0m[2m=[0m1
+[2m2026-10-27T01:35:20.583910Z[0m [32m INFO[0m [2maxocoatl_memory::neural[0m[2m:[0m neural embedder ready (minilm-l6-v2, 384-dim)
+[2m2026-10-27T01:35:20.585482Z[0m [32m INFO[0m [1mActor[0m[1m{[0m[3mid[0m[2m=[0m"0.0" [3mname[0m[2m=[0m"lead"[1m}[0m[2m:[0m [2maxocoatl_actor::actor_impl[0m[2m:[0m Agent started [3magent_id[0m[2m=[0mlead
+[2m2026-10-27T01:35:20.585509Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Agent spawned [3magent[0m[2m=[0mlead
+[2m2026-10-27T01:35:20.586527Z[0m [32m INFO[0m [1mActor[0m[1m{[0m[3mid[0m[2m=[0m"0.1" [3mname[0m[2m=[0m"assistant"[1m}[0m[2m:[0m [2maxocoatl_actor::actor_impl[0m[2m:[0m Agent started [3magent_id[0m[2m=[0massistant
+[2m2026-10-27T01:35:20.586539Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap[0m[2m:[0m Agent spawned [3magent[0m[2m=[0massistant
+[2m2026-10-27T01:35:20.606833Z[0m [32m INFO[0m [2maxocoatl_daemon::bootstrap::runtime_volumes[0m[2m:[0m checked leaked Session volumes: removed this daemon's runtime volumes of closed, deleted and unknown Sessions and Node dependency volumes of deleted and unknown Sessions [3mremoved[0m[2m=[0m0 [3mremoved_dependencies[0m[2m=[0m0 [3mkept_open[0m[2m=[0m3 [3mkept_dependencies[0m[2m=[0m1 [3mother_daemons[0m[2m=[0m0 [3mcopied_from[0m[2m=[0m0 [3munlabelled_kept[0m[2m=[0m0 [3mfailed[0m[2m=[0m0
+Axocoatl server starting on 127.0.0.1:8080
+  Sign in: run `axocoatl url --config /home/d1gate/.config/axocoatl/config.yaml` for the browser sign-in link
+  IPC:    /run/user/1001/axocoatl/axocoatl.sock
+[2m2026-10-27T01:35:20.607115Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Axocoatl local API requires the per-daemon token; run `axocoatl url` for the sign-in link [3mhost[0m[2m=[0m"127.0.0.1"
+[2m2026-10-27T01:35:20.607119Z[0m [32m INFO[0m [2maxocoatl_server[0m[2m:[0m Starting Axocoatl API server [3maddr[0m[2m=[0m127.0.0.1:8080
+[2m2026-10-27T01:35:22.335664Z[0m [32m INFO[0m [2maxocoatl_isolation::dependency_mountpoint[0m[2m:[0m kept the empty Node dependency mount point Axocoatl made: a container it cannot see could have a mount on it, so it stays, empty and yours [3mpath[0m[2m=[0m/tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo/node_modules [3mwhy[0m[2m=[0mrootful Podman is installed (/run/podman exists), and the containers `sudo podman` runs are not listed to you

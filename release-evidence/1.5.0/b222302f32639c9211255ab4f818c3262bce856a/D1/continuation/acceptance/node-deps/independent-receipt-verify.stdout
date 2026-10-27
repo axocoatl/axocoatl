@@ -1,0 +1,37 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-4cfbd34f-3819-4af6-b41d-94bf025ade65",
+  "verdict": "pass",
+  "statement_sha256": "sha256:754df1db9784f0c32fd49523582279011f7c93a6080a84e9a470f83ed30847ed",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-node-deps-20261027/public/repos/node-deps",
+    "covered": 2,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-node-deps-20261027/public/gate/node-deps/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-4cfbd34f-3819-4af6-b41d-94bf025ade65 (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-b4e67f2e-8ec0-4e43-9900-38703f884054, finished at 1793065329346 ms",
+    "Base commit be2e869ba3a32b220be8565b08298e06964c838a",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 2 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+    "  test/paginate.test.js  sha256:19fe4edb9a5183615f1047d6fe933655e1f2723a163928aeaea4e4064a367c79",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

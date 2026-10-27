@@ -1,0 +1,87 @@
+Axocoatl setup
+Every command this runs is logged to /home/d1gate/.local/state/axocoatl/onboard-20261027-004446.log
+
+Step 0 · This computer
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.43.0
+
+$ systemctl --user is-system-running
+  exit 0
+  | running
+
+$ loginctl show-user d1gate --property=Linger --value
+  exit 0
+  | no
+
+$ dpkg-query -W -f '${db:Status-Status}' uidmap
+  exit 1
+  | dpkg-query: no packages found matching uidmap
+
+This computer: Ubuntu 24.04.5 LTS, aarch64, 4 GB memory, 2 cores, 26 GB free.
+Found: git 2.43.0.
+Not found: Podman, Ollama, claude, codex, gh.
+
+Step 1 · Who writes the code
+? Who writes the code? → A hosted model (OpenRouter credits)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+? Refresh apt package lists now with `sudo apt-get update`? This downloads current package metadata from your configured repositories and asks for your password. [Y/n]
+  answered yes
+  $ sudo apt-get update
+$ sudo apt-get update
+  exit 0
+  | Get:50 http://ports.ubuntu.com/ubuntu-ports noble-security/multiverse Translation-en [12.1 kB]
+  | Get:51 http://ports.ubuntu.com/ubuntu-ports noble-security/multiverse arm64 Components [208 B]
+  | Get:52 http://ports.ubuntu.com/ubuntu-ports noble-security/multiverse arm64 c-n-f Metadata [456 B]
+  | Fetched 39.9 MB in 5s (8717 kB/s)
+  | Reading package lists...
+
+? Axocoatl runs every Session in a rootless Podman sandbox. Install Podman now with `sudo apt-get install -y podman`? This asks for your password. [Y/n]
+  answered yes
+  $ sudo apt-get install -y podman
+$ sudo apt-get install -y podman
+  exit 0
+? d1gate has no range of subordinate user and group IDs in /etc/subuid and /etc/subgid, so rootless Podman cannot unpack images or start Sessions. Add a range with `sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 d1gate && podman system migrate`? `podman system migrate` stops your running containers. [Y/n]
+  answered yes
+  $ sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 d1gate
+$ sudo usermod --add-subuids 165536-231071 --add-subgids 165536-231071 d1gate
+  exit 0
+  $ podman system migrate
+$ podman system migrate
+  exit 0
+  ✓ Landlock ABI 4
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 4
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+? Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n]
+  answered yes
+? Model for the writer (vendor/model) → qwen/qwen3-coder-30b-a3b-instruct
+? Model for the reviewer (must be a different model) → openai/gpt-oss-120b
+? How should Axocoatl get your OpenRouter key? → Sign in to OpenRouter in your browser (recommended)
+  ✓ writer qwen/qwen3-coder-30b-a3b-instruct: 262,144 tokens of context, $0.07 in / $0.28 out per million tokens
+  ✓ reviewer openai/gpt-oss-120b: 131,072 tokens of context, $0.15 in / $0.60 out per million tokens
+  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser then returns to http://127.0.0.1:34627/callback on this computer, and Axocoatl stores the key OpenRouter issues as the secret openrouter without showing it.
+  Open this address in a browser on this computer (on another computer, forward the port first: ssh -L 34627:127.0.0.1:34627 …):
+    https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A34627%2Fcallback&code_challenge=AWL1dRUGbciVBO1oqT2ACp2jA9EBuyAC1WZr8ijog2M&code_challenge_method=S256&state=K8NriIN-LxJZZ0_3skAYCg&key_label=Axocoatl+2026-10-26
+  Waiting up to 10 minutes for the sign-in (Ctrl-C stops it)…
+? No sign-in came back within 10 minutes. Keep waiting 10 minutes more? (No stops the sign-in; nothing is stored.) [Y/n]
+  answered yes
+  Waiting 10 minutes more for the sign-in (Ctrl-C stops it)…
+OpenRouter sign-in: GET /callback (Host 127.0.0.1:34627): the sign-in's code, with its state
+  The browser returned to Axocoatl. Getting the key from OpenRouter (it is not shown)…
+  ✗ OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+
+Not ready yet, 1 step left:
+  1) OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+Nothing was saved: no configuration was written. Run `axocoatl onboard` again once the steps are done.

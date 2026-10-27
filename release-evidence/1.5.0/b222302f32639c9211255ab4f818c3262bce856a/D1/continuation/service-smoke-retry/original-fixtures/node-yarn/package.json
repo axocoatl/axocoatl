@@ -1,0 +1,12 @@
+{
+  "name": "newuser-node-yarn",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "test": "uvu test"
+  },
+  "devDependencies": {
+    "uvu": "0.5.6"
+  }
+}

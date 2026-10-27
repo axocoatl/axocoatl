@@ -1,0 +1,372 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "execution_binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "verifier_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "assessed_at": "2026-10-27T02:06:30.618584+00:00",
+  "fixture": "node-deps",
+  "label": "d1-retry2-service-node-deps",
+  "repo": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+  "base_commit": "7a1a6d2f05e67c20917433624bac9b84c3eb12e1",
+  "run_id": "run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55",
+  "result": "ACCEPTED",
+  "artifact_review": "The only change preserves size when the last-page remainder is zero, correctly retaining full final pages. Original tests, README, and manifests are unchanged; run the original four tests once. This successful service fixture does not replace the earlier failed changed-model onboarding sample.",
+  "changed_files": [
+    "src/paginate.js"
+  ],
+  "original_tests_unchanged": true,
+  "sample_original_assertions_preserved": null,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "run.axorecord.jsonl",
+    "run.receipt.json"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "unchanged": true
+    },
+    "package-lock.json": {
+      "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "unchanged": true
+    },
+    "src/paginate.js": {
+      "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "final_sha256": "c549a6a2746299d2132d49e39905b691e7adf11cb99e3226a052068380301ff0",
+      "unchanged": false
+    },
+    "test/paginate.test.js": {
+      "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps/run.receipt.json",
+          "--key",
+          "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+          "--repo",
+          "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+          "--record",
+          "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+        "start": "2026-10-27T02:06:30.170656+00:00",
+        "status": "completed",
+        "end": "2026-10-27T02:06:30.180131+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "8f12da3dc83952cccca55c6601fcd4b8f1ebc1a8952ef4cf9aab65475959319b",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+        "start": "2026-10-27T02:06:30.180273+00:00",
+        "status": "completed",
+        "end": "2026-10-27T02:06:30.188676+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "2e1be90005ad8d4e41bcc3e481332edf0612b5f06c122b792bb9ea74022604e3",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+        "start": "2026-10-27T02:06:30.188823+00:00",
+        "status": "completed",
+        "end": "2026-10-27T02:06:30.218802+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-final-20261027/acceptance/service-node-deps/host-check",
+        "start": "2026-10-27T02:06:30.219053+00:00",
+        "status": "completed",
+        "end": "2026-10-27T02:06:30.229592+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-final-20261027/acceptance/service-node-deps/host-check",
+        "start": "2026-10-27T02:06:30.240656+00:00",
+        "status": "completed",
+        "end": "2026-10-27T02:06:30.600977+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "d50d61a4407ca41793f56927484426e11091205a65d025d98065907243995c9b",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "expected_original_tests": 4,
+    "observed_passed_tests": 4,
+    "suite_count_verified": true,
+    "production_files_exact_final_copy": true,
+    "test_files_original_base_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  0.45ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "required_checks_passed": true,
+  "required_review_passed": true,
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint deepinfra/fp4 (DeepInfra)",
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-chat-v3.1"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoints near-ai/fp4 (Near AI), coreweave/fp4 (CoreWeave)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-node:3b267c748259",
+      "image_id": "861dc0472db3139045371d6e43a20ec355bcdefcb044b47bf1c55e2d41207c41",
+      "recipes": [
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "npm ci --prefer-offline --no-audit --no-fund",
+        "source": "detected",
+        "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+        "exit_code": 0,
+        "duration_ms": 1196,
+        "registry_hosts": [
+          "registry.npmjs.org"
+        ],
+        "allowed_connections": 6,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-42324194e383acc1aad6b2cb",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 162
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "npm ci --ignore-scripts --no-audit --no-fund",
+      "image_contains": "node",
+      "setup_contains": "npm ci"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 114008,
+    "output_tokens": 1448,
+    "cost_microunits": 14209,
+    "cost_usd": 0.014209,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 11,
+        "payload": {
+          "call_id": "chatcmpl-tool-aa6006391c000bb6",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 15,
+        "payload": {
+          "call_id": "chatcmpl-tool-9b1050c962789894",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 38,
+        "payload": {
+          "call_id": "call-42acc737-9db0-4090-828f-9440a151c7e9",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 68,
+          "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 46,
+        "payload": {
+          "call_id": "call-18f57788-87e7-4300-a9a7-277bcb051b8e",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [
+      {
+        "role": "reviewer",
+        "sequence": 16,
+        "payload": {
+          "kind": "provider_retry",
+          "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+        }
+      }
+    ],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 162
+    },
+    "failed_activations": []
+  },
+  "gate_scope": "Independent artifact acceptance only; original gate attempts and outcomes are never changed.",
+  "network": {
+    "events": 31,
+    "allowed_connections": 6,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Independent acceptance of a completed actual Mac or Linux b222 artifact; no fresh-authentication, clean-install, whole-gate, or release completion claim.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "run.receipt.json": "a6606290c8d48f0d0af1bbf8052815b61d3f8e50a0062d15d375ebaaeeb50ba8",
+    "run.axorecord.jsonl": "328faf14d043dff48beac95046a6c29c7908d0a74533a99f7b83ff6a7c07b6c3",
+    "patch.diff": "8f4ee781ca944f009a9569426524debc43e074846a657b8cb1e1e4a377f138fe",
+    "negative-evidence.json": "b877f140a98981069b30f972a721e179b571131b2628f72e0118d550e63de6a7",
+    "activation-summary.json": "e7dbe7f18f4b033cbaab1928be676e8aac39fd923095c64b7110815b70161a69",
+    "outcome.json": "7e06b96a8fc5ab46d7d124cf554777069a01efc2ec03aad6e4386d9af9013bdb",
+    "original-tests.stdout": "d50d61a4407ca41793f56927484426e11091205a65d025d98065907243995c9b",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

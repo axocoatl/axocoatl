@@ -1,0 +1,107 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -m pytest"
+      ],
+      "candidate_sha256": "a88b0b124e503a7c2e30272e6ca3bf4e0a7b1582e98604a53812113b0e1ee8b8",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "============================= test session starts ==============================\nplatform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0\nrootdir: /tmp/axo-d1-continuation2.X4rQlC/repos/python-pytest\nconfigfile: pyproject.toml\ntestpaths: tests\ncollected 4 items\n\ntests/test_pages.py ....                                                 [100%]\n\n============================== 4 passed in 0.03s ===============================\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793065491495,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 4,
+    "events": 31,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)",
+    "reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)",
+    "image localhost/axocoatl-recipe-python:10128f1d8789 \u00b7 toolchain python (pyproject.toml at the repository root) \u00b7 check python3 -m pytest (detected from the repository) \u00b7 setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)",
+    "setup `pip install -e '.[test]'` (detected): exited 0 (6.3 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call",
+    "openai/gpt-oss-120b on OpenRouter: 6 calls answered by endpoint near-ai/fp4 (Near AI)",
+    "qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 14 calls answered by endpoint siliconflow/fp8 (SiliconFlow)"
+  ],
+  "openrouter_endpoints": {
+    "openai/gpt-oss-120b": [
+      {
+        "calls": 6,
+        "endpoint": "near-ai/fp4",
+        "provider": "Near AI"
+      }
+    ],
+    "qwen/qwen3-coder-30b-a3b-instruct": [
+      {
+        "calls": 14,
+        "endpoint": "siliconflow/fp8",
+        "provider": "SiliconFlow"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "a88b0b124e503a7c2e30272e6ca3bf4e0a7b1582e98604a53812113b0e1ee8b8",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-44fc3954-fd8c-4f7a-950d-5a244c0a0193",
+  "started_at_ms": 1793065347779,
+  "task": "Paging skips the last item when the total is a multiple of the page size",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-5039a810-b8ca-4d2b-8ba7-2330f66b4bfd"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 5865,
+    "input_tokens": 82220,
+    "output_tokens": 2748,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-f1d9c781-0e26-4207-a572-21af2898d328"
+}

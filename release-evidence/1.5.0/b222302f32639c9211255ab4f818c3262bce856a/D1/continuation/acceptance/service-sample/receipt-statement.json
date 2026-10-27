@@ -1,0 +1,156 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/paging.js",
+      "digest": {
+        "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe",
+      "session_id": "ses-75f75840-f929-4fee-bdd7-5c55a7daf19f",
+      "started_at_ms": 1793066930603,
+      "finished_at_ms": 1793067006311,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "c4416404622647a019d7c92fa240cc81d36e1381ccbc858067fa56ef0ea4e2ee"
+    },
+    "repository": {
+      "base_commit": "592c14cb256afd84c2a99eb0935a489a3097a6a5",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix",
+      "version": 1,
+      "kind": "fix",
+      "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint deepinfra/fp4 (DeepInfra)",
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-chat-v3.1"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 1,
+          "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+          "rules": []
+        }
+      ],
+      "environment": {
+        "toolchain": "node",
+        "reason": "package.json at the repository root",
+        "image": "localhost/axocoatl-recipe-node:3b267c748259",
+        "image_id": "861dc0472db3139045371d6e43a20ec355bcdefcb044b47bf1c55e2d41207c41",
+        "recipes": [
+          "node"
+        ],
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "cache_volume": "axo-tc-b4e6e3b248d3239dd7a42a0f",
+        "probe": {
+          "program": "npm",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 174
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "pids": 512,
+        "not_applied": [
+          "CPU (2 CPUs, cgroup controller cpu)"
+        ]
+      }
+    },
+    "network": {
+      "events": 13,
+      "allowed_connections": 0,
+      "refused_connections": 0,
+      "route_requests": 0,
+      "routes": []
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 56798,
+      "output_tokens": 1371,
+      "cost_microunits": 7031,
+      "cost_usd": 0.007031,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY=",
+      "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815"
+    }
+  }
+}

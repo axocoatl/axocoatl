@@ -1,0 +1,52 @@
+{
+  "tool_errors": [
+    {
+      "role": "writer",
+      "sequence": 91,
+      "payload": {
+        "call_id": "01a17b068dae3e39ae46950d9a706658",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "writer",
+      "sequence": 99,
+      "payload": {
+        "call_id": "01a17b06c26f5f7ff64b601930f58fc0",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 9,
+      "payload": {
+        "call_id": "chatcmpl-tool-931b8e9b12b56e2a",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 494
+  },
+  "failed_activations": []
+}

@@ -1,0 +1,85 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/gate/node-plain/receipt.json",
+      "--key",
+      "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+      "--repo",
+      "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/repos/node-plain",
+      "--record",
+      "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/gate/node-plain/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/repos/node-plain",
+    "start": "2026-10-27T01:42:26.682820+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:42:26.692750+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "712b797a26f99fd33fa06d9f535ae113125b8d9384896176fee15967724af620",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/gate/node-plain/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/repos/node-plain",
+    "start": "2026-10-27T01:42:26.692930+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:42:26.701940+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "10e53d8b7944ad423f24847c2de6980921ea2cd6b47581564d42a9f74d9b17ab",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/gate/node-plain/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/repos/node-plain",
+    "start": "2026-10-27T01:42:26.702228+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:42:26.731001+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/acceptance/node-plain/host-check",
+    "start": "2026-10-27T01:42:26.731254+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:42:26.742834+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/acceptance/node-plain/host-check",
+    "start": "2026-10-27T01:42:26.743188+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:42:26.871739+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "4dbcaae382a1cf066bca8c2cc2dcff22bcb7f4c5ae6009edc1941f6653673aaa",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

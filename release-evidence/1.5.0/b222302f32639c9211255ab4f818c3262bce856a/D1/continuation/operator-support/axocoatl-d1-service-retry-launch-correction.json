@@ -1,0 +1,11 @@
+{
+  "recorded_at": "2026-10-27T02:08:30.001640+00:00",
+  "previous_script_sha256": "a15f460061a9876c33bbaaf4c3ff36900e558bf3403cb61b49635f97d5ea04ae",
+  "corrected_script_sha256": "e3ba93873bec8a437b152ab7d76b2326f0bfde760386784993de2b249762d4db",
+  "failed_launch_exit": 2,
+  "failure": "gate_secret_stored needs GATE_TMP created by gate_begin; placed before gate_begin in isolated runner",
+  "runtime_changes": false,
+  "authentication": false,
+  "inference_calls": 0,
+  "correction": "move existing-key guard immediately after gate_begin; no policy/criteria change"
+}

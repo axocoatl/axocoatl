@@ -1,0 +1,18 @@
+{
+  "schema": "axocoatl.recovery.reviewed-completions-plan/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "source_bundle": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a",
+  "source_manifest_sha256": "4d6e6fd5be81283cc16adadb06bd9641bfc079155b2aa71042990b81926544fd",
+  "source_dsse_sha256": "d620e74f03baddfb64551425ab05942fc7808752342a87e42bd45714f2aa4d26",
+  "completions": [
+    {
+      "path": "D1",
+      "source_bundle": "/private/tmp/axocoatl-b222-d1-completion-20261027",
+      "manifest_sha256": "026708335083e64a594664476622c88df20ea51e4e44ba8b9cc5b5609a2d092e",
+      "record_sha256": "2c2e7c78b4beaaf10b01a9157e9dd567f221dbe071a8650adeb503693ea6f69a",
+      "review_file": "/private/tmp/axocoatl-d1-completion-root-review.json",
+      "review_sha256": "ef8f1f588025a471307c8db0101670d0672852103f9d4010a676faf9ee35947a"
+    }
+  ]
+}

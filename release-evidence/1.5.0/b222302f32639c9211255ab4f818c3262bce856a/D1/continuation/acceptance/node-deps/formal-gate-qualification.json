@@ -1,0 +1,25 @@
+{
+  "schema": "axocoatl.recovery.artifact-vs-gate-qualification/1",
+  "at": "2026-10-27T01:46:21.226356+00:00",
+  "original_assessment_sha256": "157337bed8cf3ed6be3f7efb91c435974349806d18567574d18f71091a724dda",
+  "original_assessment_result_retained": "FAILED",
+  "reason": "Predeclared independent shape metric requires byte-identical original test file; file now also contains one additional regression test.",
+  "manual_review": {
+    "production_fix": "last page length is items.length-start, retaining a full last page for exact multiples",
+    "original_assertions_preserved": true,
+    "original_assertions_modified_or_deleted": false,
+    "new_test": "10items/page5 retains exact flattened items and both complete pages",
+    "new_test_valid": true,
+    "other_test_change": "test.run() retained; final newline removed",
+    "original_suite_passed_once": 4,
+    "unexpected_untracked_files": []
+  },
+  "formal_fixture_result": "PASS",
+  "formal_basis": [
+    "actual command exit0",
+    "required tests and review passed",
+    "trusted receipt and record/markup verify",
+    "all4originaltests pass on unchanged originals"
+  ],
+  "limits": "The strict shape score remainsFAILED. The published fixture/release contract permits adding a valid regression test and contains no byte-identical-test-file requirement. This does not complete D1."
+}

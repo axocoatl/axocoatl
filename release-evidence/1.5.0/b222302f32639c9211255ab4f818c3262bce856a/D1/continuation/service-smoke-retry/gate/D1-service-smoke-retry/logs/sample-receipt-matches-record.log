@@ -1,0 +1,4 @@
+receipt of run run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: /tmp/axo-d1-service-smoke-retry.KshcU7/record.jsonl verifies and carries this receipt
+result: valid (exit 0)

@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e",
+  "verdict": "pass",
+  "statement_sha256": "sha256:8fb289996904733305470e76d559a6a07ac4267944fed8cde5ef179ca15b6673",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/repos/node-plain",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-node-plain-20261027/public/gate/node-plain/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b, finished at 1793065147667 ms",
+    "Base commit 5b4d68caf042fb2d14057c0b076b487bcb077d60",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paging.js  sha256:c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

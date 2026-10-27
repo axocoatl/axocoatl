@@ -1,0 +1,179 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793066929059,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793066929059,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-75f75840-f929-4fee-bdd7-5c55a7daf19f",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793066930059,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-75f75840-f929-4fee-bdd7-5c55a7daf19f",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793066930116,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:11e5a494-e7c0-4533-98d9-9fc6cd68a4ee",
+        "agent": "team-definition-ac3a733b1b1f5c2523fff73661763ecf9c536b299f1f0bf414598dc3aac0fbc9",
+        "invocation_id": "tool-b73262fb72115507089a69d7302103cfa240bfff2fc1ca02f074bd543519ca5c",
+        "kind": "agent",
+        "node_id": "team-node-a7b3daae8363d17626334191",
+        "process": "tool-b73262fb72115507089a69d7302103cfa240bfff2fc1ca02f074bd543519ca5c:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "27c9c891b50857e2"
+    },
+    "seq": 5,
+    "ts_ms": 1793066950079,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "27c9c891b50857e2"
+    },
+    "seq": 6,
+    "ts_ms": 1793066950276,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:11e5a494-e7c0-4533-98d9-9fc6cd68a4ee",
+        "agent": "team-definition-ac3a733b1b1f5c2523fff73661763ecf9c536b299f1f0bf414598dc3aac0fbc9",
+        "invocation_id": "tool-014d9ddfebe70b747e29da7c025bd81b5d77bec96b4dce4a2a1cfd74816a5264",
+        "kind": "agent",
+        "node_id": "team-node-a7b3daae8363d17626334191",
+        "process": "tool-014d9ddfebe70b747e29da7c025bd81b5d77bec96b4dce4a2a1cfd74816a5264:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "9d694c2ae35ca112"
+    },
+    "seq": 7,
+    "ts_ms": 1793066967420,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "9d694c2ae35ca112"
+    },
+    "seq": 8,
+    "ts_ms": 1793066967586,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:11e5a494-e7c0-4533-98d9-9fc6cd68a4ee",
+        "agent": "team-definition-ac3a733b1b1f5c2523fff73661763ecf9c536b299f1f0bf414598dc3aac0fbc9",
+        "invocation_id": "tool-26292d9fc51e74adbbc67b0898f2d9b42c96ec53537dd78d45fc931f685dcf17",
+        "kind": "agent",
+        "node_id": "team-node-a7b3daae8363d17626334191",
+        "process": "tool-26292d9fc51e74adbbc67b0898f2d9b42c96ec53537dd78d45fc931f685dcf17:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "6efbf2b11dca86fc"
+    },
+    "seq": 9,
+    "ts_ms": 1793066972522,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "6efbf2b11dca86fc"
+    },
+    "seq": 10,
+    "ts_ms": 1793066972624,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:11e5a494-e7c0-4533-98d9-9fc6cd68a4ee",
+        "agent": "team-definition-ac3a733b1b1f5c2523fff73661763ecf9c536b299f1f0bf414598dc3aac0fbc9",
+        "invocation_id": "tool-28e2cf522ec6403930c5f68a028992a16101492bbf2736496303697869561b98",
+        "kind": "agent",
+        "node_id": "team-node-a7b3daae8363d17626334191",
+        "process": "tool-28e2cf522ec6403930c5f68a028992a16101492bbf2736496303697869561b98:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "977e667b3e5ced7e"
+    },
+    "seq": 11,
+    "ts_ms": 1793066977113,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "977e667b3e5ced7e"
+    },
+    "seq": 12,
+    "ts_ms": 1793066977278,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 13,
+    "ts_ms": 1793067006274,
+    "v": 1
+  }
+]

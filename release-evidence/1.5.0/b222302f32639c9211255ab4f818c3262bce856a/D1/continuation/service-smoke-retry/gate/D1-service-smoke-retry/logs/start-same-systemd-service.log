@@ -1,0 +1,2 @@
+✓ Always-On Service started — the daemon now runs 24/7
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.

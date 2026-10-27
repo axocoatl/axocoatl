@@ -1,0 +1,36 @@
+Axocoatl doctor (config: /home/d1gate/.config/axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 4.9.3 ready (rootless; kernel 6.8.0-142-generic), needed for every Session and every axocoatl run
+  [ OK ] Landlock ABI 4
+  [ OK ] Platform: Ubuntu 24.04.5 LTS, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] OpenRouter API key present (secret openrouter, never shown)
+
+Writers
+  [ OK ] Claude Code: not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)
+  [ OK ] Codex: not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)
+  [ OK ] claude CLI: not found; needed only to sign in with `axocoatl connect claude-code`
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: not found; needed only for `axocoatl run --keep pr`
+  [ OK ] Stored credentials: openrouter, receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /home/d1gate/.config/axocoatl/config.yaml
+  [ OK ] Data dir writable: /home/d1gate/.local/share/axocoatl
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.43.0 (the daemon runs git on your repositories)
+  [ OK ] systemd user session: running (systemd --user)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes

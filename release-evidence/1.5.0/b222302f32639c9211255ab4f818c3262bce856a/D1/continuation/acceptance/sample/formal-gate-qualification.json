@@ -1,0 +1,28 @@
+{
+  "schema": "axocoatl.recovery.artifact-vs-gate-qualification/1",
+  "at": "2026-10-27T01:44:23.104663+00:00",
+  "original_assessment_sha256": "0da4f448043d260a29f11b41817cfa475f4aad8c7fd59c23cbd805e42f1cb8b6",
+  "original_assessment_result_retained": "FAILED",
+  "reason": "Predeclared independent artifact-shape criterion refuses unexpected untracked scratch files.",
+  "scratch": {
+    "path": "test_fix.js",
+    "sha256": "86dc5ab7efceef5d6d032c114722e9067968fdeb4460120d37642f61ea9c5a6e",
+    "lines": 14,
+    "description": "Console-only probes of full, partial, and empty pagination; no original assertions or manifests changed.",
+    "included_in_signed_receipt": true
+  },
+  "formal_sample_result": "PASS",
+  "formal_basis": [
+    "actual run exited0",
+    "required tests and review passed",
+    "receipt signature and both covered files verify",
+    "record and accepted-answer markup verify",
+    "original tests unchanged3/3 on single independent invocation"
+  ],
+  "contract_basis": [
+    "Sample README asks only to fix paging; it does not forbid additional files.",
+    "docs/RELEASE_GATE.md D1criteria require command success and verified receipt/record; no no-untracked-files criterion."
+  ],
+  "limits": "Quality counterexample remains FAILED. This qualification does not assert D1complete; remaining languagefixtures and servicecriteria still required.",
+  "no_artifact_changes_or_rerun": true
+}

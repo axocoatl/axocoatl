@@ -1,0 +1,72 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "original_private_archive_sha256": "51ec749cd0dc10163f951db0d70c8772b889729807b563852818e0a437f6b564",
+  "original_archive_included": false,
+  "original_gate_d1_json_exists": false,
+  "reason": "Initial official script was stopped after OAuth401 and cascading dependent failures before finish; all original steps retained unchanged.",
+  "files": [
+    {
+      "source_member": "operator.json",
+      "path": "operator.json",
+      "original_sha256": "879fb60bcc15e08d0c7d74b50752c575d154d0b244980fbe53cf1eb47e5a48a2",
+      "sha256": "879fb60bcc15e08d0c7d74b50752c575d154d0b244980fbe53cf1eb47e5a48a2",
+      "bytes": 769,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "recorder/host.json",
+      "path": "host.json",
+      "original_sha256": "8e8f700fde0950601308a1cca1c1d0efc7660bb9a4b01802dac1ff59860b9d79",
+      "sha256": "8e8f700fde0950601308a1cca1c1d0efc7660bb9a4b01802dac1ff59860b9d79",
+      "bytes": 188,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "recorder/steps.jsonl",
+      "path": "original-steps.jsonl",
+      "original_sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+      "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f",
+      "bytes": 13565,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install.log",
+      "path": "install.log",
+      "original_sha256": "59fd210f28928a1e5f89292a3f998927d39ad2bacfa632c6e48ede5370650e7a",
+      "sha256": "59fd210f28928a1e5f89292a3f998927d39ad2bacfa632c6e48ede5370650e7a",
+      "bytes": 1102,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install-curl-urls.log",
+      "path": "install-curl-urls.log",
+      "original_sha256": "d473c9b42a97e7f3007a891ebfb06763989d70c9ad94ed2c2bcbdd7494d1db0d",
+      "sha256": "d473c9b42a97e7f3007a891ebfb06763989d70c9ad94ed2c2bcbdd7494d1db0d",
+      "bytes": 343,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/forward-check.log",
+      "path": "forward-check.log",
+      "original_sha256": "7bb08953c127368b2de43bc52cddac34b1d2148fe447a1fce8eef7d0c746c852",
+      "sha256": "7bb08953c127368b2de43bc52cddac34b1d2148fe447a1fce8eef7d0c746c852",
+      "bytes": 80,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    },
+    {
+      "source_member": "onboarding-logs/onboard-20261027-004446.log",
+      "path": "initial-onboarding-commands.log",
+      "original_sha256": "280479b006f7428e87b98fec0fe2729ff259369584d4ef7ab9c23b01b1494476",
+      "sha256": "280479b006f7428e87b98fec0fe2729ff259369584d4ef7ab9c23b01b1494476",
+      "bytes": 5629,
+      "redacted_codes": 0,
+      "redacted_credentials": 0
+    }
+  ]
+}

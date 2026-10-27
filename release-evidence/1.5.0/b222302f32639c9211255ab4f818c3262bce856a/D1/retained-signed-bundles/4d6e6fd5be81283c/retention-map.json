@@ -1,0 +1,14 @@
+{
+  "schema": "axocoatl.recovery.retained-bundle-map/2",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "source_manifest_sha256": "4d6e6fd5be81283cc16adadb06bd9641bfc079155b2aa71042990b81926544fd",
+  "source_dsse_sha256": "d620e74f03baddfb64551425ab05942fc7808752342a87e42bd45714f2aa4d26",
+  "source_file_count": 3935,
+  "overrides": {
+    "manifest.json": "D1/retained-signed-bundles/4d6e6fd5be81283c/files/manifest.json",
+    "manifest.dsse.json": "D1/retained-signed-bundles/4d6e6fd5be81283c/files/manifest.dsse.json"
+  },
+  "default": "same relative path",
+  "reconstruction": "To verify older nested maps, first reconstruct this complete prior bundle through this map; do not reinterpret prior maps against changed top-level files."
+}

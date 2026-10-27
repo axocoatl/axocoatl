@@ -1,0 +1,18 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 7732b54..9303162 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -15,7 +15,12 @@ pub fn paginate<T: Clone>(items: &[T], size: usize) -> Vec<Vec<T>> {
+         let length = if page + 1 < count {
+             size
+         } else {
+-            items.len() % size
++            // If remainder is 0, it means we have a complete last page
++            if items.len() % size == 0 {
++                size
++            } else {
++                items.len() % size
++            }
+         };
+         pages.push(items[start..start + length].to_vec());
+     }

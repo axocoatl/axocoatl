@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55",
+  "verdict": "pass",
+  "statement_sha256": "sha256:51f514cf4443051a89e6ff603072710a3141e539f6dd00312d6d7f13b1325a5f",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55 (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-f766840a-c06e-4901-980f-8f73d2f38b4d, finished at 1793066702059 ms",
+    "Base commit 7a1a6d2f05e67c20917433624bac9b84c3eb12e1",
+    "Agent writer (writer): native openrouter endpoint deepinfra/fp4 (DeepInfra), openrouter:deepseek/deepseek-chat-v3.1",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoints near-ai/fp4 (Near AI), coreweave/fp4 (CoreWeave)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:c549a6a2746299d2132d49e39905b691e7adf11cb99e3226a052068380301ff0",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 512 processes; not applied, this host does not delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)"
+  ]
+}

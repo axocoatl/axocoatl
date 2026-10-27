@@ -1,0 +1,114 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  0.45ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793066702059,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 6,
+    "events": 31,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "writer_model = openrouter:deepseek/deepseek-chat-v3.1 (from your setup: run.models.writer in the configuration)",
+    "reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)",
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)",
+    "The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.",
+    "setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.2 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call",
+    "deepseek/deepseek-chat-v3.1 on OpenRouter: 16 calls answered by endpoint deepinfra/fp4 (DeepInfra)",
+    "openai/gpt-oss-120b on OpenRouter: 4 calls answered by endpoint near-ai/fp4 (Near AI), 8 by coreweave/fp4 (CoreWeave); 1 call moved on from endpoint near-ai/fp4 (Near AI), which failed them before answering"
+  ],
+  "openrouter_endpoints": {
+    "deepseek/deepseek-chat-v3.1": [
+      {
+        "calls": 16,
+        "endpoint": "deepinfra/fp4",
+        "provider": "DeepInfra"
+      }
+    ],
+    "openai/gpt-oss-120b": [
+      {
+        "calls": 4,
+        "endpoint": "near-ai/fp4",
+        "moved": 1,
+        "provider": "Near AI"
+      },
+      {
+        "calls": 8,
+        "endpoint": "coreweave/fp4",
+        "provider": "CoreWeave"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-f766840a-c06e-4901-980f-8f73d2f38b4d",
+  "started_at_ms": 1793066483325,
+  "task": "Paging skips the last item when the total is a multiple of the page size",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-8940d880-e169-4b1c-a081-876a70fa071c"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 14209,
+    "input_tokens": 114008,
+    "output_tokens": 1448,
+    "retries": 1
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-9fa62e2f-f808-45ac-8262-3c17d4ca1741"
+}

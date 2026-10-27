@@ -1,0 +1,74 @@
+[
+  {
+    "case": "sample",
+    "assessment": "D1/continuation/acceptance/sample/assessment.json",
+    "sha256": "0da4f448043d260a29f11b41817cfa475f4aad8c7fd59c23cbd805e42f1cb8b6",
+    "strict_result": "FAILED",
+    "original_tests": 3,
+    "run_id": "run-57b845d2-8a89-4449-b909-ba49eb95f8af",
+    "artifact_contract_result": "see retained sample quality assessment"
+  },
+  {
+    "case": "node-plain",
+    "assessment": "D1/continuation/acceptance/node-plain/assessment.json",
+    "sha256": "2006ae5d9fb4d2720532fdd402924c40c492dd517afbd8aeb7f4bd65cf6865bf",
+    "strict_result": "ACCEPTED",
+    "original_tests": 3,
+    "run_id": "run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e",
+    "artifact_contract_result": "ACCEPTED"
+  },
+  {
+    "case": "node-deps",
+    "assessment": "D1/continuation/acceptance/node-deps/assessment.json",
+    "sha256": "157337bed8cf3ed6be3f7efb91c435974349806d18567574d18f71091a724dda",
+    "strict_result": "FAILED",
+    "original_tests": 4,
+    "run_id": "run-4cfbd34f-3819-4af6-b41d-94bf025ade65",
+    "artifact_contract_result": "FAILED: added test violates explicit No test changes"
+  },
+  {
+    "case": "python-pytest",
+    "assessment": "D1/continuation/acceptance/python-pytest/assessment.json",
+    "sha256": "cef7ecb022a230511c16cd7bd7b590f65965f566e7f4bee525811bd71eddbca4",
+    "strict_result": "ACCEPTED",
+    "original_tests": 4,
+    "run_id": "run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac",
+    "artifact_contract_result": "ACCEPTED"
+  },
+  {
+    "case": "rust",
+    "assessment": "D1/continuation/acceptance/rust/assessment.json",
+    "sha256": "b9478c26d69e5c1844f1e146481e65cf92d6ed00d98a6b8c3836ea975c0e932d",
+    "strict_result": "ACCEPTED",
+    "original_tests": 4,
+    "run_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+    "artifact_contract_result": "ACCEPTED"
+  },
+  {
+    "case": "go",
+    "assessment": "D1/continuation/acceptance/go/assessment.json",
+    "sha256": "1501e3f7e4c2ad8f6e83a18f373e5853e019b6201ccd3013efb11b51e16a555d",
+    "strict_result": "ACCEPTED",
+    "original_tests": 4,
+    "run_id": "run-1afe11cf-8268-4b8a-a73b-b2a095470b6c",
+    "artifact_contract_result": "ACCEPTED"
+  },
+  {
+    "case": "service-sample",
+    "assessment": "D1/continuation/acceptance/service-sample/assessment.json",
+    "sha256": "b4e17077ab7505c87c347cce7f09bde971aee7087a9319895c5d54f479e63e9a",
+    "strict_result": "ACCEPTED",
+    "original_tests": 3,
+    "run_id": "run-bac8dd36-b89f-4fb5-80d0-6bccc36be6fe",
+    "artifact_contract_result": "ACCEPTED"
+  },
+  {
+    "case": "service-node-deps",
+    "assessment": "D1/continuation/acceptance/service-node-deps/assessment.json",
+    "sha256": "638e769d50d3c0e67d5f1a3577e062d688fcf0b53f56a5a0c1714d215ad302b0",
+    "strict_result": "ACCEPTED",
+    "original_tests": 4,
+    "run_id": "run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55",
+    "artifact_contract_result": "ACCEPTED"
+  }
+]

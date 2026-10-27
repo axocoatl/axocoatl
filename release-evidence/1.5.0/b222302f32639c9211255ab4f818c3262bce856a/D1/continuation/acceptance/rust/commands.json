@@ -1,0 +1,90 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.receipt.json",
+      "--key",
+      "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+      "--repo",
+      "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+      "--record",
+      "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+    "start": "2026-10-27T01:50:32.369648+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:50:32.381067+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "4670c0e855fb9b514e058096845aa813fe7ff4df1f49ea479448438d12ff81cc",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+    "start": "2026-10-27T01:50:32.381224+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:50:32.392270+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "0f5303144d19aaee9ecf45969a824bec0e56d093f9b5f34bf8fe14524641abf6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+    "start": "2026-10-27T01:50:32.392432+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:50:32.422504+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.cargo/bin/cargo",
+      "+1.95.0",
+      "--version"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/host-check",
+    "start": "2026-10-27T01:50:32.422732+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:50:32.476054+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.cargo/bin/cargo",
+      "+1.95.0",
+      "test",
+      "--offline",
+      "--jobs",
+      "1"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/host-check",
+    "start": "2026-10-27T01:50:32.476492+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:50:33.882965+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+    "stderr_sha256": "644c16191e07f47f8277bd6cf62cc77046cec40dbe8d61ecd7e48c8a404d7267"
+  }
+]

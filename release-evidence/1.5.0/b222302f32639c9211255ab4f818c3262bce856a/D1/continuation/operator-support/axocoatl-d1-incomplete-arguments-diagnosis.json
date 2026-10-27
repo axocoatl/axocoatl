@@ -1,0 +1,49 @@
+{
+  "schema": "axocoatl.d1-incomplete-native-arguments-diagnosis/1",
+  "recorded_at": "2026-10-27T01:29:01.779520+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "run_id": "run-dffa734d-0494-4cf3-a093-b237ca092b91",
+  "record_path": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/record.jsonl",
+  "record_sha256": "f37ea90980934c8140a5d24cd31cde62538d4768bac6ac7cb00380a6e2d9e77b",
+  "actual_failure": "native OpenRouter: incomplete native tool arguments",
+  "reviewer_model": "openai/gpt-oss-120b",
+  "completed_endpoint_observation": "near-ai/fp4 (Near AI), five completed calls",
+  "reviewer_recorded_event_counts": {
+    "provider_response": 5,
+    "reasoning_summary": 7,
+    "tool_proposed": 5,
+    "tool_result": 5
+  },
+  "last_recorded_event": {
+    "delta": "So test expects last item on its own page. Using Math.ceil count gives correct. Edge cases: size is integer >0. If items empty? Should return []? Let's see expected behavior maybe tests. Search for behavior with empty.",
+    "kind": "reasoning_summary"
+  },
+  "failed_call_raw_fragments_retained": false,
+  "failed_call_finish_reason_retained": false,
+  "configured_reviewer_max_output_tokens": 8192,
+  "confirmed": [
+    "writer artifact changed one implementation line; original3 tests passed (independent audit separate)",
+    "five previous reviewer calls decoded and tools returned results",
+    "sixth reviewer call failed before any corresponding tool_proposed/tool_result or successful provider_response event",
+    "malformed call was not executed and required review was not falsely approved"
+  ],
+  "source_control_flow_inference": [
+    "error at native_openrouter/stream.rs458 means all required route/usage/cost/SSE-DONE checks passed before per-index concatenated argument JSON parsing failed",
+    "the parser appends string fragments by tool index, validates stable call identity/name, then parses JSON before reporting final finish reason",
+    "the generic error discards JSON classification/location and observed finish reason; actor abandons partial argument buffer on provider error"
+  ],
+  "not_established": [
+    "actual provider argument bytes",
+    "whether finish_reason was length/tool_calls/stop",
+    "whether source input was malformed/truncated or assembly semantics mismatched",
+    "a production parser defect",
+    "a reliable reproduction from existing evidence alone"
+  ],
+  "recommended_next_action": "Preserve failure and use one normal targeted reviewer/sample retry; if recurring, capture bounded response-only SSE for exact failed context and replay offline before changing parser. No malformed-tool acceptance or gate weakening.",
+  "no_new_inference": true,
+  "source_changes": false,
+  "source_sha256": {
+    "crates/axocoatl-llm-openai/src/native_openrouter/stream.rs": "106e7f0ddd9d0513313a013c1ca3417bd1ebb8e76cddb0cf886485e56426743d",
+    "crates/axocoatl-actor/src/default_behavior.rs": "c7956cc1d1a8f45956f14a5f54c058f991f452a9c1b357961df2b091bb710319"
+  }
+}

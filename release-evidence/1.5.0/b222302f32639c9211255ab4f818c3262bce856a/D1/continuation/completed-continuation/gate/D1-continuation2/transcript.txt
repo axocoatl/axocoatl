@@ -1,0 +1,1199 @@
+Script started on 2026-10-26 18:34:57-07:00 [COMMAND="bash ./axocoatl-d1-b222-sample-retry.sh " TERM="dumb" TTY="/dev/pts/0" COLUMNS="120" LINES="36"]
+gate: PASS  existing OpenRouter key and same writer/reviewer for targeted retry
+/home/d1gate/.config/axocoatl/config.yaml: providers.openrouter reads the key from secret openrouter; openrouter_billing: credits
+  OpenRouter key: stored as secret openrouter (never shown)
+  Key label: sk-or-v1-5b0...8b3
+  Credit limit: $2.00 on this key, $2.00 left
+  Used by this key: $0.004036 in all, $0.004036 today (UTC)
+  Free tier: no (the account has bought credits)
+gate: RUN   onboard targeted sample retry (existing key; same models and required review)
+Axocoatl setup
+Every command this runs is logged to /home/d1gate/.local/state/axocoatl/onboard-20261027-013458.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 4 GB memory, 2 cores, 24 GB free.
+Found: Podman 4.9.3 (ready), git 2.43.0.
+Not found: Ollama, claude, codex, gh.
+
+An Axocoatl configuration exists: /home/d1gate/.config/axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A hosted model (OpenRouter credits) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 4
+Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image
+Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2KSessions start from, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+Copying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 4
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n] [?25l[2KUse OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) yes
+[?25h  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists qwen/qwen3-coder-30b-a3b-instruct
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  ✓ /home/d1gate/.config/axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+  Starting a daemon for this run (axocoatl serve on port 8080; its first start downloads an 87 MB embedding model once)…
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo --receipt /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --record /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/record.jsonl --config /home/d1gate/.config/axocoatl/config.yaml --model writer=openrouter:qwen/qwen3-coder-30b-a3b-instruct --model reviewer=openrouter:openai/gpt-oss-120b
+· starting loadout fix in /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+· run run-57b845d2-8a89-4449-b909-ba49eb95f8af in Session ses-1797bd4c-33ed-4672-9795-672433efb00d
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-33f0eccc-a082-4390-b06d-9ec9ec959123 started (run)
+· turn turn-33f0eccc-a082-4390-b06d-9ec9ec959123 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 13 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 75950 input + 1866 output tokens, $0.0047
+Network: 11 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-57b845d2-8a89-4449-b909-ba49eb95f8af
+· record written to /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/record.jsonl
+· receipt written to /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json (key 9641bb56a31f3a21, 2 files covered, 0 removed, judged_capture)
+  $ axocoatl receipt verify /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --key "$(axocoatl receipt key)" --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+receipt of run run-57b845d2-8a89-4449-b909-ba49eb95f8af, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 2 covered and 0 removed match /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo (judged_capture)
+result: valid (exit 0)
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard targeted sample retry (existing key; same models and required review) (143.8s)
+gate: PASS  targeted onboarding sample answered live
+gate: PASS  onboarding did not install Ollama
+gate: PASS  onboarding wrote /home/d1gate/.config/axocoatl/config.yaml
+gate: RUN   doctor --json says ready
+gate: PASS  doctor --json says ready (0.3s)
+gate: PASS  doctor: ready, no FAIL in sandbox, models, writers, daemon
+gate: RUN   doctor exits 0
+Axocoatl doctor (config: /home/d1gate/.config/axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 4.9.3 ready (rootless; kernel 6.8.0-142-generic), needed for every Session and every axocoatl run
+  [ OK ] Landlock ABI 4
+  [ OK ] Platform: Ubuntu 24.04.5 LTS, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] OpenRouter API key present (secret openrouter, never shown)
+
+Writers
+  [ OK ] Claude Code: not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)
+  [ OK ] Codex: not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)
+  [ OK ] claude CLI: not found; needed only to sign in with `axocoatl connect claude-code`
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: not found; needed only for `axocoatl run --keep pr`
+  [ OK ] Stored credentials: openrouter, receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /home/d1gate/.config/axocoatl/config.yaml
+  [ OK ] Data dir writable: /home/d1gate/.local/share/axocoatl
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.43.0 (the daemon runs git on your repositories)
+  [ OK ] systemd user session: running (systemd --user)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+gate: PASS  doctor exits 0 (0.3s)
+gate: PASS  doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]
+gate: PASS  axocoatl dev serves on its configured port
+gate: RUN   run fix on node-plain
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/node-plain
+· run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e in Session ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b
+· note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-cb72741d-3ae4-453e-a23b-1c52ff0103ed started (run)
+· turn turn-cb72741d-3ae4-453e-a23b-1c52ff0103ed ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 8 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 46974 input + 1432 output tokens, $0.0026
+Network: 11 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-plain (103.4s)
+gate: PASS  run on node-plain chose a node image
+gate: RUN   receipt verify on node-plain (documented command)
+receipt of run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on node-plain (documented command) (0.0s)
+gate: RUN   record verify on node-plain
+valid: run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e in Session ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b, written by Axocoatl 1.5.0, 31 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 11
+  run_event: 12
+  receipt: 1
+gate: PASS  record verify on node-plain (0.0s)
+gate: RUN   receipt matches the record on node-plain
+receipt of run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-plain (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-plain
+gate: RUN   run fix on node-deps
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/node-deps
+· run run-4cfbd34f-3819-4af6-b41d-94bf025ade65 in Session ses-b4e67f2e-8ec0-4e43-9900-38703f884054
+· note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.3 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-1b14ba10-99a4-4550-87a2-b60d2dc28976 started (run)
+· turn turn-1b14ba10-99a4-4550-87a2-b60d2dc28976 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.3 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 13 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 13 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 125350 input + 2540 output tokens, $0.0070
+Network: 29 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-4cfbd34f-3819-4af6-b41d-94bf025ade65
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 9641bb56a31f3a21, 2 files covered, 0 removed, judged_capture)
+gate: PASS  run fix on node-deps (181.4s)
+gate: PASS  run on node-deps chose a node image
+gate: PASS  run on node-deps ran setup (npm ci)
+gate: RUN   receipt verify on node-deps (documented command)
+receipt of run run-4cfbd34f-3819-4af6-b41d-94bf025ade65, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 2 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on node-deps (documented command) (0.0s)
+gate: RUN   record verify on node-deps
+valid: run run-4cfbd34f-3819-4af6-b41d-94bf025ade65 in Session ses-b4e67f2e-8ec0-4e43-9900-38703f884054, written by Axocoatl 1.5.0, 50 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 29
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on node-deps (0.0s)
+gate: RUN   receipt matches the record on node-deps
+receipt of run run-4cfbd34f-3819-4af6-b41d-94bf025ade65, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on node-deps (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on node-deps
+gate: RUN   run fix on python-pytest
+· building the run's image localhost/axocoatl-recipe-python:10128f1d8789 (python, from docker.io/library/python:3.13.16-slim-bookworm): about 65 MB to download, about 250 MB on disk, once on this computer; later runs reuse it
+STEP 1/8: FROM docker.io/library/python:3.13.16-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
+Trying to pull docker.io/library/python@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641...
+Getting image source signatures
+Copying blob sha256:32020fed7f2a057b9cee7fdbfa3ea9fc394149118d7a951c462c7055c3cd3f56
+Copying blob sha256:aa08835651e777794bde3e8c99bee012c418f60d0d164df22497fa01dc72aca5
+Copying blob sha256:7b2df2902dddd1a4510670c4d3a6d61b4458fa3e7c1ae0b262d75bde1349ab14
+Copying blob sha256:c75f989a229d12b2d2613a5997de9ff3546f664c22da9248720033a2410220f6
+Copying config sha256:da841a7026abc0089180121604f6d0ba4324998e2d133eccae13f22707055dc1
+Writing manifest to image destination
+STEP 2/8: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+  libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0
+  libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1 libsasl2-2
+  libsasl2-modules-db libssh2-1 perl perl-modules-5.36
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn krb5-doc krb5-user sensible-utils
+  make-doc perl-doc libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+Recommended packages:
+  patch less ssh-client krb5-locales libldap-common publicsuffix
+  libsasl2-modules
+The following NEW packages will be installed:
+  git git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1
+  libgdbm-compat4 libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3
+  libkrb5support0 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1
+  libsasl2-2 libsasl2-modules-db libssh2-1 make perl perl-modules-5.36
+The following packages will be upgraded:
+  ca-certificates
+1 upgraded, 23 newly installed, 0 to remove and 3 not upgraded.
+Need to get 18.8 MB of archives.
+After this operation, 107 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-modules-5.36 all 5.36.0-7+deb12u4 [2817 kB]
+Get:2 http://deb.debian.org/debian bookworm/main arm64 libgdbm-compat4 arm64 1.23-3 [48.0 kB]
+Get:3 http://deb.debian.org/debian-security bookworm-security/main arm64 libperl5.36 arm64 5.36.0-7+deb12u4 [4002 kB]
+Get:4 http://deb.debian.org/debian-security bookworm-security/main arm64 perl arm64 5.36.0-7+deb12u4 [239 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main arm64 ca-certificates all 20250419~deb12u2 [161 kB]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 libbrotli1 arm64 1.0.9-2+deb12u1 [267 kB]
+Get:7 http://deb.debian.org/debian bookworm/main arm64 libkrb5support0 arm64 1.20.1-2+deb12u5 [32.6 kB]
+Get:8 http://deb.debian.org/debian bookworm/main arm64 libk5crypto3 arm64 1.20.1-2+deb12u5 [79.9 kB]
+Get:9 http://deb.debian.org/debian bookworm/main arm64 libkeyutils1 arm64 1.6.3-2 [8844 B]
+Get:10 http://deb.debian.org/debian bookworm/main arm64 libkrb5-3 arm64 1.20.1-2+deb12u5 [316 kB]
+Get:11 http://deb.debian.org/debian bookworm/main arm64 libgssapi-krb5-2 arm64 1.20.1-2+deb12u5 [124 kB]
+Get:12 http://deb.debian.org/debian bookworm/main arm64 libsasl2-modules-db arm64 2.1.28+dfsg-10 [20.8 kB]
+Get:13 http://deb.debian.org/debian bookworm/main arm64 libsasl2-2 arm64 2.1.28+dfsg-10 [58.0 kB]
+Get:14 http://deb.debian.org/debian bookworm/main arm64 libldap-2.5-0 arm64 2.5.13+dfsg-5 [171 kB]
+Get:15 http://deb.debian.org/debian bookworm/main arm64 libnghttp2-14 arm64 1.52.0-1+deb12u3 [69.0 kB]
+Get:16 http://deb.debian.org/debian bookworm/main arm64 libpsl5 arm64 0.21.2-1 [58.6 kB]
+Get:17 http://deb.debian.org/debian bookworm/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b2 [59.4 kB]
+Get:18 http://deb.debian.org/debian-security bookworm-security/main arm64 libssh2-1 arm64 1.10.0-3+deb12u1 [169 kB]
+Get:19 http://deb.debian.org/debian bookworm/main arm64 libcurl3-gnutls arm64 7.88.1-10+deb12u15 [362 kB]
+Get:20 http://deb.debian.org/debian-security bookworm-security/main arm64 libexpat1 arm64 2.5.0-1+deb12u5 [91.7 kB]
+Get:21 http://deb.debian.org/debian bookworm/main arm64 liberror-perl all 0.17029-2 [29.0 kB]
+Get:22 http://deb.debian.org/debian bookworm/main arm64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+Get:23 http://deb.debian.org/debian bookworm/main arm64 git arm64 1:2.39.5-0+deb12u3 [7153 kB]
+Get:24 http://deb.debian.org/debian bookworm/main arm64 make arm64 4.3-4.1 [391 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 18.8 MB in 1s (29.2 MB/s)
+Selecting previously unselected package perl-modules-5.36.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6642 files and directories currently installed.)
+Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u4_all.deb ...
+Unpacking perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libgdbm-compat4:arm64.
+Preparing to unpack .../01-libgdbm-compat4_1.23-3_arm64.deb ...
+Unpacking libgdbm-compat4:arm64 (1.23-3) ...
+Selecting previously unselected package libperl5.36:arm64.
+Preparing to unpack .../02-libperl5.36_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../03-perl_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl (5.36.0-7+deb12u4) ...
+Preparing to unpack .../04-ca-certificates_20250419~deb12u2_all.deb ...
+Unpacking ca-certificates (20250419~deb12u2) over (20250419~deb12u1) ...
+Selecting previously unselected package libbrotli1:arm64.
+Preparing to unpack .../05-libbrotli1_1.0.9-2+deb12u1_arm64.deb ...
+Unpacking libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libkrb5support0:arm64.
+Preparing to unpack .../06-libkrb5support0_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libk5crypto3:arm64.
+Preparing to unpack .../07-libk5crypto3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libkeyutils1:arm64.
+Preparing to unpack .../08-libkeyutils1_1.6.3-2_arm64.deb ...
+Unpacking libkeyutils1:arm64 (1.6.3-2) ...
+Selecting previously unselected package libkrb5-3:arm64.
+Preparing to unpack .../09-libkrb5-3_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libgssapi-krb5-2:arm64.
+Preparing to unpack .../10-libgssapi-krb5-2_1.20.1-2+deb12u5_arm64.deb ...
+Unpacking libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Selecting previously unselected package libsasl2-modules-db:arm64.
+Preparing to unpack .../11-libsasl2-modules-db_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libsasl2-2:arm64.
+Preparing to unpack .../12-libsasl2-2_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libldap-2.5-0:arm64.
+Preparing to unpack .../13-libldap-2.5-0_2.5.13+dfsg-5_arm64.deb ...
+Unpacking libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:arm64.
+Preparing to unpack .../14-libnghttp2-14_1.52.0-1+deb12u3_arm64.deb ...
+Unpacking libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:arm64.
+Preparing to unpack .../15-libpsl5_0.21.2-1_arm64.deb ...
+Unpacking libpsl5:arm64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:arm64.
+Preparing to unpack .../16-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_arm64.deb ...
+Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:arm64.
+Preparing to unpack .../17-libssh2-1_1.10.0-3+deb12u1_arm64.deb ...
+Unpacking libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl3-gnutls:arm64.
+Preparing to unpack .../18-libcurl3-gnutls_7.88.1-10+deb12u15_arm64.deb ...
+Unpacking libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libexpat1:arm64.
+Preparing to unpack .../19-libexpat1_2.5.0-1+deb12u5_arm64.deb ...
+Unpacking libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../20-liberror-perl_0.17029-2_all.deb ...
+Unpacking liberror-perl (0.17029-2) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../21-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+Unpacking git-man (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package git.
+Preparing to unpack .../22-git_1%3a2.39.5-0+deb12u3_arm64.deb ...
+Unpacking git (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package make.
+Preparing to unpack .../23-make_4.3-4.1_arm64.deb ...
+Unpacking make (4.3-4.1) ...
+Setting up libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Setting up libkeyutils1:arm64 (1.6.3-2) ...
+Setting up libpsl5:arm64 (0.21.2-1) ...
+Setting up libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Setting up libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Setting up libkrb5support0:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Setting up ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+rehash: warning: skipping ca-certificates.crt,it does not contain exactly one certificate or CRL
+0 added, 2 removed; done.
+Setting up perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Setting up make (4.3-4.1) ...
+Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libgdbm-compat4:arm64 (1.23-3) ...
+Setting up libk5crypto3:arm64 (1.20.1-2+deb12u5) ...
+Setting up libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Setting up git-man (1:2.39.5-0+deb12u3) ...
+Setting up libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Setting up libkrb5-3:arm64 (1.20.1-2+deb12u5) ...
+Setting up libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Setting up libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Setting up perl (5.36.0-7+deb12u4) ...
+Setting up libgssapi-krb5-2:arm64 (1.20.1-2+deb12u5) ...
+Setting up libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Setting up liberror-perl (0.17029-2) ...
+Setting up git (1:2.39.5-0+deb12u3) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+Processing triggers for ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+0 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+--> b02798bc59d9
+STEP 3/8: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=python-3.13.16-bookworm
+--> 21de55cc4574
+STEP 4/8: ENV AXOCOATL_TOOLCHAIN=python     AXOCOATL_CACHE=/opt/axocoatl-cache     VIRTUAL_ENV=/opt/axocoatl-cache/python/venv     PIP_CACHE_DIR=/opt/axocoatl-cache/python/pip     PIP_DISABLE_PIP_VERSION_CHECK=1     PIP_NO_INPUT=1     PIP_ROOT_USER_ACTION=ignore     PYTHONDONTWRITEBYTECODE=1     PYTEST_ADDOPTS="-p no:cacheprovider"     DIST_EXTRA_CONFIG=/etc/axocoatl/setuptools.cfg
+--> d6db97514419
+STEP 5/8: ENV PATH=/opt/axocoatl-cache/python/venv/bin:$PATH
+--> 8e06d16885c9
+STEP 6/8: RUN mkdir -p /opt/axocoatl-cache /etc/axocoatl  && printf '[egg_info]\negg_base = /tmp\n' > /etc/axocoatl/setuptools.cfg  && python3 --version  && python3 -m venv --help >/dev/null  && python3 -m pip --version >/dev/null
+Python 3.13.16
+--> 3f251e1bafb3
+STEP 7/8: LABEL io.axocoatl.toolchain=python       io.axocoatl.toolchain.version=python-3.13.16
+--> fa280be4ba36
+STEP 8/8: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="python" "io.axocoatl.recipe-digest"="10128f1d87894aca578953f3e68efa4aa22cfcd00ed072a146470cbf730305b2"
+COMMIT localhost/axocoatl-recipe-python:10128f1d8789
+--> 73f76ea4834b
+Successfully tagged localhost/axocoatl-recipe-python:10128f1d8789
+73f76ea4834b1129abbf33ef1b70a27971a47d89a17090f3a65b599445514424
+· built localhost/axocoatl-recipe-python:10128f1d8789 in 7 s (image id 73f76ea4834b)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/python-pytest
+· run run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac in Session ses-44fc3954-fd8c-4f7a-950d-5a244c0a0193
+· note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e '.[test]'` (detected): exited 0 (6.3 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-5039a810-b8ca-4d2b-8ba7-2330f66b4bfd started (run)
+· turn turn-5039a810-b8ca-4d2b-8ba7-2330f66b4bfd ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e '.[test]'` (detected): exited 0 (6.3 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 6 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 14 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 82220 input + 2748 output tokens, $0.0059
+Network: 31 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on python-pytest (161.7s)
+gate: PASS  run on python-pytest chose a python image
+gate: PASS  run on python-pytest ran setup (pip install)
+gate: RUN   receipt verify on python-pytest (documented command)
+receipt of run run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on python-pytest (documented command) (0.0s)
+gate: RUN   record verify on python-pytest
+valid: run run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac in Session ses-44fc3954-fd8c-4f7a-950d-5a244c0a0193, written by Axocoatl 1.5.0, 52 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 31
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on python-pytest (0.0s)
+gate: RUN   receipt matches the record on python-pytest
+receipt of run run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on python-pytest (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on python-pytest
+gate: RUN   run fix on rust
+· building the run's image localhost/axocoatl-recipe-rust:0e5acf3d40e2 (rust, from docker.io/library/rust:1.99.1-slim-bookworm): about 330 MB to download, about 920 MB on disk, once on this computer; later runs reuse it
+STEP 1/7: FROM docker.io/library/rust:1.99.1-slim-bookworm@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c
+Trying to pull docker.io/library/rust@sha256:a24e292b4af7bdee351a31d3a6379972a5652f0ea22a1b6d6883324ac4f5097c...
+Getting image source signatures
+Copying blob sha256:d91d943bace8daceb8c1e41b6612775cf31c1984310499cdf2461a61dab40230
+Copying blob sha256:c75f989a229d12b2d2613a5997de9ff3546f664c22da9248720033a2410220f6
+Copying config sha256:0f6781aa444f7d2edc2cae835158914ee0784fe651b899f12eee6e55f7d61b88
+Writing manifest to image destination
+STEP 2/7: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && chmod -R go-w /usr/local/cargo /usr/local/rustup  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+  libgdbm6 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1 libsasl2-2
+  libsasl2-modules-db libssh2-1 perl perl-base perl-modules-5.36
+Suggested packages:
+  gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+  gitk gitweb git-cvs git-mediawiki git-svn gdbm-l10n sensible-utils make-doc
+  perl-doc libterm-readline-gnu-perl | libterm-readline-perl-perl
+  libtap-harness-archive-perl
+Recommended packages:
+  patch less ssh-client libldap-common publicsuffix libsasl2-modules netbase
+The following NEW packages will be installed:
+  git git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1
+  libgdbm-compat4 libgdbm6 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5
+  librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1 make perl
+  perl-modules-5.36
+The following packages will be upgraded:
+  ca-certificates perl-base
+2 upgraded, 19 newly installed, 0 to remove and 4 not upgraded.
+Need to get 19.8 MB of archives.
+After this operation, 105 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-base arm64 5.36.0-7+deb12u4 [1478 kB]
+Get:2 http://deb.debian.org/debian-security bookworm-security/main arm64 perl-modules-5.36 all 5.36.0-7+deb12u4 [2817 kB]
+Get:3 http://deb.debian.org/debian bookworm/main arm64 libgdbm6 arm64 1.23-3 [70.9 kB]
+Get:4 http://deb.debian.org/debian bookworm/main arm64 libgdbm-compat4 arm64 1.23-3 [48.0 kB]
+Get:5 http://deb.debian.org/debian-security bookworm-security/main arm64 libperl5.36 arm64 5.36.0-7+deb12u4 [4002 kB]
+Get:6 http://deb.debian.org/debian-security bookworm-security/main arm64 perl arm64 5.36.0-7+deb12u4 [239 kB]
+Get:7 http://deb.debian.org/debian-security bookworm-security/main arm64 ca-certificates all 20250419~deb12u2 [161 kB]
+Get:8 http://deb.debian.org/debian-security bookworm-security/main arm64 libbrotli1 arm64 1.0.9-2+deb12u1 [267 kB]
+Get:9 http://deb.debian.org/debian bookworm/main arm64 libsasl2-modules-db arm64 2.1.28+dfsg-10 [20.8 kB]
+Get:10 http://deb.debian.org/debian bookworm/main arm64 libsasl2-2 arm64 2.1.28+dfsg-10 [58.0 kB]
+Get:11 http://deb.debian.org/debian bookworm/main arm64 libldap-2.5-0 arm64 2.5.13+dfsg-5 [171 kB]
+Get:12 http://deb.debian.org/debian bookworm/main arm64 libnghttp2-14 arm64 1.52.0-1+deb12u3 [69.0 kB]
+Get:13 http://deb.debian.org/debian bookworm/main arm64 libpsl5 arm64 0.21.2-1 [58.6 kB]
+Get:14 http://deb.debian.org/debian bookworm/main arm64 librtmp1 arm64 2.4+20151223.gitfa8646d.1-2+b2 [59.4 kB]
+Get:15 http://deb.debian.org/debian-security bookworm-security/main arm64 libssh2-1 arm64 1.10.0-3+deb12u1 [169 kB]
+Get:16 http://deb.debian.org/debian bookworm/main arm64 libcurl3-gnutls arm64 7.88.1-10+deb12u15 [362 kB]
+Get:17 http://deb.debian.org/debian-security bookworm-security/main arm64 libexpat1 arm64 2.5.0-1+deb12u5 [91.7 kB]
+Get:18 http://deb.debian.org/debian bookworm/main arm64 liberror-perl all 0.17029-2 [29.0 kB]
+Get:19 http://deb.debian.org/debian bookworm/main arm64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+Get:20 http://deb.debian.org/debian bookworm/main arm64 git arm64 1:2.39.5-0+deb12u3 [7153 kB]
+Get:21 http://deb.debian.org/debian bookworm/main arm64 make arm64 4.3-4.1 [391 kB]
+debconf: delaying package configuration, since apt-utils is not installed
+Fetched 19.8 MB in 1s (34.4 MB/s)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9060 files and directories currently installed.)
+Preparing to unpack .../perl-base_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl-base (5.36.0-7+deb12u4) over (5.36.0-7+deb12u3) ...
+Setting up perl-base (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl-modules-5.36.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 9060 files and directories currently installed.)
+Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u4_all.deb ...
+Unpacking perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package libgdbm6:arm64.
+Preparing to unpack .../01-libgdbm6_1.23-3_arm64.deb ...
+Unpacking libgdbm6:arm64 (1.23-3) ...
+Selecting previously unselected package libgdbm-compat4:arm64.
+Preparing to unpack .../02-libgdbm-compat4_1.23-3_arm64.deb ...
+Unpacking libgdbm-compat4:arm64 (1.23-3) ...
+Selecting previously unselected package libperl5.36:arm64.
+Preparing to unpack .../03-libperl5.36_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Selecting previously unselected package perl.
+Preparing to unpack .../04-perl_5.36.0-7+deb12u4_arm64.deb ...
+Unpacking perl (5.36.0-7+deb12u4) ...
+Preparing to unpack .../05-ca-certificates_20250419~deb12u2_all.deb ...
+Unpacking ca-certificates (20250419~deb12u2) over (20250419~deb12u1) ...
+Selecting previously unselected package libbrotli1:arm64.
+Preparing to unpack .../06-libbrotli1_1.0.9-2+deb12u1_arm64.deb ...
+Unpacking libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Selecting previously unselected package libsasl2-modules-db:arm64.
+Preparing to unpack .../07-libsasl2-modules-db_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libsasl2-2:arm64.
+Preparing to unpack .../08-libsasl2-2_2.1.28+dfsg-10_arm64.deb ...
+Unpacking libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Selecting previously unselected package libldap-2.5-0:arm64.
+Preparing to unpack .../09-libldap-2.5-0_2.5.13+dfsg-5_arm64.deb ...
+Unpacking libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Selecting previously unselected package libnghttp2-14:arm64.
+Preparing to unpack .../10-libnghttp2-14_1.52.0-1+deb12u3_arm64.deb ...
+Unpacking libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Selecting previously unselected package libpsl5:arm64.
+Preparing to unpack .../11-libpsl5_0.21.2-1_arm64.deb ...
+Unpacking libpsl5:arm64 (0.21.2-1) ...
+Selecting previously unselected package librtmp1:arm64.
+Preparing to unpack .../12-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_arm64.deb ...
+Unpacking librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Selecting previously unselected package libssh2-1:arm64.
+Preparing to unpack .../13-libssh2-1_1.10.0-3+deb12u1_arm64.deb ...
+Unpacking libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Selecting previously unselected package libcurl3-gnutls:arm64.
+Preparing to unpack .../14-libcurl3-gnutls_7.88.1-10+deb12u15_arm64.deb ...
+Unpacking libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Selecting previously unselected package libexpat1:arm64.
+Preparing to unpack .../15-libexpat1_2.5.0-1+deb12u5_arm64.deb ...
+Unpacking libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Selecting previously unselected package liberror-perl.
+Preparing to unpack .../16-liberror-perl_0.17029-2_all.deb ...
+Unpacking liberror-perl (0.17029-2) ...
+Selecting previously unselected package git-man.
+Preparing to unpack .../17-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+Unpacking git-man (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package git.
+Preparing to unpack .../18-git_1%3a2.39.5-0+deb12u3_arm64.deb ...
+Unpacking git (1:2.39.5-0+deb12u3) ...
+Selecting previously unselected package make.
+Preparing to unpack .../19-make_4.3-4.1_arm64.deb ...
+Unpacking make (4.3-4.1) ...
+Setting up libexpat1:arm64 (2.5.0-1+deb12u5) ...
+Setting up libpsl5:arm64 (0.21.2-1) ...
+Setting up libbrotli1:arm64 (1.0.9-2+deb12u1) ...
+Setting up libnghttp2-14:arm64 (1.52.0-1+deb12u3) ...
+Setting up libsasl2-modules-db:arm64 (2.1.28+dfsg-10) ...
+Setting up ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+rehash: warning: skipping ca-certificates.crt,it does not contain exactly one certificate or CRL
+0 added, 2 removed; done.
+Setting up perl-modules-5.36 (5.36.0-7+deb12u4) ...
+Setting up make (4.3-4.1) ...
+Setting up librtmp1:arm64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+Setting up libsasl2-2:arm64 (2.1.28+dfsg-10) ...
+Setting up git-man (1:2.39.5-0+deb12u3) ...
+Setting up libssh2-1:arm64 (1.10.0-3+deb12u1) ...
+Setting up libgdbm6:arm64 (1.23-3) ...
+Setting up libldap-2.5-0:arm64 (2.5.13+dfsg-5) ...
+Setting up libgdbm-compat4:arm64 (1.23-3) ...
+Setting up libperl5.36:arm64 (5.36.0-7+deb12u4) ...
+Setting up libcurl3-gnutls:arm64 (7.88.1-10+deb12u15) ...
+Setting up perl (5.36.0-7+deb12u4) ...
+Setting up liberror-perl (0.17029-2) ...
+Setting up git (1:2.39.5-0+deb12u3) ...
+Processing triggers for libc-bin (2.36-9+deb12u14) ...
+Processing triggers for ca-certificates (20250419~deb12u2) ...
+Updating certificates in /etc/ssl/certs...
+0 added, 0 removed; done.
+Running hooks in /etc/ca-certificates/update.d...
+done.
+--> 3e8b71c8383f
+STEP 3/7: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=rust-1.99.1-slim-bookworm
+--> 85221cdb2f04
+STEP 4/7: ENV AXOCOATL_TOOLCHAIN=rust     AXOCOATL_CACHE=/opt/axocoatl-cache     CARGO_HOME=/opt/axocoatl-cache/rust/cargo     CARGO_TARGET_DIR=/tmp/axocoatl-cargo-target     CARGO_TERM_COLOR=never
+--> b210b4a37fb9
+STEP 5/7: RUN mkdir -p /opt/axocoatl-cache  && cargo --version  && rustc --version
+cargo 1.99.1 (5f94df478 2026-08-27)
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
+--> d3afa1d288e2
+STEP 6/7: LABEL io.axocoatl.toolchain=rust       io.axocoatl.toolchain.version=rust-1.99.1
+--> f4be7fe76b33
+STEP 7/7: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="rust" "io.axocoatl.recipe-digest"="0e5acf3d40e2de35b3f87070539362c211f6850c0983c94ec5d8859d4bfe81bc"
+COMMIT localhost/axocoatl-recipe-rust:0e5acf3d40e2
+--> c65211efb8ef
+Successfully tagged localhost/axocoatl-recipe-rust:0e5acf3d40e2
+c65211efb8ef8bb47d9a00b7e8743f16be1bf64cdb13388e7b415d760ad71736
+· built localhost/axocoatl-recipe-rust:0e5acf3d40e2 in 15 s (image id c65211efb8ef)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/rust
+· run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172 in Session ses-6471e8c3-1e6b-4458-b1f4-77631493494b
+· note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+· note: setup `cargo fetch` (detected): exited 0 (0.8 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-20b238c8-44ce-4faf-9810-6a6c914e9455 started (run)
+· turn turn-20b238c8-44ce-4faf-9810-6a6c914e9455 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+  setup `cargo fetch` (detected): exited 0 (0.8 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 25 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 216242 input + 5643 output tokens, $0.0155
+Network: 47 recorded events, 2 allowed and 0 refused connections, 0 route requests
+Record: run-5f49b8b0-bf43-4698-adf1-ab2b5af39172
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on rust (283.1s)
+gate: PASS  run on rust chose a rust image
+gate: PASS  run on rust ran setup (cargo fetch)
+gate: RUN   receipt verify on rust (documented command)
+receipt of run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on rust (documented command) (0.0s)
+gate: RUN   record verify on rust
+valid: run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172 in Session ses-6471e8c3-1e6b-4458-b1f4-77631493494b, written by Axocoatl 1.5.0, 68 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 47
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on rust (0.0s)
+gate: RUN   receipt matches the record on rust
+receipt of run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on rust (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on rust
+gate: RUN   run fix on go
+· building the run's image localhost/axocoatl-recipe-go:6063b3e9fdc6 (go, from docker.io/library/golang:1.27.2-bookworm): about 300 MB to download, about 880 MB on disk, once on this computer; later runs reuse it
+STEP 1/8: FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+Trying to pull docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61...
+Getting image source signatures
+Copying blob sha256:ed8596846564c78501630a9cfb5ea37bccebbeae1111d217c47835ed2572f772
+Copying blob sha256:bdc7363672c63abfefdedaf5e03be8e39cb662841d4f31237c4b7d7e3729f65c
+Copying blob sha256:2a02c40189e361a19e7cb07374fe9925f5c4f7db254ae2b9196348c27c286b03
+Copying blob sha256:4fd4b86f6eba05ede1422fdf209774d4fb36cfafce2fa8138b82406a3b5fa8be
+Copying blob sha256:99713dbe79ee22ead7509cd8c7c37d309206e5ddd834ba41611459b49e6ddc06
+Copying blob sha256:c488414f4e10f9495a8ef36b033a81ae04a3d43955e64f351a4247848f292d26
+Copying blob sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1
+Copying config sha256:8daab0ae6527cc929bebbfbce0d6e4c7ba363d6213264ffeb5d5bd559d4a03a7
+Writing manifest to image destination
+STEP 2/8: ENV GOPATH=     PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+--> d1fee332cfb6
+STEP 3/8: RUN rm -rf /go  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64 make; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+--> 2787bb674bac
+STEP 4/8: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=golang-1.27.2-bookworm
+--> c70cf8bb85e4
+STEP 5/8: ENV AXOCOATL_TOOLCHAIN=go     AXOCOATL_CACHE=/opt/axocoatl-cache     GOMODCACHE=/opt/axocoatl-cache/go/mod     GOPROXY=off     GOTOOLCHAIN=local
+--> 8e0323ab068a
+STEP 6/8: RUN mkdir -p /opt/axocoatl-cache  && go version  && [ -z "$(go env GOPATH | grep -x /go)" ]
+go version go1.27.2 linux/arm64
+--> 78da429af1bd
+STEP 7/8: LABEL io.axocoatl.toolchain=go       io.axocoatl.toolchain.version=go-1.27.2
+--> 96c6faec3528
+STEP 8/8: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="go" "io.axocoatl.recipe-digest"="6063b3e9fdc655be7776387d4368e64af54312c17ad69476691d854308b36d90"
+COMMIT localhost/axocoatl-recipe-go:6063b3e9fdc6
+--> c24261ce9483
+Successfully tagged localhost/axocoatl-recipe-go:6063b3e9fdc6
+c24261ce948317a01f15a4dd0edd4cb5e951bdc3d741fe9b534eda54266a27d0
+· built localhost/axocoatl-recipe-go:6063b3e9fdc6 in 8 s (image id c24261ce9483)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/go
+· run run-1afe11cf-8268-4b8a-a73b-b2a095470b6c in Session ses-41d117f8-e4de-478e-99e9-f68abae538bb
+· note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+· note: setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.7 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-aaf8cc07-b860-467b-95a2-a780e9ed7586 started (run)
+· turn turn-aaf8cc07-b860-467b-95a2-a780e9ed7586 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+  setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.7 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 5 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 13 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 67504 input + 1569 output tokens, $0.0046
+Network: 19 recorded events, 1 allowed and 0 refused connections, 0 route requests
+Record: run-1afe11cf-8268-4b8a-a73b-b2a095470b6c
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on go (127.9s)
+gate: PASS  run on go chose a go image
+gate: PASS  run on go ran setup (go mod download)
+gate: RUN   receipt verify on go (documented command)
+receipt of run run-1afe11cf-8268-4b8a-a73b-b2a095470b6c, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on go (documented command) (0.0s)
+gate: RUN   record verify on go
+valid: run run-1afe11cf-8268-4b8a-a73b-b2a095470b6c in Session ses-41d117f8-e4de-478e-99e9-f68abae538bb, written by Axocoatl 1.5.0, 40 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 19
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on go (0.0s)
+gate: RUN   receipt matches the record on go
+receipt of run run-1afe11cf-8268-4b8a-a73b-b2a095470b6c, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on go (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on go
+gate: PASS  the README's command passed on every fixture, each receipt and record verified
+gate: SKIP  negative cases with the scripted model server: a live run (Tier D) has no stub
+gate: RUN   copy-paste lint (scripts/check-copy-paste.mjs)
+Copy-paste check passed: 22 files, 60 shell blocks and copy buttons, 11 YAML snippets.
+gate: PASS  copy-paste lint (scripts/check-copy-paste.mjs) (0.1s)
+gate: PASS  Ctrl+C stops axocoatl dev with exit 0
+gate: PASS  this login has a systemd user session (the service needs one)
+
+In Step 6 ("How should Axocoatl run?"), choose "Always on, starting at login" and agree to install it.
+gate: RUN   onboard --update: Step 6, the Always-On Service (interactive)
+Axocoatl setup
+Every command this runs is logged to /home/d1gate/.local/state/axocoatl/onboard-20261027-015143.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 4 GB memory, 2 cores, 19 GB free.
+Found: Podman 4.9.3 (ready), git 2.43.0.
+Not found: Ollama, claude, codex, gh.
+
+An Axocoatl configuration exists: /home/d1gate/.config/axocoatl/config.yaml
+
+Step 1 · Who writes the code
+[?25lWho writes the code?:
+  Claude Code (your Claude Pro or Max plan; claude not found yet)
+  Codex (your ChatGPT plan)
+  A local model on this computer (Ollama, no account, needs 48 GB memory or more)
+> A hosted model (OpenRouter credits)
+[5A[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[5AWho writes the code?: A hosted model (OpenRouter credits)
+[?25h  Writer model: openrouter:qwen/qwen3-coder-30b-a3b-instruct (kept from your configuration)
+  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 4
+Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image
+Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2KSessions start from, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+Copying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 4
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n] [?25l[2KUse OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) yes
+[?25h  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists qwen/qwen3-coder-30b-a3b-instruct
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  ✓ /home/d1gate/.config/axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+
+Step 6 · Start Axocoatl
+[?25lHow should Axocoatl run?:
+> In this terminal now (axocoatl dev)
+  Always on, starting at login (a launchd or systemd service)
+  I'll start it later
+[3A[2K[1B[2K[1B[2K[1B[3A  In this terminal now (axocoatl dev)
+> Always on, starting at login (a launchd or systemd service)
+  I'll start it later
+[4A[2K[1B[2K[1B[2K[1B[2K[1B[4AHow should Axocoatl run?: Always on, starting at login (a launchd or systemd service)
+[?25hInstall the Always-On Service (it starts Axocoatl at login and keeps it running)? [Y/n] [?25l[2KInstall the Always-On Service (it starts Axocoatl at login and keeps it running)? yes
+[?25h✓ Always-On Service installed (systemd backend)
+  config: /home/d1gate/.config/axocoatl/config.yaml
+  podman: /usr/bin/podman
+  PATH=/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+  logs:   journalctl --user -u axocoatl
+
+For the daemon to keep running after you log out, enable linger:
+  loginctl enable-linger "$USER"
+
+Start it with:  axocoatl service start
+If it was already running, load the new definition with:  axocoatl service restart
+Then open the workbench with the link from:  axocoatl url --config /home/d1gate/.config/axocoatl/config.yaml
+✓ Always-On Service started — the daemon now runs 24/7
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+Run a first fix now on a small sample repository to prove the setup end to end? It costs about $0.01 on
+OpenRouter. [Y/n] [?25l[2KOpenRouter. no
+[?25h
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard --update: Step 6, the Always-On Service (interactive) (87.9s)
+gate: RUN   axocoatl service status (onboarding installed and started the Always-On Service (Step 6))
+Always-On Service (systemd backend)
+  installed: yes
+  running:   yes
+  at login:  yes
+  detail:    MainPID=40831
+  logs:      journalctl --user -u axocoatl
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (onboarding installed and started the Always-On Service (Step 6)) (0.0s)
+gate: PASS  onboarding installed and started the Always-On Service (Step 6)
+gate: PASS  the service answers on port 8080
+gate: RUN   onboard --update --writer-model openrouter:deepseek/deepseek-chat-v3.1 --smoke-test (the configuration changes while the service runs)
+Axocoatl setup
+Every command this runs is logged to /home/d1gate/.local/state/axocoatl/onboard-20261027-015311.log
+
+Step 0 · This computer
+This computer: Ubuntu 24.04.5 LTS, aarch64, 4 GB memory, 2 cores, 19 GB free.
+Found: Podman 4.9.3 (ready), git 2.43.0, a running Axocoatl 1.5.0 daemon, the Always-On Service (installed, /home/d1gate/.local/bin/axocoatl).
+Not found: Ollama, claude, codex, gh.
+Port 8080 is in use; Axocoatl will use the next free port.
+
+An Axocoatl configuration exists: /home/d1gate/.config/axocoatl/config.yaml
+
+Step 1 · Who writes the code
+[?25lWho writes the code?:
+  Claude Code (your Claude Pro or Max plan; claude not found yet)
+  Codex (your ChatGPT plan)
+  A local model on this computer (Ollama, no account, needs 48 GB memory or more)
+> A hosted model (OpenRouter credits)
+[5A[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[5AWho writes the code?: A hosted model (OpenRouter credits)
+[?25h  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 4
+Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image
+Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2KSessions start from, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+[1A[JCopying blob 3f26bc2dec0b skipped: already exists  
+Copying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+[1A[JCopying config ab3fe4defd done   | 
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 4
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n] [?25l[2KUse OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) yes
+[?25h  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists deepseek/deepseek-chat-v3.1
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for deepseek/deepseek-chat-v3.1 that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  Changes to /home/d1gate/.config/axocoatl/config.yaml:
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     model: "deepseek/deepseek-chat-v3.1"
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     model: "deepseek/deepseek-chat-v3.1"
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     model: "deepseek/deepseek-chat-v3.1"
+    -     writer: "openrouter:qwen/qwen3-coder-30b-a3b-instruct"
+    +     writer: "openrouter:deepseek/deepseek-chat-v3.1"
+Write these changes? The current file is kept as config.yaml.bak-20261027-015350 next to it. [Y/n] [?25l[2KWrite these changes? The current file is kept as config.yaml.bak-20261027-015350 next to it. yes
+[?25h  ✓ Backed up to /home/d1gate/.config/axocoatl/config.yaml.bak-20261027-015350
+  ✓ Configuration written: /home/d1gate/.config/axocoatl/config.yaml
+  ✓ Data: /home/d1gate/.local/share/axocoatl
+
+Step 5 · Check
+  ! systemd user session: running (systemd --user); linger is off, so the Always-On Service stops when d1gate logs out
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:deepseek/deepseek-chat-v3.1, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:deepseek/deepseek-chat-v3.1)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/repo
+The Always-On Service started before /home/d1gate/.config/axocoatl/config.yaml changed, so the first run would
+use the old configuration. Restart it now (this ends any Session turn or run in progress)? [Y/n] [?25l[2Kuse the old configuration. Restart it now (this ends any Session turn or run in progress)? yes
+[?25h✓ Always-On Service restarted with its installed definition — the daemon now runs 24/7
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+  ✓ Using the daemon running on port 8080
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/repo --receipt /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/receipt.json --record /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/record.jsonl --config /home/d1gate/.config/axocoatl/config.yaml --model writer=openrouter:deepseek/deepseek-chat-v3.1 --model reviewer=openrouter:openai/gpt-oss-120b
+· starting loadout fix in /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/repo
+· run run-c0995674-0bc6-4e0d-8ed6-bdc04a976791 in Session ses-9627c0b6-0ac5-4698-9e7e-aacb82409274
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· note: The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-c48745b6-cad1-4cda-b82b-5d6b7fb55f1d started (run)
+· provider call retried for team-node-af81dce6031df6de4c77a91f (HTTP 429): HTTP 429 from openrouter; the call was sent again at once, from endpoint deepinfra/fp4 (DeepInfra) to endpoint siliconflow/fp8 (SiliconFlow) of the same model (deepseek/deepseek-chat-v3.1), as a new, separately reserved call
+· turn turn-c48745b6-cad1-4cda-b82b-5d6b7fb55f1d ended: needs_attention
+· review: 0 review rounds; 0 adjudications, 0 missing
+· finishing: building the Outcome
+· closing_turn: Stopping turn turn-c48745b6-cad1-4cda-b82b-5d6b7fb55f1d, which needs attention, so the run's Session no longer holds the Workspace; the Outcome keeps the turn as it was observed
+! not covered: writer: provider_failure: Activation failed: LLM provider error: openrouter API error: 502 - native OpenRouter: endpoint siliconflow/fp8 (SiliconFlow) of deepseek/deepseek-chat-v3.1 reported an error in its answer: Network connection lost.; its accounting remains partial
+Verdict: needs_attention (exit 2)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Needs attention: The required check tests did not run on the final result
+Needs attention: The required review did not pass: The reviewer runs after the required Agents finish and the required checks pass.
+Needs attention: 1 area was not covered
+Needs attention: A turn ended needing attention
+Checks:
+  tests            not run
+Review: not_run after 0 of 3 rounds by openrouter:openai/gpt-oss-120b (not passed)
+Not covered:
+  writer: provider_failure: Activation failed: LLM provider error: openrouter API error: 502 - native OpenRouter: endpoint siliconflow/fp8 (SiliconFlow) of deepseek/deepseek-chat-v3.1 reported an error in its answer: Network connection lost.; its accounting remains partial
+Notes:
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+  deepseek/deepseek-chat-v3.1 on OpenRouter: 10 calls answered by endpoint siliconflow/fp8 (SiliconFlow); 1 call moved on from endpoint deepinfra/fp4 (DeepInfra), which failed them before answering
+Usage: 34118 input + 1726 output tokens, cost unknown (reserved up to $0.0263), 1 provider retry (known subtotal: usage or cost not reported for writer (generation 1): 1 of 12 model calls)
+Network: 11 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-c0995674-0bc6-4e0d-8ed6-bdc04a976791
+· record written to /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/record.jsonl
+· receipt written to /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/receipt.json (key 9641bb56a31f3a21, 2 files covered, 0 removed, after_capture)
+  ✗ The first run ended with exit 2: see its output above, the record /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/record.jsonl and `axocoatl doctor`
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:deepseek/deepseek-chat-v3.1, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+
+Not ready yet, 1 step left:
+  1) The first run ended with exit 2: see its output above, the record /tmp/axocoatl-first-run-51f45b29243c4f27b227488afebdb86c/record.jsonl and `axocoatl doctor`
+Run `axocoatl onboard` again once they are done; it keeps what is already set up.
+gate: FAIL  onboard --update --writer-model openrouter:deepseek/deepseek-chat-v3.1 --smoke-test (the configuration changes while the service runs): exit 1, expected 0: interactive step; see the transcript (exit 1) 
+gate: PASS  onboarding restarted the service after the configuration changed (Step 7)
+gate: RUN   run fix on service-node-deps
+· starting loadout fix in /tmp/axo-d1-continuation2.X4rQlC/repos/service-node-deps
+· run run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55 in Session ses-f766840a-c06e-4901-980f-8f73d2f38b4d
+· note: writer_model = openrouter:deepseek/deepseek-chat-v3.1 (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.2 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-8940d880-e169-4b1c-a081-876a70fa071c started (run)
+· provider call retried for required-review (HTTP 429): HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call
+· turn turn-8940d880-e169-4b1c-a081-876a70fa071c ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = openrouter:deepseek/deepseek-chat-v3.1 (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  The Session's container runs without its CPU (2 CPUs, cgroup controller cpu) cap: this computer does not delegate that cgroup controller to rootless Podman (`axocoatl doctor` says how to). With sandbox.require_resource_limits: true the Session refuses to start instead.
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.2 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  deepseek/deepseek-chat-v3.1 on OpenRouter: 16 calls answered by endpoint deepinfra/fp4 (DeepInfra)
+  openai/gpt-oss-120b on OpenRouter: 4 calls answered by endpoint near-ai/fp4 (Near AI), 8 by coreweave/fp4 (CoreWeave); 1 call moved on from endpoint near-ai/fp4 (Near AI), which failed them before answering
+Usage: 114008 input + 1448 output tokens, $0.0142, 1 provider retry
+Network: 31 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 9641bb56a31f3a21, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on service-node-deps (221.7s)
+gate: PASS  run on service-node-deps chose a node image
+gate: PASS  run on service-node-deps ran setup (npm ci)
+gate: RUN   receipt verify on service-node-deps (documented command)
+receipt of run run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on service-node-deps (documented command) (0.0s)
+gate: RUN   record verify on service-node-deps
+valid: run run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55 in Session ses-f766840a-c06e-4901-980f-8f73d2f38b4d, written by Axocoatl 1.5.0, 54 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 31
+  run_event: 15
+  receipt: 1
+gate: PASS  record verify on service-node-deps (0.0s)
+gate: RUN   receipt matches the record on service-node-deps
+receipt of run run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55, verdict pass
+signature: valid, by trusted key 9641bb56a31f3a21 (sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on service-node-deps (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on service-node-deps
+gate: PASS  a fix through the Always-On Service passed, its receipt and record verified
+gate: RUN   axocoatl service status (axocoatl service status: installed and running)
+Always-On Service (systemd backend)
+  installed: yes
+  running:   yes
+  at login:  yes
+  detail:    MainPID=41489
+  logs:      journalctl --user -u axocoatl
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service status: installed and running) (0.0s)
+gate: PASS  axocoatl service status: installed and running
+gate: RUN   axocoatl service stop
+✓ Always-On Service stopped
+gate: PASS  axocoatl service stop (0.0s)
+gate: RUN   axocoatl service status (axocoatl service stop: the service is not running)
+Always-On Service (systemd backend)
+  installed: yes
+  running:   no
+  at login:  yes
+  detail:    installed, not running (inactive)
+  logs:      journalctl --user -u axocoatl
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service stop: the service is not running) (0.0s)
+gate: PASS  axocoatl service stop: the service is not running
+gate: PASS  nothing answers on port 8080 after the service stopped
+gate: RUN   axocoatl service uninstall
+✓ Always-On Service uninstalled
+gate: PASS  axocoatl service uninstall (0.1s)
+gate: RUN   axocoatl service status (axocoatl service uninstall: not installed, its unit removed)
+Always-On Service (systemd backend)
+  installed: no
+  running:   no
+  at login:  no
+  detail:    not installed
+  logs:      journalctl --user -u axocoatl
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service uninstall: not installed, its unit removed) (0.0s)
+gate: PASS  axocoatl service uninstall: not installed, its unit removed

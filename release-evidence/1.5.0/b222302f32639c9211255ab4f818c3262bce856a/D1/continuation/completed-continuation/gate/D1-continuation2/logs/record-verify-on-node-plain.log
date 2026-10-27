@@ -1,0 +1,11 @@
+valid: run run-2627efaf-ff3b-4fb2-84f9-a4e18c431f7e in Session ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b, written by Axocoatl 1.5.0, 31 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 11
+  run_event: 12
+  receipt: 1

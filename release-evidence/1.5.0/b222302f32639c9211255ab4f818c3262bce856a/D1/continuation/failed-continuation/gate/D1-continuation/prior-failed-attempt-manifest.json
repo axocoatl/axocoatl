@@ -1,0 +1,1547 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "preserved_at": "2026-10-27T01:03:10.230198+00:00",
+  "status": "failed_onboarding_and_incomplete_service_phase",
+  "failure": "OAuth exchange succeeded; immediate GET /api/v1/key HTTP401; no credential stored and no config written",
+  "inference_requests": 0,
+  "run_admission": "all five fixture CLI commands refused before admission because config missing",
+  "operator": "Codex through SSH PTY; root coordinator completed explicitly authorized browser authorization",
+  "archive": "failed-oauth-401.tar.gz",
+  "archive_bytes": 102601,
+  "archive_sha256": "51ec749cd0dc10163f951db0d70c8772b889729807b563852818e0a437f6b564",
+  "files": [
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/answers.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/answers.txt",
+      "bytes": 92,
+      "sha256": "3842f2f14eb9c72c2c3cc65e9e5eff66b4f0d6357e5442111e9cc0e79911edd9"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/doctor.json",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/doctor.json",
+      "bytes": 2962,
+      "sha256": "2c34fa5e163095e6a361afb6f385c21d4cf1d1b9b43bc3ea7699088d99816154"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/axocoatl-junit.xml",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/changes.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/changes.txt",
+      "bytes": 22,
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/command.txt",
+      "bytes": 182,
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/run.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/go/run.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/install-command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/install-command.txt",
+      "bytes": 47,
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+      "bytes": 87,
+      "sha256": "9238e5a430ab27376d6f9a134f4984aebc54d102a71b420a3f012f5b608ee298"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/dev.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/dev.log",
+      "bytes": 85,
+      "sha256": "8f430a5c911c0a0bea5f48587cbb71e1b6e9b0b72435d9d0404c7fdc670aa86a"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/doctor---json-says-ready.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/doctor---json-says-ready.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/doctor-exits-0.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/doctor-exits-0.log",
+      "bytes": 1358,
+      "sha256": "1eca87be24b8fc4fcfe4ad95a855efb3bdd0b9eb35cacb708297b6c2728ab4a2"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/forward-check.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/forward-check.log",
+      "bytes": 80,
+      "sha256": "7bb08953c127368b2de43bc52cddac34b1d2148fe447a1fce8eef7d0c746c852"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install-curl-urls.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install-curl-urls.log",
+      "bytes": 343,
+      "sha256": "d473c9b42a97e7f3007a891ebfb06763989d70c9ad94ed2c2bcbdd7494d1db0d"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install-the-lint-s-YAML-parser--npm-ci-in-sites-docs-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install-the-lint-s-YAML-parser--npm-ci-in-sites-docs-.log",
+      "bytes": 234,
+      "sha256": "69c66142d24917719e09b08462539f822bebbb99e9368a83a2b9bb4491a08a35"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/install.log",
+      "bytes": 1102,
+      "sha256": "59fd210f28928a1e5f89292a3f998927d39ad2bacfa632c6e48ede5370650e7a"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/onboard--interactive--every-consent-answered-by-the-operator----start-none-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/onboard--interactive--every-consent-answered-by-the-operator----start-none-.log",
+      "bytes": 46,
+      "sha256": "9c753909e1abb94b0eca912aa605862ae540e1c4289668ca27dd662892ae38a6"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-go.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-go.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-node-deps.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-node-deps.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-node-plain.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-node-plain.log",
+      "bytes": 85,
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-python-pytest.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-python-pytest.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-rust.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-matches-the-record-on-rust.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-go--documented-command-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-go--documented-command-.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-node-deps--documented-command-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-node-deps--documented-command-.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-node-plain--documented-command-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-node-plain--documented-command-.log",
+      "bytes": 218,
+      "sha256": "35e967080080d06b178e8c2018b6a61d42517f27ce96736596b9100f85104872"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-python-pytest--documented-command-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-python-pytest--documented-command-.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-rust--documented-command-.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/receipt-verify-on-rust--documented-command-.log",
+      "bytes": 89,
+      "sha256": "c9301c2cfb3424b99790ad642452a51e45bb18360e23f857f4604ed01bd1ae40"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-go.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-go.log",
+      "bytes": 77,
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-node-deps.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-node-deps.log",
+      "bytes": 77,
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-node-plain.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-node-plain.log",
+      "bytes": 77,
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-python-pytest.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-python-pytest.log",
+      "bytes": 77,
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-rust.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/record-verify-on-rust.log",
+      "bytes": 77,
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-go.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-go.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-node-deps.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-node-deps.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-node-plain.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-node-plain.log",
+      "bytes": 433,
+      "sha256": "23c976ba496722682db51c6ec6bbd21f352436e054f59f1a44527d915451eac8"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-python-pytest.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-python-pytest.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-rust.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/logs/run-fix-on-rust.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/axocoatl-junit.xml",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/changes.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/changes.txt",
+      "bytes": 22,
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/command.txt",
+      "bytes": 182,
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/run.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-deps/run.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/axocoatl-junit.xml",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/changes.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/changes.txt",
+      "bytes": 22,
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/command.txt",
+      "bytes": 145,
+      "sha256": "26a7aba76f2fe2cb4e985b5e2fcfe2dc13b78914c61e55ee6a1df626798a1865"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/run.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/node-plain/run.log",
+      "bytes": 433,
+      "sha256": "23c976ba496722682db51c6ec6bbd21f352436e054f59f1a44527d915451eac8"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/axocoatl-junit.xml",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/changes.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/changes.txt",
+      "bytes": 22,
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/command.txt",
+      "bytes": 182,
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/run.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/python-pytest/run.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/readme-command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/readme-command.txt",
+      "bytes": 182,
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/axocoatl-junit.xml",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/changes.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/changes.txt",
+      "bytes": 22,
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/command.txt",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/command.txt",
+      "bytes": 182,
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/run.log",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/D1/rust/run.log",
+      "bytes": 437,
+      "sha256": "f3db5f9a1a941066c3bee44a5da6bc8f76db483451571cfce8d3a12434a70157"
+    },
+    {
+      "path": "repos/go/.git/COMMIT_EDITMSG",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/COMMIT_EDITMSG",
+      "bytes": 9,
+      "sha256": "526422879d835127c5156dd155444dc46c43a433ef8bbfefa3e8888a63daafa9"
+    },
+    {
+      "path": "repos/go/.git/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/HEAD",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80"
+    },
+    {
+      "path": "repos/go/.git/config",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/config",
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    {
+      "path": "repos/go/.git/description",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/description",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "repos/go/.git/hooks/applypatch-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/applypatch-msg.sample",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "repos/go/.git/hooks/commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/commit-msg.sample",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "repos/go/.git/hooks/fsmonitor-watchman.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/fsmonitor-watchman.sample",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "repos/go/.git/hooks/post-update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/post-update.sample",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-applypatch.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-applypatch.sample",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-commit.sample",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-merge-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-merge-commit.sample",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-push.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-push.sample",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-rebase.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-rebase.sample",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "repos/go/.git/hooks/pre-receive.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/pre-receive.sample",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "repos/go/.git/hooks/prepare-commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/prepare-commit-msg.sample",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "repos/go/.git/hooks/push-to-checkout.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/push-to-checkout.sample",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "repos/go/.git/hooks/sendemail-validate.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/sendemail-validate.sample",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    {
+      "path": "repos/go/.git/hooks/update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/hooks/update.sample",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "repos/go/.git/index",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/index",
+      "bytes": 433,
+      "sha256": "ea89bf2f935008e62de2bbffafb52849cda0c9394dc8659e5ba528ee4a8d7247"
+    },
+    {
+      "path": "repos/go/.git/info/exclude",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/info/exclude",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "repos/go/.git/logs/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/logs/HEAD",
+      "bytes": 162,
+      "sha256": "f0a926aafc4795e855b29e1d447b2c11e522c641730d365402a916a896b5fb76"
+    },
+    {
+      "path": "repos/go/.git/logs/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/logs/refs/heads/main",
+      "bytes": 162,
+      "sha256": "f0a926aafc4795e855b29e1d447b2c11e522c641730d365402a916a896b5fb76"
+    },
+    {
+      "path": "repos/go/.git/objects/0e/2b5256880b8c623ea762744b6828cf92b08f85",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/0e/2b5256880b8c623ea762744b6828cf92b08f85",
+      "bytes": 356,
+      "sha256": "9d751f4ad36e22f7f222e4cf22ae29d93ea27dc5573c2d84c6b9fac0bb847076"
+    },
+    {
+      "path": "repos/go/.git/objects/23/04fc7a4bb9371c0ac55a2e648c8c5c24dfb36a",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/23/04fc7a4bb9371c0ac55a2e648c8c5c24dfb36a",
+      "bytes": 556,
+      "sha256": "682e0c4cd3252ef9e4c2481dc08b444c7760835e6e1593f8f7d513bdbd7db0b2"
+    },
+    {
+      "path": "repos/go/.git/objects/40/e761ae7cddc0c7c463f637aebdd02d44e3a1d9",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/40/e761ae7cddc0c7c463f637aebdd02d44e3a1d9",
+      "bytes": 151,
+      "sha256": "db3820759f3bebe56a9c0d969670a37f89f90b3e9e469817ce02cd1fe140737f"
+    },
+    {
+      "path": "repos/go/.git/objects/4e/97b5a9f7b08c21f59ac17b12686383077dcfe8",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/4e/97b5a9f7b08c21f59ac17b12686383077dcfe8",
+      "bytes": 174,
+      "sha256": "90d21344be9c759e1c08571e1acd10b1534b64679c94f589c236b2f79fbd0741"
+    },
+    {
+      "path": "repos/go/.git/objects/55/0bfb03e72a959f68fec20df24baa44e79e20a7",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/55/0bfb03e72a959f68fec20df24baa44e79e20a7",
+      "bytes": 535,
+      "sha256": "137c68d8e654b3dcb1fb5ffdd901d27bc00dd3b29f2a26a9d9940bc81a15193b"
+    },
+    {
+      "path": "repos/go/.git/objects/a8/e14f80d1ebdbba6bb568109532b000a29c905c",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/a8/e14f80d1ebdbba6bb568109532b000a29c905c",
+      "bytes": 134,
+      "sha256": "931a9fd834857913ebb1370be570d4ee993f2f37ba4e11902e6f845df6cd4e2c"
+    },
+    {
+      "path": "repos/go/.git/objects/c2/0be4b3b87f2984dedbd57af3ee8d3af4aaca21",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/objects/c2/0be4b3b87f2984dedbd57af3ee8d3af4aaca21",
+      "bytes": 90,
+      "sha256": "ec8a45b0bbe4bbb4416738829029e0abd447162bb09f0fc104aa3c8a6126fb5d"
+    },
+    {
+      "path": "repos/go/.git/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/.git/refs/heads/main",
+      "bytes": 41,
+      "sha256": "b394b985f6ed93a2febe40571a4f6c7a9dc020a4cb4c42814a8c76ea844ffbca"
+    },
+    {
+      "path": "repos/go/README.md",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/README.md",
+      "bytes": 961,
+      "sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c"
+    },
+    {
+      "path": "repos/go/axocoatl-junit.xml",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "repos/go/go.mod",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/go.mod",
+      "bytes": 83,
+      "sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0"
+    },
+    {
+      "path": "repos/go/go.sum",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/go.sum",
+      "bytes": 167,
+      "sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec"
+    },
+    {
+      "path": "repos/go/pages.go",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/pages.go",
+      "bytes": 620,
+      "sha256": "f81e07d31890707518232eb0c8faad548cdfc38f7a283cb6f7fe8820a5a8e3af"
+    },
+    {
+      "path": "repos/go/pages_test.go",
+      "source": "/tmp/axo-gate.Db5c62/repos/go/pages_test.go",
+      "bytes": 1070,
+      "sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79"
+    },
+    {
+      "path": "repos/node-deps/.git/COMMIT_EDITMSG",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/COMMIT_EDITMSG",
+      "bytes": 16,
+      "sha256": "94676fae16188c11e29a7728be748ecc2a7aa421a3461b49ac56452a1e756c68"
+    },
+    {
+      "path": "repos/node-deps/.git/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/HEAD",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80"
+    },
+    {
+      "path": "repos/node-deps/.git/config",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/config",
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    {
+      "path": "repos/node-deps/.git/description",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/description",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/applypatch-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/applypatch-msg.sample",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/commit-msg.sample",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/fsmonitor-watchman.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/fsmonitor-watchman.sample",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/post-update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/post-update.sample",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-applypatch.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-applypatch.sample",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-commit.sample",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-merge-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-merge-commit.sample",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-push.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-push.sample",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-rebase.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-rebase.sample",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/pre-receive.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/pre-receive.sample",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/prepare-commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/prepare-commit-msg.sample",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/push-to-checkout.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/push-to-checkout.sample",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/sendemail-validate.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/sendemail-validate.sample",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    {
+      "path": "repos/node-deps/.git/hooks/update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/hooks/update.sample",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "repos/node-deps/.git/index",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/index",
+      "bytes": 602,
+      "sha256": "af6190b1b861c075058c46d47e8785d6c1af72e4ce417446e01108eb7d915f69"
+    },
+    {
+      "path": "repos/node-deps/.git/info/exclude",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/info/exclude",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "repos/node-deps/.git/logs/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/logs/HEAD",
+      "bytes": 169,
+      "sha256": "dcff882cc1d50be9d200aad9c3b2727395a44d50402d7dd4b473499513b2cece"
+    },
+    {
+      "path": "repos/node-deps/.git/logs/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/logs/refs/heads/main",
+      "bytes": 169,
+      "sha256": "dcff882cc1d50be9d200aad9c3b2727395a44d50402d7dd4b473499513b2cece"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/13/e32575140ddf8e7180b7f5ffb4e1478e904b75",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/13/e32575140ddf8e7180b7f5ffb4e1478e904b75",
+      "bytes": 61,
+      "sha256": "24b1c11cd18a0098b2db39ea10a741597a1318a61a3eae69787b4a415405506b"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/50/1ba48540d55f816ed81b259a4f025be6d1657d",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/50/1ba48540d55f816ed81b259a4f025be6d1657d",
+      "bytes": 365,
+      "sha256": "e2e15e33ec13dc08e13ebd4107fe98fab1f9460fb76ea096b91a8595b8231292"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/6d/979b818444fa56923c1c312499b6dbab4a3e08",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/6d/979b818444fa56923c1c312499b6dbab4a3e08",
+      "bytes": 977,
+      "sha256": "4c40dc60bf1e33907c5c6d455a62e63c41eeac9679585775151989e128abfab2"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/70/c8674e1ac327f111cdf65e4f3bc766cd61b883",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/70/c8674e1ac327f111cdf65e4f3bc766cd61b883",
+      "bytes": 369,
+      "sha256": "020c539d197c0dfb8cd6047352fd0001336deb7888e2cc8e3edb31bc0fb2220b"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/aa/0cc6f2f7319a34724bf7d3a7957a8951726bb6",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/aa/0cc6f2f7319a34724bf7d3a7957a8951726bb6",
+      "bytes": 55,
+      "sha256": "a0d99cde617d303c61529304fe059f1038c94fa2fd3e242619035cacfe9edb18"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/ab/02741e2bafd4eb391113685ffefcf5a49306c4",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/ab/02741e2bafd4eb391113685ffefcf5a49306c4",
+      "bytes": 212,
+      "sha256": "1e0e7c7938da9b878eb0e90c7f16a7686b65d547f7fc8ee2f359d93c96833a84"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/bb/bcd5566fd36b4c27e138f6cf8c85c1bd7218b6",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/bb/bcd5566fd36b4c27e138f6cf8c85c1bd7218b6",
+      "bytes": 138,
+      "sha256": "fca292f3817625ad288c593ec3e5b5abf9f44b30340fbb6979cc6339e4afb7f3"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/c2/658d7d1b31848c3b71960543cb0368e56cd4c7",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/c2/658d7d1b31848c3b71960543cb0368e56cd4c7",
+      "bytes": 30,
+      "sha256": "57bdb8d40e6ef280dacf4a95d9ae1c9768f4609bfe083093603f9f5a41a8bf59"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/cc/2dcc507ec713a541c0c441507665ea1c3a7827",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/cc/2dcc507ec713a541c0c441507665ea1c3a7827",
+      "bytes": 545,
+      "sha256": "e05c7d249d6e506a001b07a8ce2602a07fbdcf8b41f72946f17070c417f20e25"
+    },
+    {
+      "path": "repos/node-deps/.git/objects/fe/1ab0087a17720ddee76dcdda53717e79178feb",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/objects/fe/1ab0087a17720ddee76dcdda53717e79178feb",
+      "bytes": 130,
+      "sha256": "b5566c07ae29858fd393a9501b0b16117c2fec773b624188b791062120a03f47"
+    },
+    {
+      "path": "repos/node-deps/.git/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.git/refs/heads/main",
+      "bytes": 41,
+      "sha256": "be3a69245cead030aaf5619ccb42ebe51af7e4c9d1ae1ec7cb6e88d0f8cba6f0"
+    },
+    {
+      "path": "repos/node-deps/.gitignore",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/.gitignore",
+      "bytes": 14,
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+    },
+    {
+      "path": "repos/node-deps/README.md",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/README.md",
+      "bytes": 1005,
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732"
+    },
+    {
+      "path": "repos/node-deps/axocoatl-junit.xml",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "repos/node-deps/package-lock.json",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/package-lock.json",
+      "bytes": 2556,
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de"
+    },
+    {
+      "path": "repos/node-deps/package.json",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/package.json",
+      "bytes": 165,
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26"
+    },
+    {
+      "path": "repos/node-deps/src/paginate.js",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/src/paginate.js",
+      "bytes": 605,
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6"
+    },
+    {
+      "path": "repos/node-deps/test/paginate.test.js",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-deps/test/paginate.test.js",
+      "bytes": 745,
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0"
+    },
+    {
+      "path": "repos/node-plain/.git/COMMIT_EDITMSG",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/COMMIT_EDITMSG",
+      "bytes": 17,
+      "sha256": "38e5399492c3bff70550feaf19efad0b48ba0d7c6de7b01cff0debd0d6dceed1"
+    },
+    {
+      "path": "repos/node-plain/.git/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/HEAD",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80"
+    },
+    {
+      "path": "repos/node-plain/.git/config",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/config",
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    {
+      "path": "repos/node-plain/.git/description",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/description",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/applypatch-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/applypatch-msg.sample",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/commit-msg.sample",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/fsmonitor-watchman.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/fsmonitor-watchman.sample",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/post-update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/post-update.sample",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-applypatch.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-applypatch.sample",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-commit.sample",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-merge-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-merge-commit.sample",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-push.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-push.sample",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-rebase.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-rebase.sample",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/pre-receive.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/pre-receive.sample",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/prepare-commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/prepare-commit-msg.sample",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/push-to-checkout.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/push-to-checkout.sample",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/sendemail-validate.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/sendemail-validate.sample",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    {
+      "path": "repos/node-plain/.git/hooks/update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/hooks/update.sample",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "repos/node-plain/.git/index",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/index",
+      "bytes": 522,
+      "sha256": "8e6c9591e7dea6f46b901633af6ab1efae7001cb211172cb4a7a42eed36ba625"
+    },
+    {
+      "path": "repos/node-plain/.git/info/exclude",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/info/exclude",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "repos/node-plain/.git/logs/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/logs/HEAD",
+      "bytes": 170,
+      "sha256": "4d631431997452903f7ea79462dd8c5af5dbdcba2c1b9d1dc422e9ab08c271d7"
+    },
+    {
+      "path": "repos/node-plain/.git/logs/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/logs/refs/heads/main",
+      "bytes": 170,
+      "sha256": "4d631431997452903f7ea79462dd8c5af5dbdcba2c1b9d1dc422e9ab08c271d7"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/01/080f489fe70e128a31b9f3cf78b02968274d80",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/01/080f489fe70e128a31b9f3cf78b02968274d80",
+      "bytes": 278,
+      "sha256": "a40f8642d32158e55bfa1b3476243550933b2810fc50f711be4a701c8d623655"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/0a/ce6d280b7783150f2263d44e4c508399e2bc92",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/0a/ce6d280b7783150f2263d44e4c508399e2bc92",
+      "bytes": 140,
+      "sha256": "7056b786eb613761304168e478ef6e0b19169cf38c027b1b47787703f0f71771"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/0a/edfad607025d7b142d0e3e8d7f7df49d887877",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/0a/edfad607025d7b142d0e3e8d7f7df49d887877",
+      "bytes": 59,
+      "sha256": "3e0eb39c9923dc381567e3fe43c337521ee287b503cfb8391851d1cae6416b0f"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/27/38e23d2a8bb5d69c80380898287fd3a7de5334",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/27/38e23d2a8bb5d69c80380898287fd3a7de5334",
+      "bytes": 265,
+      "sha256": "1e50499e812dca67ececf406cffb5c2bd34c3522f76056a0ce48153541a6f9a5"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/38/c1138053a0d67c71bc367b785f7c4dd2aec90e",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/38/c1138053a0d67c71bc367b785f7c4dd2aec90e",
+      "bytes": 156,
+      "sha256": "cf3f2e22016a40fcf7fd5404e89b713933b93265e68303d56d7b3e90786ec5f6"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/48/8e842476ff7571777b9c16acce487ce8237359",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/48/8e842476ff7571777b9c16acce487ce8237359",
+      "bytes": 258,
+      "sha256": "edb5c07ff89f6a948215015145f9a3cdce4fb43591b2e58586c4cc8ca3ec0008"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/a9/20eacb1368dd334cf5fa83703dbd5a4adc7a2c",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/a9/20eacb1368dd334cf5fa83703dbd5a4adc7a2c",
+      "bytes": 53,
+      "sha256": "cb062d8ddf114d787b3dc1671d24619a0600dbe54395242034b558edf5e38880"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/c2/658d7d1b31848c3b71960543cb0368e56cd4c7",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/c2/658d7d1b31848c3b71960543cb0368e56cd4c7",
+      "bytes": 30,
+      "sha256": "57bdb8d40e6ef280dacf4a95d9ae1c9768f4609bfe083093603f9f5a41a8bf59"
+    },
+    {
+      "path": "repos/node-plain/.git/objects/d5/895712bb088272eb1ddcdee0af8923c400872f",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/objects/d5/895712bb088272eb1ddcdee0af8923c400872f",
+      "bytes": 181,
+      "sha256": "d25e6001d9f29b5e52f8823f78c19280485012148236bc91616e682b328d2962"
+    },
+    {
+      "path": "repos/node-plain/.git/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.git/refs/heads/main",
+      "bytes": 41,
+      "sha256": "bf2144be27f1252c92620552be3f6ca4417221e8cd4686610f9a9bb6fa5b5e6e"
+    },
+    {
+      "path": "repos/node-plain/.gitignore",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/.gitignore",
+      "bytes": 14,
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+    },
+    {
+      "path": "repos/node-plain/README.md",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/README.md",
+      "bytes": 391,
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa"
+    },
+    {
+      "path": "repos/node-plain/axocoatl-junit.xml",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "repos/node-plain/package.json",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/package.json",
+      "bytes": 210,
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3"
+    },
+    {
+      "path": "repos/node-plain/src/paging.js",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/src/paging.js",
+      "bytes": 425,
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25"
+    },
+    {
+      "path": "repos/node-plain/test/paging.test.js",
+      "source": "/tmp/axo-gate.Db5c62/repos/node-plain/test/paging.test.js",
+      "bytes": 498,
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb"
+    },
+    {
+      "path": "repos/python-pytest/.git/COMMIT_EDITMSG",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/COMMIT_EDITMSG",
+      "bytes": 20,
+      "sha256": "bb1be770619f94145e0608f4d67d7c836ee431d8d19d9cb321d02e1b763fcf91"
+    },
+    {
+      "path": "repos/python-pytest/.git/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/HEAD",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80"
+    },
+    {
+      "path": "repos/python-pytest/.git/config",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/config",
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    {
+      "path": "repos/python-pytest/.git/description",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/description",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/applypatch-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/applypatch-msg.sample",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/commit-msg.sample",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/fsmonitor-watchman.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/fsmonitor-watchman.sample",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/post-update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/post-update.sample",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-applypatch.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-applypatch.sample",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-commit.sample",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-merge-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-merge-commit.sample",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-push.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-push.sample",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-rebase.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-rebase.sample",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/pre-receive.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/pre-receive.sample",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/prepare-commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/prepare-commit-msg.sample",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/push-to-checkout.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/push-to-checkout.sample",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/sendemail-validate.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/sendemail-validate.sample",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    {
+      "path": "repos/python-pytest/.git/hooks/update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/hooks/update.sample",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "repos/python-pytest/.git/index",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/index",
+      "bytes": 487,
+      "sha256": "456abbc2cc23ea84745ad050c58f5144f88f54d7995856e43e4ce227eedca59b"
+    },
+    {
+      "path": "repos/python-pytest/.git/info/exclude",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/info/exclude",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "repos/python-pytest/.git/logs/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/logs/HEAD",
+      "bytes": 173,
+      "sha256": "f3b22b1f612106d68fb2488c21fe5ec7d26ecde5f6f0c04a7953ba7a080b576c"
+    },
+    {
+      "path": "repos/python-pytest/.git/logs/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/logs/refs/heads/main",
+      "bytes": 173,
+      "sha256": "f3b22b1f612106d68fb2488c21fe5ec7d26ecde5f6f0c04a7953ba7a080b576c"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/35/fe29551673edd09fe7fe46e4a857a3e31227ba",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/35/fe29551673edd09fe7fe46e4a857a3e31227ba",
+      "bytes": 57,
+      "sha256": "7795d77b5554e597cc7b527a15245ad9a7d875f3ad6bad19e4a9c78b91b021f0"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/73/7bf1808b89052c51541eb3ba65f865434232f0",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/73/7bf1808b89052c51541eb3ba65f865434232f0",
+      "bytes": 305,
+      "sha256": "32ed85a8d328cedb6b091e1f0f251030be4810e1adb6a6872fe687bc31037d69"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/88/398fe8e129de2766e77af89dfd6795f5b3642c",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/88/398fe8e129de2766e77af89dfd6795f5b3642c",
+      "bytes": 190,
+      "sha256": "3f1536bc5470a8f9cb2548244c25d0483648884198bea48e45f0d223159bd796"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/8d/70c54e43f3f4940502e4b2e93c2700857fd1f9",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/8d/70c54e43f3f4940502e4b2e93c2700857fd1f9",
+      "bytes": 58,
+      "sha256": "2e6af7728c36618d8a8dc476f8f31f7fcc62f5ad422286a1f3e3fed814432a25"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/b6/6dcf2b1c9bf3913397c11c1224f02ab3adba59",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/b6/6dcf2b1c9bf3913397c11c1224f02ab3adba59",
+      "bytes": 213,
+      "sha256": "16f9524263976dd149457691631bda4fa2d19924fe71ff68d7129701c1c23900"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/b9/b124352c257bda37fe8148f572fb67f23da3ca",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/b9/b124352c257bda37fe8148f572fb67f23da3ca",
+      "bytes": 310,
+      "sha256": "440a711ab013802ad43dd46fa94ea8a35db7767177a8bed93fd406e9c49da63e"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/e1/e280d46332d0e7abb50fd39e2dc90ce6812b35",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/e1/e280d46332d0e7abb50fd39e2dc90ce6812b35",
+      "bytes": 142,
+      "sha256": "99e0132ad7344ce801e750ad20c7154c6a2456215cd81f40f8eb70894397d9e1"
+    },
+    {
+      "path": "repos/python-pytest/.git/objects/ff/1b99584897901768a1b01dcde18001f9056d9c",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/objects/ff/1b99584897901768a1b01dcde18001f9056d9c",
+      "bytes": 540,
+      "sha256": "6612a3032cd0c191e4ed7c0c27d24e497c8d42bf5c9ff745c960e1532cad7516"
+    },
+    {
+      "path": "repos/python-pytest/.git/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.git/refs/heads/main",
+      "bytes": 41,
+      "sha256": "f7969d6ddcee02ffd418c3aa41684e38b1ffe8aac907018a9449d18b5a1580c6"
+    },
+    {
+      "path": "repos/python-pytest/.gitignore",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/.gitignore",
+      "bytes": 47,
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad"
+    },
+    {
+      "path": "repos/python-pytest/README.md",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/README.md",
+      "bytes": 1000,
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46"
+    },
+    {
+      "path": "repos/python-pytest/axocoatl-junit.xml",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "repos/python-pytest/pages.py",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/pages.py",
+      "bytes": 541,
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b"
+    },
+    {
+      "path": "repos/python-pytest/pyproject.toml",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/pyproject.toml",
+      "bytes": 335,
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea"
+    },
+    {
+      "path": "repos/python-pytest/tests/test_pages.py",
+      "source": "/tmp/axo-gate.Db5c62/repos/python-pytest/tests/test_pages.py",
+      "bytes": 582,
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d"
+    },
+    {
+      "path": "repos/rust/.git/COMMIT_EDITMSG",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/COMMIT_EDITMSG",
+      "bytes": 11,
+      "sha256": "8f50964c5f8f6b0e6fbfd94697b480f62266c590b7fb78d934cfa6996f10dfa9"
+    },
+    {
+      "path": "repos/rust/.git/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/HEAD",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80"
+    },
+    {
+      "path": "repos/rust/.git/config",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/config",
+      "bytes": 92,
+      "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe"
+    },
+    {
+      "path": "repos/rust/.git/description",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/description",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "repos/rust/.git/hooks/applypatch-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/applypatch-msg.sample",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "repos/rust/.git/hooks/commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/commit-msg.sample",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "repos/rust/.git/hooks/fsmonitor-watchman.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/fsmonitor-watchman.sample",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "repos/rust/.git/hooks/post-update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/post-update.sample",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-applypatch.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-applypatch.sample",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-commit.sample",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-merge-commit.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-merge-commit.sample",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-push.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-push.sample",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-rebase.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-rebase.sample",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "repos/rust/.git/hooks/pre-receive.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/pre-receive.sample",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "repos/rust/.git/hooks/prepare-commit-msg.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/prepare-commit-msg.sample",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "repos/rust/.git/hooks/push-to-checkout.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/push-to-checkout.sample",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "repos/rust/.git/hooks/sendemail-validate.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/sendemail-validate.sample",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92"
+    },
+    {
+      "path": "repos/rust/.git/hooks/update.sample",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/hooks/update.sample",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "repos/rust/.git/index",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/index",
+      "bytes": 485,
+      "sha256": "c7f63d28efab2c85d3bde54f4a26992ae6e48b8b08aa1d4dcc0bd97007e84c8a"
+    },
+    {
+      "path": "repos/rust/.git/info/exclude",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/info/exclude",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "repos/rust/.git/logs/HEAD",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/logs/HEAD",
+      "bytes": 164,
+      "sha256": "295cddcf85fe37d4df0aab242e3696e72016bc5fd8e42162b1ea2bb008189402"
+    },
+    {
+      "path": "repos/rust/.git/logs/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/logs/refs/heads/main",
+      "bytes": 164,
+      "sha256": "295cddcf85fe37d4df0aab242e3696e72016bc5fd8e42162b1ea2bb008189402"
+    },
+    {
+      "path": "repos/rust/.git/objects/04/79777509a01395d3f00c6889dfe028e47cb557",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/04/79777509a01395d3f00c6889dfe028e47cb557",
+      "bytes": 563,
+      "sha256": "8034469bbe66ea30d9f9f71f6013a52fa2c97c691723f089febc79c363cdaae2"
+    },
+    {
+      "path": "repos/rust/.git/objects/0c/5f5e4b8bbab90ffdd3365a8f5ee59761309cd4",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/0c/5f5e4b8bbab90ffdd3365a8f5ee59761309cd4",
+      "bytes": 135,
+      "sha256": "3349871ffddded6e651851e64b32f2aa7a89f1ff1cee52c10b2a4754495cf09d"
+    },
+    {
+      "path": "repos/rust/.git/objects/2f/7896d1d1365eafb0da03d9fe456fac81408487",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/2f/7896d1d1365eafb0da03d9fe456fac81408487",
+      "bytes": 23,
+      "sha256": "47e725f6cbe2c884d7386f7ddda4319a35625932d89c995ff6074bb65550eb12"
+    },
+    {
+      "path": "repos/rust/.git/objects/77/32b54c382c5303b668e9daee54b59dad60080c",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/77/32b54c382c5303b668e9daee54b59dad60080c",
+      "bytes": 757,
+      "sha256": "92fd3abefdbdc0512f6c232775a48e814cae391f85ed20f797db778b586f8011"
+    },
+    {
+      "path": "repos/rust/.git/objects/b7/9335965b95938b36c62894f06670597012b507",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/b7/9335965b95938b36c62894f06670597012b507",
+      "bytes": 181,
+      "sha256": "5e5c5fba6b66f109a1ba3d3445d1d59496af15a10adab9d4b7a8cd7a9e3f01a3"
+    },
+    {
+      "path": "repos/rust/.git/objects/be/12dd9f0518e92dfe3b8175ee01a9746c3b6d2f",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/be/12dd9f0518e92dfe3b8175ee01a9746c3b6d2f",
+      "bytes": 51,
+      "sha256": "357cf95f79a0a1b6852b2a38b1a95b6badfbf740352d6830f69a4b533b08cd54"
+    },
+    {
+      "path": "repos/rust/.git/objects/e8/4fb759146d9a08bdc07a978238035743106046",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/e8/4fb759146d9a08bdc07a978238035743106046",
+      "bytes": 410,
+      "sha256": "9fa81654cec65994557ec72d6e98ccc751845ba184648077958cb0feac9edad2"
+    },
+    {
+      "path": "repos/rust/.git/objects/ec/c8b53a9d23c8c4cf7d66d1ed23a43773ac2ee2",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/objects/ec/c8b53a9d23c8c4cf7d66d1ed23a43773ac2ee2",
+      "bytes": 112,
+      "sha256": "e2697a4e6b9edecdf7f851ae5d97ccd20b2c615c7fc2eea9883aa5b9ca6af83d"
+    },
+    {
+      "path": "repos/rust/.git/refs/heads/main",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.git/refs/heads/main",
+      "bytes": 41,
+      "sha256": "a4028829462471c07061333a563f20eb8d86b8fb5af21efb78c974973449043d"
+    },
+    {
+      "path": "repos/rust/.gitignore",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/.gitignore",
+      "bytes": 8,
+      "sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d"
+    },
+    {
+      "path": "repos/rust/Cargo.lock",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/Cargo.lock",
+      "bytes": 814,
+      "sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4"
+    },
+    {
+      "path": "repos/rust/Cargo.toml",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/Cargo.toml",
+      "bytes": 115,
+      "sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d"
+    },
+    {
+      "path": "repos/rust/README.md",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/README.md",
+      "bytes": 1003,
+      "sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880"
+    },
+    {
+      "path": "repos/rust/axocoatl-junit.xml",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/axocoatl-junit.xml",
+      "bytes": 1032,
+      "sha256": "b4fd2e43c22bdede8f7d8c39135f54c88f210d595b1722c2a3799659ae49021b"
+    },
+    {
+      "path": "repos/rust/src/lib.rs",
+      "source": "/tmp/axo-gate.Db5c62/repos/rust/src/lib.rs",
+      "bytes": 1598,
+      "sha256": "0252b65275ba544b33e24f370dfb262339d40fd391095adbc1a50427523d111f"
+    },
+    {
+      "path": "own-subids-before/1",
+      "source": "/tmp/axo-gate.Db5c62/own-subids/1",
+      "bytes": 63,
+      "sha256": "a79793c033bc5216afc51df4368fedc940c31970d3b386d183c54ba12c862d12"
+    },
+    {
+      "path": "own-subids-before/2",
+      "source": "/tmp/axo-gate.Db5c62/own-subids/2",
+      "bytes": 63,
+      "sha256": "a79793c033bc5216afc51df4368fedc940c31970d3b386d183c54ba12c862d12"
+    },
+    {
+      "path": "recorder/began",
+      "source": "/tmp/axo-gate-record.9aFKpc/began",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "recorder/curl-shim/curl",
+      "source": "/tmp/axo-gate-record.9aFKpc/curl-shim/curl",
+      "bytes": 733,
+      "sha256": "dfc59ff1ee0eae638b0be94d2f9d1947174c26f4dd903fd589151c0c152ddbf6"
+    },
+    {
+      "path": "recorder/curl.log",
+      "source": "/tmp/axo-gate-record.9aFKpc/curl.log",
+      "bytes": 343,
+      "sha256": "d473c9b42a97e7f3007a891ebfb06763989d70c9ad94ed2c2bcbdd7494d1db0d"
+    },
+    {
+      "path": "recorder/forward.port",
+      "source": "/tmp/axo-gate-record.9aFKpc/forward.port",
+      "bytes": 5,
+      "sha256": "559505b21f99d9555c63f287d3cb8acbda942e738d17d89d846da82718bd1221"
+    },
+    {
+      "path": "recorder/host.json",
+      "source": "/tmp/axo-gate-record.9aFKpc/host.json",
+      "bytes": 188,
+      "sha256": "8e8f700fde0950601308a1cca1c1d0efc7660bb9a4b01802dac1ff59860b9d79"
+    },
+    {
+      "path": "recorder/secret-list.err",
+      "source": "/tmp/axo-gate-record.9aFKpc/secret-list.err",
+      "bytes": 179,
+      "sha256": "eac62800ca13050edff549363dd216f5c1076d9fab9622bbc137e0bca3e805a8"
+    },
+    {
+      "path": "recorder/steps.jsonl",
+      "source": "/tmp/axo-gate-record.9aFKpc/steps.jsonl",
+      "bytes": 13565,
+      "sha256": "dd08ed0d143e200c062cbaa1dd41cfbfe2be49a00411baab35ec768d11ec0c4f"
+    },
+    {
+      "path": "onboarding-logs/onboard-20261027-004446.log",
+      "source": "/home/d1gate/.local/state/axocoatl/onboard-20261027-004446.log",
+      "bytes": 5629,
+      "sha256": "280479b006f7428e87b98fec0fe2729ff259369584d4ef7ab9c23b01b1494476"
+    },
+    {
+      "path": "onboarding-logs/onboard-20261027-005906.log",
+      "source": "/home/d1gate/.local/state/axocoatl/onboard-20261027-005906.log",
+      "bytes": 516,
+      "sha256": "0b4d784bf89cf3b2584b4cbcd57407609f4c9582a30f9e371ff65f2e87652f71"
+    },
+    {
+      "path": "raw-transcript.txt",
+      "source": "/tmp/axo-gate-live-20261027T004345Z.txt",
+      "bytes": 55990,
+      "sha256": "849f5d5956c6c882c7de71a4d946e5418a10aa2c2b3712a4bb877c820a3a5526"
+    },
+    {
+      "path": "operator.json",
+      "source": "/home/d1gate/gate-assets/restart-b222302f-20261027/operator.json",
+      "bytes": 769,
+      "sha256": "879fb60bcc15e08d0c7d74b50752c575d154d0b244980fbe53cf1eb47e5a48a2"
+    }
+  ],
+  "excluded": [
+    "secret store and receipt private signing key",
+    "candidate source and duplicated package",
+    "dependency caches"
+  ],
+  "gate_processes_held": [
+    1940,
+    5339
+  ]
+}

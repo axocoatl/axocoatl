@@ -1,0 +1,22 @@
+{
+  "repo": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/repos/service-node-deps",
+  "gate_dir": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/gate/D1-continuation2/service-node-deps",
+  "out": "/private/tmp/axocoatl-d1-retry2-final-20261027/acceptance/service-node-deps",
+  "fixture": "node-deps",
+  "label": "d1-retry2-service-node-deps",
+  "trusted_public_key": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/linux-receipt-public-key.txt",
+  "archive": "/private/tmp/axocoatl-b222-d1-package-20261027/axocoatl-v1.5.0-aarch64-unknown-linux-gnu.tar.gz",
+  "archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "execution_binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "execution_provenance": "/private/tmp/axocoatl-d1-retry2-final-20261027/public/execution-provenance.json",
+  "artifact_review": "The only change preserves size when the last-page remainder is zero, correctly retaining full final pages. Original tests, README, and manifests are unchanged; run the original four tests once. This successful service fixture does not replace the earlier failed changed-model onboarding sample.",
+  "sample": false,
+  "source_repo": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+  "verifier": "/usr/local/bin/axocoatl",
+  "verifier_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "node_bin": "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin",
+  "node_deps_source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+  "python": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+  "cargo": "/Users/erick/.cargo/bin/cargo",
+  "go": "/opt/homebrew/bin/go"
+}

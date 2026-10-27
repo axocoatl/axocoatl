@@ -1,0 +1,6 @@
+/home/d1gate/.config/axocoatl/config.yaml: providers.openrouter reads the key from secret openrouter; openrouter_billing: credits
+  OpenRouter key: stored as secret openrouter (never shown)
+  Key label: sk-or-v1-5b0...8b3
+  Credit limit: $2.00 on this key, $1.92 left
+  Used by this key: $0.075121 in all, $0.075121 today (UTC)
+  Free tier: no (the account has bought credits)

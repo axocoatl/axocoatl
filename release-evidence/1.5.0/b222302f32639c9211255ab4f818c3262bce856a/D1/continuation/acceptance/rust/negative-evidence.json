@@ -1,0 +1,65 @@
+{
+  "tool_errors": [
+    {
+      "role": "writer",
+      "sequence": 109,
+      "payload": {
+        "call_id": "01a17b0978f894dbb33120d4f9e80fce",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "writer",
+      "sequence": 126,
+      "payload": {
+        "call_id": "01a17b0a2edae7949028a80cc86b7d77",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 21,
+      "payload": {
+        "call_id": "chatcmpl-tool-9ed2c38e15a8b735",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 25,
+      "payload": {
+        "call_id": "chatcmpl-tool-b4db233a771a1d28",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "cargo",
+    "program_found": true,
+    "baseline_exit": 101,
+    "duration_ms": 588
+  },
+  "failed_activations": []
+}

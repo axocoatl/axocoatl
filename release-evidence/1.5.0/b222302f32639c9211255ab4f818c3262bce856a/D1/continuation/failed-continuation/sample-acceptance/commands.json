@@ -1,0 +1,85 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/receipt.json",
+      "--key",
+      "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+      "--repo",
+      "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/repo",
+      "--record",
+      "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/repo",
+    "start": "2026-10-27T01:24:24.998170+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:24:25.007602+00:00",
+    "exit_code": 6,
+    "stdout_sha256": "4b870db80d13239b1d1c21046d07d146487f30ac8e0a56c76215fb254349a6cc",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/record.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/repo",
+    "start": "2026-10-27T01:24:25.007751+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:24:25.014785+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "824459c20d1ca4ba4f3bbd0f2d6d1a1ab3a1efae7989d7bfc72d00d16fba76ec",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/record.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/repo",
+    "start": "2026-10-27T01:24:25.014924+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:24:25.112951+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e4e08c4bbfc3ef78359730f220f5b015b28bfb796348372b30cff7ff30b82490",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/acceptance/sample/host-check",
+    "start": "2026-10-27T01:24:25.113178+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:24:25.125042+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/acceptance/sample/host-check",
+    "start": "2026-10-27T01:24:25.125446+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:24:25.325711+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "35965128c4abbee49ff88a58db58ad4a7a1a4e618d97de419e3fd5b067ef8585",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

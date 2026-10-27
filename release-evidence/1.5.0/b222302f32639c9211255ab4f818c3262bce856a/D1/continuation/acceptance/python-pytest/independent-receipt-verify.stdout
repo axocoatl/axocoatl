@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac",
+  "verdict": "pass",
+  "statement_sha256": "sha256:086614624837ef41bc162ba3b47af06864e32d48b8a4ef4e775b03c319b00346",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-44fc3954-fd8c-4f7a-950d-5a244c0a0193, finished at 1793065491495 ms",
+    "Base commit fe6a3073143da2d1115ce5d3477c7140e1ea9a44",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c python3 -m pytest)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  pages.py  sha256:b06b9320a4b2985b6fd41e7721d438028f8ff7aa4c10dd38ae9a6dfb7a07f672",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 5): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

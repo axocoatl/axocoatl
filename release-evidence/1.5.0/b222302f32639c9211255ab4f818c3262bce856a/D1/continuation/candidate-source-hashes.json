@@ -1,0 +1,9 @@
+{
+  "docs/RELEASE_GATE.md": "c91818e67e04fcbf778951acb220a936f7387061f66cdf5f21c3f1b99c40881e",
+  "scripts/release-gate/newuser-linux.sh": "83472f106f85d52686d3e70ec3d68eb93caff73c64fdf8632bca65336f16116c",
+  "scripts/release-gate/lib.sh": "cfe0d44083779605c13986fa80061294882d1d4574119117c823b8dc4238fa0b",
+  "scripts/release-gate/evidence.mjs": "bcd138fe8f8c68aa668894cdc2eb4c59f76c3689237fde3569800a05649d9729",
+  "scripts/release-gate/published-commands.mjs": "ae2334357df3d1676048a95f84db486445cb4597c6b20aa509284ac55c7b5d5f",
+  "tests/fixtures/newuser/fixtures.json": "0441cc517f6c3128840760496d427e421a9782acaa5812368ad734f6268e461b",
+  "crates/axocoatl-config/loadouts/fix.yaml": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"
+}

@@ -1,0 +1,17 @@
+ M pages.go
+?? axocoatl-junit.xml
+?? run.axorecord.jsonl
+?? run.receipt.json
+diff --git a/pages.go b/pages.go
+index 0e2b525..2a5f297 100644
+--- a/pages.go
++++ b/pages.go
+@@ -14,7 +14,7 @@ func Paginate[T any](items []T, size int) [][]T {
+ 		start := page * size
+ 		length := size
+ 		if page == count-1 {
+-			length = len(items) % size
++			length = len(items) - start
+ 		}
+ 		pages = append(pages, items[start:start+length])
+ 	}

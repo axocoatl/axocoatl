@@ -1,0 +1,41 @@
+{
+  "exit_code": 6,
+  "result": "not-passed",
+  "problems": [
+    "the run's verdict is needs_attention, not pass (--require-pass)"
+  ],
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-dffa734d-0494-4cf3-a093-b237ca092b91",
+  "verdict": "needs_attention",
+  "statement_sha256": "sha256:377527d7e7d425b898f404996b27a9c30d3973434854df3ffb077d30d6f55d52",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-b222-acceptance-input-20261027/public/sample/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-dffa734d-0494-4cf3-a093-b237ca092b91 (fix@1), verdict needs attention, exit code 2",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-90d991e3-c10b-41f1-8af9-3c51c69b3ac4, finished at 1793063922975 ms",
+    "Base commit ca418b647e7b7e2ecfe8242d5ae069cfc235d6af",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): failed (not passed), 1 of 3 rounds, 0 findings",
+    "Needs attention: The required review did not pass: The reviewer did not finish, so nothing approved this result: LLM provider error: Streaming error: native OpenRouter: incomplete native tool arguments. Select the reviewer and Continue to run it again, or Finish.",
+    "Needs attention: A turn ended needing attention: The reviewer did not finish, so nothing approved this result: LLM provider error: Streaming error: native OpenRouter: incomplete native tool arguments.",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paging.js  sha256:c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

@@ -1,0 +1,105 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.receipt.json",
+      "--key",
+      "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+      "--repo",
+      "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+      "--record",
+      "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+    "start": "2026-10-27T01:45:52.284547+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.293439+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "68e897ce424be07882bd9b1e5e8666e5a66207a81178e20b00d5bb8b471f3873",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+    "start": "2026-10-27T01:45:52.293587+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.303510+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "1681aa1491b48e66ec2ae5c5f08260ac28b7194d98ddd06f1295b00bad3a1aaa",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+    "start": "2026-10-27T01:45:52.303789+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.336967+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+      "--version"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+    "start": "2026-10-27T01:45:52.337203+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.360594+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "module-selection",
+    "argv": [
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+      "-B",
+      "-c",
+      "import pathlib,pages,pytest; assert pathlib.Path(pages.__file__).resolve()==pathlib.Path(\"pages.py\").resolve();print(pages.__file__);print(pytest.__version__)"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+    "start": "2026-10-27T01:45:52.360867+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.511695+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "f7fe268358e45c749358f5f12ad839ac993d5ce1ea3d4f4bca90eb9df58619f1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+      "-B",
+      "-m",
+      "pytest",
+      "-p",
+      "no:cacheprovider"
+    ],
+    "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+    "start": "2026-10-27T01:45:52.512138+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:45:52.637041+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "0055295a84d38d8fe01bcbed4d497d12e15bb175b5315c602c18650b4b093e25",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

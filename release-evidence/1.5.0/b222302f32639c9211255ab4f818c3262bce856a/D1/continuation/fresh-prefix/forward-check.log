@@ -1,0 +1,2 @@
+GET /<the gate path> Host 127.0.0.1:44377
+GET /favicon.ico Host 127.0.0.1:44377

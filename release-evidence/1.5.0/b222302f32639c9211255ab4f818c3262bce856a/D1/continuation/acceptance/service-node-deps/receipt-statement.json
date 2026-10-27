@@ -1,0 +1,168 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/paginate.js",
+      "digest": {
+        "sha256": "c549a6a2746299d2132d49e39905b691e7adf11cb99e3226a052068380301ff0"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-ae4b10e8-8393-4d15-97d4-1abd2b65eb55",
+      "session_id": "ses-f766840a-c06e-4901-980f-8f73d2f38b4d",
+      "started_at_ms": 1793066483325,
+      "finished_at_ms": 1793066702059,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "8df97588f021a44c6c80f155939ddc596fad0a226ca7bcc5bc903ebe316551f0"
+    },
+    "repository": {
+      "base_commit": "7a1a6d2f05e67c20917433624bac9b84c3eb12e1",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix",
+      "version": 1,
+      "kind": "fix",
+      "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint deepinfra/fp4 (DeepInfra)",
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-chat-v3.1"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 3,
+          "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+          "rules": []
+        }
+      ],
+      "environment": {
+        "toolchain": "node",
+        "reason": "package.json at the repository root",
+        "image": "localhost/axocoatl-recipe-node:3b267c748259",
+        "image_id": "861dc0472db3139045371d6e43a20ec355bcdefcb044b47bf1c55e2d41207c41",
+        "recipes": [
+          "node"
+        ],
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "npm ci --prefer-offline --no-audit --no-fund",
+          "source": "detected",
+          "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+          "exit_code": 0,
+          "duration_ms": 1196,
+          "registry_hosts": [
+            "registry.npmjs.org"
+          ],
+          "allowed_connections": 6,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-42324194e383acc1aad6b2cb",
+        "probe": {
+          "program": "npm",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 162
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "pids": 512,
+        "not_applied": [
+          "CPU (2 CPUs, cgroup controller cpu)"
+        ]
+      }
+    },
+    "network": {
+      "events": 31,
+      "allowed_connections": 6,
+      "refused_connections": 0,
+      "route_requests": 0,
+      "routes": []
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoints near-ai/fp4 (Near AI), coreweave/fp4 (CoreWeave)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 114008,
+      "output_tokens": 1448,
+      "cost_microunits": 14209,
+      "cost_usd": 0.014209,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "7f87c723f8d9e89b77255cbf4395ae550383ed95ade5f91987946cb39560a749",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY=",
+      "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815"
+    }
+  }
+}

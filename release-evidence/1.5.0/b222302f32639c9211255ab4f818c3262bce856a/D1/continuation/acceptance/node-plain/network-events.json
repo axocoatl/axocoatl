@@ -1,0 +1,151 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793065044652,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793065044652,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793065045993,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-758e9b1b-a08e-477f-9ce4-8f2a6d58f13b",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793065046074,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e038ff37-79a4-48ea-94d8-9bb43de374cb",
+        "agent": "team-definition-edf3f88cf8547766966a20b32273494f966d1afbe11d91af206a7109c5938559",
+        "invocation_id": "tool-72fba74f469616656cb93da271ef7a15444a7e9b701ed4ff67260d3c87bccddf",
+        "kind": "agent",
+        "node_id": "team-node-dcac12ea39019e274ef8c347",
+        "process": "tool-72fba74f469616656cb93da271ef7a15444a7e9b701ed4ff67260d3c87bccddf:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "fdb44a6ff8039287"
+    },
+    "seq": 5,
+    "ts_ms": 1793065086393,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "fdb44a6ff8039287"
+    },
+    "seq": 6,
+    "ts_ms": 1793065086571,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e038ff37-79a4-48ea-94d8-9bb43de374cb",
+        "agent": "team-definition-edf3f88cf8547766966a20b32273494f966d1afbe11d91af206a7109c5938559",
+        "invocation_id": "tool-3e64de17e33a4994af31103f82bd3f6d7a8a45602d241eeb54dcfd0793b01347",
+        "kind": "agent",
+        "node_id": "team-node-dcac12ea39019e274ef8c347",
+        "process": "tool-3e64de17e33a4994af31103f82bd3f6d7a8a45602d241eeb54dcfd0793b01347:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "fd33b7bbb738def6"
+    },
+    "seq": 7,
+    "ts_ms": 1793065103003,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "fd33b7bbb738def6"
+    },
+    "seq": 8,
+    "ts_ms": 1793065103076,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e038ff37-79a4-48ea-94d8-9bb43de374cb",
+        "agent": "team-definition-edf3f88cf8547766966a20b32273494f966d1afbe11d91af206a7109c5938559",
+        "invocation_id": "tool-68728dc52c06b0cab338a052446e6bfaba14057cd4250227e4430578ade37bc7",
+        "kind": "agent",
+        "node_id": "team-node-dcac12ea39019e274ef8c347",
+        "process": "tool-68728dc52c06b0cab338a052446e6bfaba14057cd4250227e4430578ade37bc7:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "c1ba57340e285111"
+    },
+    "seq": 9,
+    "ts_ms": 1793065120396,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "c1ba57340e285111"
+    },
+    "seq": 10,
+    "ts_ms": 1793065120618,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 11,
+    "ts_ms": 1793065147599,
+    "v": 1
+  }
+]

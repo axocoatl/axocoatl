@@ -1,0 +1,168 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/lib.rs",
+      "digest": {
+        "sha256": "691a76fb837839485c28a3fcca4c3177e58500aa80c2c4d9a4b4e7c920be84e9"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "session_id": "ses-6471e8c3-1e6b-4458-b1f4-77631493494b",
+      "started_at_ms": 1793065512965,
+      "finished_at_ms": 1793065774901,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "8df97588f021a44c6c80f155939ddc596fad0a226ca7bcc5bc903ebe316551f0"
+    },
+    "repository": {
+      "base_commit": "df071b9d337485b624d17d60db7fa766bb220d0c",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix",
+      "version": 1,
+      "kind": "fix",
+      "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 7,
+          "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+          "rules": []
+        }
+      ],
+      "environment": {
+        "toolchain": "rust",
+        "reason": "Cargo.toml at the repository root",
+        "image": "localhost/axocoatl-recipe-rust:0e5acf3d40e2",
+        "image_id": "c65211efb8ef8bb47d9a00b7e8743f16be1bf64cdb13388e7b415d760ad71736",
+        "recipes": [
+          "rust"
+        ],
+        "check": "cargo test",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "cargo fetch",
+          "source": "detected",
+          "script_sha256": "471eeafc71b8d16620386f0a132facfc78168b25eaa54e05a50de4ac59e43732",
+          "exit_code": 0,
+          "duration_ms": 812,
+          "registry_hosts": [
+            "index.crates.io",
+            "static.crates.io",
+            "crates.io"
+          ],
+          "allowed_connections": 2,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-df4c8537b9900a86330910a0",
+        "probe": {
+          "program": "cargo",
+          "program_found": true,
+          "baseline_exit": 101,
+          "duration_ms": 588
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 47,
+      "allowed_connections": 2,
+      "refused_connections": 0,
+      "route_requests": 0,
+      "routes": []
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "cargo test"
+        ],
+        "candidate_sha256": "0f718a02fdb7132f70c76b4add184d6dde5e6db4fbef92cfdbb29ce0289fe880"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 216242,
+      "output_tokens": 5643,
+      "cost_microunits": 15478,
+      "cost_usd": 0.015478,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "0f718a02fdb7132f70c76b4add184d6dde5e6db4fbef92cfdbb29ce0289fe880",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY=",
+      "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815"
+    }
+  }
+}

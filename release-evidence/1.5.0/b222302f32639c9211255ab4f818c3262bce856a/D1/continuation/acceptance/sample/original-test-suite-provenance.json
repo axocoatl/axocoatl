@@ -1,0 +1,7 @@
+{
+  "original_tests_copied_from_base": "c305335ab906c44d11f905eb6725feb641370c03",
+  "paths": [
+    "test/paging.test.js"
+  ],
+  "single_invocation": true
+}

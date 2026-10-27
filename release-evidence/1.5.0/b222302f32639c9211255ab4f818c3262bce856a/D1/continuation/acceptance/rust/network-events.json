@@ -1,0 +1,747 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793065507407,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793065507407,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-6471e8c3-1e6b-4458-b1f4-77631493494b",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793065508600,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-6471e8c3-1e6b-4458-b1f4-77631493494b",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793065508690,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-allow:index.crates.io",
+        "host": "index.crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "cdbe05c89f383a89c00b84ba9f6634766973b0dd1be849751c64f80f5214b59c",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793065511571,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-allow:static.crates.io",
+        "host": "static.crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "fc8a9ad43f4a9f5f7b75a73a0cc279b97e93eb461655c83fc8bd00117ba3732d",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)",
+        "static.crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 6,
+    "ts_ms": 1793065511571,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-allow:crates.io",
+        "host": "crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "4de1cecf24d873b6f55dfca0c309016643cb5a4253ce83112f8d6f9d338f99aa",
+      "kind": "policy",
+      "revision": 4,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)",
+        "static.crates.io:443 (allowed for this Session)",
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 7,
+    "ts_ms": 1793065511571,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "d6c1a413ef767ed7"
+    },
+    "seq": 8,
+    "ts_ms": 1793065511572,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "146.75.94.137"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "index.crates.io",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/bin/cargo",
+        "exe_sha256": "25b6901ec9ecffaa6a88591a77d3036a63a96ecffd1a45dd622a88385d0956af",
+        "gid": 1000,
+        "pid": 24,
+        "uid": 1000
+      },
+      "policy_revision": 4,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "d6c1a413ef767ed7"
+    },
+    "seq": 9,
+    "ts_ms": 1793065511742,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "146.75.94.137"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "static.crates.io",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/bin/cargo",
+        "exe_sha256": "25b6901ec9ecffaa6a88591a77d3036a63a96ecffd1a45dd622a88385d0956af",
+        "gid": 1000,
+        "pid": 24,
+        "uid": 1000
+      },
+      "policy_revision": 4,
+      "port": 443,
+      "rule": "session#rev3",
+      "scope": "session",
+      "token": "d6c1a413ef767ed7"
+    },
+    "seq": 10,
+    "ts_ms": 1793065512047,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "d6c1a413ef767ed7"
+    },
+    "seq": 11,
+    "ts_ms": 1793065512209,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-revoke:index.crates.io",
+        "host": "index.crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "7654a7c7be6658da6e73486c633b62d55ccbc180b7e58681ce134ce47bf96e7a",
+      "kind": "policy",
+      "revision": 5,
+      "rules": [
+        "static.crates.io:443 (allowed for this Session)",
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 12,
+    "ts_ms": 1793065512209,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-revoke:static.crates.io",
+        "host": "static.crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "af681ff424f44bb5ba5043f03ca994e436dad67ec27f2c2d396b729069244240",
+      "kind": "policy",
+      "revision": 6,
+      "rules": [
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 13,
+    "ts_ms": 1793065512210,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+      "change": {
+        "command_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172:setup-revoke:crates.io",
+        "host": "crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 7,
+      "rules": [],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 14,
+    "ts_ms": 1793065512210,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 209120,
+      "ip": "146.75.94.137",
+      "kind": "close",
+      "ms": 210,
+      "outcome": "revoked",
+      "up": 2179
+    },
+    "seq": 15,
+    "ts_ms": 1793065512210,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 31122,
+      "ip": "146.75.94.137",
+      "kind": "close",
+      "ms": 520,
+      "outcome": "revoked",
+      "up": 2270
+    },
+    "seq": 16,
+    "ts_ms": 1793065512211,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-f4de236333cb86a08e74001ce29c8f7951c7fc827397f19e865c31b3402ab8f0",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-f4de236333cb86a08e74001ce29c8f7951c7fc827397f19e865c31b3402ab8f0:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "2fcaaa99c8f9bff9"
+    },
+    "seq": 17,
+    "ts_ms": 1793065521571,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "2fcaaa99c8f9bff9"
+    },
+    "seq": 18,
+    "ts_ms": 1793065521663,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-07a94c92ee679c8267e89f3de24aa010f9fd872d394d382dce017406bbd3d618",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-07a94c92ee679c8267e89f3de24aa010f9fd872d394d382dce017406bbd3d618:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "3d1a4be9373c6378"
+    },
+    "seq": 19,
+    "ts_ms": 1793065525786,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "3d1a4be9373c6378"
+    },
+    "seq": 20,
+    "ts_ms": 1793065525881,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-07be88615e3ad74cc20e496394185c84f8870530b980b6237283128cd5f3af49",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-07be88615e3ad74cc20e496394185c84f8870530b980b6237283128cd5f3af49:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "19482fde65416dd0"
+    },
+    "seq": 21,
+    "ts_ms": 1793065534301,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "19482fde65416dd0"
+    },
+    "seq": 22,
+    "ts_ms": 1793065534370,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-5d8063a820c9bff158472aa11f47ade355cbede457a425efc678f5a6ceeea670",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-5d8063a820c9bff158472aa11f47ade355cbede457a425efc678f5a6ceeea670:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "0422f0e6933bedc3"
+    },
+    "seq": 23,
+    "ts_ms": 1793065574684,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "0422f0e6933bedc3"
+    },
+    "seq": 24,
+    "ts_ms": 1793065574891,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-d5aa568b1e25596d7218e3cc2e2c149dbbd0b598ab56ea16070d36e5d399c14d",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-d5aa568b1e25596d7218e3cc2e2c149dbbd0b598ab56ea16070d36e5d399c14d:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "8657ddd7f4b86f5f"
+    },
+    "seq": 25,
+    "ts_ms": 1793065579002,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "8657ddd7f4b86f5f"
+    },
+    "seq": 26,
+    "ts_ms": 1793065579084,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-0cfffabefea56413bbe2ac792cb05e3fd9600d2a68ae0f183d24de1d265cf7c6",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-0cfffabefea56413bbe2ac792cb05e3fd9600d2a68ae0f183d24de1d265cf7c6:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "22493885ba8c7fe5"
+    },
+    "seq": 27,
+    "ts_ms": 1793065624864,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "22493885ba8c7fe5"
+    },
+    "seq": 28,
+    "ts_ms": 1793065624938,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-50bb82d2995bc61afbb212c06567a599a2629f4c362ff1c3af832b2a9a569cb1",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-50bb82d2995bc61afbb212c06567a599a2629f4c362ff1c3af832b2a9a569cb1:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "abd3d4d3d429b7d2"
+    },
+    "seq": 29,
+    "ts_ms": 1793065642882,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "abd3d4d3d429b7d2"
+    },
+    "seq": 30,
+    "ts_ms": 1793065642989,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-03d6a9b1411def3e516a4ab029b511fc434c18ea814679d8ab1e8ba0c5f54a2e",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-03d6a9b1411def3e516a4ab029b511fc434c18ea814679d8ab1e8ba0c5f54a2e:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "6fd3eed68a5a28fd"
+    },
+    "seq": 31,
+    "ts_ms": 1793065648269,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "6fd3eed68a5a28fd"
+    },
+    "seq": 32,
+    "ts_ms": 1793065648358,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-b5bce3fc60c36f50177f2480c27cebc413017c188fc87d84fec376d85905c716",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-b5bce3fc60c36f50177f2480c27cebc413017c188fc87d84fec376d85905c716:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "293b88ea5a353acd"
+    },
+    "seq": 33,
+    "ts_ms": 1793065651381,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "293b88ea5a353acd"
+    },
+    "seq": 34,
+    "ts_ms": 1793065651489,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-2d7cc93fa8399294276dd082681a88110cf4e7ca6b144098fdfaeb39fb2dd452",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-2d7cc93fa8399294276dd082681a88110cf4e7ca6b144098fdfaeb39fb2dd452:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "946e9dfbc340cf8e"
+    },
+    "seq": 35,
+    "ts_ms": 1793065665535,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "946e9dfbc340cf8e"
+    },
+    "seq": 36,
+    "ts_ms": 1793065665655,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-5ba966092a0076e64dc3fc290a74a327c57fe59bf6332c883499466b31357a43",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-5ba966092a0076e64dc3fc290a74a327c57fe59bf6332c883499466b31357a43:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "1d64f470c9d085b7"
+    },
+    "seq": 37,
+    "ts_ms": 1793065668023,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "1d64f470c9d085b7"
+    },
+    "seq": 38,
+    "ts_ms": 1793065668110,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-31d33e21fb3bcc08df20c199217fb286fbaf9488f41aa0e602bb5823cc88cf9e",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-31d33e21fb3bcc08df20c199217fb286fbaf9488f41aa0e602bb5823cc88cf9e:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "27842c21f2c43d7b"
+    },
+    "seq": 39,
+    "ts_ms": 1793065681424,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "27842c21f2c43d7b"
+    },
+    "seq": 40,
+    "ts_ms": 1793065681543,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-4cc4338afeb4ca9e0a1d25e902cc61759f28c3418cc4cca748d63ea713bc0fa7",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-4cc4338afeb4ca9e0a1d25e902cc61759f28c3418cc4cca748d63ea713bc0fa7:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "2aa12d34d565d068"
+    },
+    "seq": 41,
+    "ts_ms": 1793065694815,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "2aa12d34d565d068"
+    },
+    "seq": 42,
+    "ts_ms": 1793065694929,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-a09d47f5e4dadec42cd7daeaed6edf098bb483ef387413ab34ef4f4c467479a0",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-a09d47f5e4dadec42cd7daeaed6edf098bb483ef387413ab34ef4f4c467479a0:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "0dc8f275de1aac04"
+    },
+    "seq": 43,
+    "ts_ms": 1793065715684,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "0dc8f275de1aac04"
+    },
+    "seq": 44,
+    "ts_ms": 1793065715772,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:1c7b68a4-bb0e-4a80-9a70-700887160b3b",
+        "agent": "team-definition-132fcdba16e4c4e335e5a5e16a6a00cce0f3b4d23cc35f8aa8dce8277901b3bb",
+        "invocation_id": "tool-2398deeb6951814b59c92b88f4dae87699bf41f92223f2e7c2e20a5d0f4223bf",
+        "kind": "agent",
+        "node_id": "team-node-506adaa061ca7078f2814b5a",
+        "process": "tool-2398deeb6951814b59c92b88f4dae87699bf41f92223f2e7c2e20a5d0f4223bf:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "f5eebd9aa5da91b3"
+    },
+    "seq": 45,
+    "ts_ms": 1793065729246,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "f5eebd9aa5da91b3"
+    },
+    "seq": 46,
+    "ts_ms": 1793065729292,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 47,
+    "ts_ms": 1793065774833,
+    "v": 1
+  }
+]

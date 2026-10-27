@@ -1,0 +1,80 @@
+Axocoatl setup
+Every command this runs is logged to /home/d1gate/.local/state/axocoatl/onboard-20261027-013458.log
+
+Step 0 · This computer
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.43.0
+
+$ systemctl --user is-system-running
+  exit 0
+  | running
+
+$ loginctl show-user d1gate --property=Linger --value
+  exit 0
+  | no
+
+This computer: Ubuntu 24.04.5 LTS, aarch64, 4 GB memory, 2 cores, 24 GB free.
+Found: Podman 4.9.3 (ready), git 2.43.0.
+Not found: Ollama, claude, codex, gh.
+
+An Axocoatl configuration exists: /home/d1gate/.config/axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A hosted model (OpenRouter credits) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+  ✓ Landlock ABI 4
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 4.9.3, rootless, Landlock ABI 4
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+? Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n]
+  answered yes
+  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists qwen/qwen3-coder-30b-a3b-instruct
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  ✓ /home/d1gate/.config/axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  · axocoatl run fix-claude-code (not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`)
+  · axocoatl run fix-codex (not set up: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+  Starting a daemon for this run (axocoatl serve on port 8080; its first start downloads an 87 MB embedding model once)…
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo --receipt /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --record /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/record.jsonl --config /home/d1gate/.config/axocoatl/config.yaml --model writer=openrouter:qwen/qwen3-coder-30b-a3b-instruct --model reviewer=openrouter:openai/gpt-oss-120b
+$ /home/d1gate/.local/bin/axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo --receipt /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --record /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/record.jsonl --config /home/d1gate/.config/axocoatl/config.yaml --model writer=openrouter:qwen/qwen3-coder-30b-a3b-instruct --model reviewer=openrouter:openai/gpt-oss-120b
+  exit 0
+$ /home/d1gate/.local/bin/axocoatl receipt key --config /home/d1gate/.config/axocoatl/config.yaml
+  exit 0
+  | ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21
+
+  $ axocoatl receipt verify /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --key "$(axocoatl receipt key)" --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+$ /home/d1gate/.local/bin/axocoatl receipt verify /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json --key 'ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21' --repo /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/repo
+  exit 0
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /tmp/axocoatl-first-run-9719778d3fea43038a7dcc9f82083c8d/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)

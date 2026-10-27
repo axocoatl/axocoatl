@@ -1,0 +1,19 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "os_account": "d1gate",
+  "operator": "Codex",
+  "vm": "axo-d1-recovery-20261026-043450",
+  "cases": [
+    {
+      "label": "go",
+      "initial_commit": "9835aa68e01be6a0af455d2e6aad1da980759b45",
+      "guest_repo": "/tmp/axo-d1-continuation2.X4rQlC/repos/go"
+    }
+  ],
+  "copied_at": "2026-10-27T01:52:18.725000+00:00",
+  "overall_D1_claim": "Supplemental continuation; prior failures remain preserved. Only listed completed artifacts copied, no fresh-install reclassification.",
+  "omitted_dependency_caches": [],
+  "raw_http_or_private_store_included": false
+}

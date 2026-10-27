@@ -1,0 +1,12 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "operator": "Codex assistant through tool-owned SSH PTY; browser authentication coordinated by root and user",
+  "os_account": "d1gate",
+  "account_history": "Original adduser-created D1 account retained. Only backed-up Axocoatl test remnants were moved aside; no new account or privilege grant. Podman and Ollama never installed; cold apt indexes retained for corrected-path test.",
+  "no_automatic_yes": true,
+  "openrouter_budget_usd": 2,
+  "inference_allowed": false,
+  "source_archive_sha256": "a0a46a2b930e4224727df17034cc507cdbe3ba3153dd59cb7478b9705860117a",
+  "binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "at": "2026-10-27T00:43:31.124523+00:00"
+}

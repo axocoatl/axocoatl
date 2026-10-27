@@ -1,0 +1,53 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "D1-continuation",
+  "tier": "D",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-27T01:14:03Z",
+  "finished_at": "2026-10-27T01:18:43.400Z",
+  "steps": [
+    {
+      "name": "no OpenRouter secret before controlled onboarding retry",
+      "status": "pass",
+      "required": true,
+      "detail": "secret absent; fresh browser authorization required"
+    },
+    {
+      "name": "onboard continuation (interactive; --start none)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 279.4,
+      "bytes_downloaded": 258742084,
+      "detail": "exit 1, expected 0: interactive step; see the transcript (exit 1) "
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 24.04",
+    "kernel": "6.8.0-142-generic",
+    "arch": "aarch64",
+    "runner": "local Linux D1 continuation; Codex operator, d1gate OS account",
+    "memory_bytes": 4094377984,
+    "cpus": 2,
+    "user": "d1gate"
+  },
+  "tools": {
+    "podman": "4.9.3",
+    "git": "2.43.0",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "D1-continuation/continuation-provenance.json",
+    "D1-continuation/logs/guard.log",
+    "D1-continuation/logs/onboard-continuation--interactive----start-none-.log",
+    "D1-continuation/logs/onboarding/onboard-20261027-011403.log",
+    "D1-continuation/operator-initial.json",
+    "D1-continuation/prior-failed-attempt-manifest.json",
+    "D1-continuation/transcript.txt"
+  ]
+}

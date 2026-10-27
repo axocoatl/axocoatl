@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.7, pytest-9.1.1, pluggy-1.7.0
+rootdir: /private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check
+configfile: pyproject.toml
+testpaths: tests
+collected 4 items
+
+tests/test_pages.py ....                                                 [100%]
+
+============================== 4 passed in 0.01s ===============================

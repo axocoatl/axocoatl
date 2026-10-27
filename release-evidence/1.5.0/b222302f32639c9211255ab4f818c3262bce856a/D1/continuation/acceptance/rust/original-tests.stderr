@@ -1,0 +1,7 @@
+   Compiling diff v0.1.13
+   Compiling yansi v1.0.1
+   Compiling pretty_assertions v1.4.1
+   Compiling newuser-rust v0.1.0 (/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/host-check)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
+     Running unittests src/lib.rs (/private/tmp/axocoatl-d1-retry2-rust-20261027/acceptance/rust/cargo-target/debug/deps/newuser_rust-ef88723a5ae84dbe)
+   Doc-tests newuser_rust

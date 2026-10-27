@@ -1,0 +1,159 @@
+{
+  "ready": true,
+  "config": "/home/d1gate/.config/axocoatl/config.yaml",
+  "sections": {
+    "sandbox": [
+      {
+        "name": "Podman",
+        "status": "ok",
+        "detail": "Podman 4.9.3 ready (rootless; kernel 6.8.0-142-generic), needed for every Session and every axocoatl run",
+        "fix": null
+      },
+      {
+        "name": "Landlock",
+        "status": "ok",
+        "detail": "Landlock ABI 4",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "ok",
+        "detail": "Ubuntu 24.04.5 LTS, as the release gate verifies",
+        "fix": null
+      },
+      {
+        "name": "Sandbox network",
+        "status": "ok",
+        "detail": "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)",
+        "fix": null
+      },
+      {
+        "name": "Sandbox workload",
+        "status": "ok",
+        "detail": "Sandbox workload: image (commands run as the image's own user)",
+        "fix": null
+      }
+    ],
+    "models": [
+      {
+        "name": "OpenRouter",
+        "status": "ok",
+        "detail": "OpenRouter API key present (secret openrouter, never shown)",
+        "fix": null
+      }
+    ],
+    "writers": [
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "Codex",
+        "status": "ok",
+        "detail": "not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "claude CLI",
+        "status": "ok",
+        "detail": "not found; needed only to sign in with `axocoatl connect claude-code`",
+        "fix": null
+      },
+      {
+        "name": "codex CLI",
+        "status": "ok",
+        "detail": "not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container",
+        "fix": null
+      },
+      {
+        "name": "gh",
+        "status": "ok",
+        "detail": "not found; needed only for `axocoatl run --keep pr`",
+        "fix": null
+      },
+      {
+        "name": "Stored credentials",
+        "status": "ok",
+        "detail": "openrouter, receipt-signing-key",
+        "fix": null
+      }
+    ],
+    "daemon": [
+      {
+        "name": "Config",
+        "status": "ok",
+        "detail": "Config valid: /home/d1gate/.config/axocoatl/config.yaml",
+        "fix": null
+      },
+      {
+        "name": "Data dir",
+        "status": "ok",
+        "detail": "Data dir writable: /home/d1gate/.local/share/axocoatl",
+        "fix": null
+      },
+      {
+        "name": "Data dir ownership",
+        "status": "ok",
+        "detail": "Data dir ownership: recorded for this directory",
+        "fix": null
+      },
+      {
+        "name": "git",
+        "status": "ok",
+        "detail": "git 2.43.0 (the daemon runs git on your repositories)",
+        "fix": null
+      },
+      {
+        "name": "systemd user session",
+        "status": "ok",
+        "detail": "running (systemd --user)",
+        "fix": null
+      },
+      {
+        "name": "Daemon",
+        "status": "warn",
+        "detail": "no daemon running; `axocoatl run` and the workbench need one",
+        "fix": "Start it with `axocoatl dev` (or `axocoatl service start`)"
+      },
+      {
+        "name": "Webhooks",
+        "status": "ok",
+        "detail": "none (no outbound event egress)",
+        "fix": null
+      }
+    ]
+  },
+  "ready_for": [
+    {
+      "command": "axocoatl run fix",
+      "ok": true,
+      "detail": "writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b",
+      "set_up": true,
+      "required": true
+    },
+    {
+      "command": "axocoatl run fix-claude-code",
+      "ok": false,
+      "detail": "not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "axocoatl run fix-codex",
+      "ok": false,
+      "detail": "not set up: run `axocoatl connect codex`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "workbench Sessions",
+      "ok": true,
+      "detail": "Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+      "set_up": true,
+      "required": true
+    }
+  ],
+  "steps_left": []
+}

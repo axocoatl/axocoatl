@@ -1,0 +1,11 @@
+axocoatl-install: resolving latest release...
+axocoatl-install: downloading axocoatl-v1.5.0-aarch64-unknown-linux-gnu.tar.gz (v1.5.0)...
+axocoatl-install: checksum verified
+axocoatl-install: installed axocoatl v1.5.0 -> /home/d1gate/.local/bin/axocoatl
+axocoatl-install: ~/.profile and ~/.bashrc already add ~/.local/bin to PATH; new terminals find axocoatl
+axocoatl-install: Podman, which every Session and run needs, is not on PATH or in /usr/local/bin.
+axocoatl-install: onboard (below) installs it after asking, with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux. On an Apple-silicon Mac without Homebrew it points to the installer from podman.io; on an Intel Mac, on Ubuntu 22.04 or older, or on another Linux it says what to do.
+
+Next:  /home/d1gate/.local/bin/axocoatl onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first
+       /home/d1gate/.local/bin/axocoatl doctor       # check the sandbox, the models and the daemon
+       /home/d1gate/.local/bin/axocoatl dev          # start the daemon; leave it running

@@ -1,0 +1,14 @@
+{
+  "schema": "axocoatl.recovery.completion-review/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "path": "D1",
+  "record_sha256": "2c2e7c78b4beaaf10b01a9157e9dd567f221dbe071a8650adeb503693ea6f69a",
+  "manifest_sha256": "026708335083e64a594664476622c88df20ea51e4e44ba8b9cc5b5609a2d092e",
+  "decision": "approved_for_evidence_integration",
+  "actual_observations_reviewed": true,
+  "unchanged_pass_criteria": true,
+  "failed_attempts_preserved": true,
+  "reviewer": "Codex coordinating reviewer",
+  "reviewed_at": "2026-10-27T02:13:50.372092+00:00",
+  "assessment": "Reviewed final same-candidate D1 continuation and exact changed-model sample retry. Independently checked all 833 manifest members, 104 observed source references across 103 steps, original source-copy hashes and candidate contract hashes. Original fresh prerequisites and successful fresh browser callback are preserved. Original 43 dependent failures, required-review failure and 70/72 service continuation remain failed; the separate 17/17 retry resolves only the failed service-sample phase with unchanged configuration and pristine baseline. Service stopped/uninstalled, port closed. All original suites were independently checked once. Node-deps added a test contrary to its explicit instruction: artifact FAILED remains prominent, including the erroneous earlier qualification and correction; its runtime success supports only the literal runtime criterion. No claim of uniform artifact quality or uninterrupted first-pass clean install is made. No product source changes since candidate. Final required-step, signature and privacy checks remain mandatory before integration."
+}

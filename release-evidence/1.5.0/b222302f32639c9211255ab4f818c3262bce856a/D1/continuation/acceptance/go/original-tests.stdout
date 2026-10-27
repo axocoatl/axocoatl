@@ -1,0 +1,20 @@
+{"Time":"2026-10-26T18:56:03.586093-07:00","Action":"start","Package":"example.com/newuser/pages"}
+{"Time":"2026-10-26T18:56:03.851697-07:00","Action":"run","Package":"example.com/newuser/pages","Test":"TestAPartialLastPageKeepsTheItemsLeftOver"}
+{"Time":"2026-10-26T18:56:03.851731-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestAPartialLastPageKeepsTheItemsLeftOver","Output":"=== RUN   TestAPartialLastPageKeepsTheItemsLeftOver\n"}
+{"Time":"2026-10-26T18:56:03.851839-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestAPartialLastPageKeepsTheItemsLeftOver","Output":"--- PASS: TestAPartialLastPageKeepsTheItemsLeftOver (0.00s)\n"}
+{"Time":"2026-10-26T18:56:03.851842-07:00","Action":"pass","Package":"example.com/newuser/pages","Test":"TestAPartialLastPageKeepsTheItemsLeftOver","Elapsed":0}
+{"Time":"2026-10-26T18:56:03.851849-07:00","Action":"run","Package":"example.com/newuser/pages","Test":"TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize"}
+{"Time":"2026-10-26T18:56:03.851852-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize","Output":"=== RUN   TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize\n"}
+{"Time":"2026-10-26T18:56:03.851863-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize","Output":"--- PASS: TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize (0.00s)\n"}
+{"Time":"2026-10-26T18:56:03.851864-07:00","Action":"pass","Package":"example.com/newuser/pages","Test":"TestTheLastPageIsFullWhenTheTotalIsAMultipleOfThePageSize","Elapsed":0}
+{"Time":"2026-10-26T18:56:03.851868-07:00","Action":"run","Package":"example.com/newuser/pages","Test":"TestNoItemsMakeNoPages"}
+{"Time":"2026-10-26T18:56:03.851883-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestNoItemsMakeNoPages","Output":"=== RUN   TestNoItemsMakeNoPages\n"}
+{"Time":"2026-10-26T18:56:03.851898-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestNoItemsMakeNoPages","Output":"--- PASS: TestNoItemsMakeNoPages (0.00s)\n"}
+{"Time":"2026-10-26T18:56:03.851901-07:00","Action":"pass","Package":"example.com/newuser/pages","Test":"TestNoItemsMakeNoPages","Elapsed":0}
+{"Time":"2026-10-26T18:56:03.851902-07:00","Action":"run","Package":"example.com/newuser/pages","Test":"TestAPageSizeOfZeroIsRefused"}
+{"Time":"2026-10-26T18:56:03.851903-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestAPageSizeOfZeroIsRefused","Output":"=== RUN   TestAPageSizeOfZeroIsRefused\n"}
+{"Time":"2026-10-26T18:56:03.851905-07:00","Action":"output","Package":"example.com/newuser/pages","Test":"TestAPageSizeOfZeroIsRefused","Output":"--- PASS: TestAPageSizeOfZeroIsRefused (0.00s)\n"}
+{"Time":"2026-10-26T18:56:03.851905-07:00","Action":"pass","Package":"example.com/newuser/pages","Test":"TestAPageSizeOfZeroIsRefused","Elapsed":0}
+{"Time":"2026-10-26T18:56:03.851906-07:00","Action":"output","Package":"example.com/newuser/pages","Output":"PASS\n"}
+{"Time":"2026-10-26T18:56:03.852475-07:00","Action":"output","Package":"example.com/newuser/pages","Output":"ok  \texample.com/newuser/pages\t0.266s\n"}
+{"Time":"2026-10-26T18:56:03.853104-07:00","Action":"pass","Package":"example.com/newuser/pages","Elapsed":0.267}

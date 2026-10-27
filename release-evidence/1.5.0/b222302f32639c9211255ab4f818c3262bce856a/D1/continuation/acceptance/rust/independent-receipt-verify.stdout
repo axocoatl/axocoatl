@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-5f49b8b0-bf43-4698-adf1-ab2b5af39172",
+  "verdict": "pass",
+  "statement_sha256": "sha256:d815408d42fd551e170673ff6de26828f795c3f6627e92fbe41c8c643562f7d3",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/repos/rust",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-rust-20261027/public/gate/rust/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-5f49b8b0-bf43-4698-adf1-ab2b5af39172 (fix@1), verdict pass, exit code 0",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-6471e8c3-1e6b-4458-b1f4-77631493494b, finished at 1793065774901 ms",
+    "Base commit df071b9d337485b624d17d60db7fa766bb220d0c",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c cargo test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/lib.rs  sha256:691a76fb837839485c28a3fcca4c3177e58500aa80c2c4d9a4b4e7c920be84e9",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 7): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

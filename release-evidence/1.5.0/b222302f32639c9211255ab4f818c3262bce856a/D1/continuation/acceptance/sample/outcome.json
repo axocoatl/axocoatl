@@ -1,0 +1,104 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "6d7bf7f04b1669c7e587a40763565543515b291acac7f3703b514332271dc30d",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.490042ms)\n\u2714 keeps the last item on a page of its own (0.098291ms)\n\u2714 refuses a page size below one (0.125542ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 29.852355\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793065041784,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 0,
+    "events": 11,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup none",
+    "openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)",
+    "qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 13 calls answered by endpoint siliconflow/fp8 (SiliconFlow)"
+  ],
+  "openrouter_endpoints": {
+    "openai/gpt-oss-120b": [
+      {
+        "calls": 8,
+        "endpoint": "near-ai/fp4",
+        "provider": "Near AI"
+      }
+    ],
+    "qwen/qwen3-coder-30b-a3b-instruct": [
+      {
+        "calls": 13,
+        "endpoint": "siliconflow/fp8",
+        "provider": "SiliconFlow"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "6d7bf7f04b1669c7e587a40763565543515b291acac7f3703b514332271dc30d",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-57b845d2-8a89-4449-b909-ba49eb95f8af",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-1797bd4c-33ed-4672-9795-672433efb00d",
+  "started_at_ms": 1793064922962,
+  "task": "Fix the bug: paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-33f0eccc-a082-4390-b06d-9ec9ec959123"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 4651,
+    "input_tokens": 75950,
+    "output_tokens": 1866,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-4dd85042-8a55-43c8-aacf-8fae4f4fce88"
+}

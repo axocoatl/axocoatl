@@ -1,0 +1,366 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_archive_sha256": "6637fb0057b114f0bc0f1b8bf5af687cfe59b9b6a50c55b211fd6655a1150cf2",
+  "execution_binary_sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+  "verifier_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "assessed_at": "2026-10-27T01:45:52.654581+00:00",
+  "fixture": "python-pytest",
+  "label": "d1-retry2-python-pytest",
+  "repo": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+  "base_commit": "fe6a3073143da2d1115ce5d3477c7140e1ea9a44",
+  "run_id": "run-5658bfda-96e6-4b91-a05a-d3b5f6f378ac",
+  "result": "ACCEPTED",
+  "artifact_review": "The production paginator fixes the exact-multiple final-page length. Actual diff inspected independently; original test semantics and dependency manifest are checked separately rather than relying on the reviewer verdict.",
+  "changed_files": [
+    "pages.py"
+  ],
+  "original_tests_unchanged": true,
+  "sample_original_assertions_preserved": null,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "run.axorecord.jsonl",
+    "run.receipt.json"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "unchanged": true
+    },
+    "pages.py": {
+      "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "final_sha256": "b06b9320a4b2985b6fd41e7721d438028f8ff7aa4c10dd38ae9a6dfb7a07f672",
+      "unchanged": false
+    },
+    "pyproject.toml": {
+      "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "unchanged": true
+    },
+    "tests/test_pages.py": {
+      "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.receipt.json",
+          "--key",
+          "ed25519 tGFfiS1D8NsismvBup+wuecfexgCiWCciRsK0/+lSuY= axocoatl@lima-axo-d1-recovery-20261026-043450 9641bb56a31f3a21",
+          "--repo",
+          "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+          "--record",
+          "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+        "start": "2026-10-27T01:45:52.284547+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.293439+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "68e897ce424be07882bd9b1e5e8666e5a66207a81178e20b00d5bb8b471f3873",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+        "start": "2026-10-27T01:45:52.293587+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.303510+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "1681aa1491b48e66ec2ae5c5f08260ac28b7194d98ddd06f1295b00bad3a1aaa",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/gate/python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/public/repos/python-pytest",
+        "start": "2026-10-27T01:45:52.303789+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.336967+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "--version"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+        "start": "2026-10-27T01:45:52.337203+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.360594+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "module-selection",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-c",
+          "import pathlib,pages,pytest; assert pathlib.Path(pages.__file__).resolve()==pathlib.Path(\"pages.py\").resolve();print(pages.__file__);print(pytest.__version__)"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+        "start": "2026-10-27T01:45:52.360867+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.511695+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "f7fe268358e45c749358f5f12ad839ac993d5ce1ea3d4f4bca90eb9df58619f1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider"
+        ],
+        "cwd": "/private/tmp/axocoatl-d1-retry2-python-pytest-20261027/acceptance/python-pytest/host-check",
+        "start": "2026-10-27T01:45:52.512138+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:45:52.637041+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "0055295a84d38d8fe01bcbed4d497d12e15bb175b5315c602c18650b4b093e25",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "expected_original_tests": 4,
+    "observed_passed_tests": 4,
+    "suite_count_verified": true,
+    "production_files_exact_final_copy": true,
+    "test_files_original_base_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -m pytest"
+      ],
+      "candidate_sha256": "a88b0b124e503a7c2e30272e6ca3bf4e0a7b1582e98604a53812113b0e1ee8b8",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "============================= test session starts ==============================\nplatform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0\nrootdir: /tmp/axo-d1-continuation2.X4rQlC/repos/python-pytest\nconfigfile: pyproject.toml\ntestpaths: tests\ncollected 4 items\n\ntests/test_pages.py ....                                                 [100%]\n\n============================== 4 passed in 0.03s ===============================\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "required_checks_passed": true,
+  "required_review_passed": true,
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "python",
+      "reason": "pyproject.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-python:10128f1d8789",
+      "image_id": "73f76ea4834b1129abbf33ef1b70a27971a47d89a17090f3a65b599445514424",
+      "recipes": [
+        "python"
+      ],
+      "check": "python3 -m pytest",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "pip install -e '.[test]'",
+        "source": "detected",
+        "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+        "exit_code": 0,
+        "duration_ms": 6310,
+        "registry_hosts": [
+          "pypi.org",
+          "files.pythonhosted.org"
+        ],
+        "allowed_connections": 4,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-62f64fc2a6da519037a4621b",
+      "probe": {
+        "program": "python3",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 494
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e '.[test]'",
+      "image_contains": "python",
+      "setup_contains": "pip install"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "a88b0b124e503a7c2e30272e6ca3bf4e0a7b1582e98604a53812113b0e1ee8b8",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 82220,
+    "output_tokens": 2748,
+    "cost_microunits": 5865,
+    "cost_usd": 0.005865,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "writer",
+        "sequence": 91,
+        "payload": {
+          "call_id": "01a17b068dae3e39ae46950d9a706658",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "writer",
+        "sequence": 99,
+        "payload": {
+          "call_id": "01a17b06c26f5f7ff64b601930f58fc0",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 9,
+        "payload": {
+          "call_id": "chatcmpl-tool-931b8e9b12b56e2a",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "python3",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 494
+    },
+    "failed_activations": []
+  },
+  "gate_scope": "Independent artifact acceptance only; original gate attempts and outcomes are never changed.",
+  "network": {
+    "events": 31,
+    "allowed_connections": 4,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Independent acceptance of a completed actual Mac or Linux b222 artifact; no fresh-authentication, clean-install, whole-gate, or release completion claim.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "run.receipt.json": "025db98515c486ba74d45e4ab1212636eb59ebd62a800f85a8cd45dee6b9f91a",
+    "run.axorecord.jsonl": "37b90d80bcc7484a635d40acbded7b893b0b422733e5dda96266f4fe80a1e8b3",
+    "patch.diff": "45193bd7f213c85627cc8a79cdeda82f89891483bb9a3fa8f5d5b2318f7728cd",
+    "negative-evidence.json": "db9a08601bb36a52c5b66a2e895c102b4f9a2bd55266ee291b2e664ff43e8ed1",
+    "activation-summary.json": "f220c7491c0fa33d6de7492a180c053368b8c249cdb0617210b18f7da7c00a3f",
+    "outcome.json": "55fa01b2199400b062951361e834ae1a305ea32cfc97f531a3c9de623f7cabae",
+    "original-tests.stdout": "0055295a84d38d8fe01bcbed4d497d12e15bb175b5315c602c18650b4b093e25",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

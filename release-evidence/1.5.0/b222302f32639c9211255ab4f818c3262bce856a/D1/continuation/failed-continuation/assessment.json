@@ -1,0 +1,62 @@
+{
+  "schema": "axocoatl.recovery.d1-partial-assessment/1",
+  "assessed_at": "2026-10-27T01:26:26.027481+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "attempt": "D1 initial authentication failure plus retry1 onboarding sample",
+  "formal_D1_complete": false,
+  "release_ready": false,
+  "onboarding_sample": {
+    "run_id": "run-dffa734d-0494-4cf3-a093-b237ca092b91",
+    "artifact_result": "ORIGINAL_TESTS_ACCEPTED",
+    "gate_result": "FAILED_REQUIRED_REVIEW",
+    "patch": "Math.floor(items.length / size) \u2192 Math.ceil(items.length / size)",
+    "original_tests": {
+      "passed": 3,
+      "failed": 0,
+      "invocations": 1,
+      "unchanged": true,
+      "runtime": "Node22.23.2"
+    },
+    "receipt_signature": "trusted",
+    "receipt_covered_files_match": true,
+    "record_matches": true,
+    "receipt_require_pass_exit": 6,
+    "run_exit": 2,
+    "run_verdict": "needs_attention",
+    "review_error": "native OpenRouter: incomplete native tool arguments",
+    "provider_retries_recorded": 0,
+    "completed_writer_responses": 12,
+    "completed_reviewer_responses": 5,
+    "unreported_reviewer_calls": 1,
+    "recovered_or_prior_tool_errors": 1,
+    "tool_error_body_available": false,
+    "usage": {
+      "input_tokens": 59800,
+      "output_tokens": 1938,
+      "cost_microunits": 6933,
+      "cost_usd": 0.006933,
+      "complete": false,
+      "cost_known": false,
+      "cost_computed": false
+    },
+    "actual_key_charge_after_sample_usd": 0.004036,
+    "charge_source": "key-status-after-sample.txt, supplied by live owner; run total usage incomplete"
+  },
+  "unrun_dependent_work": [
+    "five language fixtures",
+    "service install/config update/run/status/stop/uninstall"
+  ],
+  "original_initial_failure": {
+    "passed": 18,
+    "failed": 43,
+    "skipped": 1,
+    "model_runs_admitted": 0,
+    "reason": "Fresh-key validation HTTP401 left no local key/config; dependent original commands refused before admission"
+  },
+  "privacy": {
+    "private_archive_included": false,
+    "git_objects_included": false,
+    "private_archive_retention": "Only original hash/size reference retained; owner-only raw archive stays outside this stage"
+  },
+  "scope": "Unsigned partial negative support. No replacement D1 path record, inference, source change, auth, runtime change or completion claim."
+}

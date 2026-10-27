@@ -1,0 +1,45 @@
+{
+  "exit_code": 6,
+  "result": "not-passed",
+  "problems": [
+    "the run's verdict is needs_attention, not pass (--require-pass)"
+  ],
+  "signature": "trusted",
+  "key_id": "sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815",
+  "run_id": "run-c0995674-0bc6-4e0d-8ed6-bdc04a976791",
+  "verdict": "needs_attention",
+  "statement_sha256": "sha256:c9c4e1aabdccbd84dc23e734474da617cefeba81ca8d505245305f73166b9d40",
+  "files": {
+    "repo": "/private/tmp/axocoatl-d1-retry2-service-sample-20261027/public/sample/repo",
+    "covered": 2,
+    "removed": 0,
+    "source": "after_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/tmp/axocoatl-d1-retry2-service-sample-20261027/public/sample/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-c0995674-0bc6-4e0d-8ed6-bdc04a976791 (fix@1), verdict needs attention, exit code 2",
+    "Signed by key 9641bb56a31f3a21 (ed25519 sha256:9641bb56a31f3a219b1e0172f3a97e70346769d04f5410b490941d30f6e62815)",
+    "Axocoatl 1.5.0, Session ses-9627c0b6-0ac5-4698-9e7e-aacb82409274, finished at 1793066480236 ms",
+    "Base commit 592c14cb256afd84c2a99eb0935a489a3097a6a5",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:deepseek/deepseek-chat-v3.1",
+    "Check tests: not run (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b: not_run (not passed), 0 of 3 rounds, 0 findings",
+    "Not covered: 1 (writer)",
+    "Needs attention: The required check tests did not run on the final result",
+    "Needs attention: The required review did not pass: The reviewer runs after the required Agents finish and the required checks pass.",
+    "Needs attention: 1 area was not covered",
+    "Needs attention: A turn ended needing attention",
+    "Files: 2 covered, 0 removed, as the last writer left them (no check judged them)",
+    "  src/paging.js  sha256:c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+    "  test_additional.js  sha256:0d072f94496882130acf97f0fca430f8090213ea5a96ef95458086a9c7c7474b",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 512 processes; not applied, this host does not delegate their cgroup controllers: CPU (2 CPUs, cgroup controller cpu)"
+  ]
+}
