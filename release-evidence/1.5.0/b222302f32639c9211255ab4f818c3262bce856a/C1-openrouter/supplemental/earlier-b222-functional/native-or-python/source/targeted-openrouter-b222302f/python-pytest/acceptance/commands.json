@@ -1,0 +1,100 @@
+[
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/receipt.json",
+      "--key",
+      "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:07.990237+00:00",
+    "end": "2026-10-26T14:20:07.996819+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "dc9ba0a802cbf5b9675d3b13362e057fbf9effa9484f6b4be49394017d929698",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/record.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:07.996949+00:00",
+    "end": "2026-10-26T14:20:08.003223+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "d2bbc3956af4eeda3681039acdc5808e8475aa89ed846dc35f059aac05db8a54",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+      "--version"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:08.003391+00:00",
+    "end": "2026-10-26T14:20:08.007876+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "host-venv",
+    "argv": [
+      "/opt/homebrew/bin/uv",
+      "venv",
+      "--offline",
+      "--python",
+      "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:08.008010+00:00",
+    "end": "2026-10-26T14:20:08.761985+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "a52c12edcd4274a0aed4afebcc556318dbf04bdd7a239b5fd7682e5d2ffa2cc9"
+  },
+  {
+    "name": "host-setup",
+    "argv": [
+      "/opt/homebrew/bin/uv",
+      "pip",
+      "install",
+      "--python",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+      "-e",
+      "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest[test]"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:08.762158+00:00",
+    "end": "2026-10-26T14:20:09.605771+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "bf98facf8bb2f7bd64500463bf72aff6de4bcbd1594938bf78d3c96f7f621fc6"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/pytest"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+    "start": "2026-10-26T14:20:09.605961+00:00",
+    "end": "2026-10-26T14:20:10.059514+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c63b41ec32569455038a5affce705eebfa48f1d98b6383a43ce56bc3c549351f",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

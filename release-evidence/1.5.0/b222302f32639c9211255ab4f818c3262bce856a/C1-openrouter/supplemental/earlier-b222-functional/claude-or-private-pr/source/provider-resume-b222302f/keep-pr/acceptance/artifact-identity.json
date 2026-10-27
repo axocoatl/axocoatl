@@ -1,0 +1,29 @@
+{
+  "base": "2c38749059ccd07cf6b5ce6a76f3bdcc652a6076",
+  "head": "14676ff7e60d4c3690059f3e0fe9418cc05e0f74",
+  "changed_paths": [
+    "src/paginate.js"
+  ],
+  "original_test_count": 4,
+  "original_test_and_package_files": [
+    {
+      "path": "test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "original_fixture_unchanged": true
+    },
+    {
+      "path": "package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "original_fixture_unchanged": true
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "original_fixture_unchanged": true
+    }
+  ],
+  "working_source_matches_pr_head": true,
+  "base_trusted_public_key_matches_preparation": true,
+  "isolated_artifact": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/acceptance/artifact",
+  "original_clone_modified_by_audit": false
+}

@@ -1,0 +1,221 @@
+{
+  "schema": "axocoatl.recovery.sample-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T17:58:56.059574+00:00",
+  "sample": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76",
+  "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76/repo",
+  "run_id": "run-d0383d84-97f2-437c-bb3b-6505e903129f",
+  "base_commit": "db4e7ff9170704f9b49ff18a58554181c30a850c",
+  "task": "Fix the bug: paging skips the last item",
+  "result": "ACCEPTED_WITH_ADDED_TESTS",
+  "actual_fix": "Changed src/paging.js from Math.floor(items.length / size) to Math.ceil(items.length / size), retaining the final partial page.",
+  "test_file_changed": true,
+  "original_test_semantics_preserved": {
+    "original_tests": 3,
+    "proof": "Removing exactly the eight inserted lines reproduces the original test file byte-for-byte; no original assertion or test was edited or removed."
+  },
+  "added_tests": [
+    {
+      "name": "keeps items when there are fewer than a full page",
+      "assessment": "Valid additional regression case: two items with page size3 must yield one partial page. It exercises the same corrected rounding behavior."
+    },
+    {
+      "name": "returns no pages for empty input",
+      "assessment": "Valid boundary assertion: empty input yields an empty page list; existing behavior is preserved."
+    }
+  ],
+  "manifests_unchanged": true,
+  "unchanged_file_hashes": {
+    ".gitignore": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+    "README.md": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+    "package.json": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3"
+  },
+  "covered_files": {
+    "src/paging.js": {
+      "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "final_sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99"
+    },
+    "test/paging.test.js": {
+      "original_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "final_sha256": "8a2c75c6aaa451c3bb23b6ce76aea8aeef3846077e6ece050676689a82a0bbb8"
+    }
+  },
+  "host_test": {
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "node": "v22.23.2",
+    "invocations": 1,
+    "exit_code": 0,
+    "passed": 5,
+    "failed": 0,
+    "original_tests": 3,
+    "added_tests": 2,
+    "stdout_sha256": "ac6007f007e66668d4b480a8d8a7a68419f1074d06bb56efe4e8e529a947ef08"
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "0c5f34f0602527b47eb9a4bf2626bb410049231bc2fa605e013e178b62da4e19",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.566748ms)\n\u2714 keeps the last item on a page of its own (0.063083ms)\n\u2714 keeps items when there are fewer than a full page (0.062416ms)\n\u2714 returns no pages for empty input (0.050749ms)\n\u2714 refuses a page size below one (0.154458ms)\n\u2139 tests 5\n\u2139 suites 0\n\u2139 pass 5\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 30.881477\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "0c5f34f0602527b47eb9a4bf2626bb410049231bc2fa605e013e178b62da4e19",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 87034,
+    "output_tokens": 905,
+    "cost_microunits": 39126,
+    "cost_usd": 0.039126,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": true
+  },
+  "cost_interpretation": {
+    "reported_aggregate_usd": 0.039126,
+    "cost_computed": true,
+    "meaning": "Aggregate run accounting includes Codex list-price computation from reported tokens. The writer used codex-chatgpt, so this value is not proof of a charged OpenAI API bill or an actual OpenRouter charge.",
+    "actual_openrouter_charge_usd": null,
+    "actual_charge_limit": "The completed receipt does not separately expose actual OpenRouter billing; no account or budget state was queried by this audit."
+  },
+  "negative_evidence": {
+    "provider_retries": 0,
+    "tool_errors": 0,
+    "network_refusals": 0,
+    "scope": "None recorded in the exported activation streams/network summary; this is not a claim about unexported provider internals."
+  },
+  "network": {
+    "allowed_connections": 5,
+    "events": 27,
+    "refused_connections": 0,
+    "route_requests": 5,
+    "routes": [
+      [
+        "chatgpt.com",
+        5
+      ]
+    ]
+  },
+  "verification": [
+    {
+      "name": "receipt-verify",
+      "argv": [
+        "/usr/local/bin/axocoatl",
+        "receipt",
+        "verify",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76/receipt.json",
+        "--key",
+        "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+        "--repo",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76/repo",
+        "--record",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76/record.jsonl",
+        "--require-pass",
+        "--json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "record-verify",
+      "argv": [
+        "/usr/local/bin/axocoatl",
+        "record",
+        "verify",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-e49ba255bca542299a8f45979c1e3d76/record.jsonl"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "activation_summary": [
+    {
+      "role": "writer",
+      "generation": 1,
+      "state": "accepted",
+      "failure_reference": null,
+      "currently_accepted": true,
+      "counts": {
+        "reasoning_summary": 19,
+        "text": 1,
+        "provider_response": 1
+      }
+    },
+    {
+      "role": "reviewer",
+      "generation": 1,
+      "state": "accepted",
+      "failure_reference": null,
+      "currently_accepted": true,
+      "counts": {
+        "reasoning_summary": 13,
+        "provider_response": 9,
+        "tool_proposed": 8,
+        "tool_result": 8,
+        "text": 2
+      }
+    }
+  ],
+  "evidence_hashes": {
+    "receipt.json": "651956aa6df5506e863439ccecd4a3c21e6bf696d31988ddd2c927d2c3311ad3",
+    "record.jsonl": "7fea05d53a4bf2e9abf22b02eb3da6d3a8ff7d191b185b03310ec885022423b4",
+    "patch.diff": "9c14355d1ed19be008f3097ef8081700ab7a266149761f63ef1678f3adb7c21d",
+    "negative-evidence.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+  },
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "scope": "Independent audit of this completed first-run artifact only; not formal clean-install or whole-provider-path completion."
+}

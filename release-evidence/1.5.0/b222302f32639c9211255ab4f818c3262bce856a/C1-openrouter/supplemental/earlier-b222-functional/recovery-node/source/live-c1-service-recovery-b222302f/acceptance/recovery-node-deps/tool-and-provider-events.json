@@ -1,0 +1,794 @@
+[
+  {
+    "role": "writer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "text": 52,
+      "provider_response": 14,
+      "tool_proposed": 13,
+      "tool_result": 13
+    },
+    "events": [
+      {
+        "sequence": 2,
+        "ts_ms": 1793025017984,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 3,
+        "ts_ms": 1793025017991,
+        "payload": {
+          "arguments_bytes": 12,
+          "arguments_sha256": "4ae486c3a48f8dc732af672b138b438a1d96960304cc334d46bbc2687d169cbb",
+          "call_id": "call_w7a6y8jy",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        }
+      },
+      {
+        "sequence": 4,
+        "ts_ms": 1793025018156,
+        "payload": {
+          "call_id": "call_w7a6y8jy",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 635,
+          "result_sha256": "7324f8600f71e669e81564136fa1e18bf9836a53d7c9fb9271349deb76d81255"
+        }
+      },
+      {
+        "sequence": 5,
+        "ts_ms": 1793025018789,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 6,
+        "ts_ms": 1793025018796,
+        "payload": {
+          "arguments_bytes": 14,
+          "arguments_sha256": "20bd8eec78959f58649160b38dceec3f97ab495f346c2a2b753087f52f72219a",
+          "call_id": "call_eg2dllq6",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        }
+      },
+      {
+        "sequence": 7,
+        "ts_ms": 1793025018974,
+        "payload": {
+          "call_id": "call_eg2dllq6",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 256,
+          "result_sha256": "77e94cec8c67a1e4c720bc66383408e747d0c926c65a0e08fbdffef7c76e29ae"
+        }
+      },
+      {
+        "sequence": 8,
+        "ts_ms": 1793025019555,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 9,
+        "ts_ms": 1793025019563,
+        "payload": {
+          "arguments_bytes": 26,
+          "arguments_sha256": "6247f4d98036a331a59f02bcce345cb3012f08b47651386385b344b0d8035596",
+          "call_id": "call_9k1qz3ox",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        }
+      },
+      {
+        "sequence": 10,
+        "ts_ms": 1793025019734,
+        "payload": {
+          "call_id": "call_9k1qz3ox",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 726,
+          "result_sha256": "7081b3085cab1a38794e072edcf09ac8d00f0e3edce2ea613d258787666ea473"
+        }
+      },
+      {
+        "sequence": 11,
+        "ts_ms": 1793025020339,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 12,
+        "ts_ms": 1793025020344,
+        "payload": {
+          "arguments_bytes": 15,
+          "arguments_sha256": "5dca1b447070bab48acd45f2fef5f6bf1877bdba8251af5c61edf37f9769103d",
+          "call_id": "call_c9aep5k0",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        }
+      },
+      {
+        "sequence": 13,
+        "ts_ms": 1793025020503,
+        "payload": {
+          "call_id": "call_c9aep5k0",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 261,
+          "result_sha256": "6c7929ad27dee5742f78f85e25c9347b45b706ff1cbc8cb3e58c4ea2b9e30259"
+        }
+      },
+      {
+        "sequence": 14,
+        "ts_ms": 1793025021117,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 15,
+        "ts_ms": 1793025021127,
+        "payload": {
+          "arguments_bytes": 32,
+          "arguments_sha256": "ce286ebe2965ff0f7587a320d9f0c9f238b1f2699cb0ed24f48798176cdf23ae",
+          "call_id": "call_0b5y5et6",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        }
+      },
+      {
+        "sequence": 16,
+        "ts_ms": 1793025021305,
+        "payload": {
+          "call_id": "call_0b5y5et6",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 870,
+          "result_sha256": "6c72134c3972edce1a08eb6983267fb7b5d6dcae9c88117354a2a6078681d51e"
+        }
+      },
+      {
+        "sequence": 29,
+        "ts_ms": 1793025025142,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 30,
+        "ts_ms": 1793025025149,
+        "payload": {
+          "arguments_bytes": 39,
+          "arguments_sha256": "3a9bc35fe8ad5da50bfb194c8b46acece2fa34b5308dec59ab5e8098a7c5d54d",
+          "call_id": "call_jtgstxpq",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        }
+      },
+      {
+        "sequence": 31,
+        "ts_ms": 1793025025362,
+        "payload": {
+          "call_id": "call_jtgstxpq",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 563,
+          "result_sha256": "3e2f15a11d5eda677d3c79d02fd653b357164ff72f59a25a7ece53b93db00b61"
+        }
+      },
+      {
+        "sequence": 33,
+        "ts_ms": 1793025026443,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 34,
+        "ts_ms": 1793025026450,
+        "payload": {
+          "arguments_bytes": 83,
+          "arguments_sha256": "246df5b6ea1a50b7cabbda3bd081c0dd8883abf5ed01c53524a8c10577692a77",
+          "call_id": "call_nyynnx01",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 7
+        }
+      },
+      {
+        "sequence": 35,
+        "ts_ms": 1793025026631,
+        "payload": {
+          "call_id": "call_nyynnx01",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 711,
+          "result_sha256": "bee5d636d4932e1397ec78341d59be3bc880e662564024a511271e79bd18adeb"
+        }
+      },
+      {
+        "sequence": 36,
+        "ts_ms": 1793025027749,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 37,
+        "ts_ms": 1793025027757,
+        "payload": {
+          "arguments_bytes": 103,
+          "arguments_sha256": "4db1a72dea2620b62c95b606000661d78fe211ab70656f3648561a9c1aa37a7c",
+          "call_id": "call_nta4o1tm",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 8
+        }
+      },
+      {
+        "sequence": 38,
+        "ts_ms": 1793025027968,
+        "payload": {
+          "call_id": "call_nta4o1tm",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 1542,
+          "result_sha256": "0e16c3cae377a27d49797076001a0217f772030a2eee65b2960b791502727fb7"
+        }
+      },
+      {
+        "sequence": 47,
+        "ts_ms": 1793025035982,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 48,
+        "ts_ms": 1793025035989,
+        "payload": {
+          "arguments_bytes": 1293,
+          "arguments_sha256": "decc8c0a0172676721bbf80bed0eacbd75a09f0fb5623c30ecd6ff575cd275c6",
+          "call_id": "call_otwaoa9a",
+          "kind": "tool_proposed",
+          "name": "edit_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 9
+        }
+      },
+      {
+        "sequence": 49,
+        "ts_ms": 1793025036264,
+        "payload": {
+          "call_id": "call_otwaoa9a",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 65,
+          "result_sha256": "e48ada1ba4d85a0f94f2be7d745af622b558f61dd4e08a0d93f1a0769c81f6e7"
+        }
+      },
+      {
+        "sequence": 51,
+        "ts_ms": 1793025037682,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 52,
+        "ts_ms": 1793025037689,
+        "payload": {
+          "arguments_bytes": 103,
+          "arguments_sha256": "4db1a72dea2620b62c95b606000661d78fe211ab70656f3648561a9c1aa37a7c",
+          "call_id": "call_762paubc",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 10
+        }
+      },
+      {
+        "sequence": 53,
+        "ts_ms": 1793025037888,
+        "payload": {
+          "call_id": "call_762paubc",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 276,
+          "result_sha256": "b19b164aa4922903558f8254e85068539c536ccda86154f01ae5a661c1b9a131"
+        }
+      },
+      {
+        "sequence": 56,
+        "ts_ms": 1793025041418,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 57,
+        "ts_ms": 1793025041425,
+        "payload": {
+          "arguments_bytes": 598,
+          "arguments_sha256": "e53fa7f73d10be3b9b655479e0e5b4242ff75075cb77b4f64f5837c0ad3af3a4",
+          "call_id": "call_hv6ee7fe",
+          "kind": "tool_proposed",
+          "name": "write_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 11
+        }
+      },
+      {
+        "sequence": 58,
+        "ts_ms": 1793025041592,
+        "payload": {
+          "call_id": "call_hv6ee7fe",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "write_file",
+          "result_bytes": 44,
+          "result_sha256": "2f1b4999730317cd400f4f41293434a3243914053ea0ef04ea671ddfab17bec9"
+        }
+      },
+      {
+        "sequence": 59,
+        "ts_ms": 1793025042510,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 60,
+        "ts_ms": 1793025042518,
+        "payload": {
+          "arguments_bytes": 93,
+          "arguments_sha256": "d9d6c03851fc9429d74f1ba281ed7bd3e731a3f44e1dac86b58fd8e193fd30cf",
+          "call_id": "call_158w7mh4",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 12
+        }
+      },
+      {
+        "sequence": 61,
+        "ts_ms": 1793025042707,
+        "payload": {
+          "call_id": "call_158w7mh4",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 380,
+          "result_sha256": "fe3c571347275e8d07d9e578aba81be9cd182d409b1432411211db4ddbc0595c"
+        }
+      },
+      {
+        "sequence": 81,
+        "ts_ms": 1793025048568,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 82,
+        "ts_ms": 1793025048576,
+        "payload": {
+          "arguments_bytes": 91,
+          "arguments_sha256": "a5c5da68b8cd5fb7e0287b8ee2c5a8b39c7122127724a8f0766eb3e21be6eabd",
+          "call_id": "call_gja9npz2",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 13
+        }
+      },
+      {
+        "sequence": 83,
+        "ts_ms": 1793025048748,
+        "payload": {
+          "call_id": "call_gja9npz2",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 175,
+          "result_sha256": "ed6cee1a25b5e2d8642a82a6776f311b14bd74932abb75b8d4742a6cad1ef9b1"
+        }
+      },
+      {
+        "sequence": 91,
+        "ts_ms": 1793025050566,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 58623,
+        "output_tokens": 1726,
+        "reasoning_tokens": null
+      }
+    }
+  },
+  {
+    "role": "reviewer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "reasoning_summary": 17,
+      "provider_response": 8,
+      "tool_proposed": 7,
+      "tool_result": 7,
+      "provider_retry": 1,
+      "text": 2
+    },
+    "events": [
+      {
+        "sequence": 2,
+        "ts_ms": 1793025055428,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 3,
+        "ts_ms": 1793025055435,
+        "payload": {
+          "arguments_bytes": 39,
+          "arguments_sha256": "5845b05709845943cc266b5825398d1e23cf73207193b8bbf69865f62e0e72e1",
+          "call_id": "call-58035e0a-f110-41b8-b235-f75d0a9d05b8",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        }
+      },
+      {
+        "sequence": 4,
+        "ts_ms": 1793025055624,
+        "payload": {
+          "call_id": "call-58035e0a-f110-41b8-b235-f75d0a9d05b8",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 727,
+          "result_sha256": "387815535570dcdb3077598a12b446e574c76222d0e06dac9f748ed8a2d08c5a"
+        }
+      },
+      {
+        "sequence": 7,
+        "ts_ms": 1793025057887,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 8,
+        "ts_ms": 1793025057892,
+        "payload": {
+          "arguments_bytes": 47,
+          "arguments_sha256": "76fae720234666f4cb475da3eddfe020f132261cf0c15d7353347689b6c3bc93",
+          "call_id": "call-c3f724ea-8987-421e-bace-4e0cc0222de5",
+          "kind": "tool_proposed",
+          "name": "search",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        }
+      },
+      {
+        "sequence": 9,
+        "ts_ms": 1793025057897,
+        "payload": {
+          "call_id": "call-c3f724ea-8987-421e-bace-4e0cc0222de5",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        }
+      },
+      {
+        "sequence": 11,
+        "ts_ms": 1793025059108,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 12,
+        "ts_ms": 1793025059115,
+        "payload": {
+          "arguments_bytes": 11,
+          "arguments_sha256": "518341a7f82a294570cc3ba8ae0eec8f157d80c390e56cad16702940266a4eba",
+          "call_id": "call-d2e49077-9a19-4210-9685-f0a00008ba04",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        }
+      },
+      {
+        "sequence": 13,
+        "ts_ms": 1793025059314,
+        "payload": {
+          "call_id": "call-d2e49077-9a19-4210-9685-f0a00008ba04",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 855,
+          "result_sha256": "f5417f1804221b6f3f48d44460ef05a5db9812d6547ebd17bf775a858c74fbd9"
+        }
+      },
+      {
+        "sequence": 15,
+        "ts_ms": 1793025060235,
+        "payload": {
+          "kind": "provider_retry",
+          "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 22 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+        }
+      },
+      {
+        "sequence": 17,
+        "ts_ms": 1793025061558,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 18,
+        "ts_ms": 1793025061564,
+        "payload": {
+          "arguments_bytes": 15,
+          "arguments_sha256": "5dca1b447070bab48acd45f2fef5f6bf1877bdba8251af5c61edf37f9769103d",
+          "call_id": "call-608d2aa7-280f-43d9-9c51-c3173b535b79",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        }
+      },
+      {
+        "sequence": 19,
+        "ts_ms": 1793025061746,
+        "payload": {
+          "call_id": "call-608d2aa7-280f-43d9-9c51-c3173b535b79",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 327,
+          "result_sha256": "ef06b91b99005fdbdb28869302342eb54c6afa1aeb2989fa8785b5836b013c9e"
+        }
+      },
+      {
+        "sequence": 21,
+        "ts_ms": 1793025063392,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 22,
+        "ts_ms": 1793025063399,
+        "payload": {
+          "arguments_bytes": 45,
+          "arguments_sha256": "5db76943544f1c014e1433565fd537d5966a1c8e5bf9a9fa0cc29ef94ba845fd",
+          "call_id": "call-337deb49-fa4b-43a8-82b4-99f90367da75",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        }
+      },
+      {
+        "sequence": 23,
+        "ts_ms": 1793025063589,
+        "payload": {
+          "call_id": "call-337deb49-fa4b-43a8-82b4-99f90367da75",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 870,
+          "result_sha256": "cb7d5f67f33f0e6f81de6e1649f6fed7c3d6e5dc6269e2b477f0481887b62922"
+        }
+      },
+      {
+        "sequence": 26,
+        "ts_ms": 1793025065223,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 27,
+        "ts_ms": 1793025065227,
+        "payload": {
+          "arguments_bytes": 14,
+          "arguments_sha256": "20bd8eec78959f58649160b38dceec3f97ab495f346c2a2b753087f52f72219a",
+          "call_id": "call-cf7afe74-b588-4104-831a-51d1f39f7e7b",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        }
+      },
+      {
+        "sequence": 28,
+        "ts_ms": 1793025065403,
+        "payload": {
+          "call_id": "call-cf7afe74-b588-4104-831a-51d1f39f7e7b",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 322,
+          "result_sha256": "3b4dd843822bc4e7cb524741b450df173a3b8b45220baca4c91b96272b0d5488"
+        }
+      },
+      {
+        "sequence": 30,
+        "ts_ms": 1793025067001,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 31,
+        "ts_ms": 1793025067008,
+        "payload": {
+          "arguments_bytes": 36,
+          "arguments_sha256": "107e8871c56df9e7918fb6fee513270a869b1d2a31d7f31c01ede8fca13cc997",
+          "call_id": "call-8b534fdf-a351-4054-828e-f7838c33213e",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 7
+        }
+      },
+      {
+        "sequence": 32,
+        "ts_ms": 1793025067199,
+        "payload": {
+          "call_id": "call-8b534fdf-a351-4054-828e-f7838c33213e",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 298,
+          "result_sha256": "4a5a6d5554020dd5f667d21c5877263bd3b0d174fd5fc2b964bcf5d242e36ef5"
+        }
+      },
+      {
+        "sequence": 41,
+        "ts_ms": 1793025073320,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 24708,
+        "output_tokens": 41,
+        "reasoning_tokens": 775
+      }
+    }
+  }
+]

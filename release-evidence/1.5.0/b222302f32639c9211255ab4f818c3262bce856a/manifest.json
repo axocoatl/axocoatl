@@ -2,7 +2,7 @@
   "schema": "axocoatl.release-evidence/1",
   "version": "1.5.0",
   "commit": "b222302f32639c9211255ab4f818c3262bce856a",
-  "created_at": "2026-10-26T20:57:05.983Z",
+  "created_at": "2026-10-27T00:17:24.009Z",
   "paths": {
     "A-arm": {
       "file": "A-arm.json",
@@ -39,6 +39,10 @@
     "C1-local": {
       "file": "C1-local.json",
       "pass": true
+    },
+    "C1-openrouter": {
+      "file": "C1-openrouter.json",
+      "pass": false
     },
     "C1-real-repo": {
       "file": "C1-real-repo.json",
@@ -3024,6 +3028,351 @@
       "bytes": 103468
     },
     {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "bytes": 5136
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/axocoatl-junit.xml",
+      "sha256": "1b6c038fc8542018f7c773e5caffca355db5dbd8ba1682e0e16162e74e437e2c",
+      "bytes": 2394
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/changes.txt",
+      "sha256": "22ba574d33a0e4bff783b8ab038c1d5e9a85df0b35b629398783ab77138b3806",
+      "bytes": 550
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/receipt.json",
+      "sha256": "91e4f19316310d9c198118864e7d5741d5450068029e48bc1dbdf68b1f75e2e9",
+      "bytes": 5084
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.axorecord.jsonl",
+      "sha256": "2a18c035b30653e4770786fe969d642b4ecc0b0f2fa52e34a90ae4e4d85c7f2a",
+      "bytes": 238524
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.log",
+      "sha256": "5feb741b8030861cbd188b5735a10b104dfed15df0a56967b6ffe0c9db4156c5",
+      "bytes": 2991
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/configuration.json",
+      "sha256": "c7fae830b70c77fe2e3448ae029f6980d1be6894435b92acf282630ac17052c3",
+      "bytes": 405
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/doctor.json",
+      "sha256": "1f3621f46fe1ffa61ee911831fc2b8e9dad717df84d9563c8e75693673dce3aa",
+      "bytes": 4544
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/dev.log",
+      "sha256": "cb93c56acc8ea6824c9e6faeb35147c10788e7697c0b7dcbd026f76402017b49",
+      "bytes": 870
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/doctor-JSON-ready-for-supplemental-Claude-checks.log",
+      "sha256": "567e05a2883fa79b29d3e2e733feda23a3dc9144475395be462ffa0178a5474f",
+      "bytes": 52
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/doctor-text-ready.log",
+      "sha256": "5e5b64d4ea36c8c733da914b0e5a868c70f7333fa1fa3a0fe8c356f43b72e510",
+      "bytes": 2252
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/receipt-matches-the-record-on-claude-node-deps.log",
+      "sha256": "2c627c47aafb26ae5d0748f263f7b8142b49c30ecfb384a7d4f664a21833d11a",
+      "bytes": 279
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/receipt-verify-on-claude-node-deps--documented-command-.log",
+      "sha256": "902ee973b5c49dfdb46086f4afd1dee710cd351916bede1da5bd629f1e35f4bf",
+      "bytes": 273
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/record-verify-on-claude-node-deps.log",
+      "sha256": "52ba6ca553c2706fc6a1b7c972a3592115edc001bb894c57b7b729a63b64a8b3",
+      "bytes": 278
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/run-fix-on-claude-node-deps.log",
+      "sha256": "5feb741b8030861cbd188b5735a10b104dfed15df0a56967b6ffe0c9db4156c5",
+      "bytes": 2991
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/provenance.json",
+      "sha256": "af8e4740b8da3138e672c7e63b7101c8993aa4c3c724836e3556259507d1af11",
+      "bytes": 1078
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/published-command.txt",
+      "sha256": "486c5d26b2488c8b9ff4c672a987e2dbda7e0ec462b234aae75c008724b0775d",
+      "bytes": 88
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/runner.sh",
+      "sha256": "fcb71da83b210f5ec051f73219868bc953fad7d9083730aa5d898adb91034c45",
+      "bytes": 9687
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/transcript.txt",
+      "sha256": "63755321c36c56205e81101a8824d3ef72e8a3b25dadae38f1fc5ec17f4fa18e",
+      "bytes": 7677
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/activation-summary.json",
+      "sha256": "f87d5ae366db382a249d6fb04daf5b50437de107ea49f888f26aaefb53a1399d",
+      "bytes": 21580
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/assessment.json",
+      "sha256": "ff0afae5749ebda8e3439b40a48a29c6e1f4dda0a3eaef0010806ee4c975f585",
+      "bytes": 14455
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/axocoatl-junit.xml",
+      "sha256": "1b6c038fc8542018f7c773e5caffca355db5dbd8ba1682e0e16162e74e437e2c",
+      "bytes": 2394
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/changes.txt",
+      "sha256": "22ba574d33a0e4bff783b8ab038c1d5e9a85df0b35b629398783ab77138b3806",
+      "bytes": 550
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/commands.json",
+      "sha256": "ac657d970ec8ee947c1971ee2ef90543fab97bc07cd58fc0838572e0ecf3fa60",
+      "bytes": 4365
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/gate-output-exclusions.json",
+      "sha256": "9d815e7d17cfde63ce8167fb4fff2c9777442e60ac198d81c700870af825babe",
+      "bytes": 658
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/git-status-after.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/git-status-before.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-receipt-verify.stdout",
+      "sha256": "b0bedbcb4d806c80f83d7acff984da757db612364ddcb482a4238dc292a5ceb3",
+      "bytes": 2316
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-record-verify.stdout",
+      "sha256": "52ba6ca553c2706fc6a1b7c972a3592115edc001bb894c57b7b729a63b64a8b3",
+      "bytes": 278
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/negative-evidence.json",
+      "sha256": "415bd662b728baedffd1689fe0ee4f7cdf7c1a8e3075352e485ff2c6abfab7fd",
+      "bytes": 1718
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/network-events.json",
+      "sha256": "dc3dac6076cb29fc05f00cb0621071a9f89f15d6314ae4d550657b4baa9b1e92",
+      "bytes": 21257
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-test-suite-provenance.json",
+      "sha256": "ca641920e7bc2c55e18d32b72c92be57c6c00b9d16b0ef8b4d5a1919c0ef65dc",
+      "bytes": 159
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-tests.stdout",
+      "sha256": "ea713ae1aa41bc545ef127652f503352cfc7e87190a0ec3f8bfd8dfab4a9fd31",
+      "bytes": 154
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/outcome.json",
+      "sha256": "0d546d3ebcf2516a62ef046a712ef6ddc4a770471585f1dbf2f63be38566cae4",
+      "bytes": 3307
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/patch.diff",
+      "sha256": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+      "bytes": 470
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/receipt-statement.json",
+      "sha256": "5b569ea91c0d2313ef70fb13b7625c7ebdf120a76f9b2a26f98f3ef8202f3ab0",
+      "bytes": 5206
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/receipt.json",
+      "sha256": "91e4f19316310d9c198118864e7d5741d5450068029e48bc1dbdf68b1f75e2e9",
+      "bytes": 5084
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/run.axorecord.jsonl",
+      "sha256": "2a18c035b30653e4770786fe969d642b4ecc0b0f2fa52e34a90ae4e4d85c7f2a",
+      "bytes": 238524
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/run.log",
+      "sha256": "5feb741b8030861cbd188b5735a10b104dfed15df0a56967b6ffe0c9db4156c5",
+      "bytes": 2991
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/summary.json",
+      "sha256": "bfd80418f9d2e9fd7e908f7584e6314953b093d9993aa92c365f594652f4512f",
+      "bytes": 3820
+    },
+    {
+      "path": "C1-claude-code/supplemental/one-hour-node-recovery/transcript.txt",
+      "sha256": "8538cfa22888bf79b757d7609477c198e1de5f456d67a141715e3f06d967932b",
+      "bytes": 7954
+    },
+    {
       "path": "C1-claude-code/transcript.txt",
       "sha256": "8c932be9e1cbdcda3aabced493c55bc6cca72909a30a3dadbcf85ccee76700d6",
       "bytes": 158263
@@ -3527,6 +3876,226 @@
       "path": "C1-codex/supplemental/coordination.json",
       "sha256": "a9c071ec7dc41092271ae9d381c03166c3c57dac341f78ca809895abe7a85636",
       "bytes": 775
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/activation-summary.json",
+      "sha256": "7fe942d254f89eeb041388e7b36326b9f0e7e498c7bbd9bb2c4be077be12f3c9",
+      "bytes": 21600
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/assessment.json",
+      "sha256": "feb9a9ab825072d5b5e022f37108cb552dec2a316631f50f0604ce6436157349",
+      "bytes": 13689
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/candidate-provenance.json",
+      "sha256": "924a1264881282c2d283f4730ba7cb0bae1eaf4e09e96e5e6166e9d03ab7f8fa",
+      "bytes": 584
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/commands.json",
+      "sha256": "c5668dc7f51e2458292c91a996b17d649342d7ec3977142e260a94f9a0812f43",
+      "bytes": 4506
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/daemon.log",
+      "sha256": "85be6a4e8cff4d8e6c1da1d5f9c7519916f9bcefc40fec363f5a1400125b5da8",
+      "bytes": 226
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/final/test/paging.test.js",
+      "sha256": "8a2c75c6aaa451c3bb23b6ce76aea8aeef3846077e6ece050676689a82a0bbb8",
+      "bytes": 715
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/git-status-after.txt",
+      "sha256": "79e684830c310ff50c474a0d4523859d3a4d964a685adadc3cabb91964c6db57",
+      "bytes": 40
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/git-status-before.txt",
+      "sha256": "79e684830c310ff50c474a0d4523859d3a4d964a685adadc3cabb91964c6db57",
+      "bytes": 40
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/host-check/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/host-check/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/host-check/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/host-check/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/negative-evidence.json",
+      "sha256": "76cf56ac20d89f28906ae4206e49f23ca1e1837805f494de447a14f92c381112",
+      "bytes": 233
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/network-events.json",
+      "sha256": "b6b9ccd899018094ff9bbba5861f2e45969d8946033a15da1c04ed3da4cbf2da",
+      "bytes": 14747
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/onboarding-transcript.txt",
+      "sha256": "230a5a2129482cdd3059136b8ddbe35ce491410824f1dba8d19c311dbcf86bcb",
+      "bytes": 7244
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/onboarding.log",
+      "sha256": "d24d3c21d4ad80d6c9186753ff91d2e5b360781c9438890e94ba6b87aa3c5536",
+      "bytes": 6478
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original-tests.stdout",
+      "sha256": "f7656a81236787c5ab04550c549cfb66f11624819b4fb51b534eccdadcd3fa16",
+      "bytes": 573
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/outcome.json",
+      "sha256": "7a76e355eb83eefe802d744a0715658a2448a604d209dbc187348c81a00a6746",
+      "bytes": 2971
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/patch.diff",
+      "sha256": "9c14355d1ed19be008f3097ef8081700ab7a266149761f63ef1678f3adb7c21d",
+      "bytes": 1090
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/receipt-statement.json",
+      "sha256": "4f6134af0f04be4acf1af67539e50b2de43389e8ae42ff5d1f7f3f52d1688edb",
+      "bytes": 4885
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/receipt-verify.stdout",
+      "sha256": "a81f1a832aff76c412a36e19e9d06720ca7bd6765358b1e223d82cfc70319b55",
+      "bytes": 2302
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/receipt.json",
+      "sha256": "0ba2a4e34b15b4fb4d5ccd8154fd49f4966d4466fbb35abf2f85e613cbf4b72d",
+      "bytes": 4784
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/record-verify.stdout",
+      "sha256": "2ff62f1f195e41d6e5e2d5b2684cd57ae9e50cdb7683951cb127f7058b71f650",
+      "bytes": 278
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/record.jsonl",
+      "sha256": "16db7ee51dc51d7efdd916e53151ac9e9866af6c930836cd2e0b38d03444ecd3",
+      "bytes": 305183
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/trusted-public-key.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/trusted-public-key.stdout",
+      "sha256": "1ad05d75f69bca37451e6ed1e29971a137718b8d14bb1cdb1bc7654c07d71fb8",
+      "bytes": 91
+    },
+    {
+      "path": "C1-codex/supplemental/one-hour-onboarding-no-connect/transcript.txt",
+      "sha256": "230a5a2129482cdd3059136b8ddbe35ce491410824f1dba8d19c311dbcf86bcb",
+      "bytes": 7244
     },
     {
       "path": "C1-codex/supplemental/outer-transcript.txt",
@@ -5029,6 +5598,61 @@
       "bytes": 4885
     },
     {
+      "path": "C1-local/final-verification/assembly-source.json",
+      "sha256": "f0ae40a5c28f2913c9336797c2a0583be6f4ff08a6f4fdf4d341295517240890",
+      "bytes": 584
+    },
+    {
+      "path": "C1-local/final-verification/consolidation.json",
+      "sha256": "d01c9b11d2e95d84aa9336c279229da06fd17132da5d8901952f851c32bc9c47",
+      "bytes": 810419
+    },
+    {
+      "path": "C1-local/final-verification/linux-inventory.json",
+      "sha256": "c202d4ce9b08e6f02d92d529b23794ffa8c212d910a510b15cb18e6469da4325",
+      "bytes": 33178
+    },
+    {
+      "path": "C1-local/final-verification/mac-provenance.json",
+      "sha256": "adcafd3dc0e288c451d2c6d907bec75e8670533c0f13f2ddd52d8a1cdcbfbb04",
+      "bytes": 1706
+    },
+    {
+      "path": "C1-local/final-verification/operational-state.json",
+      "sha256": "59d762fc44f277f954f896ce8ed6aae06e8e893b889ae12e26e30751c915ee9b",
+      "bytes": 576
+    },
+    {
+      "path": "C1-local/final-verification/packaging-attempt-1.json",
+      "sha256": "863fabd198c9b5c638df6758ea8560d2aa3a46a38aa7ffcde89fad16d6d7975f",
+      "bytes": 459
+    },
+    {
+      "path": "C1-local/final-verification/prior-manifest.dsse.json",
+      "sha256": "47e93951a1eac9e54b79d7931813905127516075b08041131e8b8e6437de3097",
+      "bytes": 290042
+    },
+    {
+      "path": "C1-local/final-verification/prior-manifest.json",
+      "sha256": "fb411212c48df66af9eb1d242685b5a9774f4e5880b291b31b41ca9060d77085",
+      "bytes": 217324
+    },
+    {
+      "path": "C1-local/final-verification/provider-inventory.json",
+      "sha256": "77a7d6f5a60de25c2ef1f75e83b7fde246811af67a04603669d09a59051f895f",
+      "bytes": 949696
+    },
+    {
+      "path": "C1-local/final-verification/report.txt",
+      "sha256": "ef02d6735d3e2a3fd1a4b42a7c69ab35521b57a876c66a049e2360c7efc2d9e2",
+      "bytes": 4270
+    },
+    {
+      "path": "C1-local/final-verification/status.json",
+      "sha256": "b7f7980de21ac1929ec9fa69e0bcca7b7cb11595aa3d6b7092a53173b234ac42",
+      "bytes": 2283
+    },
+    {
       "path": "C1-local/install-command.txt",
       "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
       "bytes": 47
@@ -5337,6 +5961,2391 @@
       "path": "C1-local/transcript.txt",
       "sha256": "2d8d70b39ff3406939f04e00ece76e6a66ca8e15aff530881999b680cf3da83e",
       "bytes": 111633
+    },
+    {
+      "path": "C1-openrouter.json",
+      "sha256": "a9d4aaaaf9ac439b9120a49f7cca37e5247a843caded3a1ddd109de1dc653865",
+      "bytes": 1846
+    },
+    {
+      "path": "C1-openrouter/logs/onboard---update---writer-openrouter--connect-in-the-browser-when-it-asks---inte.log",
+      "sha256": "9c753909e1abb94b0eca912aa605862ae540e1c4289668ca27dd662892ae38a6",
+      "bytes": 46
+    },
+    {
+      "path": "C1-openrouter/logs/onboarding/onboard-20261026-203201.log",
+      "sha256": "fde15b14754351cae1df0f385ac1e3c7193db85838418a98be970b4a5b2b0603",
+      "bytes": 5011
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/assessment-before-audit-repair.json",
+      "sha256": "70e343823cc116dde6df9315e7b0695ced17158fd68fd1c4801754c61ff929a3",
+      "bytes": 10625
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/assessment.json",
+      "sha256": "ca44fbc2792432b67108aa2c33b3c690766b74f133f00e17aba72fa0a5919437",
+      "bytes": 11912
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/audit-harness-repair.json",
+      "sha256": "0317d41efd47c5f9de2bd897c6fe2588e7788947773f5f96c73ea885f6a89052",
+      "bytes": 838
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/audit-preparation-interruption.json",
+      "sha256": "0bd9d4efe94816b957728300987df7bfa3bee66b86ef5967defcd32112df523f",
+      "bytes": 274
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/base-commit.txt",
+      "sha256": "d82af639abd3e20efcfb119bfe9de273a1200446670f4312ae48609cac3edcf1",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/commands.json",
+      "sha256": "f84fc7346c9788005fa7cd5e980d2958c4c3bfa905ea90abed4fdc138dd26edd",
+      "bytes": 4794
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/git-status-after.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/git-status-before.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/host-dependency-provenance.json",
+      "sha256": "ef89ed39deabcbdd3550cdbbc4027297f75e40a5b5d49af2f878d39c45881427",
+      "bytes": 7989
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/junit.xml",
+      "sha256": "7e0b52b5ce20bfbb8ae809f6bef9bba55d3562c6c07453305e3e3a11c030b33b",
+      "bytes": 2395
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/negative-evidence.json",
+      "sha256": "e36e97a03ad27468fe4f2ce0e40a0c01847742be9e2dc44279d084f55f57ee5e",
+      "bytes": 993
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/network-events.json",
+      "sha256": "91f2ef3dfe8d6f90b720647ff37d6ad36df720243dec75895182cc42fb88ad8e",
+      "bytes": 20639
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original-tests-after-audit-repair.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original-tests-after-audit-repair.stdout",
+      "sha256": "8031bca1f0ee9ca562ffc29532af25a6c661811dfeef853e5e999051954d45c0",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original-tests.stderr",
+      "sha256": "0029da7684be5782778082fad69b080fad5596596ca8d38327a980ad50c5bd1b",
+      "bytes": 1334
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original-tests.stdout",
+      "sha256": "29e0ac2c16d8d48fe72532d5494a0c59c6e90ce951a1f8f2f45f8552ba7f5cf8",
+      "bytes": 44
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/patch.diff",
+      "sha256": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+      "bytes": 470
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/receipt-statement.json",
+      "sha256": "a48068ce2fc4ec87d209cf390ebebbdae97acca890b811f056f303ad0886a5e1",
+      "bytes": 5244
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/receipt-verify.stdout",
+      "sha256": "bb6edd348eda33c9c0bd421667ba856fc89ac5c268b5cc662576ebf3ee0a7da6",
+      "bytes": 2307
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/receipt.json",
+      "sha256": "2a8eb8963efc0b13e5903d1d5d846701c95d7ed701fec96908ab023e6c8475aa",
+      "bytes": 5136
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/record-verify.stdout",
+      "sha256": "2987f7aeeb72d1528e2ab997ca1513713d55f96dbc0fda70ad3722f924b35954",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/record.jsonl",
+      "sha256": "a6c25c76e3d09a29f39d1c6231c76e19276bf76b8e90a24c5c2ba1653ae853b0",
+      "bytes": 209452
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/run.log",
+      "sha256": "95cfbc569657367d6a78c0d72cbab59bf9bb2dfececaec8a6f480a7fb676dee2",
+      "bytes": 2929
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/acceptance/tool-and-provider-events.json",
+      "sha256": "c32086abb85b90c46966bfcd516d94679e29a8fa61897f2729daea3098abfa2b",
+      "bytes": 5553
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/junit.xml",
+      "sha256": "7e0b52b5ce20bfbb8ae809f6bef9bba55d3562c6c07453305e3e3a11c030b33b",
+      "bytes": 2395
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/receipt.json",
+      "sha256": "2a8eb8963efc0b13e5903d1d5d846701c95d7ed701fec96908ab023e6c8475aa",
+      "bytes": 5136
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/record.jsonl",
+      "sha256": "a6c25c76e3d09a29f39d1c6231c76e19276bf76b8e90a24c5c2ba1653ae853b0",
+      "bytes": 209452
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-node/source/provider-resume-b222302f/claude-node-deps/run.log",
+      "sha256": "95cfbc569657367d6a78c0d72cbab59bf9bb2dfececaec8a6f480a7fb676dee2",
+      "bytes": 2929
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/accepted-output-markup.log",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact-identity.json",
+      "sha256": "dffbac2eaeeb1bd47a71bd2900eb813cacd5d01e38e11961d5b1c397250dcb5b",
+      "bytes": 1056
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact.diff",
+      "sha256": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+      "bytes": 470
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/.axocoatl/receipt-keys",
+      "sha256": "5910a50674848258613d293ecd56baf7c4a7ea39ab7679f8efd92a1dbc983460",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/.github/workflows/verify-receipt.yml",
+      "sha256": "064b1b63e1e98f73b50c0460bac7c1fbbf66ed2509e0768affcc6225054cf534",
+      "bytes": 534
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/artifact/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/assessment.json",
+      "sha256": "c3e4ebd97c4ddc3ca1a4038c4e9eef9d771dc33245770a0a1ba02f03bb3b2cc0",
+      "bytes": 2091
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/four-original-tests.log",
+      "sha256": "dcb08a5c3f632e4653592f959a0f05f81dab02430348a4728ff3ff6854589a56",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/install-test-dependencies.log",
+      "sha256": "5ab6f08dc4fc3c34799ccd0bf61d9b478688f1791c9a88fb136efbf4267c8621",
+      "bytes": 27
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/original-tests-result.json",
+      "sha256": "db6305796ef9942ec587503e216399c81e8ef89911f727f897c7186de6760aac",
+      "bytes": 400
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/pr2.json",
+      "sha256": "d1412afa08b53c86f1cf20d7e0a92276f63a3c0d00ba7cf82cdbf3fa6b500e9b",
+      "bytes": 384
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/pr2.json.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/receipt-verify.log",
+      "sha256": "ec1d124fbf469f0edc7741ec190691b77516648a52a6eb93a297a7beb5ac9bf2",
+      "bytes": 2301
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/record-verify.log",
+      "sha256": "46e08d6d27303d89bd8f4b61b4793a86d771d1a24af2d651f86ecb204bca3ebf",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/verification-result.json",
+      "sha256": "004011ffee5d21a7b0df43dacf222912532f6964fd84c6cd8b0afc050fdd662d",
+      "bytes": 1445
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/verified-run-lines.txt",
+      "sha256": "ff77185fdc7d2194fb980d51124bdfdb0e66c2022340be8a13d70d9bef014ed6",
+      "bytes": 381
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/verify-receipt-action.log",
+      "sha256": "171173372557758406f68f985d1c2365ce8b62a4d7ab1b10668631c3c547b972",
+      "bytes": 26761
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/verify-receipt-action.log.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/workflow.json",
+      "sha256": "112703a01bf52d9f23d62d6d1a47fa1b480f62952a38088c8e2d0450588b40e0",
+      "bytes": 1552
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/acceptance/workflow.json.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/junit.xml",
+      "sha256": "04a0ec60c898810f1bf33b4347fa6ba9f0ce99e6d973e8453eaa996799326bbd",
+      "bytes": 2509
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/receipt.json",
+      "sha256": "ff3637c610b610381864413dcbd792765ea44850c7cdbc5838e74a787e2c610f",
+      "bytes": 5252
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/record.jsonl",
+      "sha256": "ad4d71961c5c739a23fd85460c2d9ae222e305550f45cef7cabbb71a6c1bd1d5",
+      "bytes": 233335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-private-pr/source/provider-resume-b222302f/keep-pr/run.log",
+      "sha256": "b6134b28f9b802f8fdc351fbbf00aafb24d4c8f871cfeb8647a927afeaea74d9",
+      "bytes": 3736
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/assessment.json",
+      "sha256": "058b092fb101c881eb7cf932814fc01bd594f4489e0a49d389609f069fa3dd38",
+      "bytes": 11709
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/base-commit.txt",
+      "sha256": "aae70fa5968c77c1b1f232ca4f66b346e25491fe248b3d9c12d971b5ce59956c",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/commands.json",
+      "sha256": "47c2cbd807ce568d72022dc4379b13479128293768c4aca1f50870d168e72aa2",
+      "bytes": 5348
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/final/pages.py",
+      "sha256": "c79b04d0b7d7b66d8c67a50d9465be88c18ba018fc03c5e099c5e834dc7047f6",
+      "bytes": 380
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/git-status-after.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/git-status-before.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/host-dependency-provenance.json",
+      "sha256": "73b9cb59cf6c2f1781dd7d21328f93d9a97ae6df85239de9617aebfe0b1698ba",
+      "bytes": 465
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/host-module-selection.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/host-module-selection.stdout",
+      "sha256": "b825f482eea1a547e1a58b59013763baa0754e2b47f7fefcc6ca1c1f24514c6d",
+      "bytes": 177
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/junit.xml",
+      "sha256": "fac0db73ea0dcae938b67e922164de9497e9a952f8e17638fe329dca52f92049",
+      "bytes": 2512
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/negative-evidence.json",
+      "sha256": "31135db2aa82748d2c20b809e4a3dbc61fdc55b830b22e6b44699582b97f4587",
+      "bytes": 8939
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/network-events.json",
+      "sha256": "bedea9fc15d850a3850f572d7d496cdb16541f12bfeb0455baf3ae26ae9bd32d",
+      "bytes": 25323
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original-tests.stdout",
+      "sha256": "1b1116350fa8545ef3f306eff1cffca139ae9789188814a52c896e6121439ab8",
+      "bytes": 531
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/patch.diff",
+      "sha256": "9b4d26e3dced102d2d79e9358d09f2ad26a030d0f747da3b5f3141411c603f96",
+      "bytes": 559
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/receipt-statement.json",
+      "sha256": "e596a8238e2e074c9aeb98342aadd996c5bb84b39188d54d329fc59596f04312",
+      "bytes": 5266
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/receipt-verify.stdout",
+      "sha256": "cb2d5ce34fff8ad1012e2e13f62bdec6b43ff12c36b6e86c67a0288c8e2a03b9",
+      "bytes": 2313
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/receipt.json",
+      "sha256": "569246015fafa717705cd027de90b33ecd08c51262be8898e46e5ef810690fa0",
+      "bytes": 5148
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/record-verify.stdout",
+      "sha256": "aa85fa5f33c9dcf0ebcb32bda8373687b96caee1774071c245988f84497dc273",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/record.jsonl",
+      "sha256": "310c950d05d07fb78c387e4ef39a7224f410bdc96a8cc0d9c31c07934633b62f",
+      "bytes": 217454
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/run.log",
+      "sha256": "6f5777472a9e743395c28d07814b63e203335bd8dfba4dfa70c09eb8961b1127",
+      "bytes": 8513
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/acceptance/tool-and-provider-events.json",
+      "sha256": "85ed9657002b2becaf2fec799fd05fcd7523510dde0c961b8c8f656aa07b24ab",
+      "bytes": 7732
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/junit.xml",
+      "sha256": "fac0db73ea0dcae938b67e922164de9497e9a952f8e17638fe329dca52f92049",
+      "bytes": 2512
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/receipt.json",
+      "sha256": "569246015fafa717705cd027de90b33ecd08c51262be8898e46e5ef810690fa0",
+      "bytes": 5148
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/record.jsonl",
+      "sha256": "310c950d05d07fb78c387e4ef39a7224f410bdc96a8cc0d9c31c07934633b62f",
+      "bytes": 217454
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-python/source/provider-resume-b222302f/claude-python-pytest/run.log",
+      "sha256": "6f5777472a9e743395c28d07814b63e203335bd8dfba4dfa70c09eb8961b1127",
+      "bytes": 8513
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/assessment.json",
+      "sha256": "1a1afbc64d44df6ca42ba2e7751c40560b48fcbafd75d21c0f94306110d74464",
+      "bytes": 7279
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/host-test-exit-status.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/host-test.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/host-test.stdout",
+      "sha256": "0611e67a2dbd0b9bea24803c73f32dfa40429d0d7211d80e8cd8a8e34eb61242",
+      "bytes": 572
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/negative-evidence.json",
+      "sha256": "1aacc3fefd92a51799c48dd73278d5f52ea9e781aa0cc7884c149288b43f5957",
+      "bytes": 3943
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/node-version.txt",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/outcome.json",
+      "sha256": "0ed76c6042c9917466c5d4e3e02489559402a4df1c96f0a5a096427b3118b81f",
+      "bytes": 3506
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/receipt-statement.json",
+      "sha256": "083c8665ff56df85ea74f7a4d4b174978c7671c83df9135b46a554321e1606d7",
+      "bytes": 4868
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/receipt-verify.stdout",
+      "sha256": "65717e4e77826a2dfb5cfb0f0c19b5a3913381544961a47f04b9e8c4a940b9bc",
+      "bytes": 2321
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/receipt.json",
+      "sha256": "444f5bd1e3bb8ab12a762de8a78e936db9188e09f2a5559765510b82254b6f81",
+      "bytes": 4820
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/record-verify.stdout",
+      "sha256": "4ff5fc7ed33fb21381ec1874ab92da90d083c55cc6bc9b2bbda05a01e911a19b",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/record.jsonl",
+      "sha256": "030e25a4817980018578d1c8f558a590745142e2b62a74e54db69f953ed4dbdf",
+      "bytes": 252715
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/claude-or-sample/source/provider-resume-b222302f/claude-sample-acceptance/tool-and-provider-events.json",
+      "sha256": "f9739b7cb135317cb356d8b21c48748b8acc63553383faa29ada28e94b18da2e",
+      "bytes": 16363
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/accepted-answer-markup.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/accepted-answer-markup.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/assessment.json",
+      "sha256": "f19deaea412cbd391d90a394b2e4bb635410a304a1169358475c8b90873b5ea0",
+      "bytes": 17296
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/base-commit.txt",
+      "sha256": "d82af639abd3e20efcfb119bfe9de273a1200446670f4312ae48609cac3edcf1",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/commands.json",
+      "sha256": "7340d19cb89b8190f5ac1c984f91d7bf956589dee7417bdd681ac3fb54c91fe1",
+      "bytes": 5524
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/git-status-after.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/git-status-before.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/host-setup.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/host-setup.stdout",
+      "sha256": "757c16b7216242f19e1d19ec5c7f8c0f22002cd61f797c075ec6d6ea5cd9586d",
+      "bytes": 27
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/junit.xml",
+      "sha256": "9129d8497d8b3a7c64ec0e783cae46619e730ae8165d3ef461bf6a1b98faaec8",
+      "bytes": 2534
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/markup-assessment.json",
+      "sha256": "ac0d529359c0e1487e4308541b91fe1088e50163a099ddf67a7ec38e46577e2a",
+      "bytes": 225
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/negative-evidence.json",
+      "sha256": "94009fe12d6f1e8df9903a65dd5026fd2343689ea41b9b8b74455abad5cd03d2",
+      "bytes": 3733
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/network-events.json",
+      "sha256": "29292e159a41c5983cdbc613ec7286d05862e065c37f47642225c0997d4101e8",
+      "bytes": 23226
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/patch.diff",
+      "sha256": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+      "bytes": 484
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/receipt-statement.json",
+      "sha256": "b63ec4261aff87d74161c2b53bd6959fac98e256f31b0997187d3803f936b941",
+      "bytes": 5195
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/receipt-verify.stdout",
+      "sha256": "c8ec8bf7becb8b03c7f9dec54aab72f63f5bcc25e393c0ac3fa79223a1efa8ac",
+      "bytes": 2279
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/receipt.json",
+      "sha256": "c103d2adf6ba6b9157bf1194fbaebcda7880745691b71cdf72d456b8a4211dab",
+      "bytes": 5068
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/record-base.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/record-base.stdout",
+      "sha256": "d82af639abd3e20efcfb119bfe9de273a1200446670f4312ae48609cac3edcf1",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/record-verify.stdout",
+      "sha256": "1d2b9ccac8fe3e8c92c067dcb0bc0a8dfa2cfb32c099a50c425d1852360e12e9",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/record.jsonl",
+      "sha256": "4011f8bb7dc094557d62cea0d0b3f9d9e90128321e912b6bc1ce6f660c97b2f3",
+      "bytes": 299287
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/run.log",
+      "sha256": "5903d0ed960c8f0a4419621324590ac64352ef1745a6f4d8579ac2e02b8b9f9d",
+      "bytes": 3139
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/acceptance/tool-and-provider-events.json",
+      "sha256": "046a688522aaeec3754ef311509445ab866544004f8e7fe499f60267827150b2",
+      "bytes": 14149
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/junit.xml",
+      "sha256": "9129d8497d8b3a7c64ec0e783cae46619e730ae8165d3ef461bf6a1b98faaec8",
+      "bytes": 2534
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/receipt.json",
+      "sha256": "c103d2adf6ba6b9157bf1194fbaebcda7880745691b71cdf72d456b8a4211dab",
+      "bytes": 5068
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/record.jsonl",
+      "sha256": "4011f8bb7dc094557d62cea0d0b3f9d9e90128321e912b6bc1ce6f660c97b2f3",
+      "bytes": 299287
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-node/source/provider-resume-b222302f/codex-node-deps/run.log",
+      "sha256": "5903d0ed960c8f0a4419621324590ac64352ef1745a6f4d8579ac2e02b8b9f9d",
+      "bytes": 3139
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/accepted-answer-markup.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/accepted-answer-markup.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/assessment.json",
+      "sha256": "79b892c2abac7b4659f7a36c2a1c391d472c6d46c9a796b65915d7362ab86fc8",
+      "bytes": 16553
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/base-commit.txt",
+      "sha256": "aae70fa5968c77c1b1f232ca4f66b346e25491fe248b3d9c12d971b5ce59956c",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/commands.json",
+      "sha256": "14aa592160f5ea0e4672ec95248c0a9aa28f870d33c56da374b57cf983bf0a7d",
+      "bytes": 6778
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/final/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/git-status-after.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/git-status-before.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/host-setup.stderr",
+      "sha256": "b8700946c94907e60af748df1847c0cd9e62177d3c7f9ec68e0c75c5ce128256",
+      "bytes": 958
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/host-setup.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv.stderr",
+      "sha256": "21e84b0e433f85f5af0e9679a1816bcad361ebe6db5fe95a213d26ffcbf3be58",
+      "bytes": 493
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/junit.xml",
+      "sha256": "42e90f95865a93eff410a78c964f0b61ccba3e30fcbc12a14c4a5a0701ae241f",
+      "bytes": 2538
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/markup-assessment.json",
+      "sha256": "bf828af997fa665f66a3feadbcd71d724aae1b88a1326635292b636c5e2e7d81",
+      "bytes": 225
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/negative-evidence.json",
+      "sha256": "8c0058cb9d5144752f8b4d1f5c99d503ea2e6cb3414bd1501c26486d51f4a6a4",
+      "bytes": 10454
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/network-events.json",
+      "sha256": "3dbfd04e9debfee417cc9eb8da01f15466a14672652444859461f74a6cc050e0",
+      "bytes": 36607
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original-tests.stdout",
+      "sha256": "49e81e5937bf64bd3ba22a7485f37fca0a93e8e1711b761e540390e0e428c307",
+      "bytes": 529
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/patch.diff",
+      "sha256": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+      "bytes": 416
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/receipt-statement.json",
+      "sha256": "63eae8142ea8820b86d0a21986626e0088cb1aedc95be90d5d0e886d931c766e",
+      "bytes": 5219
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/receipt-verify.stdout",
+      "sha256": "6a17cc18b0a4565223fc5b03eacaa3c5cae3d3239fac8f28f643699793fd977d",
+      "bytes": 2285
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/receipt.json",
+      "sha256": "35a76f0e869755f31880a0e47e689e612a5aea4cad92a2411a7113dfd693c566",
+      "bytes": 5084
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/record-base.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/record-base.stdout",
+      "sha256": "aae70fa5968c77c1b1f232ca4f66b346e25491fe248b3d9c12d971b5ce59956c",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/record-verify.stdout",
+      "sha256": "5e23372a832ff9dd85473319c75b6186a9611d938525b1d93b8c85f7072d26f9",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/record.jsonl",
+      "sha256": "5675770fc819d16e3beb43dce6b03b5beec04039e7e23e0319580e17933f1bbd",
+      "bytes": 265211
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/run.log",
+      "sha256": "dcdde0f6dd62bef470109426cf49d975292834fb12c074c11f31bc3ea00280ee",
+      "bytes": 9034
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/acceptance/tool-and-provider-events.json",
+      "sha256": "996ec444607cb43b64b9d09a6f04e12ea06ae37f38eb656b052d047d24a1c40f",
+      "bytes": 8811
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/exit-code.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/junit.xml",
+      "sha256": "42e90f95865a93eff410a78c964f0b61ccba3e30fcbc12a14c4a5a0701ae241f",
+      "bytes": 2538
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/receipt.json",
+      "sha256": "35a76f0e869755f31880a0e47e689e612a5aea4cad92a2411a7113dfd693c566",
+      "bytes": 5084
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/record.jsonl",
+      "sha256": "5675770fc819d16e3beb43dce6b03b5beec04039e7e23e0319580e17933f1bbd",
+      "bytes": 265211
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-python/source/provider-resume-b222302f/codex-python-pytest/run.log",
+      "sha256": "dcdde0f6dd62bef470109426cf49d975292834fb12c074c11f31bc3ea00280ee",
+      "bytes": 9034
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/assessment.json",
+      "sha256": "c8c829dca12886f5cc2839a1583546882255d283d8107f16319b0d01a2eab5e3",
+      "bytes": 8087
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/final/test/paging.test.js",
+      "sha256": "8a2c75c6aaa451c3bb23b6ce76aea8aeef3846077e6ece050676689a82a0bbb8",
+      "bytes": 715
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/git-status-after.txt",
+      "sha256": "79e684830c310ff50c474a0d4523859d3a4d964a685adadc3cabb91964c6db57",
+      "bytes": 40
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/git-status-before.txt",
+      "sha256": "79e684830c310ff50c474a0d4523859d3a4d964a685adadc3cabb91964c6db57",
+      "bytes": 40
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/host-test-exit-status.txt",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "bytes": 2
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/host-test.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/host-test.stdout",
+      "sha256": "ac6007f007e66668d4b480a8d8a7a68419f1074d06bb56efe4e8e529a947ef08",
+      "bytes": 875
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/negative-evidence.json",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "bytes": 3
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/node-version.txt",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/outcome.json",
+      "sha256": "99acde629332a9f250f3a1ea34336a1404a67a70fd0b9997f50087039de9d903",
+      "bytes": 3174
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/patch.diff",
+      "sha256": "9c14355d1ed19be008f3097ef8081700ab7a266149761f63ef1678f3adb7c21d",
+      "bytes": 1090
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/receipt-statement.json",
+      "sha256": "8c7b073dac1a43a9b401a32fc13307d6835d75ed08009e0aaf60f6cc33859e51",
+      "bytes": 4923
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/receipt-verify.stdout",
+      "sha256": "7d24b95ca2829d5dcb270086566b3058a0f36199769bfe5fdb0f820e83039009",
+      "bytes": 2341
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/receipt.json",
+      "sha256": "651956aa6df5506e863439ccecd4a3c21e6bf696d31988ddd2c927d2c3311ad3",
+      "bytes": 4836
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/record-verify.stdout",
+      "sha256": "2c197fdb14b3c15b446d2dbcf1b2ce67d270e9c53b3b0a5f21ab8cb9453a5ff3",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/record.jsonl",
+      "sha256": "7fea05d53a4bf2e9abf22b02eb3da6d3a8ff7d191b185b03310ec885022423b4",
+      "bytes": 255080
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/codex-or-sample/source/provider-resume-b222302f/codex-sample-acceptance/tool-and-provider-events.json",
+      "sha256": "778bf76b19e5a9e8b1ce227542eec9ae05d4435b1f3de8df07f2fd4af17d95c3",
+      "bytes": 12217
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/assessment.json",
+      "sha256": "3a16c549e29e4d81885cfaefa4a6195f499cd45fa0e149756e60005a00513e21",
+      "bytes": 10658
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/base-commit.txt",
+      "sha256": "12a2aa8362c23fb82242fb57f7108b521e6b54d7d5f8e212ecfcd2f06032b385",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/commands.json",
+      "sha256": "039ac80ed17aad634f7c58cff69c95ae8ebc66a910404cab4b14d193fb39a20b",
+      "bytes": 4049
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/git-status-after.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/git-status-before.txt",
+      "sha256": "dc64de9d318977a384bc1eb1990a787d65afec12959e4316e62cc42d392a2dc6",
+      "bytes": 19
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/host-setup-online.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/host-setup-online.stdout",
+      "sha256": "e37ab260c14eb4e9cf5cbd344c65b281feaca25b62ddca2b8607e4bfdaab609f",
+      "bytes": 27
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/host-setup.stderr",
+      "sha256": "d2977c3d9a568244f6f9fc202abbc938a46308623ee94caa3ca2022be88dc575",
+      "bytes": 285
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/host-setup.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/junit.xml",
+      "sha256": "ff5396567e4c5d5f79c5681e4639e28f66a3e761c3736b36b660964a10586f01",
+      "bytes": 2701
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/negative-evidence.json",
+      "sha256": "e3eaf95f00f1aaeb641d6cdf44e7f823bc19263a6901608a37b4a97a8cd64cd2",
+      "bytes": 1548
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/network-events.json",
+      "sha256": "b8a6a0ccf0754af1f825e7ba108b99313e86f2df007e18e86a00ddced53c3ae1",
+      "bytes": 13446
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original-tests.stdout",
+      "sha256": "1ee8609fec674b061b791f769cf16a45de709580b32efb3a27801cd363b864b9",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/patch.diff",
+      "sha256": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+      "bytes": 484
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/receipt-statement.json",
+      "sha256": "3d52359c0f17ff1bedddfad51d0896096b071c3ae655fe722a0208c389940fc4",
+      "bytes": 4840
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/receipt-verify.stdout",
+      "sha256": "d1536fce0413b1d6252b5ea5f0194a1c959a7117b99667b484d6221a9494176f",
+      "bytes": 2125
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/receipt.json",
+      "sha256": "6fac6742766726364a2476de9f1f0beb02cf76c2eaa464f627e96954a201af3f",
+      "bytes": 4848
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/record-verify.stdout",
+      "sha256": "836ddc394b84b8cff3191509a416a573f88ce3dd393136eb5efe02aebc72b203",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/record.jsonl",
+      "sha256": "9b579385068a4e9cac940d71d944183ad0b1aa9af21fcfd159c516e9a0e2e061",
+      "bytes": 355190
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/run.log",
+      "sha256": "b3fba769e337e8fa2e0a50b29783139bb2400a15e7bbe06681c75df5b3e56400",
+      "bytes": 3694
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/acceptance/tool-and-provider-events.json",
+      "sha256": "9ba986c31af0685fd2da8a64137a61929541e9933a329ff9c12473542d78ae62",
+      "bytes": 19123
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/junit.xml",
+      "sha256": "ff5396567e4c5d5f79c5681e4639e28f66a3e761c3736b36b660964a10586f01",
+      "bytes": 2701
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/receipt.json",
+      "sha256": "6fac6742766726364a2476de9f1f0beb02cf76c2eaa464f627e96954a201af3f",
+      "bytes": 4848
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/record.jsonl",
+      "sha256": "9b579385068a4e9cac940d71d944183ad0b1aa9af21fcfd159c516e9a0e2e061",
+      "bytes": 355190
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-node/source/targeted-openrouter-b222302f/node-deps/run.log",
+      "sha256": "b3fba769e337e8fa2e0a50b29783139bb2400a15e7bbe06681c75df5b3e56400",
+      "bytes": 3694
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/assessment.json",
+      "sha256": "008ebd598751dad685b5ef3d9b6f4e05069c2961508454841a310df21241e71d",
+      "bytes": 11792
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/base-commit.txt",
+      "sha256": "2c2802beee424ed81bb4e5d53c56322b136053bc0e60ad22b4d70b655e332d2f",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/commands.json",
+      "sha256": "0be5665ad3cf3cac0f3f6c76d13fa17623811149b854f24a1eec789e37e1f7e4",
+      "bytes": 4512
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/final/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/git-status-after.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/git-status-before.txt",
+      "sha256": "7224975055b54b506c03dd8f654a201d10409f800509d0a38ec2921a7ffafd87",
+      "bytes": 12
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/host-setup.stderr",
+      "sha256": "bf98facf8bb2f7bd64500463bf72aff6de4bcbd1594938bf78d3c96f7f621fc6",
+      "bytes": 741
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/host-setup.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv.stderr",
+      "sha256": "a52c12edcd4274a0aed4afebcc556318dbf04bdd7a239b5fd7682e5d2ffa2cc9",
+      "bytes": 489
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/junit.xml",
+      "sha256": "95fbfbd4c65fa2863b39325a1a762db120add12dc01dab23ae791014b9d306d0",
+      "bytes": 2705
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/negative-evidence.json",
+      "sha256": "a9bd4d3c0d25a5cc136c82b87bbb7b2eca6ac401b2394a680ea3c79585527583",
+      "bytes": 10293
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/network-events.json",
+      "sha256": "e864277927ed6a929156572c1f4f4e1fb0069dd167943c075a7da486fd63f0d1",
+      "bytes": 20864
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original-tests.stdout",
+      "sha256": "c63b41ec32569455038a5affce705eebfa48f1d98b6383a43ce56bc3c549351f",
+      "bytes": 457
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/patch.diff",
+      "sha256": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+      "bytes": 416
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/receipt-statement.json",
+      "sha256": "b1bf55d17a2e3a4deddda5c7c5b2d74be0423a82aa698f0a9c8302c7ec8631ce",
+      "bytes": 4862
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/receipt-verify.stdout",
+      "sha256": "dc9ba0a802cbf5b9675d3b13362e057fbf9effa9484f6b4be49394017d929698",
+      "bytes": 2131
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/receipt.json",
+      "sha256": "2cd8769ac24a733f6d8c4b4579f3e7b0296e5c282983f07c61cdd63a6f470f1f",
+      "bytes": 4860
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/record-verify.stdout",
+      "sha256": "d2bbc3956af4eeda3681039acdc5808e8475aa89ed846dc35f059aac05db8a54",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/record.jsonl",
+      "sha256": "1cc7fdcd368b0e5c8e00dd5ad51d35de990371c48b795ad51c97f96cc77485f2",
+      "bytes": 414013
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/run.log",
+      "sha256": "0b94d9c37f6dd7e39984bdac7501aa78cb6c85abcecd7f03df7435bc17c7984a",
+      "bytes": 3708
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/acceptance/tool-and-provider-events.json",
+      "sha256": "2b3f03c14b958fe2341c9631e80802c88307d63396ee86231f90f677f109b9fd",
+      "bytes": 21268
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/junit.xml",
+      "sha256": "95fbfbd4c65fa2863b39325a1a762db120add12dc01dab23ae791014b9d306d0",
+      "bytes": 2705
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/receipt.json",
+      "sha256": "2cd8769ac24a733f6d8c4b4579f3e7b0296e5c282983f07c61cdd63a6f470f1f",
+      "bytes": 4860
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/record.jsonl",
+      "sha256": "1cc7fdcd368b0e5c8e00dd5ad51d35de990371c48b795ad51c97f96cc77485f2",
+      "bytes": 414013
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-python/source/targeted-openrouter-b222302f/python-pytest/run.log",
+      "sha256": "0b94d9c37f6dd7e39984bdac7501aa78cb6c85abcecd7f03df7435bc17c7984a",
+      "bytes": 3708
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/assessment.json",
+      "sha256": "188bf38a9c1885f8a8e775cc70603b558e233b894d7d7646e24ed98db35b380c",
+      "bytes": 9312
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/base-commit.txt",
+      "sha256": "3d5adb01e45bbb93e53d82b237041f0bf3fba4f110d880149aaa2d3d70646006",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/final/src/paging.js",
+      "sha256": "10d26263da431c78212ff560aede93f01019de9c9b9ec0194842cb71d6d5495a",
+      "bytes": 562
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/negative-evidence.json",
+      "sha256": "8eb77a7e002217907262cd743d4661815be50a924de9bc355aaa64b5b3f169eb",
+      "bytes": 781
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/node-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/node-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original-tests.stdout",
+      "sha256": "5f53acad12acfa90c9733a01250f9140b80399fae020c9e562484ed0739b9101",
+      "bytes": 573
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/patch.diff",
+      "sha256": "b0ac4cfd0060e99a3058cddf155db5559c23cc3b9b43d0328cd394eba7792242",
+      "bytes": 442
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/receipt-statement.json",
+      "sha256": "8535b1bd095eb073ed15086058f43e223a20dacec1809aefa4e8a233c97d2400",
+      "bytes": 4402
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/receipt-verify.stdout",
+      "sha256": "120bdc0df89ee68892dfc3c53e9c67c8c85eb511213b1f4e06c97f220a1967bb",
+      "bytes": 2139
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/receipt.json",
+      "sha256": "a119a5087e7f8f9f7ed311381062d121478b4b599d15e42fee2d603271919022",
+      "bytes": 4448
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/record-verify.stdout",
+      "sha256": "d6cde5c639b7e816a7d73447278c2473de2891f83acc756598502568ce70d9fd",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/record.jsonl",
+      "sha256": "c7ed7920c2339ccfa7f73f401e881e1e36242c3f626fa60bf2497f74357a5375",
+      "bytes": 361082
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/tool-and-provider-events.json",
+      "sha256": "87d2cb9383821e8df42b59a496a4be3dfb5dd1c63c612de07cce247e2f2d45e0",
+      "bytes": 18172
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/trusted-public-key.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/native-or-sample/source/targeted-openrouter-b222302f/sample-acceptance/trusted-public-key.stdout",
+      "sha256": "83f36a79344f3fd61ed6849e21293c648cf2f84628fa9c9adc063867622fd44b",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/assessment.json",
+      "sha256": "85e3a78d44a0dc9d9514114a6573b49113830a29c1afad6f0ffcf8e3a035c807",
+      "bytes": 9228
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/base-commit.txt",
+      "sha256": "b3f5df3d44139b2bad98d9b56621d9be3c254223b74872c8db5f96dd3e777378",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/commands.json",
+      "sha256": "33fe8f39f25389982376a3b2fcc78f3f46299beb4ed925ac5ee92d40262652fc",
+      "bytes": 3122
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/git-status-after.txt",
+      "sha256": "338e5c02418bfaba889c1b1e1f2a9bc48537acb507798aa9b4e83d12eda124b5",
+      "bytes": 84
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/git-status-before.txt",
+      "sha256": "338e5c02418bfaba889c1b1e1f2a9bc48537acb507798aa9b4e83d12eda124b5",
+      "bytes": 84
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/host-setup-online.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/host-setup-online.stdout",
+      "sha256": "97e5d2d686d246ce321c676e33860bf9affc052d657fe30688d3874534d559d0",
+      "bytes": 27
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/junit.xml",
+      "sha256": "7780fe595b2622573be76c5c431e2b8ae506817b081d047cb08bd6c547c3e7c9",
+      "bytes": 2474
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/negative-evidence.json",
+      "sha256": "9ace2d2b6cab1afa68d5a74171488ecea7ca67723c613222a34aca4d4d86ff16",
+      "bytes": 1182
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/network-events.json",
+      "sha256": "1371225e361cc59031fe6ffb136d87af36686925a0e04472ecb361ac596e5d41",
+      "bytes": 16710
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/patch.diff",
+      "sha256": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+      "bytes": 484
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/receipt-statement.json",
+      "sha256": "ed16b5a0d87abefa256627c7cd6feebc7ca487ca0fd3b94295dd7828f4f8a790",
+      "bytes": 4782
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/receipt-verify.stdout",
+      "sha256": "1e387813fb260d0968e4e72d1a2c5cc48b45a9f225b921fa16835f6bac063951",
+      "bytes": 1986
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/receipt.json",
+      "sha256": "bb2b008914b3670ba978d5a44386605eb33cf1d7b880ef8b3bbf8b6524edae86",
+      "bytes": 4772
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/record-verify.stdout",
+      "sha256": "7952244e9f1ec8a164efca934d911e83fe17cd603ca42085595eaf140b222566",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/record.jsonl",
+      "sha256": "6a1d8785685b5f5de66f0007b5b09fd74eb87cf4b2146f610690009075d46297",
+      "bytes": 390492
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/recovery-node/source/live-c1-service-recovery-b222302f/acceptance/recovery-node-deps/tool-and-provider-events.json",
+      "sha256": "7e1f6bc915c8a2a1121727c1342905bdeacb776f3a460a36aa136b09a6c536d5",
+      "bytes": 23040
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/assessment.json",
+      "sha256": "7512db59e255a6b09aaed3d2d9d82a3c2129d87ab1a73785ae8ce41b696d9265",
+      "bytes": 9673
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/base-commit.txt",
+      "sha256": "883326517164ad9e332f15c68bc508bb0aa58f272ecc75fc79918888aa1962e1",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/commands.json",
+      "sha256": "96698f4294a39b17b8f5a429995a41b4eedaecf1b78ef7c8f2bdd0405e15cb8c",
+      "bytes": 3113
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/final/test/paginate.test.js",
+      "sha256": "67327b6cf02be78d55f7dcf5bd2da6e9c0769e23cde99a69b35cf2bc37caef21",
+      "bytes": 1102
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/git-status-after.txt",
+      "sha256": "edcdece1d34449a83389c1147ff1f644eefd3ea8aa09d7734ccefa9cbe00b764",
+      "bytes": 109
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/git-status-before.txt",
+      "sha256": "edcdece1d34449a83389c1147ff1f644eefd3ea8aa09d7734ccefa9cbe00b764",
+      "bytes": 109
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/host-setup-online.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/host-setup-online.stdout",
+      "sha256": "f031183538393e79491d362ecbefb406cb876c534c7f243680fcd37aae8e9b81",
+      "bytes": 27
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/junit.xml",
+      "sha256": "2ca272c0c7d23e4f0fce5f5039314693aa99352a66d74ef710d3ed84a5b3e3f4",
+      "bytes": 2456
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/negative-evidence.json",
+      "sha256": "fa6365baa586d3601b64684fdcd83f87d66fb6b14c73720aa503e7e0a00ae250",
+      "bytes": 1188
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/network-events.json",
+      "sha256": "f65b291ea59848487be62c3933323ff20f452ffdb965912d3b9d0a2833ce16c8",
+      "bytes": 16712
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original-tests.stdout",
+      "sha256": "49ce4d7a5ba46f7092368eea98ba6dc844aa9bddf7051f7f64a3474fd9cb47bd",
+      "bytes": 158
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/patch.diff",
+      "sha256": "7d297c6208dc450eb56e218dc09549323e85c6797c7f0aa390e7b8a8311fde25",
+      "bytes": 1262
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/receipt-statement.json",
+      "sha256": "4c4d04479f9ba584764384ee2a663be1221ee54843a5f8396611aefe9c7a6379",
+      "bytes": 4945
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/receipt-verify.stdout",
+      "sha256": "7fb9ee121e7c46e4905a725014380cb3c4a4b6bbbd69fe90e1d1e3163aab0de8",
+      "bytes": 2088
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/receipt.json",
+      "sha256": "2a587e4beb7c1fbaacffd0c8b85059db6a1f0bb230272acf7081243b86c051d0",
+      "bytes": 4932
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/record-verify.stdout",
+      "sha256": "2420cd762cdbdebb26459a2b12847233aa64b90ac29747c3f564270657769c3b",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/record.jsonl",
+      "sha256": "76447e84d6f051fa85eb11d0aad902ab1217ab08df6c507c6088e4f412528cae",
+      "bytes": 426753
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-node/source/live-c1-service-recovery-b222302f/acceptance/service-node-deps/tool-and-provider-events.json",
+      "sha256": "64e98519e66e34431d58f3a33d45e8b3fc280e2bbe2c5ecfada7bf5aae87883f",
+      "bytes": 21431
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/assessment.json",
+      "sha256": "ef17308e264c7fa8e70369959cbadcf8dc2509127c9f7a783641a103a7fc8b2c",
+      "bytes": 9237
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/base-commit.txt",
+      "sha256": "c4033a3894983a6817e7ba8dee3da73da3d03beae84ff891dad3db8b86d892f3",
+      "bytes": 41
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/negative-evidence.json",
+      "sha256": "5912963cb0743dbe354c802e8be707c738290a24118aa1c68826048546f747a2",
+      "bytes": 1381
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/node-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/node-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original-tests.stdout",
+      "sha256": "7afb909f147d4fadf9d07ecab5068751342f7436606ba788c3d6e194a8c2493a",
+      "bytes": 572
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/receipt-statement.json",
+      "sha256": "ea9eec7248bb14cc9a3407e0a6727f0c9cf272f60dc9635e980700331119bc51",
+      "bytes": 4350
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/receipt-verify.stdout",
+      "sha256": "1b00e0a30d88d15335ed258f26f90c8e1f221439d4291620b0a91e078e8fd6bc",
+      "bytes": 2086
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/receipt.json",
+      "sha256": "0145d53ddc4e006021977cca3ec95db744afa3d7c40cba102d53f93c363a87ab",
+      "bytes": 4380
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/record-verify.stdout",
+      "sha256": "659c1000e86bc9f09bf15f10e5ade016a9bb0c50b4120aef3a540e5f31391c4b",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/record.jsonl",
+      "sha256": "79685032b17447249bf9f73e3ead6d5c197fb201e9c3e0dc87fce96b3ef91cad",
+      "bytes": 331342
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/tool-and-provider-events.json",
+      "sha256": "9899753993e416b19b935064748318dfac8161f6e383112bd175137c31a92344",
+      "bytes": 18908
+    },
+    {
+      "path": "C1-openrouter/supplemental/earlier-b222-functional/service-smoke/source/live-c1-service-recovery-b222302f/acceptance/service-smoke/trusted-public-key.txt",
+      "sha256": "83f36a79344f3fd61ed6849e21293c648cf2f84628fa9c9adc063867622fd44b",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/transcript.txt",
+      "sha256": "a257eecd46c0d7a27439ed1095718feac3dfe53258c331c508d4e2fb91f8dbae",
+      "bytes": 174235
     },
     {
       "path": "C1-real-repo.json",

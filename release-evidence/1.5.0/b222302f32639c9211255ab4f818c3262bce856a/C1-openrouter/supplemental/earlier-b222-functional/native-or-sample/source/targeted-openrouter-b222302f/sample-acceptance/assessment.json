@@ -1,0 +1,221 @@
+{
+  "schema": "axocoatl.recovery.sample-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T14:11:20.000610+00:00",
+  "sample_source": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28",
+  "run_id": "run-842e6816-8079-4b80-9281-fee1ebe578f1",
+  "task": "Fix the bug: paging skips the last item",
+  "base_commit": "c61bec99701456c1dc890926a543d57fea7f5bbd",
+  "cli": {
+    "path": "/usr/local/bin/axocoatl",
+    "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+  },
+  "outcome": "accepted",
+  "artifact_change": {
+    "files": [
+      "src/paging.js"
+    ],
+    "explanation": "After copying all full pages, append items.slice(count * size) only when items remain. The original five-item, page-size-two case now returns [[1,2],[3,4],[5]]; exact multiples do not gain an empty page. Existing positive-integer size validation remains unchanged.",
+    "original_tests_unchanged": true,
+    "package_and_readme_unchanged": true,
+    "hashes": {
+      ".gitignore": {
+        "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "unchanged": true
+      },
+      "README.md": {
+        "original_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+        "final_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+        "unchanged": true
+      },
+      "package.json": {
+        "original_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+        "final_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+        "unchanged": true
+      },
+      "src/paging.js": {
+        "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+        "final_sha256": "10d26263da431c78212ff560aede93f01019de9c9b9ec0194842cb71d6d5495a",
+        "unchanged": false
+      },
+      "test/paging.test.js": {
+        "original_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+        "final_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+        "unchanged": true
+      }
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "node-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+        "started_at": "2026-10-26T14:11:19.827775+00:00",
+        "finished_at": "2026-10-26T14:11:19.837097+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+        "started_at": "2026-10-26T14:11:19.837176+00:00",
+        "finished_at": "2026-10-26T14:11:19.961709+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "5f53acad12acfa90c9733a01250f9140b80399fae020c9e562484ed0739b9101",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "trusted-public-key",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "key"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+        "started_at": "2026-10-26T14:11:19.961740+00:00",
+        "finished_at": "2026-10-26T14:11:19.966919+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "83f36a79344f3fd61ed6849e21293c648cf2f84628fa9c9adc063867622fd44b",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/receipt.json",
+          "--key",
+          "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+          "--repo",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+          "--record",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+        "started_at": "2026-10-26T14:11:19.966960+00:00",
+        "finished_at": "2026-10-26T14:11:19.973303+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "120bdc0df89ee68892dfc3c53e9c67c8c85eb511213b1f4e06c97f220a1967bb",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/record.jsonl"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+        "started_at": "2026-10-26T14:11:19.973344+00:00",
+        "finished_at": "2026-10-26T14:11:19.979477+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "d6cde5c639b7e816a7d73447278c2473de2891f83acc756598502568ce70d9fd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "tests_added": 0,
+    "independent_baseline_rerun": false,
+    "baseline_failure_evidence": "Recorded environment probe exit1; original source uses Math.floor and lacks any partial-page append.",
+    "source_status_unchanged": true
+  },
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "2e811ad280a87899ede2e6d5694490ae5140a6c35038ca4f79fe5ed5f0cae22b"
+      }
+    ],
+    "sandbox": "podman"
+  },
+  "usage": {
+    "input_tokens": 62079,
+    "output_tokens": 1721,
+    "cost_microunits": 3500,
+    "cost_usd": 0.0035,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "recorded_provider_calls": {
+    "writer": 10,
+    "reviewer": 9
+  },
+  "tool_results": {
+    "writer": 9,
+    "reviewer": 8,
+    "reviewer_error_count": 1
+  },
+  "negative_evidence": [
+    {
+      "role": "reviewer",
+      "sequence": 7,
+      "payload": {
+        "call_id": "chatcmpl-tool-9804dd13836b3a22",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "cause": "Unknown: exported record contains argument/result hashes and lengths, not raw tool arguments or error body. Reviewer continued with successful list_dir and read_file calls."
+    }
+  ],
+  "adjudications": [],
+  "limitations": [
+    "One small paging sample; not a completion claim for other onboarding paths, live fixtures, Safari or the full release.",
+    "One recovered reviewer search error is retained; its cause cannot be established from the record hashes alone.",
+    "No new inference, test additions, runtime changes or service actions were performed."
+  ],
+  "evidence_hashes": {
+    "receipt.json": "a119a5087e7f8f9f7ed311381062d121478b4b599d15e42fee2d603271919022",
+    "record.jsonl": "c7ed7920c2339ccfa7f73f401e881e1e36242c3f626fa60bf2497f74357a5375",
+    "patch.diff": "b0ac4cfd0060e99a3058cddf155db5559c23cc3b9b43d0328cd394eba7792242",
+    "tool-and-provider-events.json": "87d2cb9383821e8df42b59a496a4be3dfb5dd1c63c612de07cce247e2f2d45e0",
+    "negative-evidence.json": "8eb77a7e002217907262cd743d4661815be50a924de9bc355aaa64b5b3f169eb"
+  }
+}

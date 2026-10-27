@@ -1,0 +1,37 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d",
+  "run_id": "run-347b6716-0ea2-4bd5-aa3f-a94383145504",
+  "verdict": "pass",
+  "statement_sha256": "sha256:fbd21507d31231be613f8b460fe484398c5667f93fccfccb4242157ca09f372d",
+  "files": {
+    "repo": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-node-deps/repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-node-deps/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-347b6716-0ea2-4bd5-aa3f-a94383145504 (fix-codex@1), verdict pass, exit code 0",
+    "Signed by key 40f14e2ddf0bef15 (ed25519 sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)",
+    "Axocoatl 1.5.0, Session ses-da4a6600-bdd4-4a5a-8154-74733fbfac12, finished at 1793037506197 ms",
+    "Base commit 90cf19015534989984365e7b521ae34a0bac798d",
+    "Agent writer (writer): codex 0.160.1, openai:gpt-6.1-sol",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)",
+    "  route#0 chatgpt.com: model-call bodies checked, provider fetches refused",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

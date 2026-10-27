@@ -1,0 +1,1003 @@
+[
+  {
+    "event": {
+      "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793037132045,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793037132045,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-abb2fa77-70d8-4ac5-a78d-1de794972c90",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793037134038,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-abb2fa77-70d8-4ac5-a78d-1de794972c90",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793037134234,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-063e310e-9266-4207-bd3f-678e67acf6db",
+      "change": {
+        "command_id": "run-063e310e-9266-4207-bd3f-678e67acf6db:setup-allow:pypi.org",
+        "host": "pypi.org",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "e99b0e66d6fe88cd0293fbf9fc2d3acdcb2aef53ade2a003afa833bc785dad88",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "pypi.org:443 (allowed for this Session)",
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793037135624,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-063e310e-9266-4207-bd3f-678e67acf6db",
+      "change": {
+        "command_id": "run-063e310e-9266-4207-bd3f-678e67acf6db:setup-allow:files.pythonhosted.org",
+        "host": "files.pythonhosted.org",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "d350c89c404db6872947d5b1a107de724f15588a5cef6e7ef1a5be44fc1a7b2e",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [
+        "pypi.org:443 (allowed for this Session)",
+        "files.pythonhosted.org:443 (allowed for this Session)",
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 6,
+    "ts_ms": 1793037135624,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 7,
+    "ts_ms": 1793037135634,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42::223",
+        "2a04:4e42:600::223",
+        "2a04:4e42:200::223",
+        "2a04:4e42:400::223",
+        "151.101.64.223",
+        "151.101.128.223",
+        "151.101.192.223",
+        "151.101.0.223"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 33,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 8,
+    "ts_ms": 1793037137846,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42:400::223",
+        "2a04:4e42:600::223",
+        "2a04:4e42::223",
+        "2a04:4e42:200::223",
+        "151.101.64.223",
+        "151.101.128.223",
+        "151.101.192.223",
+        "151.101.0.223"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "files.pythonhosted.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 33,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "session#rev3",
+      "scope": "session",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 9,
+    "ts_ms": 1793037138108,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 890330,
+      "ip": "151.101.64.223",
+      "kind": "close",
+      "ms": 450,
+      "outcome": "closed",
+      "up": 1856
+    },
+    "seq": 10,
+    "ts_ms": 1793037138527,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 197657,
+      "ip": "151.101.64.223",
+      "kind": "close",
+      "ms": 741,
+      "outcome": "closed",
+      "up": 1208
+    },
+    "seq": 11,
+    "ts_ms": 1793037138560,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42::223",
+        "2a04:4e42:600::223",
+        "2a04:4e42:200::223",
+        "2a04:4e42:400::223",
+        "151.101.64.223",
+        "151.101.128.223",
+        "151.101.192.223",
+        "151.101.0.223"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 30,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 12,
+    "ts_ms": 1793037139485,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42:400::223",
+        "2a04:4e42:600::223",
+        "2a04:4e42::223",
+        "2a04:4e42:200::223",
+        "151.101.64.223",
+        "151.101.128.223",
+        "151.101.192.223",
+        "151.101.0.223"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:4",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "files.pythonhosted.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 30,
+        "uid": 1000
+      },
+      "policy_revision": 3,
+      "port": 443,
+      "rule": "session#rev3",
+      "scope": "session",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 13,
+    "ts_ms": 1793037139664,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 107818,
+      "ip": "151.101.64.223",
+      "kind": "close",
+      "ms": 1971,
+      "outcome": "closed",
+      "up": 3704
+    },
+    "seq": 14,
+    "ts_ms": 1793037141455,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "6aaa679ea0924362"
+    },
+    "seq": 15,
+    "ts_ms": 1793037141482,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-063e310e-9266-4207-bd3f-678e67acf6db",
+      "change": {
+        "command_id": "run-063e310e-9266-4207-bd3f-678e67acf6db:setup-revoke:pypi.org",
+        "host": "pypi.org",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "59288c33f9332b5b8446dc60a2ae251e8f1e6de6b3170581869ce6c1ca8fddc6",
+      "kind": "policy",
+      "revision": 4,
+      "rules": [
+        "files.pythonhosted.org:443 (allowed for this Session)",
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 16,
+    "ts_ms": 1793037141482,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-063e310e-9266-4207-bd3f-678e67acf6db",
+      "change": {
+        "command_id": "run-063e310e-9266-4207-bd3f-678e67acf6db:setup-revoke:files.pythonhosted.org",
+        "host": "files.pythonhosted.org",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+      "kind": "policy",
+      "revision": 5,
+      "rules": [
+        "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 17,
+    "ts_ms": 1793037141482,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "down": 1841922,
+      "ip": "151.101.64.223",
+      "kind": "close",
+      "ms": 1821,
+      "outcome": "revoked",
+      "up": 6922
+    },
+    "seq": 18,
+    "ts_ms": 1793037141483,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 19,
+    "ts_ms": 1793037144443,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:6",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 175,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 20,
+    "ts_ms": 1793037145138,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:5",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 175,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 21,
+    "ts_ms": 1793037145138,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/policy_limits",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 22,
+    "ts_ms": 1793037145144,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "down": 1780,
+      "kind": "close",
+      "ms": 9,
+      "outcome": "closed",
+      "up": 1934
+    },
+    "seq": 23,
+    "ts_ms": 1793037145145,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "decision": "deny",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "GET",
+      "path": "/api/claude_code/settings",
+      "reason": "route_denied",
+      "seq_in_conn": 1
+    },
+    "seq": 24,
+    "ts_ms": 1793037145183,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "down": 1766,
+      "kind": "close",
+      "ms": 48,
+      "outcome": "closed",
+      "up": 1929
+    },
+    "seq": 25,
+    "ts_ms": 1793037145184,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2607:6bc0::10",
+        "160.79.104.10"
+      ],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:7",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/claude-code/claude",
+        "exe_sha256": "24caa9e6ff13bf227049a2626f1c816fc895023050f0ec3b12dbf14d897367e0",
+        "gid": 1000,
+        "pid": 175,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 26,
+    "ts_ms": 1793037145289,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 27,
+    "ts_ms": 1793037145335,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 3197,
+      "kind": "response",
+      "ms": 1152,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 47588
+    },
+    "seq": 28,
+    "ts_ms": 1793037146486,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 2
+    },
+    "seq": 29,
+    "ts_ms": 1793037146551,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 3653,
+      "kind": "response",
+      "ms": 951,
+      "outcome": "completed",
+      "seq_in_conn": 2,
+      "status": 200,
+      "up": 49068
+    },
+    "seq": 30,
+    "ts_ms": 1793037147502,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 3
+    },
+    "seq": 31,
+    "ts_ms": 1793037147529,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 8492,
+      "kind": "response",
+      "ms": 1393,
+      "outcome": "completed",
+      "seq_in_conn": 3,
+      "status": 200,
+      "up": 51212
+    },
+    "seq": 32,
+    "ts_ms": 1793037148922,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:8",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 33,
+    "ts_ms": 1793037149625,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:9",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 34,
+    "ts_ms": 1793037149628,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:10",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 35,
+    "ts_ms": 1793037150136,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:11",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 36,
+    "ts_ms": 1793037151145,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:12",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 37,
+    "ts_ms": 1793037153154,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [],
+      "binding": {
+        "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+        "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+        "kind": "agent",
+        "node_id": "team-node-2246b5c476301feb4a8c027b",
+        "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+      },
+      "conn": "g1:13",
+      "conn_kind": "connect",
+      "decision": "deny",
+      "host": "pypi.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/local/bin/python3.13",
+          "/usr/bin/bash",
+          "/usr/bin/bash",
+          "/opt/axocoatl/claude-code/claude",
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/usr/local/bin/python3.13",
+        "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+        "gid": 1000,
+        "pid": 235,
+        "uid": 1000
+      },
+      "policy_revision": 5,
+      "port": 443,
+      "reason": "not_allowed",
+      "scope": "session",
+      "status": 403,
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 38,
+    "ts_ms": 1793037157163,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "credential": "claude-code-oauth",
+      "decision": "allow",
+      "host": "api.anthropic.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/v1/messages",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 4
+    },
+    "seq": 39,
+    "ts_ms": 1793037157475,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 7332,
+      "kind": "response",
+      "ms": 1969,
+      "outcome": "completed",
+      "seq_in_conn": 4,
+      "status": 200,
+      "up": 52388
+    },
+    "seq": 40,
+    "ts_ms": 1793037159444,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:7",
+      "down": 29866,
+      "kind": "close",
+      "ms": 14172,
+      "outcome": "closed",
+      "up": 207751
+    },
+    "seq": 41,
+    "ts_ms": 1793037159460,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "50d9a7f78ac76eec"
+    },
+    "seq": 42,
+    "ts_ms": 1793037159481,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 43,
+    "ts_ms": 1793037181630,
+    "v": 1
+  }
+]

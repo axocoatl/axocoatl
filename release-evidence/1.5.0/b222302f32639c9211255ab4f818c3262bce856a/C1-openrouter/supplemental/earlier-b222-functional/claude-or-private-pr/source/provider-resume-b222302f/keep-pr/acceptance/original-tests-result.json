@@ -1,0 +1,25 @@
+{
+  "node": "v22.23.2",
+  "steps": [
+    {
+      "name": "install-test-dependencies",
+      "command": [
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "four-original-tests",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "test_invocations": 1
+}

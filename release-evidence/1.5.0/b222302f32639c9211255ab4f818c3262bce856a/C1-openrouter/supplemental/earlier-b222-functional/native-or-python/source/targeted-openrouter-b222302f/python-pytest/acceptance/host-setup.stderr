@@ -1,0 +1,12 @@
+Using Python 3.13.7 environment at: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv
+Resolved 6 packages in 268ms
+   Building newuser-python-pytest @ file:///Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest
+      Built newuser-python-pytest @ file:///Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest
+Prepared 4 packages in 510ms
+Installed 6 packages in 7ms
+ + iniconfig==2.3.1
+ + newuser-python-pytest==0.1.0 (from file:///Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest)
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==9.1.1

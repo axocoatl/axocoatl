@@ -1,0 +1,12 @@
+Using Python 3.13.7 environment at: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv
+Resolved 6 packages in 123ms
+   Building newuser-python-pytest @ file:///Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo
+      Built newuser-python-pytest @ file:///Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo
+Prepared 1 package in 374ms
+Installed 6 packages in 8ms
+ + iniconfig==2.3.1
+ + newuser-python-pytest==0.1.0 (from file:///Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo)
+ + packaging==26.3
+ + pluggy==1.7.0
+ + pygments==2.21.0
+ + pytest==9.1.1

@@ -1,0 +1,235 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "fixture": "recovery-node-deps",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T14:32:52.765076+00:00",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+  "base_commit": "c9cb46d3a80afdfaa9c3f1bce4c46f718f48b0a9",
+  "run_id": "run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5",
+  "cli": {
+    "path": "/usr/local/bin/axocoatl",
+    "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+  },
+  "outcome": "accepted",
+  "artifact_change": {
+    "files": [
+      "src/paginate.js"
+    ],
+    "explanation": "The final page length now equals the remaining item count after its start, rather than a modulo that becomes zero for exact multiples. Ten items with page size5 now retain both full pages; partial pages, empty input and invalid size behavior remain covered by the unchanged original tests.",
+    "all_other_tracked_files_unchanged": true,
+    "original_tests_unchanged": true,
+    "hashes": {
+      ".gitignore": {
+        "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "unchanged": true
+      },
+      "README.md": {
+        "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+        "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+        "unchanged": true
+      },
+      "package-lock.json": {
+        "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+        "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+        "unchanged": true
+      },
+      "package.json": {
+        "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+        "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+        "unchanged": true
+      },
+      "src/paginate.js": {
+        "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+        "final_sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+        "unchanged": false
+      },
+      "test/paginate.test.js": {
+        "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+        "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+        "unchanged": true
+      }
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.receipt.json",
+          "--key",
+          "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+          "--record",
+          "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+        "start": "2026-10-26T14:32:52.270400+00:00",
+        "end": "2026-10-26T14:32:52.277467+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "1e387813fb260d0968e4e72d1a2c5cc48b45a9f225b921fa16835f6bac063951",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+        "start": "2026-10-26T14:32:52.277649+00:00",
+        "end": "2026-10-26T14:32:52.284815+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "7952244e9f1ec8a164efca934d911e83fe17cd603ca42085595eaf140b222566",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+        "start": "2026-10-26T14:32:52.285028+00:00",
+        "end": "2026-10-26T14:32:52.295025+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "host-setup-online",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "ci",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+        "start": "2026-10-26T14:32:52.295206+00:00",
+        "end": "2026-10-26T14:32:52.446135+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "97e5d2d686d246ce321c676e33860bf9affc052d657fe30688d3874534d559d0",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+        "start": "2026-10-26T14:32:52.446316+00:00",
+        "end": "2026-10-26T14:32:52.739649+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "tests_added": 0,
+    "tracked_files_unchanged_by_audit": true,
+    "independent_baseline_rerun": false
+  },
+  "configuration": {
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "ollama 0.40.11",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint coreweave/fp4 (CoreWeave)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "226575e2267747b2331ee56ff4116a4c37a43854c38a3074d70459d8c73af4a3"
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 83331,
+    "output_tokens": 1767,
+    "cost_microunits": 884,
+    "cost_usd": 0.000884,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 15,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 22 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+      }
+    }
+  ],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 9,
+      "payload": {
+        "call_id": "call-c3f724ea-8987-421e-bace-4e0cc0222de5",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "network": {
+    "events": 33,
+    "allowed_connections": 6,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "network_explanation": "No refused connections were recorded.",
+  "adjudications": [],
+  "limitations": [
+    "This audits the actual fixture artifact, not other release paths.",
+    "Raw tool errors and command arguments are not present in the public record; no unobserved cause is asserted.",
+    "No new inference, product source edit, daemon or service action."
+  ],
+  "evidence_hashes": {
+    "receipt.json": "bb2b008914b3670ba978d5a44386605eb33cf1d7b880ef8b3bbf8b6524edae86",
+    "record.jsonl": "6a1d8785685b5f5de66f0007b5b09fd74eb87cf4b2146f610690009075d46297",
+    "patch.diff": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+    "network-events.json": "1371225e361cc59031fe6ffb136d87af36686925a0e04472ecb361ac596e5d41",
+    "negative-evidence.json": "9ace2d2b6cab1afa68d5a74171488ecea7ca67723c613222a34aca4d4d86ff16"
+  }
+}

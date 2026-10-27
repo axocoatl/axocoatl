@@ -1,0 +1,6 @@
+{
+  "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/assemble-evidence-reviewed.py",
+  "sha256": "72261592a7656bbe228aa6c2d9f49d67d4e03e6a6247ed2056de2bdd90948083",
+  "bytes": 11930,
+  "qualification": "Assembly program preserved outside signed data because its own credential-pattern matcher triggers the collector scanner. No credential match was found in the test data. The scanner is unchanged. The first collection stopped before signing; the corrected collection retains original path statuses."
+}

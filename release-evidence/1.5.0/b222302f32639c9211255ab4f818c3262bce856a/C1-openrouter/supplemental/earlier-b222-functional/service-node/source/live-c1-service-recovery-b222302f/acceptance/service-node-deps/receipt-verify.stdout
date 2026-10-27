@@ -1,0 +1,37 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d",
+  "run_id": "run-43d63e61-3d9d-4417-970d-bc2005b0825e",
+  "verdict": "pass",
+  "statement_sha256": "sha256:50e03be482412b0b071a22cc26eb77fa14eb2077a2aa54d43bdab3330ced3048",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/repos/service-node-deps",
+    "covered": 2,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/axocoatl-gate-work/repos/service-node-deps/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-43d63e61-3d9d-4417-970d-bc2005b0825e (fix@1), verdict pass, exit code 0",
+    "Signed by key 40f14e2ddf0bef15 (ed25519 sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)",
+    "Axocoatl 1.5.0, Session ses-b48aea6f-2bd6-4a3d-a27c-37c98efe973e, finished at 1793024989489 ms",
+    "Base commit 7cdbe50fcf4a821d81189561bddd97d07efcdbe0",
+    "Agent writer (writer): native ollama 0.40.11, ollama:qwen3-coder:30b",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint coreweave/fp4 (CoreWeave)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 2 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+    "  test/paginate.test.js  sha256:67327b6cf02be78d55f7dcf5bd2da6e9c0769e23cde99a69b35cf2bc37caef21",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

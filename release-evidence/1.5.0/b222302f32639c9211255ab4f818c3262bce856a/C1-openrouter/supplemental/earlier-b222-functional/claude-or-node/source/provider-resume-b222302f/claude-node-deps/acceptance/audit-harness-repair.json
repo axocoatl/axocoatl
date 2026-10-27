@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-26T17:58:40.037005+00:00",
+  "cause": "Audit dependency copy followed the .bin/uvu symlink; the resulting regular file resolved its relative ./package import from .bin and failed before loading any test.",
+  "changed_only": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/acceptance/host-check/node_modules/.bin/uvu",
+  "preserved_copy": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/acceptance/host-check/node_modules/.bin/uvu.dereferenced-copy",
+  "original_sha256": "947efa34173de960ab95e58ec8854ab427767768ef940c10fdb031ab16dfdfb9",
+  "restored_symlink_target": "../uvu/bin.js",
+  "prior_original_tests_loaded": 0,
+  "additional_inference": false
+}

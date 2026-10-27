@@ -1,0 +1,82 @@
+[
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.receipt.json",
+      "--key",
+      "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+      "--record",
+      "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+    "start": "2026-10-26T14:32:52.270400+00:00",
+    "end": "2026-10-26T14:32:52.277467+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "1e387813fb260d0968e4e72d1a2c5cc48b45a9f225b921fa16835f6bac063951",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+    "start": "2026-10-26T14:32:52.277649+00:00",
+    "end": "2026-10-26T14:32:52.284815+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "7952244e9f1ec8a164efca934d911e83fe17cd603ca42085595eaf140b222566",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+    "start": "2026-10-26T14:32:52.285028+00:00",
+    "end": "2026-10-26T14:32:52.295025+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "host-setup-online",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "ci",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+    "start": "2026-10-26T14:32:52.295206+00:00",
+    "end": "2026-10-26T14:32:52.446135+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "97e5d2d686d246ce321c676e33860bf9affc052d657fe30688d3874534d559d0",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/repos/recovery-node-deps",
+    "start": "2026-10-26T14:32:52.446316+00:00",
+    "end": "2026-10-26T14:32:52.739649+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

@@ -1,0 +1,3 @@
+Using CPython 3.13.7 interpreter at: /Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3
+Creating virtual environment at: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv
+Activate with: source /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/activate

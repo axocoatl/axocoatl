@@ -1,0 +1,90 @@
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261027-000302.log
+
+Step 0 · This computer
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 44 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, codex, gh, git 2.39.5.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: Codex (your ChatGPT plan) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+Check the sandbox with one throwaway container? This pulls
+docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start
+from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2Kfrom, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · Codex
+  ✓ codex at /Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex (not needed: Axocoatl runs the pinned Codex in its sandbox)
+  Codex runs bill to your ChatGPT plan (kept from your configuration: codex-chatgpt)
+  ✓ Signed in: codex-chatgpt is stored
+  ✓ The codex sandbox image is built
+  Codex runs in your repository's language image (Node.js, Python, Go or Rust, detected from package.json, pyproject.toml or requirements, go.mod or Cargo.toml), with the dependencies installed first and only the package registries open for that step (https://docs.axocoatl.ai/configure/toolchains/).
+
+  The reviewer: a different model that only reads the change.
+  ✓ Ollama 0.40.11 at http://localhost:11434, cloud models off (2 models installed)
+  ✓ gpt-oss:20b is installed
+  Loading gpt-oss:20b once to read its context…
+  ✓ gpt-oss:20b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  ✓ /Users/erick/Library/Application Support/Axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix-claude-code, axocoatl run fix-codex --param credential=codex-chatgpt, workbench Sessions
+  ✓ axocoatl run fix-claude-code (reviewer ollama:gpt-oss:20b)
+  ✓ axocoatl run fix-codex --param credential=codex-chatgpt (reviewer ollama:gpt-oss:20b)
+  ✓ workbench Sessions (Lead ollama:gpt-oss:20b)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/repo
+  Starting a daemon for this run (axocoatl serve on port 8080; its first start downloads an 87 MB embedding model once)…
+  $ axocoatl run fix-codex --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model reviewer=ollama:gpt-oss:20b --param credential=codex-chatgpt
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix-codex in /private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/repo
+· run run-36e29dc3-a54c-480e-8145-5c36967b1441 in Session ses-9979020b-ce3e-4ce9-919c-6dd8f0631f57
+· note: Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com).
+· note: image localhost/axocoatl-recipe-codex-node:9ecb56968dac · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix-codex
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-22982ea5-3ce4-4a02-b0d5-dae6250282e8 started (run)
+· turn turn-22982ea5-3ce4-4a02-b0d5-dae6250282e8 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix-codex@1 sha256:6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com).
+  image localhost/axocoatl-recipe-codex-node:9ecb56968dac · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+Usage: 99717 input + 1715 output tokens, $0.0459 (includes cost computed from reported tokens at list prices)
+Network: 31 recorded events, 6 allowed and 0 refused connections, 6 route requests
+Record: run-36e29dc3-a54c-480e-8145-5c36967b1441
+· record written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/record.jsonl
+· receipt written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/receipt.json (key 8a7a6b546e72ca24, 2 files covered, 0 removed, judged_capture)
+  $ axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/receipt.json --key "$(axocoatl receipt key)" --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/repo
+receipt of run run-36e29dc3-a54c-480e-8145-5c36967b1441, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 2 covered and 0 removed match /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/repo (judged_capture)
+result: valid (exit 0)
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-4dc23cf4296b4b7aa2f2dc3300c1492e/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix-codex --task "Describe the bug" --param credential=codex-chatgpt
+(reviewer ollama:gpt-oss:20b comes from your setup; --model ROLE=PROVIDER:MODEL overrides them)

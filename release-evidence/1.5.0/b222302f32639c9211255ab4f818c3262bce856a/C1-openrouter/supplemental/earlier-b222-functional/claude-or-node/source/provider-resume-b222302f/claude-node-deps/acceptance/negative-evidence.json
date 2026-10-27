@@ -1,0 +1,43 @@
+{
+  "provider_retries": [],
+  "tool_errors": [],
+  "refused_connections": [
+    {
+      "event": {
+        "conn": "g1:7",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/settings",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 24,
+      "ts_ms": 1793037098128,
+      "v": 1
+    },
+    {
+      "event": {
+        "conn": "g1:8",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/policy_limits",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 26,
+      "ts_ms": 1793037098130,
+      "v": 1
+    }
+  ],
+  "baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 291
+  },
+  "network_explanation": "All denied events retained; no unobserved cause or motive inferred."
+}

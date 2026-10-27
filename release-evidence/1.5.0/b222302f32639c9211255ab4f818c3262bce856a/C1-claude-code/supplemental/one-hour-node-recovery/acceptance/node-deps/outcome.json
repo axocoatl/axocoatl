@@ -1,0 +1,99 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "ccf6623dddedf42b5f631eabf12d7e476ae62fdeae202c687740f623a0268fb0",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  0.45ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793059328663,
+  "loadout": {
+    "builtin": true,
+    "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+    "id": "fix-claude-code",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 9,
+    "events": 43,
+    "refused_connections": 0,
+    "route_requests": 6,
+    "routes": [
+      [
+        "api.anthropic.com",
+        6
+      ]
+    ]
+  },
+  "not_covered": [],
+  "notes": [
+    "reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)",
+    "Agent writer (claude-code) sends the stored credential claude-code-oauth (Claude Code's OAuth token, sent to api.anthropic.com).",
+    "image localhost/axocoatl-recipe-claude-code-node:5520bc024263 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)",
+    "setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call"
+  ],
+  "ollama_versions": {
+    "gpt-oss:20b": [
+      "0.40.11"
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "ccf6623dddedf42b5f631eabf12d7e476ae62fdeae202c687740f623a0268fb0",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-776fe067-8014-45a4-9391-8b7a918b281d",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-c62dd59d-fc48-473e-bf7f-7bbab67897a5",
+  "started_at_ms": 1793059302344,
+  "task": "Paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-a3031b1b-d8a7-4acd-ba2b-dabe4d53a29d"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 61368,
+    "input_tokens": 131822,
+    "output_tokens": 1453,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-447c6e19-e3a4-4582-9f45-15d8be255475"
+}

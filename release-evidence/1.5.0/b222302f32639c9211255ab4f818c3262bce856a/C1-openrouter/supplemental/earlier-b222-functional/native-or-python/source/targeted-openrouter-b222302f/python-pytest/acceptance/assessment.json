@@ -1,0 +1,274 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "fixture": "python-pytest",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T14:20:10.082346+00:00",
+  "repo": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+  "base_commit": "4bd7ac97a7831ecf826adeb56448aafd6dc3beee",
+  "run_id": "run-345e91e5-dfec-4bb0-9a23-6c5a704b81a8",
+  "cli": {
+    "path": "/usr/local/bin/axocoatl",
+    "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+  },
+  "outcome": "accepted",
+  "artifact_change": {
+    "files": [
+      "pages.py"
+    ],
+    "explanation": "The final page length now equals the remaining item count after its start, rather than a modulo that becomes zero for exact multiples. Ten items with page size5 now retain both full pages; partial pages, empty input and invalid size behavior remain covered by the unchanged original tests.",
+    "all_other_tracked_files_unchanged": true,
+    "original_tests_unchanged": true,
+    "hashes": {
+      ".gitignore": {
+        "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+        "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+        "unchanged": true
+      },
+      "README.md": {
+        "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+        "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+        "unchanged": true
+      },
+      "pages.py": {
+        "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+        "final_sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+        "unchanged": false
+      },
+      "pyproject.toml": {
+        "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+        "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+        "unchanged": true
+      },
+      "tests/test_pages.py": {
+        "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+        "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+        "unchanged": true
+      }
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/receipt.json",
+          "--key",
+          "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:07.990237+00:00",
+        "end": "2026-10-26T14:20:07.996819+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "dc9ba0a802cbf5b9675d3b13362e057fbf9effa9484f6b4be49394017d929698",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/record.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:07.996949+00:00",
+        "end": "2026-10-26T14:20:08.003223+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "d2bbc3956af4eeda3681039acdc5808e8475aa89ed846dc35f059aac05db8a54",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+          "--version"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:08.003391+00:00",
+        "end": "2026-10-26T14:20:08.007876+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "host-venv",
+        "argv": [
+          "/opt/homebrew/bin/uv",
+          "venv",
+          "--offline",
+          "--python",
+          "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:08.008010+00:00",
+        "end": "2026-10-26T14:20:08.761985+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "a52c12edcd4274a0aed4afebcc556318dbf04bdd7a239b5fd7682e5d2ffa2cc9"
+      },
+      {
+        "name": "host-setup",
+        "argv": [
+          "/opt/homebrew/bin/uv",
+          "pip",
+          "install",
+          "--python",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-e",
+          "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest[test]"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:08.762158+00:00",
+        "end": "2026-10-26T14:20:09.605771+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "bf98facf8bb2f7bd64500463bf72aff6de4bcbd1594938bf78d3c96f7f621fc6"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/pytest"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/python-pytest",
+        "start": "2026-10-26T14:20:09.605961+00:00",
+        "end": "2026-10-26T14:20:10.059514+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c63b41ec32569455038a5affce705eebfa48f1d98b6383a43ce56bc3c549351f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "tests_added": 0,
+    "tracked_files_unchanged_by_audit": true,
+    "independent_baseline_rerun": false
+  },
+  "configuration": {
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint coreweave/fp4 (CoreWeave)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "python3 -m pytest"
+        ],
+        "candidate_sha256": "64d3136648d2bba443ca3e70a454aa2958219170cf163e0da054d95ff958ba92"
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 77955,
+    "output_tokens": 2235,
+    "cost_microunits": 5110,
+    "cost_usd": 0.00511,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 0,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    }
+  ],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 8,
+      "payload": {
+        "call_id": "call-caf4bb0b-9ea9-4bae-9c15-d5b2792bd751",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 28,
+      "payload": {
+        "call_id": "call-2bd923e5-34ea-4245-ba6f-6f568fc919d5",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 32,
+      "payload": {
+        "call_id": "call-14dacd96-676a-405e-9d83-4547bda49fa3",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "network": {
+    "events": 35,
+    "allowed_connections": 4,
+    "refused_connections": 6,
+    "route_requests": 0,
+    "routes": []
+  },
+  "network_explanation": "Six attempts by one writer-bound Python3.13 process/tool invocation to pypi.org:443 were denied with HTTP403 not_allowed at policy revision5, after setup revoked both registry exceptions (network seq17-18). This establishes enforced post-setup egress policy, not a registry outage. The writer subsequently completed, required host checks passed, and the review approved. The exported record hashes the tool arguments/results, so the exact attempted command and motive cannot be independently established.",
+  "adjudications": [],
+  "limitations": [
+    "This audits the actual fixture artifact, not other release paths.",
+    "Raw tool errors and command arguments are not present in the public record; no unobserved cause is asserted.",
+    "No new inference, product source edit, daemon or service action."
+  ],
+  "evidence_hashes": {
+    "receipt.json": "2cd8769ac24a733f6d8c4b4579f3e7b0296e5c282983f07c61cdd63a6f470f1f",
+    "record.jsonl": "1cc7fdcd368b0e5c8e00dd5ad51d35de990371c48b795ad51c97f96cc77485f2",
+    "patch.diff": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+    "network-events.json": "e864277927ed6a929156572c1f4f4e1fb0069dd167943c075a7da486fd63f0d1",
+    "negative-evidence.json": "a9bd4d3c0d25a5cc136c82b87bbb7b2eca6ac401b2394a680ea3c79585527583"
+  }
+}

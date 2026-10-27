@@ -1,0 +1,280 @@
+[
+  {
+    "role": "writer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "reasoning_summary": 8,
+      "text": 1,
+      "provider_response": 1
+    },
+    "events": [
+      {
+        "sequence": 9,
+        "ts_ms": 1793037159526,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 1,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 70426,
+        "output_tokens": 590,
+        "reasoning_tokens": null
+      }
+    }
+  },
+  {
+    "role": "reviewer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "reasoning_summary": 10,
+      "provider_response": 7,
+      "tool_proposed": 6,
+      "tool_result": 6,
+      "text": 2
+    },
+    "events": [
+      {
+        "sequence": 1,
+        "ts_ms": 1793037162989,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 2,
+        "ts_ms": 1793037162994,
+        "payload": {
+          "arguments_bytes": 11,
+          "arguments_sha256": "518341a7f82a294570cc3ba8ae0eec8f157d80c390e56cad16702940266a4eba",
+          "call_id": "chatcmpl-tool-9b8e3b9d2024561b",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        }
+      },
+      {
+        "sequence": 3,
+        "ts_ms": 1793037163171,
+        "payload": {
+          "call_id": "chatcmpl-tool-9b8e3b9d2024561b",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 700,
+          "result_sha256": "829a00d17651075940558a6630957815a4ad0e2fad43de8e625a37095b6a41ab"
+        }
+      },
+      {
+        "sequence": 5,
+        "ts_ms": 1793037165042,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 6,
+        "ts_ms": 1793037165047,
+        "payload": {
+          "arguments_bytes": 32,
+          "arguments_sha256": "0ff4531575e332293bb41357d9c8f867fdae11281dfaeffca225663fc167e422",
+          "call_id": "chatcmpl-tool-8757311c0b06831d",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        }
+      },
+      {
+        "sequence": 7,
+        "ts_ms": 1793037165220,
+        "payload": {
+          "call_id": "chatcmpl-tool-8757311c0b06831d",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 506,
+          "result_sha256": "452d92a4539ef31dc3ae16beb6e9b90c6ca8fc699b6e422a8f66b1f2abddbdf9"
+        }
+      },
+      {
+        "sequence": 9,
+        "ts_ms": 1793037166312,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 10,
+        "ts_ms": 1793037166318,
+        "payload": {
+          "arguments_bytes": 16,
+          "arguments_sha256": "4d94e6687ad87d0a5d267174b492241b3a1dbca91b5602a745ecf138dcf3697e",
+          "call_id": "chatcmpl-tool-97575fda3d67c634",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        }
+      },
+      {
+        "sequence": 11,
+        "ts_ms": 1793037166519,
+        "payload": {
+          "call_id": "chatcmpl-tool-97575fda3d67c634",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 321,
+          "result_sha256": "e8ac0c7d85f351953eea74f164ef0b016aea18458d5350fe2c76c6411f2f48ec"
+        }
+      },
+      {
+        "sequence": 12,
+        "ts_ms": 1793037167606,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 13,
+        "ts_ms": 1793037167610,
+        "payload": {
+          "arguments_bytes": 43,
+          "arguments_sha256": "d1051f32d2393e10d424cf26879a1df64a460a476659d6791efc14302331e348",
+          "call_id": "chatcmpl-tool-abef95b403f18da7",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        }
+      },
+      {
+        "sequence": 14,
+        "ts_ms": 1793037167780,
+        "payload": {
+          "call_id": "chatcmpl-tool-abef95b403f18da7",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 706,
+          "result_sha256": "48588ce48a69585eeefb4edb103d29e32d27a5af198f619d5f0100ffde2d2594"
+        }
+      },
+      {
+        "sequence": 19,
+        "ts_ms": 1793037173082,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 20,
+        "ts_ms": 1793037173091,
+        "payload": {
+          "arguments_bytes": 33,
+          "arguments_sha256": "68a4ed91cb317e12eb816576038c00760b80ad20dc450def814d84622fa950dd",
+          "call_id": "chatcmpl-tool-835bd2f1a06eb736",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        }
+      },
+      {
+        "sequence": 21,
+        "ts_ms": 1793037173312,
+        "payload": {
+          "call_id": "chatcmpl-tool-835bd2f1a06eb736",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 1130,
+          "result_sha256": "680af7cdd735543270782c316444609df7ba9ebfb48bd95d0fa6446815ed753a"
+        }
+      },
+      {
+        "sequence": 23,
+        "ts_ms": 1793037177357,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 24,
+        "ts_ms": 1793037177363,
+        "payload": {
+          "arguments_bytes": 38,
+          "arguments_sha256": "e31954b220f4eb1967cd72abd075f70f6fda528085b539f8f3c3be8e99f09181",
+          "call_id": "chatcmpl-tool-baa0f5b6a4160409",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        }
+      },
+      {
+        "sequence": 25,
+        "ts_ms": 1793037177551,
+        "payload": {
+          "call_id": "chatcmpl-tool-baa0f5b6a4160409",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 471,
+          "result_sha256": "66457888d54b58895d0aa3fa8a3b3d678413101585fda174762c2b1997000de9"
+        }
+      },
+      {
+        "sequence": 30,
+        "ts_ms": 1793037180987,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 18860,
+        "output_tokens": 110,
+        "reasoning_tokens": 401
+      }
+    }
+  }
+]

@@ -1,0 +1,205 @@
+{
+  "schema": "axocoatl.recovery.sample-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T17:52:47.977967+00:00",
+  "sample": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd",
+  "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd/repo",
+  "run_id": "run-9c0e8bee-6cc5-4a91-89fb-4cc7c952b504",
+  "base_commit": "eefa478758a1bc4f023eee0bfc9b71b5f720cb05",
+  "task": "Fix the bug: paging skips the last item",
+  "result": "ACCEPTED",
+  "actual_fix": "Changed only src/paging.js: Math.floor(items.length / size) to Math.ceil(items.length / size), retaining the final partial page.",
+  "original_tests_and_manifests_unchanged": true,
+  "unchanged_file_hashes": {
+    ".gitignore": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+    "README.md": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+    "package.json": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+    "test/paging.test.js": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb"
+  },
+  "changed_file": {
+    "path": "src/paging.js",
+    "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+    "final_sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99"
+  },
+  "host_test": {
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "node": "v22.23.2",
+    "invocations": 1,
+    "exit_code": 0,
+    "passed": 3,
+    "failed": 0,
+    "stdout_sha256": "0611e67a2dbd0b9bea24803c73f32dfa40429d0d7211d80e8cd8a8e34eb61242"
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.572248ms)\n\u2714 keeps the last item on a page of its own (0.07525ms)\n\u2714 refuses a page size below one (0.165666ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 30.103345\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoints near-ai/fp4 (Near AI), coreweave/fp4 (CoreWeave), deepinfra/bf16 (DeepInfra)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0
+  },
+  "review_detail": {
+    "approved_round_number": 2,
+    "completed_review_results_in_outcome": 1,
+    "first_reviewer_generation": "failed and preserved",
+    "second_reviewer_generation": "accepted",
+    "note": "Receipt review.rounds counts the one completed review result; the outcome identifies its round as2. Do not describe this as approval on the first attempt."
+  },
+  "usage": {
+    "input_tokens": 100216,
+    "output_tokens": 558,
+    "cost_microunits": 46793,
+    "cost_usd": 0.046793,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "usage_note": "100216 input +558 output tokens and $0.046793 are the total run-reported accounting across Claude Code and OpenRouter, including retained attempts; this is not an assertion that OpenRouter alone charged that amount.",
+  "negative_evidence": {
+    "provider_retries": 8,
+    "http429_retries": 4,
+    "reasoning_only_retries": 4,
+    "reasoning_only_output_tokens": [
+      36,
+      35,
+      35,
+      170
+    ],
+    "tool_errors": 2,
+    "tool_error_names": [
+      "print_tree",
+      "print_tree"
+    ],
+    "tool_error_limit": "Public record retains result hashes and sizes, not error bodies; no additional cause inferred."
+  },
+  "network": {
+    "allowed_connections": 3,
+    "events": 23,
+    "refused_connections": 0,
+    "route_requests": 4,
+    "routes": [
+      [
+        "api.anthropic.com",
+        4
+      ]
+    ]
+  },
+  "verification": [
+    {
+      "name": "receipt-verify",
+      "argv": [
+        "/usr/local/bin/axocoatl",
+        "receipt",
+        "verify",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd/receipt.json",
+        "--key",
+        "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+        "--repo",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd/repo",
+        "--record",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd/record.jsonl",
+        "--require-pass",
+        "--json"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "record-verify",
+      "argv": [
+        "/usr/local/bin/axocoatl",
+        "record",
+        "verify",
+        "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-054e41410fc74df1acf5df9484d90dcd/record.jsonl"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "activation_summary": [
+    {
+      "role": "writer",
+      "generation": 1,
+      "state": "accepted",
+      "failure_reference": null,
+      "currently_accepted": true,
+      "counts": {
+        "reasoning_summary": 7,
+        "text": 1,
+        "provider_response": 1
+      }
+    },
+    {
+      "role": "reviewer",
+      "generation": 1,
+      "state": "failed",
+      "failure_reference": "content-c692999a87c2c5e7dee9a286b6b920129dc5a4be52dbfca10d0c7f51bd0c89d5",
+      "currently_accepted": false,
+      "counts": {
+        "provider_retry": 4,
+        "reasoning_summary": 5,
+        "provider_response": 2,
+        "tool_proposed": 2,
+        "tool_result": 2
+      }
+    },
+    {
+      "role": "reviewer",
+      "generation": 2,
+      "state": "accepted",
+      "failure_reference": null,
+      "currently_accepted": true,
+      "counts": {
+        "reasoning_summary": 15,
+        "provider_response": 7,
+        "tool_proposed": 6,
+        "tool_result": 6,
+        "provider_retry": 4,
+        "text": 3
+      }
+    }
+  ],
+  "evidence_hashes": {
+    "receipt.json": "444f5bd1e3bb8ab12a762de8a78e936db9188e09f2a5559765510b82254b6f81",
+    "record.jsonl": "030e25a4817980018578d1c8f558a590745142e2b62a74e54db69f953ed4dbdf",
+    "patch.diff": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+    "negative-evidence.json": "1aacc3fefd92a51799c48dd73278d5f52ea9e781aa0cc7884c149288b43f5957"
+  },
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "scope": "Independent audit of this completed first-run artifact only; not formal clean-install or whole-provider-path completion."
+}

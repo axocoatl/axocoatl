@@ -1,0 +1,129 @@
+[
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/receipt.json",
+      "--key",
+      "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+      "--repo",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+    "start": "2026-10-26T18:04:35.136416+00:00",
+    "end": "2026-10-26T18:04:35.144379+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "6a17cc18b0a4565223fc5b03eacaa3c5cae3d3239fac8f28f643699793fd977d",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+    "start": "2026-10-26T18:04:35.144531+00:00",
+    "end": "2026-10-26T18:04:35.152099+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "5e23372a832ff9dd85473319c75b6186a9611d938525b1d93b8c85f7072d26f9",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answer-markup",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+    "start": "2026-10-26T18:04:35.152272+00:00",
+    "end": "2026-10-26T18:04:35.178569+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-base",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "--repo-head",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+    "start": "2026-10-26T18:04:35.178752+00:00",
+    "end": "2026-10-26T18:04:35.206031+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "aae70fa5968c77c1b1f232ca4f66b346e25491fe248b3d9c12d971b5ce59956c",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+    "start": "2026-10-26T18:04:35.235328+00:00",
+    "end": "2026-10-26T18:04:35.241902+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "host-venv",
+    "argv": [
+      "/opt/homebrew/bin/uv",
+      "venv",
+      "--offline",
+      "--python",
+      "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+    "start": "2026-10-26T18:04:35.242085+00:00",
+    "end": "2026-10-26T18:04:35.315270+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "21e84b0e433f85f5af0e9679a1816bcad361ebe6db5fe95a213d26ffcbf3be58"
+  },
+  {
+    "name": "host-setup",
+    "argv": [
+      "/opt/homebrew/bin/uv",
+      "pip",
+      "install",
+      "--python",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv/bin/python",
+      "-e",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo[test]"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+    "start": "2026-10-26T18:04:35.315528+00:00",
+    "end": "2026-10-26T18:04:35.893539+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "b8700946c94907e60af748df1847c0cd9e62177d3c7f9ec68e0c75c5ce128256"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv/bin/pytest"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+    "start": "2026-10-26T18:04:35.893762+00:00",
+    "end": "2026-10-26T18:04:36.347181+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "49e81e5937bf64bd3ba22a7485f37fca0a93e8e1711b761e540390e0e428c307",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

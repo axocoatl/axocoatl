@@ -1,0 +1,38 @@
+[
+  {
+    "name": "receipt-verify",
+    "command": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/receipt.json",
+      "--keys",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/preparation/receipt-public-key.txt",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/pr-repo-b222302f-DyQRZO/repo",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/record.jsonl",
+      "--json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "record-verify",
+    "command": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/record.jsonl"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "accepted-output-markup",
+    "command": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/keep-pr/record.jsonl"
+    ],
+    "exit_code": 0
+  }
+]

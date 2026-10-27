@@ -1,0 +1,20 @@
+{
+  "scope": "Supplemental Claude runtime fixtures using existing configuration and Claude subscription authentication",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "operator": "Codex assistant through tool-owned PTY",
+  "human_operator": false,
+  "authentication": "Existing claude-code-oauth secret; prior browser authentication completed separately by the user",
+  "clean_install": false,
+  "fresh_authentication": false,
+  "replaces_formal_C1_claude_code": false,
+  "formal_failure_preserved": true,
+  "required_paths_satisfied": [],
+  "onboarding": false,
+  "onboarding_smoke": false,
+  "configuration_mutated": false,
+  "formal_gate_coordination": "Root holds OpenRouter before configuration writes or inference until this script settles",
+  "fixture_acceptance": "Independent artifact assessment is separate",
+  "linux": "Outside this script; owned by another verifier"
+}

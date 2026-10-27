@@ -1,0 +1,650 @@
+[
+  {
+    "role": "writer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "text": 55,
+      "provider_response": 10,
+      "tool_proposed": 9,
+      "tool_result": 9
+    },
+    "events": [
+      {
+        "sequence": 5,
+        "ts_ms": 1793023947031,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 6,
+        "ts_ms": 1793023947039,
+        "payload": {
+          "arguments_bytes": 11,
+          "arguments_sha256": "518341a7f82a294570cc3ba8ae0eec8f157d80c390e56cad16702940266a4eba",
+          "call_id": "01a1788e2c9c1be57bca4c5e5a831504",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        }
+      },
+      {
+        "sequence": 7,
+        "ts_ms": 1793023947214,
+        "payload": {
+          "call_id": "01a1788e2c9c1be57bca4c5e5a831504",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 635,
+          "result_sha256": "7261221401009fc799dd277ac4f5a1956f7f025e599c1ec27e12a499d61a579c"
+        }
+      },
+      {
+        "sequence": 10,
+        "ts_ms": 1793023949570,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 11,
+        "ts_ms": 1793023949577,
+        "payload": {
+          "arguments_bytes": 14,
+          "arguments_sha256": "20bd8eec78959f58649160b38dceec3f97ab495f346c2a2b753087f52f72219a",
+          "call_id": "01a1788e39213205d6ad19960d6af928",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        }
+      },
+      {
+        "sequence": 12,
+        "ts_ms": 1793023949744,
+        "payload": {
+          "call_id": "01a1788e39213205d6ad19960d6af928",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 256,
+          "result_sha256": "7ab018d16159add0d3f84e749cfad3c6c23ff530c0e619856c6e0a1fda8dd53f"
+        }
+      },
+      {
+        "sequence": 13,
+        "ts_ms": 1793023952216,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 14,
+        "ts_ms": 1793023952223,
+        "payload": {
+          "arguments_bytes": 26,
+          "arguments_sha256": "6247f4d98036a331a59f02bcce345cb3012f08b47651386385b344b0d8035596",
+          "call_id": "01a1788e4300a0723f48a4bdd0e20405",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        }
+      },
+      {
+        "sequence": 15,
+        "ts_ms": 1793023952392,
+        "payload": {
+          "call_id": "01a1788e4300a0723f48a4bdd0e20405",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 727,
+          "result_sha256": "b1288844844bc7583ec13e6ffff3feb622c977996dd9b4ecf165afe95dbcb91f"
+        }
+      },
+      {
+        "sequence": 18,
+        "ts_ms": 1793023954707,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 19,
+        "ts_ms": 1793023954715,
+        "payload": {
+          "arguments_bytes": 15,
+          "arguments_sha256": "5dca1b447070bab48acd45f2fef5f6bf1877bdba8251af5c61edf37f9769103d",
+          "call_id": "01a1788e4d03cccdb325df14dc4a9fd4",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        }
+      },
+      {
+        "sequence": 20,
+        "ts_ms": 1793023954889,
+        "payload": {
+          "call_id": "01a1788e4d03cccdb325df14dc4a9fd4",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 261,
+          "result_sha256": "d3935b152f0fed73e249fec2468135783d1a071e4e1ced61253cc4e544ec7877"
+        }
+      },
+      {
+        "sequence": 21,
+        "ts_ms": 1793023957068,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 22,
+        "ts_ms": 1793023957075,
+        "payload": {
+          "arguments_bytes": 32,
+          "arguments_sha256": "ce286ebe2965ff0f7587a320d9f0c9f238b1f2699cb0ed24f48798176cdf23ae",
+          "call_id": "01a1788e55b884381a38d3a93485799f",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        }
+      },
+      {
+        "sequence": 23,
+        "ts_ms": 1793023957223,
+        "payload": {
+          "call_id": "01a1788e55b884381a38d3a93485799f",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 871,
+          "result_sha256": "c33680605281f2cf9326db2f4b91f9924dc26af369959e0f7063020a565f8b36"
+        }
+      },
+      {
+        "sequence": 37,
+        "ts_ms": 1793023972058,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 38,
+        "ts_ms": 1793023972064,
+        "payload": {
+          "arguments_bytes": 1293,
+          "arguments_sha256": "decc8c0a0172676721bbf80bed0eacbd75a09f0fb5623c30ecd6ff575cd275c6",
+          "call_id": "01a1788e6de96f13a03552805dbabbcb",
+          "kind": "tool_proposed",
+          "name": "edit_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        }
+      },
+      {
+        "sequence": 39,
+        "ts_ms": 1793023972320,
+        "payload": {
+          "call_id": "01a1788e6de96f13a03552805dbabbcb",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 65,
+          "result_sha256": "e48ada1ba4d85a0f94f2be7d745af622b558f61dd4e08a0d93f1a0769c81f6e7"
+        }
+      },
+      {
+        "sequence": 42,
+        "ts_ms": 1793023975401,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 43,
+        "ts_ms": 1793023975408,
+        "payload": {
+          "arguments_bytes": 105,
+          "arguments_sha256": "890fdaee8ffb2decd5c5e1c829f535fbc21e72403c0c49676a563c6e5b20c684",
+          "call_id": "01a1788e9ba3902829c9fbe8e32496a8",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 7
+        }
+      },
+      {
+        "sequence": 44,
+        "ts_ms": 1793023975662,
+        "payload": {
+          "call_id": "01a1788e9ba3902829c9fbe8e32496a8",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 521,
+          "result_sha256": "c6e1e1386d556fb8b189800c24ff50711f0c3a00f02f2032deabc3107c8f271f"
+        }
+      },
+      {
+        "sequence": 48,
+        "ts_ms": 1793023981294,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 49,
+        "ts_ms": 1793023981302,
+        "payload": {
+          "arguments_bytes": 406,
+          "arguments_sha256": "6f06041d0b7ea257e90906a65dab9f0fe32dd6b5f9c73974c20a91690a03790e",
+          "call_id": "01a1788ea9f617af10344637b37ffb93",
+          "kind": "tool_proposed",
+          "name": "bash",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 8
+        }
+      },
+      {
+        "sequence": 50,
+        "ts_ms": 1793023981499,
+        "payload": {
+          "call_id": "01a1788ea9f617af10344637b37ffb93",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "bash",
+          "result_bytes": 349,
+          "result_sha256": "47027c2b2de6b088d4d7a1c712c3775f94eec6227a678346382c7e777ea05637"
+        }
+      },
+      {
+        "sequence": 70,
+        "ts_ms": 1793023989506,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 71,
+        "ts_ms": 1793023989513,
+        "payload": {
+          "arguments_bytes": 26,
+          "arguments_sha256": "6247f4d98036a331a59f02bcce345cb3012f08b47651386385b344b0d8035596",
+          "call_id": "01a1788ed4a25740af1a0670fef05eaa",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 9
+        }
+      },
+      {
+        "sequence": 72,
+        "ts_ms": 1793023989682,
+        "payload": {
+          "call_id": "01a1788ed4a25740af1a0670fef05eaa",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 728,
+          "result_sha256": "38211525210f0a88c3f8732f9f57daa015b86155b4990e35e8567e55f0bdf6bd"
+        }
+      },
+      {
+        "sequence": 82,
+        "ts_ms": 1793023994011,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 7,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 35840,
+        "output_tokens": 1232,
+        "reasoning_tokens": null
+      }
+    }
+  },
+  {
+    "role": "reviewer",
+    "state": "accepted",
+    "failure": null,
+    "counts": {
+      "provider_retry": 1,
+      "reasoning_summary": 16,
+      "provider_response": 8,
+      "tool_proposed": 7,
+      "tool_result": 7,
+      "text": 2
+    },
+    "events": [
+      {
+        "sequence": 0,
+        "ts_ms": 1793023995661,
+        "payload": {
+          "kind": "provider_retry",
+          "reason": "HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+        }
+      },
+      {
+        "sequence": 3,
+        "ts_ms": 1793024001071,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 4,
+        "ts_ms": 1793024001077,
+        "payload": {
+          "arguments_bytes": 39,
+          "arguments_sha256": "5845b05709845943cc266b5825398d1e23cf73207193b8bbf69865f62e0e72e1",
+          "call_id": "call-7c6d6055-1dbe-4c25-8617-b78a3023d923",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 1
+        }
+      },
+      {
+        "sequence": 5,
+        "ts_ms": 1793024001276,
+        "payload": {
+          "call_id": "call-7c6d6055-1dbe-4c25-8617-b78a3023d923",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 727,
+          "result_sha256": "387815535570dcdb3077598a12b446e574c76222d0e06dac9f748ed8a2d08c5a"
+        }
+      },
+      {
+        "sequence": 10,
+        "ts_ms": 1793024008843,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 11,
+        "ts_ms": 1793024008848,
+        "payload": {
+          "arguments_bytes": 51,
+          "arguments_sha256": "371f36bb82f73c9fc3004269deae0e2bea2df3360ff1ccdaa81cada971ff42e2",
+          "call_id": "call-bc6fa07b-04fc-4652-aaad-ada7a49417e9",
+          "kind": "tool_proposed",
+          "name": "search",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 2
+        }
+      },
+      {
+        "sequence": 12,
+        "ts_ms": 1793024008852,
+        "payload": {
+          "call_id": "call-bc6fa07b-04fc-4652-aaad-ada7a49417e9",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        }
+      },
+      {
+        "sequence": 14,
+        "ts_ms": 1793024010798,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 15,
+        "ts_ms": 1793024010804,
+        "payload": {
+          "arguments_bytes": 25,
+          "arguments_sha256": "6a36d9af8cbf9821a84f7619ebb56df6be2da378518f598271d010c2364fcc2e",
+          "call_id": "call-a11d9c44-f48e-4c60-8639-82d9e95092a3",
+          "kind": "tool_proposed",
+          "name": "glob",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 3
+        }
+      },
+      {
+        "sequence": 16,
+        "ts_ms": 1793024010995,
+        "payload": {
+          "call_id": "call-a11d9c44-f48e-4c60-8639-82d9e95092a3",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "glob",
+          "result_bytes": 104,
+          "result_sha256": "95f4ce11e7f054d6a1b262ffa1af9b177fab5859968770039eb8350c56248baf"
+        }
+      },
+      {
+        "sequence": 18,
+        "ts_ms": 1793024013493,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 19,
+        "ts_ms": 1793024013499,
+        "payload": {
+          "arguments_bytes": 33,
+          "arguments_sha256": "b1b0da47554c936aa486de6c30bbdea6b1137856fdfd02ed4dfc446eece35da0",
+          "call_id": "call-1d1b0b4c-e487-414f-9893-83ad048d8102",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 4
+        }
+      },
+      {
+        "sequence": 20,
+        "ts_ms": 1793024013706,
+        "payload": {
+          "call_id": "call-1d1b0b4c-e487-414f-9893-83ad048d8102",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 1135,
+          "result_sha256": "87c3a882822295a3f49d737e92995cbf0523ac86218a1e63bf2fce7024274d93"
+        }
+      },
+      {
+        "sequence": 22,
+        "ts_ms": 1793024015850,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 23,
+        "ts_ms": 1793024015854,
+        "payload": {
+          "arguments_bytes": 28,
+          "arguments_sha256": "f95108ad323354390da8962e20fef3b9328581be20059e937231e3dffd4373aa",
+          "call_id": "call-320e7555-7f7c-457b-b9d4-a54fa95dd96e",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 5
+        }
+      },
+      {
+        "sequence": 24,
+        "ts_ms": 1793024016040,
+        "payload": {
+          "call_id": "call-320e7555-7f7c-457b-b9d4-a54fa95dd96e",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 91,
+          "result_sha256": "7a01ee0639a7a34b4782a6faee772f14094d1d9e20ae77f361bd96bd6254c197"
+        }
+      },
+      {
+        "sequence": 26,
+        "ts_ms": 1793024026709,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 27,
+        "ts_ms": 1793024026716,
+        "payload": {
+          "arguments_bytes": 15,
+          "arguments_sha256": "5dca1b447070bab48acd45f2fef5f6bf1877bdba8251af5c61edf37f9769103d",
+          "call_id": "call-81b05eba-5cf7-40d5-8b9b-44af53844717",
+          "kind": "tool_proposed",
+          "name": "list_dir",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 6
+        }
+      },
+      {
+        "sequence": 28,
+        "ts_ms": 1793024026903,
+        "payload": {
+          "call_id": "call-81b05eba-5cf7-40d5-8b9b-44af53844717",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "list_dir",
+          "result_bytes": 327,
+          "result_sha256": "4aeba5af22c4427956522799ca8e4d3f803aae3b5781f418eaaedf8d56c7b57a"
+        }
+      },
+      {
+        "sequence": 29,
+        "ts_ms": 1793024032661,
+        "payload": {
+          "finish_reason": "tool_use",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 1
+        }
+      },
+      {
+        "sequence": 30,
+        "ts_ms": 1793024032667,
+        "payload": {
+          "arguments_bytes": 45,
+          "arguments_sha256": "529f4a25f1c3c1df71d021f4be6e06a0d59a92b76b0b25bf1798e59fc659cd9e",
+          "call_id": "call-b2a2cb3d-2336-470a-b67e-bfa24c03f20c",
+          "kind": "tool_proposed",
+          "name": "read_file",
+          "provider_call_count": 1,
+          "provider_call_index": 0,
+          "provider_response_group": 7
+        }
+      },
+      {
+        "sequence": 31,
+        "ts_ms": 1793024032862,
+        "payload": {
+          "call_id": "call-b2a2cb3d-2336-470a-b67e-bfa24c03f20c",
+          "is_error": false,
+          "kind": "tool_result",
+          "name": "read_file",
+          "result_bytes": 870,
+          "result_sha256": "86397b35ac8a80826cc23fb2fbf853161b3460d116943886b6102f593d644cdd"
+        }
+      },
+      {
+        "sequence": 40,
+        "ts_ms": 1793024041300,
+        "payload": {
+          "finish_reason": "stop",
+          "kind": "provider_response",
+          "offered_tools": 4,
+          "tool_calls": 0
+        }
+      }
+    ],
+    "usage": {
+      "kind": "measured",
+      "usage": {
+        "input_tokens": 21723,
+        "output_tokens": 69,
+        "reasoning_tokens": 869
+      }
+    }
+  }
+]

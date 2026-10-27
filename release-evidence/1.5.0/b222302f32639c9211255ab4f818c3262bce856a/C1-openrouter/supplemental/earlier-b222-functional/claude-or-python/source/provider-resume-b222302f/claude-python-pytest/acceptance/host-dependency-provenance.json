@@ -1,0 +1,7 @@
+{
+  "existing_python_venv": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv",
+  "new_install_or_download": false,
+  "module_selection_verified": true,
+  "pythonpath": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-python-pytest/acceptance/host-check",
+  "pytest_plugin_autoload": false
+}

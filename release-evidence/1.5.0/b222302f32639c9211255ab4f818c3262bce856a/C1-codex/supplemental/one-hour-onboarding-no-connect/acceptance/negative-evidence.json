@@ -1,0 +1,12 @@
+{
+  "tool_errors": [],
+  "provider_retries": [],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 318
+  },
+  "failed_activations": []
+}
