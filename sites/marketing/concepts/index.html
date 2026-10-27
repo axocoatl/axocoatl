@@ -6,7 +6,7 @@
   <meta name="description" content="How Axocoatl runs coding agents on your own machine: the sandbox for Session tools, write scopes the host checks, required checks and review, budgets, the record it keeps, and a model per Agent.">
   <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/concepts">
   <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/concepts"><meta property="og:title" content="How Axocoatl works"><meta property="og:description" content="Isolation built in, a complete record of every step, and model choice per Agent: what the host enforces, and where it stops."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="How Axocoatl works"><meta name="twitter:description" content="Isolation built in, a complete record of every step, and model choice per Agent: what the host enforces, and where it stops."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify.">
-  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261027-clarity"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261027-dashboard"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
   <script type="module" src="/components/ax-site-nav.js?v=20261013-run"></script><script type="module" src="/components/ax-footer.js?v=20261027-clarity"></script><script type="module" src="/components/ax-theme-toggle.js"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
 </head>
 <body>
@@ -23,14 +23,12 @@
 
     <section class="container section section-rule" id="any-model">
       <div class="split reverse">
-        <div class="code-pane"><div class="code-pane-head">one team · two models</div><pre><code><span class="code-key">lead</span>       ollama · <span class="code-string">qwen3-coder:30b</span>
-  writes the change
-       ↓
-<span class="code-key">checks</span>     host · exact final files
-       ↓
-<span class="code-key">reviewer</span>   ollama · <span class="code-string">gpt-oss:20b</span>
-  read-only · fresh conversation
-  <span class="code-comment">or any eligible OpenRouter model</span></code></pre></div>
+        <!-- optional-demo: assets/demo/dashboard-1.5/outcome.jpg assets/demo/dashboard-1.5/provenance.json assets/demo/dashboard-1.5/capture.json assets/demo/dashboard-1.5/verify-media.mjs -->
+      <figure class="dashboard-shot ">
+        <a class="dashboard-image-link" href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener" aria-label="Open full-size screenshot: The saved fix outcome naming the writer and required reviewer"><img src="/assets/demo/dashboard-1.5/outcome.jpg" alt="The saved fix outcome naming the writer and required reviewer" loading="lazy" decoding="async"></a>
+        <figcaption>A local Qwen3-Coder writer and GPT-OSS reviewer in this completed fix run. Actual roles and model identities belong to the run. <a href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener">View full size ↗</a></figcaption>
+      </figure>
+      <!-- /optional-demo -->
         <div class="stack"><span class="eyebrow">Model choice, per Agent</span><h2>Pick the model for the job.</h2><p>Each Agent template names its own provider and model. Native Sessions, with approved budgets, run supported local models through Ollama and eligible hosted models through OpenRouter; Anthropic, OpenAI, Gemini and Mistral adapters remain on the compatibility path. A writer and its required reviewer can therefore use different models.</p>
           <!-- measured: axocoatl-1.1.0 2026-10-01 -->
           <p>In a pre-registered benchmark (6 Python tasks, 25 withheld tests, local qwen3-coder 30B writer, one run per task, temperature 0), one Axocoatl Agent passed 17 of 25 tests. With a Required review by a stronger local model, gpt-oss 120B, the same writer passed 19 of 25 at 2.6× the tokens; the reviewer reported 15 defects and 14 were real. More looks by the same model added nothing: a fresh same-model reviewer approved every change, including three with real defects.</p>
@@ -57,16 +55,12 @@
 
     <section class="container section section-rule" id="durable-turn">
       <div class="split reverse">
-        <div class="code-pane"><div class="code-pane-head">Session turn · durable lifecycle</div><pre><code><span class="code-key">accepted</span>
-  request + context snapshot recorded
-       ↓
-<span class="code-key">running</span>
-  agent output + bounded tool evidence
-       ↓
-<span class="code-key">final state</span>
-  complete · failed · cancelled · interrupted
-       ↓
-<span class="code-key">History + Git review</span></code></pre></div>
+        <!-- optional-demo: assets/demo/dashboard-1.5/conversation.jpg assets/demo/dashboard-1.5/provenance.json assets/demo/dashboard-1.5/capture.json assets/demo/dashboard-1.5/verify-media.mjs -->
+      <figure class="dashboard-shot ">
+        <a class="dashboard-image-link" href="/assets/demo/dashboard-1.5/conversation.jpg" target="_blank" rel="noopener" aria-label="Open full-size screenshot: The retained conversation for a completed fix run"><img src="/assets/demo/dashboard-1.5/conversation.jpg" alt="The retained conversation for a completed fix run" loading="lazy" decoding="async"></a>
+        <figcaption>A completed run remains available in its Session. This capture shows retained work, not a replay of its execution. <a href="/assets/demo/dashboard-1.5/conversation.jpg" target="_blank" rel="noopener">View full size ↗</a></figcaption>
+      </figure>
+      <!-- /optional-demo -->
         <div class="stack"><span class="eyebrow">A normal turn</span><h2>Accept first. Execute second.</h2><p>Attach a file for <strong>Once</strong> or keep it selected for the <strong>Session</strong>. Axocoatl records the request and immutable context snapshot before the agent begins, so the visible conversation does not depend on a streaming connection staying open.</p><p><strong>Stop</strong> addresses the exact active turn. Completed, failed, cancelled, and interrupted work remains reachable in History. Review the result against the repository and inspect Last turn through Git.</p></div>
       </div>
       <ax-product-film
@@ -98,7 +92,7 @@
     </section>
 
     <section class="container section section-rule" id="execution-shapes">
-      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>New configurations start with a lead and two read-only helpers. One Agent on its own is the simplest shape; it works through the repository inside the Session sandbox. <a href="https://docs.axocoatl.ai/workbench/session/">The Session workbench →</a></p></div>
+      <div class="section-head"><span class="eyebrow">Execution shapes</span><h2>Use the structure the work needs.</h2><p>A new Session starts with one Agent. Read-only helpers are opt-in; one Agent works through the repository inside the Session sandbox. <a href="https://docs.axocoatl.ai/workbench/session/">The Session workbench →</a></p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Default</span><h3>Lead and helpers</h3><p>The lead edits files and delegates read-only questions or a review to helpers. Each helper starts in an empty conversation, its limits are reserved from the lead's grant, and its answer returns to the lead. <a href="https://docs.axocoatl.ai/understand/coordination/#default-team">Read about the default team →</a></p></article>
         <article class="card"><span class="card-kicker">Ordered team</span><h3>Dependency order</h3><p>Exact named dependencies activate each configured role. Agents receive only the handoffs that caused them to run, and the causal graph stays with the Session turn.</p></article>
@@ -109,16 +103,12 @@
 
     <section class="container section section-rule" id="checks-review">
       <div class="split reverse">
-        <div class="code-pane"><div class="code-pane-head">after the Agents finish</div><pre><code><span class="code-key">required checks</span>
-  capture · run check · capture
-       ↓
-<span class="code-key">required review</span>
-  fresh read-only reviewer
-  VERDICT: CHANGES → lead · next round
-  VERDICT: APPROVE ↓
-       ↓
-<span class="code-key">complete</span> on the exact final tree
-  <span class="code-comment">otherwise: needs attention</span></code></pre></div>
+        <!-- optional-demo: assets/demo/dashboard-1.5/outcome.jpg assets/demo/dashboard-1.5/provenance.json assets/demo/dashboard-1.5/capture.json assets/demo/dashboard-1.5/verify-media.mjs -->
+      <figure class="dashboard-shot ">
+        <a class="dashboard-image-link" href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener" aria-label="Open full-size screenshot: The recorded check and required review in the Run outcome"><img src="/assets/demo/dashboard-1.5/outcome.jpg" alt="The recorded check and required review in the Run outcome" loading="lazy" decoding="async"></a>
+        <figcaption>Checks and required review are visible in the completed fix run. Interactive teams require them only when configured. <a href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener">View full size ↗</a></figcaption>
+      </figure>
+      <!-- /optional-demo -->
         <div class="stack"><span class="eyebrow">A complete record</span><h2>The host decides when a turn is done.</h2><p>Required checks are commands Axocoatl runs in the Session's repository after the Agents finish, each between two captures of the repository. A required review runs a read-only reviewer in a fresh conversation, for 1 to 3 rounds; requested changes go back to the lead. The turn completes only when every check passes and the reviewer approves the exact final tree. Both are off until you add them in Team &amp; budget.</p><p>Each Agent's <code>writes</code> list names the paths it may change. Read-only helpers get no file-writing tools, and their shell runs under Linux Landlock, which refuses writing, creating, renaming or deleting repository files and opening TCP connections, where Linux 6.7 or later allows it; otherwise they get no shell. A path-scoped writer's file tools refuse other paths, and every change it made is checked after it finishes. For a writer with a shell, that check is review evidence, not confinement.</p><p>Every Agent runs under a grant with the limits you approved. Each provider and tool call is reserved against it before it runs; once the provider reports what a call used, only that stays charged. Grants and budgets carry across restarts. The Session durably records every model call, tool call, budget decision and check.</p></div>
       </div>
     </section>
@@ -182,14 +172,7 @@
 
     <section class="container section section-rule" id="mcp-approval">
       <div class="split reverse">
-        <div class="code-pane"><div class="code-pane-head">Session Agent · MCP call</div><pre><code><span class="code-key">discover</span> configured MCP tool
-       ↓
-<span class="code-key">request approval</span>
-  allow once · deny
-       ↓
-<span class="code-key">execute</span> approved call
-       ↓
-<span class="code-key">record</span> result on the Turn</code></pre></div>
+        <ol class="step-list"><li><div><h3>Discover</h3><p>The Agent finds a configured MCP tool.</p></div></li><li><div><h3>Approve</h3><p>A new permission waits for Allow once or Deny.</p></div></li><li><div><h3>Record</h3><p>The allowed call and its result stay with the Turn.</p></div></li></ol>
         <div class="stack"><span class="eyebrow">External tools</span><h2>New MCP permissions wait for approval.</h2><p>A compatibility Session Agent can discover a configured MCP tool, but discovery is not permission. A call with no matching saved decision pauses the exact Session Turn before dispatch; a saved allow or deny decision is applied without prompting again.</p><p>After an allowed call, the returned value, bounded tool evidence, and final answer remain together on the durable Turn. This film uses a deterministic local MCP server and compatibility execution. Native Session turns do not currently expose this configured MCP registry.</p></div>
       </div>
       <ax-product-film

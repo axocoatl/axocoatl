@@ -6,7 +6,12 @@ real repositories. One Rust executable runs a daemon that executes the Agents an
 browser workbench. Open a repository and work in a
 durable, folder-anchored Session: conversation stays at the center while Files,
 Source Control, Preview, Terminal, History, Agent activity, and Settings open
-around it.
+around it. Start with the dashboard guide at
+https://docs.axocoatl.ai/start/first-session/. The marketing site shows actual
+1.5 dashboard screenshots and a navigation recording of a completed run, not a
+live model execution. Headless runs remain a separate terminal workflow; opening
+their Session in the dashboard exposes Run outcome, checks, review and a receipt
+when one was produced. Ordinary workbench turns do not produce signed receipts.
 
 - Isolation built in: every Session's repository tools (file, shell, terminal) run
   in a rootless Podman container (E2B Cloud is an explicit remote option on the

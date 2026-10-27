@@ -204,6 +204,13 @@ these steps.
   - `axocoatl service uninstall: not installed, its unit removed`
 <!-- release-gate:required-steps:end -->
 
+The `C1-claude-code` step named “the home page's fix-claude-code command passed
+on node-deps and python-pytest” keeps its historical identity. The command is now
+copied from the home page's linked `/install` page; `hero-command-source.txt`
+records that location. The same two fixtures, receipt checks and PR verification
+still apply.
+
+
 Every run on a fixture or a real repository, the `--keep pr` run, and the
 workbench paths' Session turn (read from the Session's JSON export,
 `record-answers.mjs --export`) also check that no accepted output holds

@@ -1,0 +1,43 @@
+{
+  "schema": "axocoatl.docs-dashboard-media/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "product_version": "1.5.0",
+  "captured_at": "2026-10-26",
+  "capture": "Actual Safari workbench operated by Codex through native computer use, not a mock or synthetic screenshot.",
+  "task": "Fix the paging bug in src/paginate.js.",
+  "configuration": {
+    "agent_count": 1,
+    "model": "openrouter:openai/gpt-oss-120b",
+    "helpers": 0,
+    "required_host_checks": false,
+    "required_review": false
+  },
+  "outcome": "Actual paging fix accepted against the original tests.",
+  "scope": "Shows Conversation and a changed-file diff. Does not demonstrate helpers, required host review, or headless signed receipts.",
+  "operator_evidence": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-workbench-webkit/operator.json",
+  "acceptance_evidence": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-workbench-webkit/acceptance/assessment.json",
+  "files": [
+    {
+      "file": "conversation.jpg",
+      "source_path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-workbench-webkit/ui-observations/axocoatl-safari-final-session.png",
+      "bytes": 243762,
+      "sha256": "27c99a8ceb699f18c6272243ddbd0f1f1d8d3239e4f4081534cd486c6a294c3b",
+      "width": 1600,
+      "height": 1408,
+      "transformation": "none; original JPEG bytes, file extension corrected from .png",
+      "content_type": "image/jpeg"
+    },
+    {
+      "file": "diff.jpg",
+      "source_path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-workbench-webkit/ui-observations/axocoatl-safari-paging-diff.png",
+      "bytes": 287886,
+      "sha256": "e988ef6b6f9e5187d15a8aa9de74663520316a93ed6f3db0f4aad2f97f505144",
+      "width": 1600,
+      "height": 1408,
+      "transformation": "none; original JPEG bytes, file extension corrected from .png",
+      "content_type": "image/jpeg"
+    }
+  ],
+  "release_commit": "19e3c89ca7b4d02cd742bccd671f7274e68b95d7"
+}

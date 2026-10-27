@@ -210,3 +210,73 @@ gate_run_fixture node-deps "$4" "$3" readme-node-deps
     assert.equal(readFileSync(path.join(kept, 'changes.txt'), 'utf8'), '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('the actual Mac Claude path uses the linked install command and preserves its checks', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'axo-published-claude-'));
+  const gateDir = path.join(REPO, 'scripts/release-gate');
+  const source = readFileSync(path.join(gateDir, 'newuser-mac.sh'), 'utf8');
+  const actualPath = source.match(/^path_claude_code\(\) \{[\s\S]*?^\}/m)?.[0];
+  assert.ok(actualPath, 'exercise the actual provider path, not a copied extraction');
+  const command = 'axocoatl run fix-claude-code --task "Fix the verified bug." --record run.jsonl --receipt receipt.json';
+  const script = actualPath + '\n' + String.raw`
+set -u
+site=$1
+site_install_page=$site/install/index.html
+gate_commands_js=$2/published-commands.mjs
+GATE_ATTACH=$site/attachments
+GATE_TMP=$site/tmp
+work=$site/work
+task='synthetic refusal check'
+log() { printf '%s\n' "$*" >>"$site/calls.txt"; }
+path_begin() { log "begin|$*"; }
+path_end() { log 'end'; }
+install_once() { log 'install'; }
+signed_out_before() { log "signed-out|$*"; }
+onboard() { log "onboard|$*"; }
+signed_in_during_onboarding() { log "signed-in|$*"; }
+doctor_ready() { log "doctor|$*"; }
+ensure_daemon() { log 'daemon'; }
+gate_record() { log "record|$*"; }
+run_published_on() { log "run|$1|$2|$3|$4"; return "$FIXTURE_STATUS"; }
+summary() { log "summary|$1|$2|$3"; }
+keep_pr() { log "pr|$*"; }
+gate_fixture_repo() { log "fixture|$1"; }
+axocoatl() { log "cli|$*"; printf 'unchanged synthetic Sessions\n'; }
+gate_step() { log "step|$*"; }
+gate_check() { log "check|$*"; }
+path_claude_code
+`;
+  try {
+    for (const [name, homeHasCommand, installHasCommand, fixtureStatus] of [
+      ['dashboard home, linked terminal guide', false, true, 0],
+      ['fixture failure still fails the summary', false, true, 1],
+      ['a stale homepage command cannot fill a missing install command', true, false, 0],
+    ]) {
+      const page = path.join(dir, String(fixtureStatus) + '-' + String(installHasCommand));
+      for (const sub of ['install', 'attachments', 'tmp']) mkdirSync(path.join(page, sub), { recursive: true });
+      writeFileSync(path.join(page, 'index.html'), '<a href="/install">Install</a>' +
+        (homeHasCommand ? `<pre>${command}</pre>` : '<img src="dashboard.jpg" alt="Dashboard">'));
+      writeFileSync(path.join(page, 'install/index.html'), installHasCommand ? `<pre>${command}</pre>` : '<p>No Claude command</p>');
+      const result = spawnSync('/bin/bash', ['-c', script, 'published-claude', page, gateDir], {
+        encoding: 'utf8', env: { ...process.env, FIXTURE_STATUS: String(fixtureStatus) },
+      });
+      assert.equal(result.status, 0, `${name}: ${result.stdout} ${result.stderr}`);
+      const calls = readFileSync(path.join(page, 'calls.txt'), 'utf8');
+      assert.equal(readFileSync(path.join(page, 'attachments/hero-command-source.txt'), 'utf8'), 'install/index.html\n');
+      assert.ok(calls.includes('doctor|fix-claude-code\n'), name);
+      assert.ok(calls.includes('step|reviewer anthropic:opus is refused: exit 3 --expect 3 -- /bin/bash -c'), name);
+      assert.ok(calls.includes('check|the refused run left no Session'), name);
+      if (installHasCommand) {
+        assert.equal(readFileSync(path.join(page, 'attachments/hero-command.txt'), 'utf8'), command + '\n');
+        assert.ok(calls.includes(`run|${command}|hero|node-deps|python-pytest\n`), name);
+        assert.ok(calls.includes(`summary|the home page's fix-claude-code command passed on node-deps and python-pytest|${fixtureStatus}|install/index.html: ${command}\n`), name);
+        assert.ok(calls.includes(`pr|${command}\n`), name);
+      } else {
+        assert.ok(calls.includes('record|the home page shows the fix-claude-code command fail'), name);
+        assert.ok(calls.includes('not found on the linked install/index.html page'), name);
+        assert.ok(!calls.includes('run|') && !calls.includes('summary|') && !calls.includes('pr|'), name);
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

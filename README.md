@@ -12,6 +12,17 @@ One open-source Rust executable; no Axocoatl account or telemetry.
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+[![Axocoatl 1.5 dashboard showing the actual paging fix](sites/marketing/assets/demo/dashboard-1.5/changes.jpg)](https://axocoatl.ai/#verified-fix)
+
+Open a workspace, work through chat, and review the changes in the dashboard.
+Conversation, Files, Source Control, Preview and History stay with the same Session.
+[See the dashboard walkthrough](https://axocoatl.ai/#verified-fix) or
+[create your first Session](https://docs.axocoatl.ai/start/first-session/).
+The walkthrough shows a completed headless fix opened in the dashboard; its Run
+outcome includes the checks, required review and signed receipt.
+
+## Start with the dashboard
+
 In the first terminal:
 
 ```bash
@@ -21,7 +32,19 @@ axocoatl doctor
 axocoatl dev                   # leave this terminal running
 ```
 
-In a second terminal, from the repository you want to change:
+In a second terminal, run `axocoatl url` and open the sign-in link. Choose **Open
+workspace…**, select your repository, and create a Session. Review its environment,
+apply **Team and budget**, then ask for the change in chat. Use **Files → Source
+Control → Last turn** to review the result before committing.
+
+Ordinary Sessions use native Agents through Ollama or OpenRouter. A team can require
+checks and review; signed receipts belong to headless loadout runs. For the full UI
+journey, follow [Your first Session](https://docs.axocoatl.ai/start/first-session/).
+
+## Run a headless fix
+
+For a repeatable fix with required checks, review and a signed receipt, use the
+terminal. From the repository you want to change:
 
 ```bash
 cd ~/src/my-app
@@ -35,7 +58,7 @@ axocoatl receipt verify "$AXO_EVIDENCE/receipt.json" \
   --record "$AXO_EVIDENCE/run.axorecord.jsonl" --require-pass
 ```
 
-Follow [Your first verified fix](https://docs.axocoatl.ai/start/first-fix/) for the
+Follow [Run a fix from the terminal](https://docs.axocoatl.ai/start/first-fix/) for the
 Claude Code, Codex, local and OpenRouter setup choices and expected result. Evidence
 stays outside the repository; inspect the diff and commit deliberately.
 `--start none` lets onboarding return before doctor and dev. Without it, onboarding
@@ -69,25 +92,11 @@ writer. What each path needs and downloads is on
 requires `axocoatl run fix` with the local models onboarding sets up to pass end to end
 on a Mac on Apple silicon; its evidence names the models and the Mac's memory.
 
-An example of the summary `axocoatl run fix` prints on standard output (progress goes to
-standard error), here for a small Go repository with the paging bug above whose check is
-`go test ./...`, with `qwen3-coder:30b` writing and `gpt-oss:20b` reviewing. It shows
-the format, not a measurement.
-
-```text
-Verdict: pass (exit 0)
-Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
-Checks:
-  tests            passed, exit 0
-Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
-Notes:
-  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
-  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
-  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup none
-Usage: 72252 input + 3003 output tokens, $0.0000
-Network: 16 recorded events, 0 allowed and 0 refused connections, 0 route requests
-Record: run-289c0a31-ef02-42ac-b7a9-d21e8767ddae
-```
+Open the run's Session in the dashboard to inspect **Run outcome**: the verdict,
+checks, reviewer decision, usage, network record and signed receipt. **Download
+receipt** and **Download record** keep the evidence available for later verification.
+The [command reference](https://docs.axocoatl.ai/reference/run/) covers terminal output
+and automation flags.
 
 - **Claude Code or Codex as the writer, in one command.**
   `axocoatl run fix-claude-code --task "…"` (or `fix-codex`) runs the built-in `fix` with
@@ -105,9 +114,7 @@ Record: run-289c0a31-ef02-42ac-b7a9-d21e8767ddae
   own check, such as `npm test`, `pytest` or `go test ./...`, runs as it does for `fix`. To change the model, the budgets or the checks,
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
-<p align="center">
-  <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: run coding agents unattended. Agents write the code. Axocoatl writes the receipt." width="760">
-</p>
+
 
 ## What a run does
 

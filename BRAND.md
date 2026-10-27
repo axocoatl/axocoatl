@@ -83,6 +83,16 @@ concrete facts:
 The lead and its read-only helpers, the Session workbench and several Ways are how the
 product is used, not the category. The default is one Agent; helpers are opt-in.
 
+### Show the product through its dashboard
+
+Public product pages lead with authentic screenshots and recordings of the browser
+workbench. Show the request, changed files, checks, review and available receipt in
+the actual UI. Terminal commands belong in installation instructions and command
+references, not in a substitute product demo. Captures must name their real version
+and workflow; never turn a headless run into a claim that the dashboard launched it,
+or imply that an ordinary Session produces a signed receipt. A tour of saved work
+must be labelled as such rather than presented as live model execution.
+
 ### Claims come only from measured results
 
 A performance or quality claim needs a measured result behind it, stated with its

@@ -157,16 +157,22 @@ implementation:
   onboarding otherwise defaults to starting the foreground daemon itself.
 - Provider examples retain repository tools, introductory Agent examples do not
   refer to an undefined planner, and source builds include an installation step.
-- The homepage's interactive 1.5 excerpt is one accepted local fixture run,
-  `run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3`, from the signed `C1-local`
-  `readme-node-deps` evidence on candidate `b222302f`. It shows literal task, diff,
-  check/review, original-test and receipt-verification output. The Qwen3-Coder 30B
-  writer and GPT-OSS 20B reviewer used no helpers; two recovered reviewer tool
-  errors remain disclosed. This is a functional example, not a recording, a timing
-  comparison or evidence that the reviewer improves quality. The source hashes,
-  frozen public links and offline verification are in
-  `sites/marketing/assets/demo/verified-fix-1.5/provenance.json`; the excerpt
-  verifier checks them against the frozen signed inventory.
+- The homepage now shows actual 1.5 dashboard screenshots and a UI navigation
+  recording of the saved local fixture run
+  `run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3`. The installed capture binary matches
+  the frozen release binary. The request, changed file, host check, required review
+  and receipt belong to that same run. No model was rerun for capture; the recording
+  shows navigation of completed work, not execution time. It was launched from the
+  CLI, then opened in the dashboard. The Qwen3-Coder 30B writer and GPT-OSS 20B
+  reviewer used no helpers; two recovered reviewer tool errors remain disclosed.
+  Screenshot bytes, capture times, actual frame timings and media hashes are bound
+  by `sites/marketing/assets/demo/dashboard-1.5/provenance.json`. This is one
+  functional example, not comparative evidence of model quality.
+- The first-Session docs use the original signed 1.5 Safari workbench captures:
+  one native OpenRouter GPT-OSS 120B Agent, no helpers, required review or host-run
+  required checks. They are distinct from the local headless run on the homepage.
+  Captions do not present the Agent's test claim as a host-enforced check or add a
+  receipt to an ordinary Session.
 
 ## Not measured
 
@@ -179,10 +185,8 @@ quality or performance claims about them.
   built-ins' default writer models (`anthropic:sonnet`, `openai:gpt-6.1-sol`) and
   budgets are choices, not measurements.
 - External agents (Claude Code CLI, Codex CLI) run inside an Axocoatl Session.
-- The receipt the marketing home page shows (`axocoatl receipt show` of a passing
-  `fix-codex` run on a test repository, one network-policy line left out) is real output
-  of one run, shown for what a receipt holds. It is not a measurement of `fix-codex`, and
-  no page cites it as one.
+- The dashboard receipt shown on the marketing homepage belongs to the saved
+  local fix run above. It illustrates the UI and recorded facts, not model quality.
 - The e2e check (tester-army/e2e) as a required check.
 - Any reviewer or Agent through OpenRouter.
 - `gpt-oss:20b` as the reviewer of a `qwen3-coder:30b` writer, the pair the commands use and

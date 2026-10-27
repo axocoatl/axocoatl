@@ -1,93 +1,112 @@
 ---
 title: Axocoatl documentation
-description: Install Axocoatl, configure a writer and reviewer, run a first fix, and inspect its checks, files and signed receipt. Or work interactively in a repository Session.
+description: Set up Axocoatl, open the dashboard, work with an Agent in a repository Session, and review the changed files before committing.
 template: splash
 hero:
-  tagline: Set up a writer. Run a fix. Check the result.
+  tagline: Open your repository. Work with an Agent. Review the result.
   actions:
-    - text: Install Axocoatl
-      link: /start/install/
+    - text: Create your first Session
+      link: /start/first-session/
       icon: right-arrow
       variant: primary
-    - text: Run your first fix
-      link: /start/first-fix/
+    - text: Install Axocoatl
+      link: /start/install/
       icon: right-arrow
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components';
 
-Axocoatl runs coding agents against your repository. For a fix, choose Claude Code,
-Codex, a local Ollama model or a hosted model through OpenRouter. The host runs the
-repository's checks and a required review before deciding whether the fix passes.
-You inspect the changed files, the outcome and its signed receipt.
+Axocoatl's dashboard keeps your repository, conversation and Agent's work together.
+Ask for a change in a **Session**, follow the tool calls, then inspect the actual
+files and Git diff. Files, Preview, Terminal and History open around the conversation.
+You decide what to commit.
 
-## Start here
+<figure>
+  <a href="/assets/workbench-1.5/conversation.jpg" aria-label="Open the full-size Conversation screenshot (1600 × 1408)">
+    <img src="/assets/workbench-1.5/conversation.jpg" width="1600" height="1408"
+      alt="Actual Axocoatl 1.5 dashboard in Safari showing a completed paging fix, the Conversation, Team and budget controls, Files, Preview and History." />
+  </a>
+  <figcaption>
+    A real Axocoatl 1.5 Session in Safari: one OpenRouter Agent completed a paging fix.
+    <a href="/assets/workbench-1.5/provenance.json">Capture and result provenance</a>.
+    Select the image to view it at full size.
+  </figcaption>
+</figure>
+
+## From setup to your first Session
 
 <Steps>
 
-1. [Install Axocoatl](/start/install/). The release binaries support Linux and macOS;
-   check the platform requirements before downloading.
-2. [Set up this computer](/start/onboard/) with `axocoatl onboard --start none`.
-   Choose a writer and reviewer, complete their sign-ins, and approve the setup
-   changes you want. This configures the current user, without making a project.
-3. Run `axocoatl doctor`. Resolve any failures, then start `axocoatl dev` and leave
-   that terminal open. If onboarding already started the daemon, keep it running
-   instead of starting another.
-4. Open a **second terminal** and follow [Your first fix](/start/first-fix/) to run
-   the selected writer in your repository, save its evidence and verify the receipt.
-   For interactive work, open the daemon's sign-in link and
-   [create a Session](/start/first-session/).
+1. [Install Axocoatl](/start/install/) for your platform.
+2. [Set up this computer](/start/onboard/#recommended-setup): run
+   `axocoatl onboard --start none`, then `axocoatl doctor`. Resolve any setup
+   failures and start `axocoatl dev`. Leave that terminal open, or use an
+   already-running daemon or Always-On Service.
+3. Open the **Sign in:** link it prints. In the dashboard, choose
+   **Open workspace…** and select your existing repository. Onboarding has not
+   created or chosen a project for you.
+4. Create a **New session**, review its environment setup, then apply
+   **Team & budget**. Ask for one concrete result in Conversation.
+5. Follow the work, inspect **Files → Source Control → Last turn**, check the
+   result, and commit deliberately.
 
 </Steps>
 
-## Choose how to work
+[Follow the illustrated first-Session guide →](/start/first-session/)
+
+## Work in the dashboard
 
 <CardGrid>
-  <Card title="Run a task from your shell" icon="seti:shell">
-    A **loadout** is a YAML recipe for one run. The built-in `fix`,
-    `fix-claude-code` and `fix-codex` recipes include checks and a required review.
-    `qa` explores a running app; `audit` reads a repository and reports findings.
+  <Card title="Ask and follow the work" icon="comment">
+    Conversation holds your request, the Agent's response and expandable tool
+    calls. Start with one Agent. Approve helpers, required checks or a required
+    review when the task needs them.
 
-    [Run your first fix →](/start/first-fix/)
-
-    Then [keep a passing run as a PR](/workbench/keep-as-pr/), check its receipt with
-    the [GitHub Action](/workbench/receipts/#checking-pull-requests-in-github-actions),
-    or look up [flags and exit codes](/reference/run/).
+    [Work in a Session →](/workbench/session/)
   </Card>
-  <Card title="Work in a repository Session" icon="laptop">
-    A **Session** keeps your conversation and work anchored to a repository.
-    Open Files, Terminal, Preview, History and Git around it. A new Session starts
-    with one Agent; helpers, required checks and a required review are opt-in.
-    Claude Code and Codex write headless runs; an ordinary workbench Session uses
-    a native Ollama or OpenRouter model.
+  <Card title="Inspect the result" icon="document">
+    Open Files to read edits, Source Control to review the diff, and Preview
+    when the repository runs a web app. Commit only after checking the actual result.
 
-    [Create your first Session →](/start/first-session/)
+    [Review Git and Last turn →](/workbench/git/)
+  </Card>
+  <Card title="Control the next step" icon="setting">
+    Team & budget sets the Agent's limits. Stop addresses the active turn;
+    History retains completed, failed and interrupted work with its recorded evidence.
+
+    [Context, History and Stop →](/workbench/history/)
+  </Card>
+  <Card title="Compare when useful" icon="random">
+    Explore several Ways for a decision that needs independent attempts.
+    Compare Outcome, Route, checks and changes, then choose Keep this one.
+
+    [Explore several Ways →](/workbench/ways/)
   </Card>
 </CardGrid>
 
-## Read the evidence with its limits
+## Choose a model for the Session
 
-A [signed receipt](/workbench/receipts/) identifies the key that signed the recorded
-files, checks, review and verdict. It does not prove that the change is correct.
-Failed runs can have receipts too; a run refused before it starts has none, and a
-signing failure is reported. Workbench turns do not issue run receipts. The
-[record bundle](/reference/run/#record-bundle) and [History](/workbench/history/)
-retain execution evidence with their documented bounds; they do not promise that
-every historical message or attachment is sent to every future model call.
+Ordinary dashboard Sessions use native models through **Ollama** or **OpenRouter**.
+The default is one Agent; helpers and required checks or review are choices you apply
+in Team & budget. [Provider requirements](/configure/providers/) explain the models,
+memory, accounts and network access each route needs.
 
-Hosted providers receive the context sent to them. Local execution still downloads
-software and models, and configured tools may use the network. Read the
-[security boundary](/operate/security/) and [provider requirements](/configure/providers/).
-Functional release checks and model-quality comparisons answer different questions:
-see [release verification](/operate/verification/#release-evidence) and
-[What we measured](/understand/what-we-measured/). The comparative review measurements
-used a local reviewer; OpenRouter reviewers have not been measured in that comparison.
+Claude Code and Codex are also available as writers for headless loadout runs.
+Those runs have their own outcome and signed-receipt workflow; a normal workbench
+turn does not issue a run receipt. See
+[Run a fix from the terminal](/start/first-fix/) when you want that workflow.
 
 ## Find the next detail
 
-- [Configure Agents and budgets](/configure/agents/), [providers](/configure/providers/)
-  and [repository toolchains](/configure/toolchains/).
+- [Configure Agents and budgets](/configure/agents/) or use [Settings](/configure/settings/).
 - [Run as a service](/operate/service/), [back up data](/operate/data-backup/) or
   [troubleshoot a failure](/operate/troubleshooting/).
-- [Explore several Ways](/workbench/ways/) when a task needs comparison, or retain
-  source-linked decisions in [Workspace knowledge](/workbench/knowledge/).
+- Read the [security boundary](/operate/security/) and
+  [History limits](/workbench/history/). Hosted providers receive the context sent
+  to them; local execution still downloads software and models, and tools may use the network.
+- For headless runs, read about [loadouts](/configure/loadouts/),
+  [signed receipts](/workbench/receipts/) and [Keep as PR](/workbench/keep-as-pr/).
+- [Release verification](/operate/verification/#release-evidence) records functional
+  checks; [What we measured](/understand/what-we-measured/) describes quality comparisons.
+  The comparative review measurements used a local reviewer; OpenRouter reviewers
+  have not been measured in that comparison.

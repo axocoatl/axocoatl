@@ -686,13 +686,16 @@ path_claude_code() {
   doctor_ready fix-claude-code
   ensure_daemon
   local hero status
-  hero=$(node "$gate_commands_js" first "$site/index.html" "axocoatl run fix-claude-code") \
-    || gate_record "the home page shows the fix-claude-code command" fail '' '' '' 'not found'
+  # The required step keeps its historical identity for existing evidence.
+  # The home page now links to /install, whose commands site_setup_commands validates.
+  printf '%s\n' 'install/index.html' >"$GATE_ATTACH/hero-command-source.txt"
+  hero=$(node "$gate_commands_js" first "$site_install_page" "axocoatl run fix-claude-code") \
+    || gate_record "the home page shows the fix-claude-code command" fail '' '' '' 'not found on the linked install/index.html page'
   if [ -n "$hero" ]; then
     printf '%s\n' "$hero" >"$GATE_ATTACH/hero-command.txt"
     run_published_on "$hero" hero node-deps python-pytest
     status=$?
-    summary "the home page's fix-claude-code command passed on node-deps and python-pytest" "$status" "$hero"
+    summary "the home page's fix-claude-code command passed on node-deps and python-pytest" "$status" "install/index.html: $hero"
     keep_pr "$hero"
   fi
   local repo="$work/repos/anthropic-reviewer"

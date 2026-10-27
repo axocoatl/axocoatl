@@ -6,7 +6,7 @@
   <meta name="description" content="When a coding agent says it is done, that is a claim about its own work. Axocoatl fix loadouts require checks and review on the final files, with a signed receipt that someone who didn't watch can verify.">
   <meta name="theme-color" content="#3E7C5C"><link rel="canonical" href="https://axocoatl.ai/why">
   <meta property="og:type" content="website"><meta property="og:site_name" content="Axocoatl"><meta property="og:url" content="https://axocoatl.ai/why"><meta property="og:title" content="Why Axocoatl — an agent’s “done” is not evidence"><meta property="og:description" content="Axocoatl fix loadouts require checks and review on the final files, with a signed receipt that someone who didn't watch can verify."><meta property="og:image" content="https://axocoatl.ai/assets/og-home.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify."><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Why Axocoatl"><meta name="twitter:description" content="Axocoatl fix loadouts require checks and review on the final files, with a signed receipt that someone who didn't watch can verify."><meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png"><meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify.">
-  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261027-clarity"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
+  <link rel="icon" type="image/png" href="/assets/favicon.png"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/base.css?v=20261027-dashboard"><link rel="stylesheet" href="/styles/finder.css?v=20261013-run">
   <script type="module" src="/components/ax-site-nav.js?v=20261013-run"></script><script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script><script type="module" src="/components/ax-footer.js?v=20261027-clarity"></script><script type="module" src="/components/ax-theme-toggle.js"></script>
 </head>
 <body>
@@ -25,7 +25,7 @@
       </div>
     </section>
 
-    <section class="container-narrow section section-rule" id="host">
+    <section class="container section section-rule" id="host">
       <div class="stack"><span class="eyebrow">So the host decides</span><h2>The host decides, not the agent.</h2>
         <p>The built-in fix loadouts give the host, the computer running the Axocoatl daemon, responsibility for checks and required review:</p>
         <ul class="fact-list">
@@ -37,6 +37,12 @@
         </ul>
         <p><a href="/#run">What a run does, step by step →</a></p>
       </div>
+      <!-- optional-demo: assets/demo/dashboard-1.5/outcome.jpg assets/demo/dashboard-1.5/provenance.json assets/demo/dashboard-1.5/capture.json assets/demo/dashboard-1.5/verify-media.mjs -->
+      <figure class="dashboard-shot ">
+        <a class="dashboard-image-link" href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener" aria-label="Open full-size screenshot: A completed run with a passed check and approved review"><img src="/assets/demo/dashboard-1.5/outcome.jpg" alt="A completed run with a passed check and approved review" loading="lazy" decoding="async"></a>
+        <figcaption>The host-run check and required review are recorded in this completed fix run, visible in the dashboard. <a href="/assets/demo/dashboard-1.5/outcome.jpg" target="_blank" rel="noopener">View full size ↗</a></figcaption>
+      </figure>
+      <!-- /optional-demo -->
     </section>
 
     <section class="container-narrow section section-rule" id="receipt">
@@ -59,11 +65,17 @@
       </div>
     </section>
 
-    <section class="container-narrow section section-rule" id="workbench">
+    <section class="container section section-rule" id="workbench">
       <div class="stack"><span class="eyebrow">When to use the workbench</span><h2>Watch the work when you want to.</h2>
         <p>The same daemon serves a workbench in your browser for work you want to watch or steer. There, a Session (one durable work item anchored to a repository folder: its conversation, the sandbox its tools run in, and its record) keeps the conversation beside Files, Terminal, Preview and Source Control. A Session can require checks and review, and keeps a durable record. In the workbench, you review the Git changes and commit deliberately.</p>
         <p>When an implementation choice is genuinely ambiguous, turn on <strong>Explore several ways</strong>. Each Way is a separate attempt from the same task and repository snapshot. Compare their outcomes, diffs and cost, keep one, and it returns to your checkout uncommitted. One answer is the default; Ways are for a hard decision.</p>
       </div>
+      <!-- optional-demo: assets/demo/dashboard-1.5/changes.jpg assets/demo/dashboard-1.5/provenance.json assets/demo/dashboard-1.5/capture.json assets/demo/dashboard-1.5/verify-media.mjs -->
+      <figure class="dashboard-shot ">
+        <a class="dashboard-image-link" href="/assets/demo/dashboard-1.5/changes.jpg" target="_blank" rel="noopener" aria-label="Open full-size screenshot: Files showing the actual paging fix"><img src="/assets/demo/dashboard-1.5/changes.jpg" alt="Files showing the actual paging fix" loading="lazy" decoding="async"></a>
+        <figcaption>Reviewing the saved fix in Files. Changes remain yours to inspect and commit deliberately. <a href="/assets/demo/dashboard-1.5/changes.jpg" target="_blank" rel="noopener">View full size ↗</a></figcaption>
+      </figure>
+      <!-- /optional-demo -->
       <ax-product-film
         film="workspace-sessions-turns"
         src="/assets/films/v1.5.0/workspace-sessions-turns.mp4"

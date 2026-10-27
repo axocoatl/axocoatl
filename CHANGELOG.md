@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Documentation
+- Lead the websites and first-run guides with the browser dashboard: actual 1.5
+  screenshots, a recorded tour of a completed run, and the workspace-to-chat-to-diff
+  journey. Keep terminal examples in setup and headless reference documentation.
 - Simplify the marketing homepage and first-run documentation around a verified
   fix and its signed receipt. Separate installation from the release evidence,
   document one daemon start, and provide complete provider and Agent examples.

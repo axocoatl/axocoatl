@@ -1,0 +1,841 @@
+{
+  "schema": "axocoatl.dashboard-media-provenance/1",
+  "created_at": "2026-10-27T17:21:43.370114+00:00",
+  "presentation": {
+    "kind": "sampled-ui-navigation",
+    "label": "Dashboard navigation through a completed 1.5 run",
+    "live_execution": false,
+    "new_inference": false,
+    "run_started_from": "CLI",
+    "scope": "Actual UI navigation sampled about five times per second. Captured timing is preserved with repeated frames for normal 24fps playback; no interpolation, speedup or model rerun. This is a tour of a completed CLI-launched fix, not a recording of model execution or a portfolio-film acceptance."
+  },
+  "product": {
+    "version": "1.5.0",
+    "release_commit": "19e3c89ca7b4d02cd742bccd671f7274e68b95d7",
+    "runtime_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+    "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+    "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+    "run_id": "run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3",
+    "session_id": "ses-4e194c4f-858c-4162-a7d1-7744ed401723"
+  },
+  "capture": {
+    "operator": "Codex assistant using the actual browser UI",
+    "operator_detail": "Codex CUA in isolated in-app browser tab",
+    "human_operator": false,
+    "origin": "http://127.0.0.1:8080/",
+    "session_url": "http://127.0.0.1:8080/?session=ses-4e194c4f-858c-4162-a7d1-7744ed401723",
+    "viewport": {
+      "device_scale_factor": 2,
+      "height": 720,
+      "width": 1280
+    },
+    "theme": "dark",
+    "capture_order": [
+      "outcome",
+      "receipt",
+      "conversation",
+      "changes"
+    ],
+    "source_metadata_file": "capture.json",
+    "source_metadata_sha256": "fefe59c0b9c6a89406d141998f5220364996ebc7a173130c355cbc445a77b5cb",
+    "interventions": "Opened the saved completed run; expanded or collapsed Run outcome; scrolled to the receipt and conversation; opened Source Control, Last turn, and the file diff. No prompt, staging, edits, commit or new model call."
+  },
+  "shots": [
+    {
+      "id": "conversation",
+      "file": "conversation.jpg",
+      "sha256": "4f24ff0c3f5572335393c52367039f3d5994a3b843c9f55ed07db57efbd43eca",
+      "bytes": 71843,
+      "width": 1280,
+      "height": 720,
+      "captured_at": "2026-10-27T17:16:15.247Z",
+      "observed": "Original request and accepted writer answer, Run outcome collapsed; scrolled to start of saved conversation.",
+      "source_capture_file": "conversation.png",
+      "source_capture_sha256": "4f24ff0c3f5572335393c52367039f3d5994a3b843c9f55ed07db57efbd43eca",
+      "pixel_edits": "none",
+      "filename_correction": "Original capture filename ended in .png; its actual JPEG bytes are published unchanged with .jpg."
+    },
+    {
+      "id": "changes",
+      "file": "changes.jpg",
+      "sha256": "a38224a2bb68542282cdef132d87f4f6e47581f4ec1d22bce3290cbae9e97800",
+      "bytes": 80461,
+      "width": 1280,
+      "height": 720,
+      "captured_at": "2026-10-27T17:17:27.573Z",
+      "observed": "Opened Source Control \u2192 Last turn \u2192 src/paginate.js, then Files tab; actual diff remains open next to file tree. No staging or edits.",
+      "source_capture_file": "changes.png",
+      "source_capture_sha256": "a38224a2bb68542282cdef132d87f4f6e47581f4ec1d22bce3290cbae9e97800",
+      "pixel_edits": "none",
+      "filename_correction": "Original capture filename ended in .png; its actual JPEG bytes are published unchanged with .jpg."
+    },
+    {
+      "id": "outcome",
+      "file": "outcome.jpg",
+      "sha256": "c9f99ae115bf371e1f8604641bac05bf71d3c5d6f2971cf7962afe73da2fc392",
+      "bytes": 75890,
+      "width": 1280,
+      "height": 720,
+      "captured_at": "2026-10-27T17:15:52.960Z",
+      "observed": "Run outcome expanded: passed host check and approved required review; actual saved run, no new inference.",
+      "source_capture_file": "outcome.png",
+      "source_capture_sha256": "c9f99ae115bf371e1f8604641bac05bf71d3c5d6f2971cf7962afe73da2fc392",
+      "pixel_edits": "none",
+      "filename_correction": "Original capture filename ended in .png; its actual JPEG bytes are published unchanged with .jpg."
+    },
+    {
+      "id": "receipt",
+      "file": "receipt.jpg",
+      "sha256": "17257614f0ae7d64c08632f2e6b29a39b254cb70f38e85e5650d93e3ba3a174a",
+      "bytes": 76232,
+      "width": 1280,
+      "height": 720,
+      "captured_at": "2026-10-27T17:16:04.023Z",
+      "observed": "Run outcome scrolled to actual signed receipt, download record, and Keep actions; nothing submitted.",
+      "source_capture_file": "receipt.png",
+      "source_capture_sha256": "17257614f0ae7d64c08632f2e6b29a39b254cb70f38e85e5650d93e3ba3a174a",
+      "pixel_edits": "none",
+      "filename_correction": "Original capture filename ended in .png; its actual JPEG bytes are published unchanged with .jpg."
+    }
+  ],
+  "video": {
+    "file": "dashboard-tour.mp4",
+    "sha256": "a7d55d137842b8496e0af8a9f0e579193e6cb506baa50e91440245a46f8867bc",
+    "bytes": 365259,
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "frames_per_second": 24,
+    "duration_seconds": 17.761,
+    "width": 1280,
+    "height": 720,
+    "audio": false,
+    "editing": "Original screenshot samples in captured chronological order and timing; repeated frames only for 24fps playback. No generated frames, overlays, interpolated motion or simulated execution.",
+    "source_archive_file": "video-source.tar.gz",
+    "source_archive_sha256": "119c35323356443e3d3300d51d09deee8036258a0c38515be7f03fab918c8640",
+    "source_archive_bytes": 5672755,
+    "source_metadata_sha256": "4e069ec8355d612852397f51bf8505710ede716288151cfc2682e218650e90fd",
+    "source_frame_count": 88,
+    "frames": [
+      {
+        "file": "frame-0000.jpg",
+        "elapsed_ms": 0,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0001.jpg",
+        "elapsed_ms": 201,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0002.jpg",
+        "elapsed_ms": 402,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0003.jpg",
+        "elapsed_ms": 603,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0004.jpg",
+        "elapsed_ms": 804,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0005.jpg",
+        "elapsed_ms": 1005,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0006.jpg",
+        "elapsed_ms": 1205,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0007.jpg",
+        "elapsed_ms": 1406,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0008.jpg",
+        "elapsed_ms": 1607,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0009.jpg",
+        "elapsed_ms": 1807,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0010.jpg",
+        "elapsed_ms": 2008,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0011.jpg",
+        "elapsed_ms": 2209,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0012.jpg",
+        "elapsed_ms": 2410,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0013.jpg",
+        "elapsed_ms": 2611,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0014.jpg",
+        "elapsed_ms": 2812,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0015.jpg",
+        "elapsed_ms": 3012,
+        "sha256": "c1cbde52a196564563f8f96fdbf12d8f60809dc125a1d8c83780cf280f576caf",
+        "bytes": 71758
+      },
+      {
+        "file": "frame-0016.jpg",
+        "elapsed_ms": 3213,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0017.jpg",
+        "elapsed_ms": 3414,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0018.jpg",
+        "elapsed_ms": 3616,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0019.jpg",
+        "elapsed_ms": 3818,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0020.jpg",
+        "elapsed_ms": 4020,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0021.jpg",
+        "elapsed_ms": 4221,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0022.jpg",
+        "elapsed_ms": 4422,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0023.jpg",
+        "elapsed_ms": 4624,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0024.jpg",
+        "elapsed_ms": 4825,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0025.jpg",
+        "elapsed_ms": 5026,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0026.jpg",
+        "elapsed_ms": 5227,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0027.jpg",
+        "elapsed_ms": 5428,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0028.jpg",
+        "elapsed_ms": 5630,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0029.jpg",
+        "elapsed_ms": 5831,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0030.jpg",
+        "elapsed_ms": 6032,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0031.jpg",
+        "elapsed_ms": 6233,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0032.jpg",
+        "elapsed_ms": 6434,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0033.jpg",
+        "elapsed_ms": 6635,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0034.jpg",
+        "elapsed_ms": 6836,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0035.jpg",
+        "elapsed_ms": 7037,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0036.jpg",
+        "elapsed_ms": 7238,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0037.jpg",
+        "elapsed_ms": 7439,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0038.jpg",
+        "elapsed_ms": 7641,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0039.jpg",
+        "elapsed_ms": 7842,
+        "sha256": "38e219285121f7798b462c41bbf3c4e774ac463a92889957f8be5c0452211b95",
+        "bytes": 74973
+      },
+      {
+        "file": "frame-0040.jpg",
+        "elapsed_ms": 8043,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0041.jpg",
+        "elapsed_ms": 8309,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0042.jpg",
+        "elapsed_ms": 8510,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0043.jpg",
+        "elapsed_ms": 8711,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0044.jpg",
+        "elapsed_ms": 8912,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0045.jpg",
+        "elapsed_ms": 9113,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0046.jpg",
+        "elapsed_ms": 9314,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0047.jpg",
+        "elapsed_ms": 9515,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0048.jpg",
+        "elapsed_ms": 9716,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0049.jpg",
+        "elapsed_ms": 9917,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0050.jpg",
+        "elapsed_ms": 10118,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0051.jpg",
+        "elapsed_ms": 10319,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0052.jpg",
+        "elapsed_ms": 10521,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0053.jpg",
+        "elapsed_ms": 10722,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0054.jpg",
+        "elapsed_ms": 10923,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0055.jpg",
+        "elapsed_ms": 11123,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0056.jpg",
+        "elapsed_ms": 11324,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0057.jpg",
+        "elapsed_ms": 11525,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0058.jpg",
+        "elapsed_ms": 11726,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0059.jpg",
+        "elapsed_ms": 11927,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0060.jpg",
+        "elapsed_ms": 12129,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0061.jpg",
+        "elapsed_ms": 12330,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0062.jpg",
+        "elapsed_ms": 12531,
+        "sha256": "033b0bb4438f6514c096615c0db1b85c0e519b0a297e64d099c5bb915bc4dbad",
+        "bytes": 75346
+      },
+      {
+        "file": "frame-0063.jpg",
+        "elapsed_ms": 12731,
+        "sha256": "a38224a2bb68542282cdef132d87f4f6e47581f4ec1d22bce3290cbae9e97800",
+        "bytes": 80461
+      },
+      {
+        "file": "frame-0064.jpg",
+        "elapsed_ms": 12932,
+        "sha256": "2f72481b636d116b94102ee1cb9718e958f1737a6279193e98a4df81fff668f4",
+        "bytes": 81111
+      },
+      {
+        "file": "frame-0065.jpg",
+        "elapsed_ms": 13133,
+        "sha256": "2f72481b636d116b94102ee1cb9718e958f1737a6279193e98a4df81fff668f4",
+        "bytes": 81111
+      },
+      {
+        "file": "frame-0066.jpg",
+        "elapsed_ms": 13334,
+        "sha256": "a442a0f4b41fda87e85df1f822ac6bc92b31e63d815613b514c3f2428a3add2c",
+        "bytes": 81079
+      },
+      {
+        "file": "frame-0067.jpg",
+        "elapsed_ms": 13535,
+        "sha256": "c2b389443fed7eab93bb9d13de0821663e4e526f90d8696218cd545318abaccc",
+        "bytes": 81121
+      },
+      {
+        "file": "frame-0068.jpg",
+        "elapsed_ms": 13737,
+        "sha256": "348490d98bc61b8d38ed8f4b21d43a08f501311b78c84604a31e5caa529d3eeb",
+        "bytes": 80809
+      },
+      {
+        "file": "frame-0069.jpg",
+        "elapsed_ms": 13938,
+        "sha256": "2dbca90443915f01bc8ba16aaa86e9a84ee8d4d263b48e334a9d8d1d2d5ec7ad",
+        "bytes": 80645
+      },
+      {
+        "file": "frame-0070.jpg",
+        "elapsed_ms": 14139,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0071.jpg",
+        "elapsed_ms": 14340,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0072.jpg",
+        "elapsed_ms": 14542,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0073.jpg",
+        "elapsed_ms": 14743,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0074.jpg",
+        "elapsed_ms": 14945,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0075.jpg",
+        "elapsed_ms": 15147,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0076.jpg",
+        "elapsed_ms": 15348,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0077.jpg",
+        "elapsed_ms": 15549,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0078.jpg",
+        "elapsed_ms": 15750,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0079.jpg",
+        "elapsed_ms": 15952,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0080.jpg",
+        "elapsed_ms": 16153,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0081.jpg",
+        "elapsed_ms": 16353,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0082.jpg",
+        "elapsed_ms": 16554,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0083.jpg",
+        "elapsed_ms": 16755,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0084.jpg",
+        "elapsed_ms": 16956,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0085.jpg",
+        "elapsed_ms": 17158,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0086.jpg",
+        "elapsed_ms": 17359,
+        "sha256": "2d36af4f57debfda12d951733de4d11e22fc8add279d9981f9c260fa0832d7f1",
+        "bytes": 80447
+      },
+      {
+        "file": "frame-0087.jpg",
+        "elapsed_ms": 17560,
+        "sha256": "a38224a2bb68542282cdef132d87f4f6e47581f4ec1d22bce3290cbae9e97800",
+        "bytes": 80461
+      }
+    ],
+    "actions": [
+      {
+        "elapsed_ms": 3283,
+        "action": "Expand Run outcome"
+      },
+      {
+        "elapsed_ms": 7933,
+        "action": "Scroll Run outcome to receipt and record"
+      },
+      {
+        "elapsed_ms": 12957,
+        "action": "Open Files with preserved actual diff"
+      }
+    ],
+    "captured_start": "2026-10-27T17:19:50.469Z",
+    "captured_end": "2026-10-27T17:20:08.230Z",
+    "target_interval_ms": 200,
+    "errors": [],
+    "encoder_command": [
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "concat",
+      "-safe",
+      "1",
+      "1",
+      "/private/tmp/axocoatl-dashboard-media-20261027/video-frames/encode-actual-timing.ffconcat",
+      "encode-actual-timing.ffconcat",
+      "17.761",
+      "-vf",
+      "scale=iw:ih:in_range=pc:out_range=tv:flags=lanczos,format=yuv420p,fps=24:round=near,tpad=stop_mode=clone:stop_duration=0.1",
+      "-color_range",
+      "tv",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "slow",
+      "-crf",
+      "16",
+      "-r",
+      "24",
+      "-an",
+      "-movflags",
+      "+faststart",
+      "dashboard-tour.mp4"
+    ],
+    "encoder_version": "ffmpeg version 8.1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "color_conversion": "Full-range JPEG samples converted to standard video-range YUV420P for H.264 playback; screenshot assets and archived source samples stay byte-identical.",
+    "concat_recipe": "List the archived JPEG samples in order. Give each the duration until the next elapsed_ms; hold the last until duration_ms. Repeat the last file line for the concat demuxer. Preserve these timings; the final FPS filter repeats samples rather than interpolating motion."
+  },
+  "configuration": {
+    "writer": "ollama:qwen3-coder:30b",
+    "reviewer": "ollama:gpt-oss:20b",
+    "runtime": "native",
+    "ollama_version": "0.40.11",
+    "helpers": 0,
+    "required_checks": [
+      "npm run test"
+    ],
+    "required_review": true,
+    "review_rounds": 1
+  },
+  "artifact": {
+    "assessment": "ACCEPTED",
+    "changed_files": [
+      "src/paginate.js"
+    ],
+    "original_tests_unchanged": true,
+    "other_tracked_files_unchanged": true,
+    "unexpected_untracked_files": [],
+    "independent_original_tests": {
+      "passed": 4,
+      "failed": 0,
+      "invocations": 1
+    },
+    "patch": "The final page keeps a full page when the item count is an exact multiple of the page size."
+  },
+  "negative_evidence": {
+    "recovered_reviewer_tool_errors": 2,
+    "tool_names": [
+      "search",
+      "grep"
+    ],
+    "raw_causes": "Not inferred from public result hashes and lengths.",
+    "provider_retries": 0,
+    "baseline_check_exit": 1,
+    "failed_activations": []
+  },
+  "privacy": {
+    "visible": "The real dashboard includes an abbreviated local checkout path containing the local account name, public run/signing-key identifiers, and generated receipt/record/JUnit filenames. No screenshot pixels were altered.",
+    "excluded": "No authentication screen, URL token, credential value or provider secret is shown.",
+    "scope": "The complete historical record and recovered tool errors remain in the linked frozen release evidence."
+  },
+  "sources": [
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff",
+      "sha256": "121d2af3e44c8dd0f57cafd2d6b9843e560d030040f87d38f051276f4bb6a6a1",
+      "bytes": 491,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log",
+      "sha256": "cc663a7e31194a4ef41b969d7cb863babd4c2114264b9473b3ffdceffeb990d1",
+      "bytes": 2839,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+      "sha256": "da17e0c70b587cf30379aa541c0b35c6f4b08ea707fbcc55cac1eeaa3cb71e39",
+      "bytes": 273,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/assessment.json",
+      "sha256": "eef0517ba395b4907cf714b21f2e99f3379e50820b1d44489449cd5e90ce38ff",
+      "bytes": 12731,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/assessment.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/negative-evidence.json",
+      "sha256": "b11fd835c997daf82898a04e3093aa6efb6104d0dcc3fa56e429050df860fa2e",
+      "bytes": 1020,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/negative-evidence.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/src/paginate.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/src/paginate.js",
+      "sha256": "a010054ab3170d2de1b39d739d5a82dce7b3b6c68952f1ed7d7cf2df5454369b",
+      "bytes": 613,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/src/paginate.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/test/paginate.test.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/test/paginate.test.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.receipt.json",
+      "sha256": "6d96d422d6946c480c410be883a27c862e1540c490bb926a12f3de75f1b01575",
+      "bytes": 4704,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.receipt.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl",
+      "sha256": "6979771b1d6b5db565ca06c035f7c4455f844f20b97e3bb72abe3cf2355428d8",
+      "bytes": 529295,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local.json",
+      "sha256": "9029f9a753b670cebb033c13b9b61907fdca57b7ec7a77f46a64f2dea7e4e0a5",
+      "bytes": 14942,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/final-verification/mac-provenance.json",
+      "sha256": "adcafd3dc0e288c451d2c6d907bec75e8670533c0f13f2ddd52d8a1cdcbfbb04",
+      "bytes": 1706,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/final-verification/mac-provenance.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/local-sample/assessment.json",
+      "sha256": "4ce730e4b9cd8661f2b42ecd1d714209a743fe4a08ec9b0df0ef743c4ddf2477",
+      "bytes": 11759,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/local-sample/assessment.json"
+    }
+  ]
+}

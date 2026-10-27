@@ -475,8 +475,28 @@ if (builtRoot && !filmsPending) {
   }
 }
 
-// The source-only fallback is copied literally into the homepage; protect it
-// too so a future embed refresh cannot reintroduce the production rewrite.
+// This current dashboard walkthrough is independent of the pending twelve-film
+// portfolio. Its actual captures and video always receive their full proof,
+// including in a PENDING build; optional-demo only controls asset staging.
+const dashboardDirectory = join(root, 'assets/demo/dashboard-1.5');
+if (!existsSync(dashboardDirectory)) {
+  fail('dashboard walkthrough', 'the current homepage requires its actual dashboard captures and video');
+} else {
+  const verifier = join(dashboardDirectory, 'verify-media.mjs');
+  if (!existsSync(verifier)) {
+    fail('dashboard walkthrough', 'missing immutable capture/media verifier');
+  } else {
+    const result = spawnSync(process.execPath, [verifier, '--repo', repositoryRoot, '--probe'], {
+      encoding: 'utf8', timeout: 120_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) {
+      fail('dashboard walkthrough', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
+    }
+  }
+}
+
+// Retain protection on the historical literal excerpt source as well; a future
+// reuse must not reintroduce Cloudflare rewriting of evidence bytes.
 const verifiedFixEmbed = join(sourceRoot, 'assets/demo/verified-fix-1.5/embed.html');
 if (existsSync(verifiedFixEmbed)) {
   checkVerifiedFixProtection(readFileSync(verifiedFixEmbed, 'utf8'), 'assets/demo/verified-fix-1.5/embed.html');

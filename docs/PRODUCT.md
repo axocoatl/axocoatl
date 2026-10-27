@@ -53,6 +53,15 @@ The normal configuration and durable data live in platform user directories; a
 project-local YAML configuration is an explicit operator override and is never selected
 merely because it exists in the current working directory.
 
+## Public product presentation
+
+The website and first-run documentation show the browser workbench through actual
+screenshots and UI recordings. The primary entry is installation, onboarding, then
+**Open workspace…** and a Session. Command-line runs remain documented as a separate
+headless workflow. A loadout-created Session exposes its checks, required review,
+record and signed receipt in **Run outcome**; this does not make the UI a loadout
+launcher or add receipts to ordinary workbench turns.
+
 ## The primary loop
 
 1. Start Axocoatl and open the local app.

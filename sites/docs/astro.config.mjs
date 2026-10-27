@@ -34,7 +34,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Axocoatl',
-      description: 'Install Axocoatl, set up a writer and reviewer, run a first fix, and inspect its checks, changed files and signed receipt. Guides for headless runs and the repository workbench.',
+      description: 'Install Axocoatl, open the dashboard, create a repository Session, and review your Agent’s work. Guides for Conversation, Files, Preview, Git and headless runs.',
       disable404Route: true,
       favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/overrides.css'],
@@ -76,20 +76,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'index' },
             { label: 'Install', slug: 'start/install' },
             { label: 'Onboard and doctor', slug: 'start/onboard' },
-            { label: 'Your first fix', slug: 'start/first-fix' },
             { label: 'Your first Session', slug: 'start/first-session' },
-          ],
-        },
-        {
-          label: 'Run headless',
-          items: [
-            { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
-            { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
-            { label: 'Signed receipts', slug: 'workbench/receipts' },
-            // Pages that live under Configure, linked here too; their slugs stay put.
-            { label: 'Loadouts', link: '/configure/loadouts/' },
-            { label: 'Repository toolchains', link: '/configure/toolchains/' },
-            { label: 'External agents', link: '/configure/external-agents/' },
           ],
         },
         {
@@ -101,6 +88,19 @@ export default defineConfig({
             { label: 'Explore several Ways', slug: 'workbench/ways' },
             { label: 'Review Git and Last turn', slug: 'workbench/git' },
             { label: 'Context, History, and Stop', slug: 'workbench/history' },
+          ],
+        },
+        {
+          label: 'Run headless',
+          items: [
+            { label: 'Run a fix from the terminal', slug: 'start/first-fix' },
+            { label: 'Fix, QA and audit runs', slug: 'workbench/fix-qa-audit' },
+            { label: 'Keep as PR', slug: 'workbench/keep-as-pr' },
+            { label: 'Signed receipts', slug: 'workbench/receipts' },
+            // Pages that live under Configure, linked here too; their slugs stay put.
+            { label: 'Loadouts', link: '/configure/loadouts/' },
+            { label: 'Repository toolchains', link: '/configure/toolchains/' },
+            { label: 'External agents', link: '/configure/external-agents/' },
           ],
         },
         {

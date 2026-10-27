@@ -1,0 +1,35 @@
+{
+  "captured_at": "2026-10-27T17:15:52.940Z",
+  "url": "http://127.0.0.1:8080/?session=ses-4e194c4f-858c-4162-a7d1-7744ed401723",
+  "run_id": "run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3",
+  "session_id": "ses-4e194c4f-858c-4162-a7d1-7744ed401723",
+  "viewport": {
+    "device_scale_factor": 2,
+    "height": 720,
+    "width": 1280
+  },
+  "theme": "dark",
+  "operator": "Codex CUA in isolated in-app browser tab",
+  "shots": [
+    {
+      "file": "outcome.png",
+      "captured_at": "2026-10-27T17:15:52.960Z",
+      "description": "Run outcome expanded: passed host check and approved required review; actual saved run, no new inference."
+    },
+    {
+      "file": "receipt.png",
+      "captured_at": "2026-10-27T17:16:04.023Z",
+      "description": "Run outcome scrolled to actual signed receipt, download record, and Keep actions; nothing submitted."
+    },
+    {
+      "file": "conversation.png",
+      "captured_at": "2026-10-27T17:16:15.247Z",
+      "description": "Original request and accepted writer answer, Run outcome collapsed; scrolled to start of saved conversation."
+    },
+    {
+      "file": "changes.png",
+      "captured_at": "2026-10-27T17:17:27.573Z",
+      "description": "Opened Source Control → Last turn → src/paginate.js, then Files tab; actual diff remains open next to file tree. No staging or edits."
+    }
+  ]
+}

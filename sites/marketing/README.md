@@ -33,7 +33,7 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | The job and receipt first: early Install and First verified fix actions, one run/verify command, a manually explorable actual 1.5 fixture result, receipt limits and verification, loadouts and mechanisms, qualified historical measurements, then a brief workbench entry. Setup details stay on Install and in the first-fix guide |
+| `/` | The current dashboard first: Install and Open your first Session actions, a real Files screenshot, a short walkthrough and four views of one accepted 1.5 run, receipt limits and evidence links, loadouts, mechanisms and qualified historical measurements. Copyable commands stay on Install and in the guides |
 | `/compare` | Mechanisms only: questions to ask of any setup (who runs the checks, who reviews, where the credential lives, network, record, CI, changes, spend) answered for a loadout run, and how that differs from running Claude Code or Codex directly, a devcontainer, or a parallel-agent workbench, without naming or describing other products beyond links to their own documentation |
 | `/concepts` | What the host enforces and where it stops (isolation, any model per Agent, a short measured summary), then Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why an agent's "done" is not evidence: the measured self-review result, the host deciding, the receipt, why a local binary, and when to use the workbench |
@@ -65,21 +65,32 @@ The homepage uses the existing `<!-- optional-demo: … -->` slots independently
 pending portfolio films. A slot renders and its declared assets are copied only
 when all exist; with none it is omitted, and a partial set fails the build.
 
-The `verified-fix-1.5` slot contains literal transcript and artifact excerpts from
-one accepted release-gate fixture. All four steps remain visible without JavaScript;
-`ax-verified-fix` adds manual step controls after initialization. This is not a screen
-recording, and execution time is omitted. Its provenance links the frozen release
-evidence, names the actual configuration, and preserves the recovered errors. The
-homepage's `pre[data-excerpt]` text must match `excerpts.json` exactly. Verify the
-selections against the frozen source without model calls or test reruns:
+The `dashboard-1.5` slot contains real captures of the installed Axocoatl 1.5
+app reviewing one completed CLI-launched fix run. The hero shows its actual Files
+diff. The walkthrough and four stills show the conversation, code change, check and
+review, and signed receipt. Captions distinguish this saved loadout run from an
+interactive workbench turn, which has no receipt. The media is not a live model
+execution or a performance demonstration. Native video controls remain available
+without JavaScript, and each still opens at full size.
+
+`assets/demo/dashboard-1.5/provenance.json` binds the captures, recording, exact
+binary, and frozen accepted artifact. The original public evidence remains linked;
+its two recovered reviewer tool errors are retained. The older literal excerpts
+under `verified-fix-1.5` remain as source evidence, but no longer form the homepage
+walkthrough.
+
+The dashboard assets have their own strict verifier, invoked for both source and
+built payloads even while portfolio films are pending:
 
 ```bash
-node assets/demo/verified-fix-1.5/verify-excerpts.mjs --repo ../..
+node assets/demo/dashboard-1.5/verify-media.mjs --repo ../.. --probe
 ```
 
-`assets/demo/verified-fix-1.5/embed.html` is the source snippet; the build ships the
-inline homepage content, component, excerpts, provenance and verification script.
-Keep the snippet and homepage excerpts aligned when updating them.
+This requires `ffmpeg` and `ffprobe`; the deployment installs them when the dashboard
+video ships. It does not mark any of the twelve pending product films accepted or
+reuse their historical provenance. Keep original captures immutable, include their
+exact provenance, capture metadata and source-frame archive in the optional slot, and inspect the actual
+frames for private data before publication.
 
 The separate historical video slot names `assets/demo/cross-model-review.mp4` and
 `assets/demo/cross-model-review.jpg`. It is explicitly labelled Axocoatl 1.1.0 and

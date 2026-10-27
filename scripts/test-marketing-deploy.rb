@@ -8,14 +8,46 @@ require "tmpdir"
 require "yaml"
 
 root = Pathname.new(__dir__).join("..").realpath
-workflow = YAML.load_file(root.join(".github/workflows/marketing-deploy.yml"))
-step = workflow.fetch("jobs").fetch("deploy").fetch("steps").find do |entry|
-  entry["name"] == "Install film inspection dependency"
+# The strict dashboard proof reads frozen Git objects before installer staging.
+# Every current-source marketing caller must obtain history in its own job.
+def require_source_history(workflow, job)
+  steps = workflow.fetch("jobs").fetch(job).fetch("steps")
+  checkout = steps.find { |entry| entry.fetch("uses", "").start_with?("actions/checkout@") }
+  raise "#{job}: marketing provenance requires fetch-depth: 0" unless checkout && checkout.fetch("with", {})["fetch-depth"] == 0
 end
-abort "marketing dependency step is missing" unless step && step["run"]
-body = step.fetch("run")
+[
+  ["ci.yml", "marketing-site"],
+  ["marketing-deploy.yml", "deploy"],
+  ["release.yml", "marketing-site"],
+].each do |filename, job|
+  workflow = YAML.load_file(root.join(".github/workflows", filename))
+  require_source_history(workflow, job)
+  checkout = workflow.fetch("jobs").fetch(job).fetch("steps").find { |entry| entry.fetch("uses", "").start_with?("actions/checkout@") }
+  checkout.fetch("with")["fetch-depth"] = 1
+  rejected = false
+  begin
+    require_source_history(workflow, job)
+  rescue RuntimeError => error
+    rejected = error.message.include?("requires fetch-depth: 0")
+  end
+  abort "FAIL: #{filename}: shallow marketing checkout was accepted" unless rejected
+  puts "ok: #{filename} marketing source history is complete; shallow mutation refused"
+end
+
+bodies = [
+  ["marketing-deploy.yml", "deploy", "Install media inspection dependencies"],
+  ["release.yml", "marketing-site", "Install film inspection dependency"],
+].map do |filename, job, name|
+  workflow = YAML.load_file(root.join(".github/workflows", filename))
+  step = workflow.fetch("jobs").fetch(job).fetch("steps").find { |entry| entry["name"] == name }
+  abort "#{filename}: marketing dependency step is missing or conditionally bypassed" unless step && step["run"] && !step.key?("if")
+  [filename, step.fetch("run")]
+end
 cases = [
   {name: "matching PENDING needs no tools or apt", marker: :current, apt: [], success: true, probes: false},
+  {name: "matching PENDING with dashboard video reuses media tools", marker: :current, dashboard: true, ffmpeg: true, ffprobe: true, apt: [], success: true},
+  {name: "matching PENDING with dashboard video installs missing tools", marker: :current, dashboard: true, apt: %w[update install], success: true},
+  {name: "dashboard video cannot hide a failed dependency install", marker: :current, dashboard: true, fail: "install", apt: %w[update install], success: false},
   {name: "stale PENDING reuses working tools", marker: :stale, ffmpeg: true, ffprobe: true, apt: [], success: true},
   {name: "missing PENDING installs missing tools", marker: :missing, apt: %w[update install], success: true},
   {name: "symlink PENDING cannot skip dependencies", marker: :symlink, apt: %w[update install], success: true},
@@ -26,6 +58,7 @@ cases = [
   {name: "apt install failure stops deployment", marker: :missing, fail: "install", apt: %w[update install], success: false},
   {name: "successful apt cannot hide broken tools", marker: :missing, broken_install: true, apt: %w[update install], success: false},
 ]
+bodies.each do |filename, body|
 cases.each do |test|
   Dir.mktmpdir("axocoatl-marketing-dependency") do |directory|
     dir = Pathname.new(directory)
@@ -33,6 +66,11 @@ cases.each do |test|
     FileUtils.cp(root.join("scripts/verify-film-gate.sh"), dir.join("scripts/verify-film-gate.sh"))
     dir.join("axocoatl-cli/Cargo.toml").write("[package]\nversion = \"1.5.0\"\n")
     dir.join("demo/one-app/films/verify-film-set.mjs").write("// Not invoked by pending mode.\n")
+    if test[:dashboard]
+      video = dir.join("sites/marketing/assets/demo/dashboard-1.5/dashboard-tour.mp4")
+      video.dirname.mkpath
+      video.write("dependency-presence fixture; no media probing in this shell contract")
+    end
     marker = dir.join("demo/one-app/films/PENDING")
     case test.fetch(:marker)
     when :current then marker.write("1.5.0\n")
@@ -98,7 +136,8 @@ cases.each do |test|
     if test[:success] && test[:probes] != false && !%w[ffmpeg ffprobe].all? { |tool| calls.include?(tool) }
       abort "FAIL: #{test[:name]} did not verify both media tools"
     end
-    puts "ok: #{test[:name]}"
+    puts "ok: #{filename}: #{test[:name]}"
   end
 end
-puts "Marketing deployment dependency contract: PASS (#{cases.length} cases)"
+end
+puts "Marketing deployment dependency contract: PASS (#{cases.length * bodies.length} dependency cases; 3 history bindings and shallow-checkout refusals)"
