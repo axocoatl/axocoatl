@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="3" failures="0" errors="0" skipped="0" time="112.940">
+  <properties>
+    <property name="axocoatl.run_id" value="run-c9541ac6-7722-401c-8e7f-763a1884a3e8"/>
+    <property name="axocoatl.session_id" value="ses-0f7c8a91-8fa7-4e5f-aa87-7c6e04f0d361"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"/>
+    <property name="axocoatl.verdict" value="pass"/>
+    <property name="axocoatl.exit_code" value="0"/>
+    <property name="axocoatl.usage" value="74096 input + 1835 output tokens, $0.0046"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: sh -c npm run test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <system-out>reviewer openrouter:openai/gpt-oss-120b (native), 1 of 3 rounds
+round 1: approve, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <system-out>note: writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)
+note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (2.4 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+note: openai/gpt-oss-120b on OpenRouter: 7 calls answered by endpoint near-ai/fp4 (Near AI)
+note: qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 11 calls answered by endpoint siliconflow/fp8 (SiliconFlow)</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

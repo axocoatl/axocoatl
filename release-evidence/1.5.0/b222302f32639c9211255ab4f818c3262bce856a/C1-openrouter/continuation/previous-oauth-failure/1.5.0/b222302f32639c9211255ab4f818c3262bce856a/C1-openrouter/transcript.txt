@@ -1,0 +1,61 @@
+gate: PASS  free disk at the start
+
+===== C1-openrouter (1.5.0 at b222302f3263) =====
+gate: PASS  axocoatl is installed
+gate: PASS  no OpenRouter key was stored before this path
+gate: RUN   onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261027-005221.log
+
+Step 0 · This computer
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 43 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5.
+Not found: codex.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A hosted model (OpenRouter credits) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+Check the sandbox with one throwaway container? This pulls
+docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start
+from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2Kfrom, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native
+Sessions do not support BYOK) [Y/n] [?25l[2KSessions do not support BYOK) yes
+[?25hModel for the writer (vendor/model) [qwen/qwen3-coder-30b-a3b-instruct]: [2KModel for the writer (vendor/model): qwen/qwen3-coder-30b-a3b-instruct
+Model for the reviewer (must be a different model) [openai/gpt-oss-120b]: [2KModel for the reviewer (must be a different model): openai/gpt-oss-120b
+  1. Sign in to OpenRouter in your browser (recommended)
+  2. Read it from an environment variable (the configuration names the
+     variable, not the key)
+  3. Enter it at a hidden prompt (stored in your owner-only configuration)
+[?25lHow should Axocoatl get your OpenRouter key?:
+> 1. Sign in to OpenRouter in your browser (recommended)
+  2. Read it from an environment variable (the configuration names the variabl…
+  3. Enter it at a hidden prompt (stored in your owner-only configuration)
+[4A[2K[1B[2K[1B[2K[1B[2K[1B[4A[?25hHow should Axocoatl get your OpenRouter key?: Sign in to OpenRouter in your browser (recommended)
+  ✓ writer qwen/qwen3-coder-30b-a3b-instruct: 262,144 tokens of context, $0.07 in / $0.28 out per million tokens
+  ✓ reviewer openai/gpt-oss-120b: 131,072 tokens of context, $0.15 in / $0.60 out per million tokens
+  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser then returns to http://127.0.0.1:52891/callback on this computer, and Axocoatl stores the key OpenRouter issues as the secret openrouter without showing it.
+  If no browser opens, open this address in a browser on this computer:
+    https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A52891%2Fcallback&code_challenge=vO9dzu3ZKTQpwxHXyyBU8J_62biroXfnD8ZtxAJcx88&code_challenge_method=S256&state=dTrq7ZIQiru02UTZ4dmq6w&key_label=Axocoatl+2026-10-26
+  Waiting up to 10 minutes for the sign-in (Ctrl-C stops it)…
+  The browser returned to Axocoatl. Getting the key from OpenRouter (it is not shown)…
+  ✗ OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+
+Not ready yet, 1 step left:
+  1) OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+Your configuration was not changed (/Users/erick/Library/Application Support/Axocoatl/config.yaml is as it was). Run `axocoatl onboard` again once the steps are done.
+gate: FAIL  onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript): exit 1, expected 0: interactive step; see the transcript (exit 1) 
+gate: PASS  free disk at the end

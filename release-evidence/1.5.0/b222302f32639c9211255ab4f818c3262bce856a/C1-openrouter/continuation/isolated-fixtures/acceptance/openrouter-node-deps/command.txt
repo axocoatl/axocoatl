@@ -1,0 +1,1 @@
+axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --config /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/config.port18080.yaml --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt receipt.json

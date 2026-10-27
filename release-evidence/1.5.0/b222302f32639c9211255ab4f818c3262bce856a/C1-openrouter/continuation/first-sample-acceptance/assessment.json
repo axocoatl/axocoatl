@@ -1,0 +1,305 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "execution_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "verifier_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "assessed_at": "2026-10-27T01:39:42.831303+00:00",
+  "fixture": "node-plain",
+  "label": "openrouter-retry1-sample",
+  "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo",
+  "base_commit": "ca3c9adfbbc68b561a16bd06319ec0bd7d80ba54",
+  "run_id": "run-241be6b1-d700-4826-a5eb-8bb55a284c26",
+  "result": "ACCEPTED",
+  "artifact_review": "Correct one-line Math.floor to Math.ceil change retains the final partial page; original tests and all other tracked files remain unchanged.",
+  "changed_files": [
+    "src/paging.js"
+  ],
+  "original_tests_unchanged": true,
+  "sample_original_assertions_preserved": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "final_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "final_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "unchanged": true
+    },
+    "src/paging.js": {
+      "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "final_sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "unchanged": false
+    },
+    "test/paging.test.js": {
+      "original_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "final_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-146.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo",
+          "--record",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo",
+        "start": "2026-10-27T01:39:42.578930+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:39:42.588349+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e4c5b708de10a324f48d8cca9a00c04774df49b4283156ab79d9c73cc11fd087",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/record.jsonl"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo",
+        "start": "2026-10-27T01:39:42.588596+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:39:42.598306+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "2caa19d48a1000032beff0a7d4ae4a20cc86ef10de9e2f80f3ae74745c10174c",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/record.jsonl"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo",
+        "start": "2026-10-27T01:39:42.598500+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:39:42.627936+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/private/tmp/axocoatl-mac-or-retry1-acceptance/sample-key-corrected/host-check",
+        "start": "2026-10-27T01:39:42.628285+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:39:42.639435+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/private/tmp/axocoatl-mac-or-retry1-acceptance/sample-key-corrected/host-check",
+        "start": "2026-10-27T01:39:42.639791+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:39:42.813581+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "068a312343880e73a36f215a986ffb2c7f99c25f958b6fc034409869d727b8d4",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "expected_original_tests": 3,
+    "observed_passed_tests": 3,
+    "suite_count_verified": true,
+    "production_files_exact_final_copy": true,
+    "test_files_original_base_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.534625ms)\n\u2714 keeps the last item on a page of its own (0.074167ms)\n\u2714 refuses a page size below one (0.135666ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 33.514537\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "required_checks_passed": true,
+  "required_review_passed": true,
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-node:3b267c748259",
+      "image_id": "b5d48e90838f8df4bce8ed92ed15860b6b684cf517828281f1a9a540ef07f9b3",
+      "recipes": [
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "cache_volume": "axo-tc-c3be4269d2c82d961ab458f4",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 458
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "owner": "onboarding (the first-run sample repository)",
+      "command": "fixture-readme",
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": null,
+      "image_contains": "node",
+      "setup_contains": null
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "67dfabfa2435b66c5cb6bedd312310a4000bdbbd821b8f2ca50062a771f48fe0",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 78538,
+    "output_tokens": 2363,
+    "cost_microunits": 5194,
+    "cost_usd": 0.005194,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 3,
+        "payload": {
+          "call_id": "chatcmpl-tool-8deca8d22deb7c37",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "print_tree",
+          "result_bytes": 148,
+          "result_sha256": "116a6ad028b48a99a45d69dbaf63d3e5542862d8fdd5001f96e52cf56bb65632"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 458
+    },
+    "failed_activations": []
+  },
+  "gate_scope": "Independent artifact acceptance only; original gate attempts and outcomes are never changed.",
+  "network": {
+    "events": 19,
+    "allowed_connections": 0,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Independent acceptance of a completed actual Mac or Linux b222 artifact; no fresh-authentication, clean-install, whole-gate, or release completion claim.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "5f72aba440b29c8f0829580a2d9b2307f96453441a84e0741451cf1d68ecbfa4",
+    "record.jsonl": "abf28f8cc28bde02ee27a99ec541140750349d993e1f1bdf55bbbbc8bfc20e41",
+    "patch.diff": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+    "negative-evidence.json": "def6e1c23700146754fd37bb3228dfed61afc3498a63cb18d23097da9df07391",
+    "activation-summary.json": "c953d470f012b93ace15daad5fbe5d29f2a5b196402281ae20617433f4297dac",
+    "outcome.json": "47a6af9e1f93cef01526353ce5c0533ab82a2197b93dbd317eda8cad2b114877",
+    "original-tests.stdout": "068a312343880e73a36f215a986ffb2c7f99c25f958b6fc034409869d727b8d4",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

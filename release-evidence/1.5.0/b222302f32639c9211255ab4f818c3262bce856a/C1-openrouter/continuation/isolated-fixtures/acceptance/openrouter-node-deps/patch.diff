@@ -1,0 +1,42 @@
+diff --git a/README.md b/README.md
+index cc2dcc5..7607a65 100644
+--- a/README.md
++++ b/README.md
+@@ -11,7 +11,23 @@ A Node project whose tests need its dev dependencies: `npm test` runs the
+ 
+ ## The bug
+ 
+-Paging skips the last item when the total is a multiple of the page size.
++Paging skips the last item when the total is a multiple of the page size
++
++# Problem
++
++The pagination function had a bug that caused the last page to be empty when the total number of items was exactly divisible by the page size.
++
++## Example
++
++When calling `paginate([1,2,3,4,5,6,7,8,9,10], 5)`:
++- **Before fix**: `[[1,2,3,4,5], []]` (last page empty)
++- **After fix**: `[[1,2,3,4,5], [6,7,8,9,10]]` (last page properly filled)
++
++## Solution
++
++Fixed the logic in `src/paginate.js` to correctly calculate the length of the last page by using `items.length - start` instead of `items.length % size`.
++
++This ensures that when the total number of items is a multiple of the page size, the last page contains the correct number of items rather than being empty..
+ `paginate(items, size)` in `src/paginate.js` sizes the last page as
+ `items.length % size`, which is 0 when the total divides evenly, so the last
+ page comes back empty and its items are lost.
+diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..5268ea1 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,7 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page < count; page += 1) {
+     const start = page * size;
+-    const length = page < count - 1 ? size : items.length % size;
++    const length = page < count - 1 ? size : items.length - start;
+     pages.push(items.slice(start, start + length));
+   }
+   return pages;

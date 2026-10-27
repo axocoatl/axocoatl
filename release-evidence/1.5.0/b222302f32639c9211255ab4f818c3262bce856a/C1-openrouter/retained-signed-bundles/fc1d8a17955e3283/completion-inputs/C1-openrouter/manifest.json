@@ -1,0 +1,1449 @@
+{
+  "schema": "axocoatl.release-evidence/1",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "created_at": "2026-10-27T01:51:46.178Z",
+  "paths": {
+    "C1-openrouter": {
+      "file": "C1-openrouter.json",
+      "pass": true
+    }
+  },
+  "files": [
+    {
+      "path": "C1-openrouter.json",
+      "sha256": "ccb9a05df5b756aef2acff292b06119b86569f84abbfac91b61a1df4215c9381",
+      "bytes": 69828
+    },
+    {
+      "path": "C1-openrouter/continuation/artifact-contract-annotation.json",
+      "sha256": "43645f6826ce06b12d786fbca9c714232a5ca0c6e82f04657d9fb853886462dc",
+      "bytes": 868
+    },
+    {
+      "path": "C1-openrouter/continuation/candidate-source-hashes.json",
+      "sha256": "4a0d05e3c56df56f7ba8553a39c8651cdde1005e731be7fb4d9a944a5c509639",
+      "bytes": 654
+    },
+    {
+      "path": "C1-openrouter/continuation/composer.py",
+      "sha256": "1841bce720681b6623d2d84774b5ca99b1139c12af6b0a73ba9acd3b6d260378",
+      "bytes": 11002
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/activation-summary.json",
+      "sha256": "c953d470f012b93ace15daad5fbe5d29f2a5b196402281ae20617433f4297dac",
+      "bytes": 51371
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/assessment.json",
+      "sha256": "eee6441a2af6ce76f1f477abacfe06918eae6020b213cc1d0878e23c07a9d85b",
+      "bytes": 12298
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/audit-inputs.json",
+      "sha256": "dcfd3be238e78813dbbde4bf9624d5b9e19a1243a01cfbdbe24dd44691508ddc",
+      "bytes": 1760
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/commands.json",
+      "sha256": "d6963b5e543a65ba93d3914154ce871a03763717e54b45790f5904be71ac2762",
+      "bytes": 3854
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/daemon.log",
+      "sha256": "fe9390ee17b3db65246b1fe82971195d6eb6975b82888ffa1e7e7b4ef1c3fab5",
+      "bytes": 451
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/execution-provenance.json",
+      "sha256": "adcafd3dc0e288c451d2c6d907bec75e8670533c0f13f2ddd52d8a1cdcbfbb04",
+      "bytes": 1706
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/gate-output-exclusions.json",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "bytes": 3
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-check/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-check/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-check/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-check/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/host-dependency-provenance.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "bytes": 3
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/independent-receipt-verify.stdout",
+      "sha256": "e4c5b708de10a324f48d8cca9a00c04774df49b4283156ab79d9c73cc11fd087",
+      "bytes": 2139
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/independent-record-verify.stdout",
+      "sha256": "2caa19d48a1000032beff0a7d4ae4a20cc86ef10de9e2f80f3ae74745c10174c",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/negative-evidence.json",
+      "sha256": "def6e1c23700146754fd37bb3228dfed61afc3498a63cb18d23097da9df07391",
+      "bytes": 649
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/network-events.json",
+      "sha256": "09c45e04ac20229e309da0ea5431cddadf338f1020397b7a86bfc6a04b810ee3",
+      "bytes": 7211
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original-test-suite-provenance.json",
+      "sha256": "906eb879fa62ef0fb736071d2ad4d29696e9a2f3587ca9bf7df670c9f5bc75b8",
+      "bytes": 157
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original-tests.stdout",
+      "sha256": "068a312343880e73a36f215a986ffb2c7f99c25f958b6fc034409869d727b8d4",
+      "bytes": 573
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/outcome.json",
+      "sha256": "47a6af9e1f93cef01526353ce5c0533ab82a2197b93dbd317eda8cad2b114877",
+      "bytes": 3120
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/receipt-statement.json",
+      "sha256": "7c43d6b4cffe92df56a94a3f9a50ad6f2e4fbef9e00164d96c33f80586abcadd",
+      "bytes": 4404
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/receipt.json",
+      "sha256": "5f72aba440b29c8f0829580a2d9b2307f96453441a84e0741451cf1d68ecbfa4",
+      "bytes": 4452
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/record.jsonl",
+      "sha256": "abf28f8cc28bde02ee27a99ec541140750349d993e1f1bdf55bbbbc8bfc20e41",
+      "bytes": 453947
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/team-configuration.json",
+      "sha256": "62038765a6a4b931b1b642ec111ca7c168b86403c93f97e6cb13113ec79d2b22",
+      "bytes": 6025
+    },
+    {
+      "path": "C1-openrouter/continuation/first-sample-acceptance/trusted-public-key.txt",
+      "sha256": "1ad05d75f69bca37451e6ed1e29971a137718b8d14bb1cdb1bc7654c07d71fb8",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter.json",
+      "sha256": "e23999282769e3d5b2e7b46b12f6eaffd2ec4979beeb7c5ff80c510db7d67961",
+      "bytes": 12794
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/answers.txt",
+      "sha256": "3b6ddb2553b8e6415022b586fc2a2fe20985d1b8b7a8ca7cff2ea90f931f9962",
+      "bytes": 311
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/claude-openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "cf55790b7f214c6598bf4022e187e69ac860cd629d969fca29c60e2222a09a1f",
+      "bytes": 902
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/claude-openrouter-node-deps/changes.txt",
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1",
+      "bytes": 22
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/claude-openrouter-node-deps/command.txt",
+      "sha256": "e8fd54b4e5053efa0333cce5e57e0ed43c6ed1fec53442ddc7e977f5f428a56b",
+      "bytes": 238
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/claude-openrouter-node-deps/run.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/doctor.json",
+      "sha256": "103a9d1c400be6000392e8edb4b62091dabc081211d47bcf74e022001aee0c24",
+      "bytes": 4729
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+      "sha256": "085e86c01e2a557724114d11d6e2c2a8a5ab366cc84b59a0a78a03df3bd6e844",
+      "bytes": 2269
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/doctor---json-says-ready.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/onboard---update---writer-openrouter--connect-in-the-browser-when-it-asks---inte.log",
+      "sha256": "54daf12ad4f4300b033e2680cef3b67acc2e0a923f443169bf74b1379c85a09f",
+      "bytes": 46
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/onboarding/onboard-20261027-013126.log",
+      "sha256": "64f253723dcc579784cecc4f0d45cf61522d03e757c86924778a9d9e6e7e9024",
+      "bytes": 9987
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-matches-the-record-on-claude-openrouter-node-deps.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-matches-the-record-on-openrouter-node-deps.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-matches-the-record-on-openrouter-python-pytest.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-verify-on-claude-openrouter-node-deps--documented-command-.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-verify-on-openrouter-node-deps--documented-command-.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/receipt-verify-on-openrouter-python-pytest--documented-command-.log",
+      "sha256": "a269654a4069799265f2588ee8d8693afbd667bfb07640f1e53e3e1a18d64670",
+      "bytes": 85
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/record-verify-on-claude-openrouter-node-deps.log",
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb",
+      "bytes": 77
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/record-verify-on-openrouter-node-deps.log",
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb",
+      "bytes": 77
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/record-verify-on-openrouter-python-pytest.log",
+      "sha256": "60f793cae0ea54da89b4144a3597e17adedcae4bd857ae6cfdf69d6e9ca267eb",
+      "bytes": 77
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/run-fix-on-claude-openrouter-node-deps.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/run-fix-on-openrouter-node-deps.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/run-fix-on-openrouter-python-pytest.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "6fe6b71fdc10a6d3b4bd81f5c47cc46e5a72042ad0bf83ee7f543f608796671a",
+      "bytes": 890
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-node-deps/changes.txt",
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1",
+      "bytes": 22
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-node-deps/command.txt",
+      "sha256": "e9eabde55be84c7dfc381fd8adc1c9ca5845b1a5fe1698b58cdb90d01e8dbc5d",
+      "bytes": 178
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-node-deps/run.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-python-pytest/axocoatl-junit.xml",
+      "sha256": "6fe6b71fdc10a6d3b4bd81f5c47cc46e5a72042ad0bf83ee7f543f608796671a",
+      "bytes": 890
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-python-pytest/changes.txt",
+      "sha256": "8d35d329a7d7597cba54bf4afd2f85500041f94be81ea891c8838fc49a9d07a1",
+      "bytes": 22
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-python-pytest/command.txt",
+      "sha256": "e9eabde55be84c7dfc381fd8adc1c9ca5845b1a5fe1698b58cdb90d01e8dbc5d",
+      "bytes": 178
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/openrouter-python-pytest/run.log",
+      "sha256": "25cb020342ee642da8cad01e244afd2c30b3f09f153ca2e52d69a26d09eb10cf",
+      "bytes": 291
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/transcript.txt",
+      "sha256": "b37f01e74fa3c0ed41bc12799e1a0101c009bf693ebd31ae93139dd9caae660e",
+      "bytes": 22035
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/continuation-provenance.json",
+      "sha256": "841eac54d1a322f40298c109f9fc67633ed52eece245013783efb62287a20946",
+      "bytes": 16210
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/launch.sh",
+      "sha256": "e422f56b532f7b03e8f74c37b15aca88b2b7c26240f39214b181656f09a00a9b",
+      "bytes": 3689
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/newuser-mac-continuation.sh",
+      "sha256": "94399693a42de77b0532b2ab6cb7dad8098eb96ad053980075b038174ed507e5",
+      "bytes": 65966
+    },
+    {
+      "path": "C1-openrouter/continuation/fresh-prerequisites/verify-inputs.py",
+      "sha256": "2e3fa0c58174b25219b5aa504bccdaed36987debb2dddbb5f344f7c867d451f7",
+      "bytes": 1764
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures.json",
+      "sha256": "dd798f3e926d1a9056458e01ae73a3a6d266bcf7d07627067b98541232f36a98",
+      "bytes": 9516
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "927b603bafb38bff5291d686e4caaf8ea430a9fcbe2a50179b1b011f22a3efb8",
+      "bytes": 2582
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/changes.txt",
+      "sha256": "22ba574d33a0e4bff783b8ab038c1d5e9a85df0b35b629398783ab77138b3806",
+      "bytes": 550
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/command.txt",
+      "sha256": "f78a9022677e3649132a9b7d513f71e36a4637a505d3085186bb96189de24d4b",
+      "bytes": 359
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/receipt.json",
+      "sha256": "c803b2a0f8e69eff7224465808e9905c7915d09442770ff631e511781bdb40aa",
+      "bytes": 5136
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/run.axorecord.jsonl",
+      "sha256": "710d41b516afbf2635c84b34cb92eff78bde00d7f6b013bbc37fad6cad262076",
+      "bytes": 256388
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/run.log",
+      "sha256": "e7ca0fd8a7cf24fe3db6590a976005db51525663fd3fa8db98f92c9d14fa6c57",
+      "bytes": 3280
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/capped-OpenRouter-credit-status-after-fixtures.log",
+      "sha256": "6d49f90dc80ef5270fa111966a9615da35ca46a940d01833f88ea1e609095e24",
+      "bytes": 451
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/capped-OpenRouter-credit-status-before-fixtures.log",
+      "sha256": "444da5949c00aa650a9dfb4a5df08b65c29eaf41b8a5afd3a2c1a41673ee7559",
+      "bytes": 451
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/dev.log",
+      "sha256": "14198c259093533313c1d9de3074a47b8de13ec1242d9d498bf613580107637b",
+      "bytes": 749
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-claude-openrouter-node-deps.log",
+      "sha256": "6706e12dd0eb1d08f17ab36c8702892ea8c286f20c16ba012a15eaca2a22a053",
+      "bytes": 279
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-openrouter-node-deps.log",
+      "sha256": "61bcb29ac9fa163cfa58aaa1aa7b2e31808a59ab712c59ad24e2a0a2817edecd",
+      "bytes": 279
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-openrouter-python-pytest.log",
+      "sha256": "850c18786a0cc0d7257f337bb84b8233f50c527c43bb3794a042a2cfa0686165",
+      "bytes": 279
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-verify-on-claude-openrouter-node-deps--documented-command-.log",
+      "sha256": "316194c0028ec65ec3df79b07f6b0a0215aff2be011ba40a087739a240d32992",
+      "bytes": 273
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-verify-on-openrouter-node-deps--documented-command-.log",
+      "sha256": "8a7c132ee2d58f45f1225bb80410d6ec7d5a8204a8632ced3c211b88a8764f4a",
+      "bytes": 273
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/receipt-verify-on-openrouter-python-pytest--documented-command-.log",
+      "sha256": "4540933fee2760c2d7936247bbdfc6f6f0d51b935f3a452aaa8ac6351734e09e",
+      "bytes": 273
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/record-verify-on-claude-openrouter-node-deps.log",
+      "sha256": "90dcf3c4e16ae626c0f93590da6a7370405d92001000bc1daf9dd871eb46edf1",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/record-verify-on-openrouter-node-deps.log",
+      "sha256": "644613488919aea74e8b5f717979a67d3d6295cd8211adfdf5511fbd8d115e10",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/record-verify-on-openrouter-python-pytest.log",
+      "sha256": "81564e61cd429fbcdcf6eba704784eb70e9af781d1dd9db1cbfb1628d4356be7",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/run-fix-on-claude-openrouter-node-deps.log",
+      "sha256": "e7ca0fd8a7cf24fe3db6590a976005db51525663fd3fa8db98f92c9d14fa6c57",
+      "bytes": 3280
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/run-fix-on-openrouter-node-deps.log",
+      "sha256": "13ae989e84da59f2e20c7e8440f8ca7e66402b7a10f99734248df05f42c770be",
+      "bytes": 3159
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/logs/run-fix-on-openrouter-python-pytest.log",
+      "sha256": "a8ac11bd6f7fc6787e67ecee8e5450e91134fefac8d708bfd0ba63ac19b31b95",
+      "bytes": 3161
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "da7d61eb6378c04106675831126fe20a5ffa3f40dd3f6db1387f7fc7f2155e5d",
+      "bytes": 2590
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/changes.txt",
+      "sha256": "fb8228b2d612c4aa944226457451ca03c0f0d1d04f13afa38241089e9a8faabb",
+      "bytes": 1820
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/command.txt",
+      "sha256": "5f998b599021d2e6ab38fc6967ce7fbb535a2bc39066a7b68fa9070283c7cef0",
+      "bytes": 299
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/receipt.json",
+      "sha256": "629e5869da0dd91b80a4a74a58f1f9f3c1931b125fbf3532301e1e110c267175",
+      "bytes": 4988
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/run.axorecord.jsonl",
+      "sha256": "f654e9d130a576330ceed7655205a3a61e4a2d6563bef6c0f7d15a940869d869",
+      "bytes": 416046
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/run.log",
+      "sha256": "13ae989e84da59f2e20c7e8440f8ca7e66402b7a10f99734248df05f42c770be",
+      "bytes": 3159
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/axocoatl-junit.xml",
+      "sha256": "f503fad78a441794d5fcfbd0ab45f0620931cb7df6bebb5179e4de859883cafa",
+      "bytes": 2595
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/changes.txt",
+      "sha256": "8cd680f236b12ca94b5bac1377715c89a9bb4b4beb1d34121dab787b66ae6de1",
+      "bytes": 489
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/command.txt",
+      "sha256": "5f998b599021d2e6ab38fc6967ce7fbb535a2bc39066a7b68fa9070283c7cef0",
+      "bytes": 299
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/receipt.json",
+      "sha256": "c1b3807872087056058cef8f2af32463c507a81515ca329d0df375c57cc3ca79",
+      "bytes": 4856
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl",
+      "sha256": "f949ec0b5808280770f54ddf68d16e044a0ba9d1bc05bff5ffb9e617d032847f",
+      "bytes": 430306
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.log",
+      "sha256": "a8ac11bd6f7fc6787e67ecee8e5450e91134fefac8d708bfd0ba63ac19b31b95",
+      "bytes": 3161
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/owned-listener.txt",
+      "sha256": "44e87a5f0d4208a7ad36ba98ae1cc5e549654e8fcb4707fa61359d66650b5bd3",
+      "bytes": 249
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/provenance.json",
+      "sha256": "a9548940d317ae19fc1b1475b8ada1f9796d7815e39e97cd030907e39ccc3a11",
+      "bytes": 1163
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/runner.sh",
+      "sha256": "d6d6897ad11bd904c9b56421d23c314a6d4994b18f8db644992063905291298a",
+      "bytes": 7701
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/transcript.txt",
+      "sha256": "5521217871b108c5f97e3640207571486d147b12a5631f1988f65111a9db74d2",
+      "bytes": 15940
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/activation-summary.json",
+      "sha256": "c29050b0be4abe8a4a71a73143375580f933414d9b89e99a5708bd358b581237",
+      "bytes": 24294
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/assessment.json",
+      "sha256": "4eb1c6fd8769cf719258341cf7f62d4a0ecf0a9c451433f085cc6355fd10dbd7",
+      "bytes": 15562
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/audit-inputs.json",
+      "sha256": "43b3bca40fa8ea50559d0edda2119bbc643b3a3796d95ae385c2f3711e71c760",
+      "bytes": 2341
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "927b603bafb38bff5291d686e4caaf8ea430a9fcbe2a50179b1b011f22a3efb8",
+      "bytes": 2582
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/changes.txt",
+      "sha256": "22ba574d33a0e4bff783b8ab038c1d5e9a85df0b35b629398783ab77138b3806",
+      "bytes": 550
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/command.txt",
+      "sha256": "f78a9022677e3649132a9b7d513f71e36a4637a505d3085186bb96189de24d4b",
+      "bytes": 359
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/commands.json",
+      "sha256": "a4c4d07358986d783ce66b4069817cf111edcaf5d7a1f8e0cb5deaec572e5bff",
+      "bytes": 4679
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/execution-provenance.json",
+      "sha256": "9e17abb91fe08fc593d090bb28f90c0357ce39189aa36e252ca0b2ad2c09b578",
+      "bytes": 1164
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/gate-output-exclusions.json",
+      "sha256": "42c4cb93785bbcd67b3b64f8a95f6ec2c3930a6e70782dd065cfb717c5cdd580",
+      "bytes": 658
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/git-status-after.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/git-status-before.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/independent-receipt-verify.stdout",
+      "sha256": "e24c7c8bde73e28a497d94ce064ab3e6a95fdc984293575fe4bcf1322ab659db",
+      "bytes": 2417
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/independent-record-verify.stdout",
+      "sha256": "90dcf3c4e16ae626c0f93590da6a7370405d92001000bc1daf9dd871eb46edf1",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/negative-evidence.json",
+      "sha256": "9496888d1c558f264b12170e58104375c503653fa244b1ce258f852fe88313de",
+      "bytes": 2154
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/network-events.json",
+      "sha256": "e97fb1a2e7a672eb9b509758af1048ecee10bbd745acc423fc10c20710531d84",
+      "bytes": 20647
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original-test-suite-provenance.json",
+      "sha256": "3638822371d098fc469f16380d5c81023f0d76ef63c1b120dd037ff97f5bccda",
+      "bytes": 159
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original-tests.stdout",
+      "sha256": "ace17323bcd9f9f16ed10ce35fa5f08a78cdf90dfaa40742d3333d3f7af17a36",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/outcome.json",
+      "sha256": "4d905e71a743cfed69e0540fda93945f09892eb82d8f5645cf92662f6828b82f",
+      "bytes": 3641
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/patch.diff",
+      "sha256": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+      "bytes": 470
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/receipt-statement.json",
+      "sha256": "bd886258ddc7ccf91ea4bbbe3f4dc04c9676eb4294979e49a3a4f689f1986969",
+      "bytes": 5245
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/receipt.json",
+      "sha256": "c803b2a0f8e69eff7224465808e9905c7915d09442770ff631e511781bdb40aa",
+      "bytes": 5136
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/run.axorecord.jsonl",
+      "sha256": "710d41b516afbf2635c84b34cb92eff78bde00d7f6b013bbc37fad6cad262076",
+      "bytes": 256388
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/run.log",
+      "sha256": "e7ca0fd8a7cf24fe3db6590a976005db51525663fd3fa8db98f92c9d14fa6c57",
+      "bytes": 3280
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/team-configuration.json",
+      "sha256": "1564a9c0b5de07b41fefc79ee833743cc390c68c8f2acf88b6b42c983f3034ed",
+      "bytes": 5831
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/claude-openrouter-node-deps/trusted-public-key.txt",
+      "sha256": "1ad05d75f69bca37451e6ed1e29971a137718b8d14bb1cdb1bc7654c07d71fb8",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/activation-summary.json",
+      "sha256": "4ddb72b84b8c4ed905935e051f650c4bf9182332192eb0503e0896f45d569cf1",
+      "bytes": 41563
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/assessment.json",
+      "sha256": "f9f80cb7712a504e73c8def8d2e7aac1173499d9e2c27fc422ec39f8a0bf4ef4",
+      "bytes": 13373
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/audit-inputs.json",
+      "sha256": "36d46b98b456f0de5266fb564117642bbe7fc6f6246d39f3366e682d6b8ada70",
+      "bytes": 2329
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/axocoatl-junit.xml",
+      "sha256": "da7d61eb6378c04106675831126fe20a5ffa3f40dd3f6db1387f7fc7f2155e5d",
+      "bytes": 2590
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/changes.txt",
+      "sha256": "fb8228b2d612c4aa944226457451ca03c0f0d1d04f13afa38241089e9a8faabb",
+      "bytes": 1820
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/command.txt",
+      "sha256": "5f998b599021d2e6ab38fc6967ce7fbb535a2bc39066a7b68fa9070283c7cef0",
+      "bytes": 299
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/commands.json",
+      "sha256": "c870b0ff7749db6a434601094fe36c508780dd1b5748b5c7692926dc3febb5c8",
+      "bytes": 4609
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/execution-provenance.json",
+      "sha256": "9e17abb91fe08fc593d090bb28f90c0357ce39189aa36e252ca0b2ad2c09b578",
+      "bytes": 1164
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/README.md",
+      "sha256": "2a1aeb934145d6b9be9ae9ac7fa68be652a8040b750f9d4dadf5eaeaa9f40783",
+      "bytes": 1682
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/gate-output-exclusions.json",
+      "sha256": "a67b555870ae9b8d82d03c94335853b2e446a3b86fff6425f6db0efea0cacb37",
+      "bytes": 658
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/git-status-after.txt",
+      "sha256": "abcb49403324e929344318f9a958347af7991959f71043b4ebc7d8271a6b4b44",
+      "bytes": 93
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/git-status-before.txt",
+      "sha256": "abcb49403324e929344318f9a958347af7991959f71043b4ebc7d8271a6b4b44",
+      "bytes": 93
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/src/paginate.js",
+      "sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "bytes": 606
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/independent-receipt-verify.stdout",
+      "sha256": "1cec9049780ae5cdb4ac90b04fc0ab1c9f49224ce3381d1df958e592483e944b",
+      "bytes": 2369
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/independent-record-verify.stdout",
+      "sha256": "644613488919aea74e8b5f717979a67d3d6295cd8211adfdf5511fbd8d115e10",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/negative-evidence.json",
+      "sha256": "ef8b52fbfa8ea3e1c3492b3f4870eb1d997ead2b8161bee091b2db35dc5c9272",
+      "bytes": 233
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/network-events.json",
+      "sha256": "2c720265441ea02e7c3cb6705df6a9919c462551522f4abdf52c078f5c62c639",
+      "bytes": 14272
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original-test-suite-provenance.json",
+      "sha256": "1a430d2fc9edf348401bc486537d7f70d45796ed95abf98fdc5865611c2b7b6c",
+      "bytes": 159
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original-tests.stdout",
+      "sha256": "cc6a06662a8ef99fe5203cb67f7f330041528232960f140d34f748fe8ef0797c",
+      "bytes": 154
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/outcome.json",
+      "sha256": "d78e7b71245e061edfcb4ee7603bc9b4e968279f911f9317a01ee52a78b2d3ba",
+      "bytes": 3747
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/patch.diff",
+      "sha256": "3de4a30be1c06f1c1a37a4e08b0e2ac760baa3a71cfa5e5828f0b72ff8b6d83d",
+      "bytes": 1727
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/receipt-statement.json",
+      "sha256": "f6ff90be9f26f52c6a93e9c28b16fba3b2149870d2a5e1a0e2dc13eb1990de83",
+      "bytes": 4987
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/receipt.json",
+      "sha256": "629e5869da0dd91b80a4a74a58f1f9f3c1931b125fbf3532301e1e110c267175",
+      "bytes": 4988
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/run.axorecord.jsonl",
+      "sha256": "f654e9d130a576330ceed7655205a3a61e4a2d6563bef6c0f7d15a940869d869",
+      "bytes": 416046
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/run.log",
+      "sha256": "13ae989e84da59f2e20c7e8440f8ca7e66402b7a10f99734248df05f42c770be",
+      "bytes": 3159
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/team-configuration.json",
+      "sha256": "622d5622feaa78584a639b553ee9f36517ee801af53439f7fd9330a07cf10054",
+      "bytes": 6025
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/trusted-public-key.txt",
+      "sha256": "1ad05d75f69bca37451e6ed1e29971a137718b8d14bb1cdb1bc7654c07d71fb8",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/activation-summary.json",
+      "sha256": "8266c59a0840155dfc9755e8920806c05081903255b97ced3516a4cf1c2b5f0c",
+      "bytes": 51313
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/assessment.json",
+      "sha256": "6404c14f214e6e2a60d3beee244d62953e60cd59d5bdedbd5c011935c7ecafdc",
+      "bytes": 17531
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/audit-inputs.json",
+      "sha256": "959dfc62f188409bc28fe16fa09ad16190933ec85bf0dc6e4d4546e4611d03dd",
+      "bytes": 2249
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/axocoatl-junit.xml",
+      "sha256": "f503fad78a441794d5fcfbd0ab45f0620931cb7df6bebb5179e4de859883cafa",
+      "bytes": 2595
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/changes.txt",
+      "sha256": "8cd680f236b12ca94b5bac1377715c89a9bb4b4beb1d34121dab787b66ae6de1",
+      "bytes": 489
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/command.txt",
+      "sha256": "5f998b599021d2e6ab38fc6967ce7fbb535a2bc39066a7b68fa9070283c7cef0",
+      "bytes": 299
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/commands.json",
+      "sha256": "1d6c58c8447d419add379d233a2a028f3275e27b0eea4c708acc0b044f43c286",
+      "bytes": 5840
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/execution-provenance.json",
+      "sha256": "9e17abb91fe08fc593d090bb28f90c0357ce39189aa36e252ca0b2ad2c09b578",
+      "bytes": 1164
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/final/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/gate-output-exclusions.json",
+      "sha256": "3834d9ad63ed77eb14cd748d8d4ecf6b78d2415a1f335e599bae1f7e109e8557",
+      "bytes": 658
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/git-status-after.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/git-status-before.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-check/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-check/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-check/pages.py",
+      "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "bytes": 542
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-check/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-check/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/host-dependency-provenance.json",
+      "sha256": "5a6ed248aaf27aa8df0736f24ca7cda710934752a27a1780a9c4b0c314a2e033",
+      "bytes": 255
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/independent-receipt-verify.stdout",
+      "sha256": "1708387b61e0026921d971717d1d4e444e629eeeb8d575f92ce5c0248232bee2",
+      "bytes": 2283
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/independent-record-verify.stdout",
+      "sha256": "81564e61cd429fbcdcf6eba704784eb70e9af781d1dd9db1cbfb1628d4356be7",
+      "bytes": 278
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/module-selection.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/module-selection.stdout",
+      "sha256": "e862c0be97fe70ac9a0e3917ebaf45e0f134cb1d50a5bc7375e7a7f56238e7bb",
+      "bytes": 207
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/negative-evidence.json",
+      "sha256": "2b77c9227cc1479993b14fc8ba7998cdbc4ee3e6e647a74d0f4a7bf36916fa64",
+      "bytes": 3107
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/network-events.json",
+      "sha256": "5046fcc71ad0904d72b961b347636ec06c17edef7302b9e1d316617c09a8ae32",
+      "bytes": 12695
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original-test-suite-provenance.json",
+      "sha256": "df2ec1c29f7f114475b532b085d74b70e35cb42b1b4435f70b71b08bd5924145",
+      "bytes": 157
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original-tests.stdout",
+      "sha256": "27a302c4e76cff2f27d934286efa35e3c5e6fe27387ae9f2d681d337457fc18f",
+      "bytes": 568
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/outcome.json",
+      "sha256": "854b9fa4ae18c5d7ad97f3e07479d1227c731632f03799d7cba14344eeafe586",
+      "bytes": 3887
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/patch.diff",
+      "sha256": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+      "bytes": 416
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/receipt-statement.json",
+      "sha256": "3602037c319fc4b1780ecd21797bd8c390c2ab2589ad8d4be828a04e0d01b337",
+      "bytes": 4859
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/receipt.json",
+      "sha256": "c1b3807872087056058cef8f2af32463c507a81515ca329d0df375c57cc3ca79",
+      "bytes": 4856
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/run.axorecord.jsonl",
+      "sha256": "f949ec0b5808280770f54ddf68d16e044a0ba9d1bc05bff5ffb9e617d032847f",
+      "bytes": 430306
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/run.log",
+      "sha256": "a8ac11bd6f7fc6787e67ecee8e5450e91134fefac8d708bfd0ba63ac19b31b95",
+      "bytes": 3161
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/team-configuration.json",
+      "sha256": "6942652107fd6ddef1ad31a56790f3b23505166c7353b062761f9da03dbe2c9b",
+      "bytes": 6035
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-python-pytest/trusted-public-key.txt",
+      "sha256": "1ad05d75f69bca37451e6ed1e29971a137718b8d14bb1cdb1bc7654c07d71fb8",
+      "bytes": 91
+    },
+    {
+      "path": "C1-openrouter/continuation/isolated-fixtures/transcript.txt",
+      "sha256": "2e04b72a5c1d560b7bd46a966950f3d916c3b30b4e390e35c00266b78b14c34b",
+      "bytes": 16260
+    },
+    {
+      "path": "C1-openrouter/continuation/omitted-cache-payload.json",
+      "sha256": "1bdbb1476816021edf9ac4e05a94c757045e03df210f86246427820829f4986b",
+      "bytes": 56665
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter.json",
+      "sha256": "3f4c8d94a1816eaae29222a7084201011d8a6d15f5e7e16890088323ae8345eb",
+      "bytes": 1853
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/onboard---update---writer-openrouter--connect-in-the-browser-when-it-asks---inte.log",
+      "sha256": "9c753909e1abb94b0eca912aa605862ae540e1c4289668ca27dd662892ae38a6",
+      "bytes": 46
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/logs/onboarding/onboard-20261027-005221.log",
+      "sha256": "d86511f73b175177d910cdffc1783de81c373753908dfc149b74c3ca4b6aa05e",
+      "bytes": 4352
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-openrouter/transcript.txt",
+      "sha256": "cbc23cd589d31d53073a28056e3ef9f677e30771f35993de41775591b3ac428f",
+      "bytes": 5301
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/continuation-provenance.json",
+      "sha256": "3ff683b2d01028f005d2b30c1d199b6c8efe8f77704fe762d1f07ab396e77fa6",
+      "bytes": 15457
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/launch.sh",
+      "sha256": "467e07765f1ee51ac3f1d0e94602881c3f9d72e2b4633b78ba447eb128ff6930",
+      "bytes": 3531
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/newuser-mac-continuation.sh",
+      "sha256": "94399693a42de77b0532b2ab6cb7dad8098eb96ad053980075b038174ed507e5",
+      "bytes": 65966
+    },
+    {
+      "path": "C1-openrouter/continuation/previous-oauth-failure/verify-inputs.py",
+      "sha256": "2e3fa0c58174b25219b5aa504bccdaed36987debb2dddbb5f344f7c867d451f7",
+      "bytes": 1764
+    },
+    {
+      "path": "C1-openrouter/continuation/source-copy-index.json",
+      "sha256": "f68c86ef6bd21e1e4a6a972d4fba558d8ac6322aec5311e4dea078791498669d",
+      "bytes": 128170
+    },
+    {
+      "path": "C1-openrouter/continuation/step-provenance.json",
+      "sha256": "cb6576fa491e8100acb43725df8f64d79f2405ca529dc1c85bfa00e6a0869787",
+      "bytes": 27337
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+2026-10-27T01:37:15Z	erick	When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter there (no key typed or pasted)?	y	
+2026-10-27T01:37:21Z	erick	Did onboarding ask separately for the writer and the reviewer model, and refuse the same model for both?	y	

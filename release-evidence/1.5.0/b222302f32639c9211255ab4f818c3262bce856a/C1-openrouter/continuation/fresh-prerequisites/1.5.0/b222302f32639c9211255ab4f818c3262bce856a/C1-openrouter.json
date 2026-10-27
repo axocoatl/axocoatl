@@ -1,0 +1,323 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-openrouter",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-27T01:31:26Z",
+  "finished_at": "2026-10-27T01:37:26.533Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "34395 MiB free; models cached: yes"
+    },
+    {
+      "name": "axocoatl is installed",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "no OpenRouter key was stored before this path",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl secret list names no openrouter"
+    },
+    {
+      "name": "onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 326.1,
+      "bytes_downloaded": 119857645
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "onboard --update --writer openrouter (connect in the browser when it asks): every prompt was answered by the operator (erick); the transcript holds each"
+    },
+    {
+      "name": "OpenRouter was connected through the browser sign-in during onboarding",
+      "status": "pass",
+      "required": true,
+      "detail": "openrouter was stored during the interactive onboarding, and the operator (erick) answered yes: When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter there (no key typed or pasted)?"
+    },
+    {
+      "name": "config.yaml holds no OpenRouter key",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboarding asked for different writer and reviewer models",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Did onboarding ask separately for the writer and the reviewer model, and refuse the same model for both?"
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.8,
+      "bytes_downloaded": 55086
+    },
+    {
+      "name": "doctor: ready, no FAIL",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl doctor (as the site shows it) exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.7,
+      "bytes_downloaded": 65979
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "the daemon answers on port 8080",
+      "status": "pass",
+      "required": true,
+      "detail": "an Axocoatl daemon on port 8080 runs the current configuration (the service or dev)"
+    },
+    {
+      "name": "run fix on openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 4,
+      "seconds": 0,
+      "bytes_downloaded": 5932,
+      "detail": "exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign "
+    },
+    {
+      "name": "run on openrouter-node-deps chose a node image",
+      "status": "fail",
+      "required": true,
+      "detail": "expected the run's plan line (image … · toolchain …) to name a node image; found 'none'"
+    },
+    {
+      "name": "run on openrouter-node-deps ran setup (npm ci)",
+      "status": "fail",
+      "required": true,
+      "detail": "neither the run's output nor its record names npm ci"
+    },
+    {
+      "name": "receipt verify on openrouter-node-deps (documented command)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 556,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "record verify on openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 722,
+      "detail": "exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) "
+    },
+    {
+      "name": "receipt matches the record on openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 16006,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "detail": "cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/openrouter-node-deps/run.axorecord.jsonl does not exist"
+    },
+    {
+      "name": "run fix on openrouter-python-pytest",
+      "status": "fail",
+      "required": true,
+      "exit_code": 4,
+      "seconds": 0,
+      "bytes_downloaded": 275,
+      "detail": "exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign "
+    },
+    {
+      "name": "run on openrouter-python-pytest chose a python image",
+      "status": "fail",
+      "required": true,
+      "detail": "expected the run's plan line (image … · toolchain …) to name a python image; found 'none'"
+    },
+    {
+      "name": "run on openrouter-python-pytest ran setup (pip install)",
+      "status": "fail",
+      "required": true,
+      "detail": "neither the run's output nor its record names pip install"
+    },
+    {
+      "name": "receipt verify on openrouter-python-pytest (documented command)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 86,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "record verify on openrouter-python-pytest",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "detail": "exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) "
+    },
+    {
+      "name": "receipt matches the record on openrouter-python-pytest",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on openrouter-python-pytest",
+      "status": "fail",
+      "required": true,
+      "detail": "cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/openrouter-python-pytest/run.axorecord.jsonl does not exist"
+    },
+    {
+      "name": "axocoatl run fix passed on node-deps and python-pytest with the OpenRouter models",
+      "status": "fail",
+      "required": true,
+      "detail": "writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b: see the failing steps above"
+    },
+    {
+      "name": "run fix on claude-openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 4,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "detail": "exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign "
+    },
+    {
+      "name": "run on claude-openrouter-node-deps chose a node image",
+      "status": "fail",
+      "required": true,
+      "detail": "expected the run's plan line (image … · toolchain …) to name a node image; found 'none'"
+    },
+    {
+      "name": "run on claude-openrouter-node-deps ran setup (npm ci)",
+      "status": "fail",
+      "required": true,
+      "detail": "neither the run's output nor its record names npm ci"
+    },
+    {
+      "name": "receipt verify on claude-openrouter-node-deps (documented command)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 86,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "record verify on claude-openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 42,
+      "detail": "exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) "
+    },
+    {
+      "name": "receipt matches the record on claude-openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "detail": "exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) "
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on claude-openrouter-node-deps",
+      "status": "fail",
+      "required": true,
+      "detail": "cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/claude-openrouter-node-deps/run.axorecord.jsonl does not exist"
+    },
+    {
+      "name": "fix-claude-code with the OpenRouter reviewer passed on node-deps",
+      "status": "fail",
+      "required": true,
+      "detail": "reviewer openrouter:openai/gpt-oss-120b: see the failing steps above"
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "34271 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-openrouter/answers.txt",
+    "C1-openrouter/claude-openrouter-node-deps/axocoatl-junit.xml",
+    "C1-openrouter/claude-openrouter-node-deps/changes.txt",
+    "C1-openrouter/claude-openrouter-node-deps/command.txt",
+    "C1-openrouter/claude-openrouter-node-deps/run.log",
+    "C1-openrouter/doctor.json",
+    "C1-openrouter/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+    "C1-openrouter/logs/doctor---json-says-ready.log",
+    "C1-openrouter/logs/onboard---update---writer-openrouter--connect-in-the-browser-when-it-asks---inte.log",
+    "C1-openrouter/logs/onboarding/onboard-20261027-013126.log",
+    "C1-openrouter/logs/receipt-matches-the-record-on-claude-openrouter-node-deps.log",
+    "C1-openrouter/logs/receipt-matches-the-record-on-openrouter-node-deps.log",
+    "C1-openrouter/logs/receipt-matches-the-record-on-openrouter-python-pytest.log",
+    "C1-openrouter/logs/receipt-verify-on-claude-openrouter-node-deps--documented-command-.log",
+    "C1-openrouter/logs/receipt-verify-on-openrouter-node-deps--documented-command-.log",
+    "C1-openrouter/logs/receipt-verify-on-openrouter-python-pytest--documented-command-.log",
+    "C1-openrouter/logs/record-verify-on-claude-openrouter-node-deps.log",
+    "C1-openrouter/logs/record-verify-on-openrouter-node-deps.log",
+    "C1-openrouter/logs/record-verify-on-openrouter-python-pytest.log",
+    "C1-openrouter/logs/run-fix-on-claude-openrouter-node-deps.log",
+    "C1-openrouter/logs/run-fix-on-openrouter-node-deps.log",
+    "C1-openrouter/logs/run-fix-on-openrouter-python-pytest.log",
+    "C1-openrouter/openrouter-node-deps/axocoatl-junit.xml",
+    "C1-openrouter/openrouter-node-deps/changes.txt",
+    "C1-openrouter/openrouter-node-deps/command.txt",
+    "C1-openrouter/openrouter-node-deps/run.log",
+    "C1-openrouter/openrouter-python-pytest/axocoatl-junit.xml",
+    "C1-openrouter/openrouter-python-pytest/changes.txt",
+    "C1-openrouter/openrouter-python-pytest/command.txt",
+    "C1-openrouter/openrouter-python-pytest/run.log",
+    "C1-openrouter/transcript.txt"
+  ]
+}

@@ -1,0 +1,271 @@
+gate: PASS  free disk at the start
+
+===== C1-openrouter (1.5.0 at b222302f3263) =====
+gate: PASS  axocoatl is installed
+gate: PASS  no OpenRouter key was stored before this path
+gate: RUN   onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261027-013126.log
+
+Step 0 · This computer
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 36 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5.
+Not found: codex.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A hosted model (OpenRouter credits) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+Check the sandbox with one throwaway container? This pulls
+docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start
+from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2Kfrom, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native
+Sessions do not support BYOK) [Y/n] [?25l[2KSessions do not support BYOK) yes
+[?25hModel for the writer (vendor/model) [qwen/qwen3-coder-30b-a3b-instruct]: [2KModel for the writer (vendor/model): qwen/qwen3-coder-30b-a3b-instruct
+Model for the reviewer (must be a different model) [openai/gpt-oss-120b]: qwen/qwen3-coder-30b-a3b-instruct[2KModel for the reviewer (must be a different model): qwen/qwen3-coder-30b-a3b-instruct
+  ✗ The reviewer must be a different model from the writer (qwen/qwen3-coder-30b-a3b-instruct): a second model checks the writer's change
+Model for the reviewer (a different model) [openai/gpt-oss-120b]: [2KModel for the reviewer (a different model): openai/gpt-oss-120b
+  1. Sign in to OpenRouter in your browser (recommended)
+  2. Read it from an environment variable (the configuration names the
+     variable, not the key)
+  3. Enter it at a hidden prompt (stored in your owner-only configuration)
+[?25lHow should Axocoatl get your OpenRouter key?:
+> 1. Sign in to OpenRouter in your browser (recommended)
+  2. Read it from an environment variable (the configuration names the variabl…
+  3. Enter it at a hidden prompt (stored in your owner-only configuration)
+[4A[2K[1B[2K[1B[2K[1B[2K[1B[4A[?25hHow should Axocoatl get your OpenRouter key?: Sign in to OpenRouter in your browser (recommended)
+  ✓ writer qwen/qwen3-coder-30b-a3b-instruct: 262,144 tokens of context, $0.07 in / $0.28 out per million tokens
+  ✓ reviewer openai/gpt-oss-120b: 131,072 tokens of context, $0.15 in / $0.60 out per million tokens
+  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser then returns to http://127.0.0.1:54447/callback on this computer, and Axocoatl stores the key OpenRouter issues as the secret openrouter without showing it.
+  If no browser opens, open this address in a browser on this computer:
+    https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A54447%2Fcallback&code_challenge=FKsOF_1-YwuDPbGoqhp0lax0cARshKXWa6bfAqHTBdo&code_challenge_method=S256&state=bTvalxO9krMy11g40y-PzA&key_label=Axocoatl+2026-10-26
+  Waiting up to 10 minutes for the sign-in (Ctrl-C stops it)…
+  The browser returned to Axocoatl. Getting the key from OpenRouter (it is not shown)…
+  ✓ Connected OpenRouter: stored the key as secret openrouter (it was never shown)
+    Key label: sk-or-v1-d63...8a9
+    Credit limit: $0.90 on this key, $0.90 left
+    Used by this key: $0.00 in all, $0.00 today (UTC)
+    Free tier: no (the account has bought credits)
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  Changes to /Users/erick/Library/Application Support/Axocoatl/config.yaml:
+    -     provider: ollama
+    -     model: "gpt-oss:20b"
+    +     provider: openrouter
+    +     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    -     provider: ollama
+    -     model: "gpt-oss:20b"
+    +     provider: openrouter
+    +     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    -     provider: ollama
+    -     model: "gpt-oss:20b"
+    +     provider: openrouter
+    +     model: "openai/gpt-oss-120b"
+    -       max_tokens: 4096
+    +       max_tokens: 2048
+    -     provider: ollama
+    -     model: "gpt-oss:20b"
+    +     provider: openrouter
+    +     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     sampling:
+    +       max_tokens: 2048
+    +   openrouter_billing: credits
+    +   openrouter:
+    +     api_key_secret: openrouter
+    - # Writer: codex (axocoatl run fix-codex --param credential=codex-chatgpt)
+    + # Writer: openrouter (axocoatl run fix)
+    -     reviewer: "ollama:gpt-oss:20b"
+    +     writer: "openrouter:qwen/qwen3-coder-30b-a3b-instruct"
+    +     reviewer: "openrouter:openai/gpt-oss-120b"
+Write these changes? The current file is kept as
+config.yaml.bak-20261027-013409 next to it. [Y/n] [?25l[2Kconfig.yaml.bak-20261027-013409 next to it. yes
+[?25h  ✓ Backed up to /Users/erick/Library/Application Support/Axocoatl/config.yaml.bak-20261027-013409
+  ✓ Configuration written: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Data: /Users/erick/Library/Application Support/Axocoatl/data
+
+Step 5 · Check
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, axocoatl run fix-claude-code, axocoatl run fix-codex, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-claude-code (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-codex (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+Run a first fix now on a small sample repository to prove the setup end
+to end? It costs about $0.01 on OpenRouter. [Y/n] [?25l[2Kto end? It costs about $0.01 on OpenRouter. yes
+[?25h
+Step 7 · A first run
+  Sample repository: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo
+  Starting a daemon for this run (axocoatl serve on port 8080; its first start downloads an 87 MB embedding model once)…
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model writer=openrouter:qwen/qwen3-coder-30b-a3b-instruct --model reviewer=openrouter:openai/gpt-oss-120b
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo
+· run run-241be6b1-d700-4826-a5eb-8bb55a284c26 in Session ses-2700a2dd-97d3-46b6-a85e-022ca984f4da
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-c3df7cad-6e3b-43dc-a158-af8d4e2c23d4 started (run)
+· turn turn-c3df7cad-6e3b-43dc-a158-af8d4e2c23d4 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint near-ai/fp4 (Near AI)
+  qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 14 calls answered by endpoint siliconflow/fp8 (SiliconFlow)
+Usage: 78538 input + 2363 output tokens, $0.0052
+Network: 19 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-241be6b1-d700-4826-a5eb-8bb55a284c26
+· record written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/record.jsonl
+· receipt written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/receipt.json (key 8a7a6b546e72ca24, 1 file covered, 0 removed, judged_capture)
+  $ axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/receipt.json --key "$(axocoatl receipt key)" --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo
+receipt of run run-241be6b1-d700-4826-a5eb-8bb55a284c26, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 1 covered and 0 removed match /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/repo (judged_capture)
+result: valid (exit 0)
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-5a9115f59a5349e397f0a754dac9bf71/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript) (326.1s)
+gate: PASS  onboarding was answered live in the terminal
+
+>>> When onboarding asked how to get the OpenRouter key, did you choose the browser sign-in and sign in to OpenRouter there (no key typed or pasted)? [y/n] y
+>>> answered y
+gate: PASS  OpenRouter was connected through the browser sign-in during onboarding
+gate: PASS  config.yaml holds no OpenRouter key
+
+>>> Did onboarding ask separately for the writer and the reviewer model, and refuse the same model for both? [y/n] y
+>>> answered y
+gate: PASS  onboarding asked for different writer and reviewer models
+gate: RUN   doctor --json says ready
+gate: PASS  doctor --json says ready (0.8s)
+gate: PASS  doctor: ready, no FAIL
+gate: RUN   axocoatl doctor (as the site shows it) exits 0
+Axocoatl doctor (config: /Users/erick/Library/Application Support/Axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 6.1.4 ready (machine podman-machine-default: applehv, rootless, 6 CPUs / 8 GiB; kernel 7.2.7-200.fc44.aarch64), needed for every Session and every axocoatl run
+  [ OK ] Platform: macOS on Apple silicon, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] Ollama 0.40.11 at http://localhost:11434, a version native Sessions accept
+  [ OK ] Ollama cloud models disabled at http://localhost:11434 (~/.ollama/server.json)
+  [ OK ] OpenRouter API key present (secret openrouter, never shown)
+
+Writers
+  [ OK ] Claude Code: claude-code image built
+  [ OK ] Claude Code: signed in (claude-code-oauth stored)
+  [ OK ] codex image built
+  [ OK ] Codex: signed in (codex-chatgpt stored)
+  [ OK ] claude CLI: /opt/homebrew/bin/claude 2.1.92 (Claude Code)
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: signed in (for `--keep pr`)
+  [ OK ] Stored credentials: claude-code-oauth, codex-chatgpt, openrouter, receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  [ OK ] Data dir writable: /Users/erick/Library/Application Support/Axocoatl/data
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.39.5 (the daemon runs git on your repositories)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, axocoatl run fix-claude-code, axocoatl run fix-codex, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-claude-code (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-codex (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+gate: PASS  axocoatl doctor (as the site shows it) exits 0 (0.7s)
+gate: PASS  doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]
+gate: PASS  the daemon answers on port 8080
+gate: RUN   run fix on openrouter-node-deps
+axocoatl run: the daemon refused the API token (401 Unauthorized): 
+· JUnit written to axocoatl-junit.xml
+· no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record
+· no receipt written to receipt.json: no run was admitted, so there is nothing to sign
+gate: FAIL  run fix on openrouter-node-deps: exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign 
+gate: FAIL  run on openrouter-node-deps chose a node image: expected the run's plan line (image … · toolchain …) to name a node image; found 'none'
+gate: FAIL  run on openrouter-node-deps ran setup (npm ci): neither the run's output nor its record names npm ci
+gate: RUN   receipt verify on openrouter-node-deps (documented command)
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt verify on openrouter-node-deps (documented command): exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: RUN   record verify on openrouter-node-deps
+axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2)
+gate: FAIL  record verify on openrouter-node-deps: exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) 
+gate: RUN   receipt matches the record on openrouter-node-deps
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt matches the record on openrouter-node-deps: exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: FAIL  no tool-call markup in the accepted output of the run on openrouter-node-deps: cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/openrouter-node-deps/run.axorecord.jsonl does not exist
+gate: RUN   run fix on openrouter-python-pytest
+axocoatl run: the daemon refused the API token (401 Unauthorized): 
+· JUnit written to axocoatl-junit.xml
+· no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record
+· no receipt written to receipt.json: no run was admitted, so there is nothing to sign
+gate: FAIL  run fix on openrouter-python-pytest: exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign 
+gate: FAIL  run on openrouter-python-pytest chose a python image: expected the run's plan line (image … · toolchain …) to name a python image; found 'none'
+gate: FAIL  run on openrouter-python-pytest ran setup (pip install): neither the run's output nor its record names pip install
+gate: RUN   receipt verify on openrouter-python-pytest (documented command)
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt verify on openrouter-python-pytest (documented command): exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: RUN   record verify on openrouter-python-pytest
+axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2)
+gate: FAIL  record verify on openrouter-python-pytest: exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) 
+gate: RUN   receipt matches the record on openrouter-python-pytest
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt matches the record on openrouter-python-pytest: exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: FAIL  no tool-call markup in the accepted output of the run on openrouter-python-pytest: cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/openrouter-python-pytest/run.axorecord.jsonl does not exist
+gate: FAIL  axocoatl run fix passed on node-deps and python-pytest with the OpenRouter models: writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b: see the failing steps above
+gate: RUN   run fix on claude-openrouter-node-deps
+axocoatl run: the daemon refused the API token (401 Unauthorized): 
+· JUnit written to axocoatl-junit.xml
+· no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record
+· no receipt written to receipt.json: no run was admitted, so there is nothing to sign
+gate: FAIL  run fix on claude-openrouter-node-deps: exit 4, expected 0: · JUnit written to axocoatl-junit.xml · no record written to run.axorecord.jsonl: no run was admitted, so there is nothing to record · no receipt written to receipt.json: no run was admitted, so there is nothing to sign 
+gate: FAIL  run on claude-openrouter-node-deps chose a node image: expected the run's plan line (image … · toolchain …) to name a node image; found 'none'
+gate: FAIL  run on claude-openrouter-node-deps ran setup (npm ci): neither the run's output nor its record names npm ci
+gate: RUN   receipt verify on claude-openrouter-node-deps (documented command)
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt verify on claude-openrouter-node-deps (documented command): exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: RUN   record verify on claude-openrouter-node-deps
+axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2)
+gate: FAIL  record verify on claude-openrouter-node-deps: exit 3, expected 0: axocoatl record: run.axorecord.jsonl: No such file or directory (os error 2) 
+gate: RUN   receipt matches the record on claude-openrouter-node-deps
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)
+gate: FAIL  receipt matches the record on claude-openrouter-node-deps: exit 3, expected 0: problem: receipt.json: No such file or directory (os error 2) result: usage (exit 3) 
+gate: FAIL  no tool-call markup in the accepted output of the run on claude-openrouter-node-deps: cannot read the run's accepted answers: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-retry1/repos/claude-openrouter-node-deps/run.axorecord.jsonl does not exist
+gate: FAIL  fix-claude-code with the OpenRouter reviewer passed on node-deps: reviewer openrouter:openai/gpt-oss-120b: see the failing steps above
+gate: PASS  free disk at the end

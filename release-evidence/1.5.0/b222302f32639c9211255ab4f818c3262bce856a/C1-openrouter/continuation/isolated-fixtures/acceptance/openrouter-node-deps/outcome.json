@@ -1,0 +1,107 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "f49d5b8856ad791234bb46703f3e38b27972af4b118d1fd09392d522a4ed6109",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  0.51ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793065549495,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 6,
+    "events": 27,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "writer_model = openrouter:qwen/qwen3-coder-30b-a3b-instruct (from your setup: run.models.writer in the configuration)",
+    "reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)",
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)",
+    "setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (2.4 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call",
+    "openai/gpt-oss-120b on OpenRouter: 7 calls answered by endpoint near-ai/fp4 (Near AI)",
+    "qwen/qwen3-coder-30b-a3b-instruct on OpenRouter: 11 calls answered by endpoint siliconflow/fp8 (SiliconFlow)"
+  ],
+  "openrouter_endpoints": {
+    "openai/gpt-oss-120b": [
+      {
+        "calls": 7,
+        "endpoint": "near-ai/fp4",
+        "provider": "Near AI"
+      }
+    ],
+    "qwen/qwen3-coder-30b-a3b-instruct": [
+      {
+        "calls": 11,
+        "endpoint": "siliconflow/fp8",
+        "provider": "SiliconFlow"
+      }
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "f49d5b8856ad791234bb46703f3e38b27972af4b118d1fd09392d522a4ed6109",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-c9541ac6-7722-401c-8e7f-763a1884a3e8",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-0f7c8a91-8fa7-4e5f-aa87-7c6e04f0d361",
+  "started_at_ms": 1793065436555,
+  "task": "Paging skips the last item when the total is a multiple of the page size",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-7cea0e51-43bd-449f-bef3-e3f60e040af0"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 4592,
+    "input_tokens": 74096,
+    "output_tokens": 1835,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-11c084d9-b8ba-4b7f-8870-c929f87ee5bc"
+}

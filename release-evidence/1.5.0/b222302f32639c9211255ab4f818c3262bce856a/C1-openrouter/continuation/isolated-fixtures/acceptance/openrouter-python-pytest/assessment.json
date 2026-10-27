@@ -1,0 +1,418 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "execution_archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "execution_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "verifier_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "assessed_at": "2026-10-27T01:48:57.978542+00:00",
+  "fixture": "python-pytest",
+  "label": "openrouter-python-pytest",
+  "repo": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+  "base_commit": "34d039975d22cd8284c0de745b4aac40f1c37e89",
+  "run_id": "run-98bc627d-e4b5-436c-907e-55f99bcee746",
+  "result": "ACCEPTED",
+  "artifact_review": "Only pages.py changed: final-page length uses len(items)-start. Original tests and package metadata unchanged; no scratch files.",
+  "changed_files": [
+    "pages.py"
+  ],
+  "original_tests_unchanged": true,
+  "sample_original_assertions_preserved": null,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "unchanged": true
+    },
+    "pages.py": {
+      "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "final_sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+      "unchanged": false
+    },
+    "pyproject.toml": {
+      "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "unchanged": true
+    },
+    "tests/test_pages.py": {
+      "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-146.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+        "start": "2026-10-27T01:48:57.665317+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.675843+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "1708387b61e0026921d971717d1d4e444e629eeeb8d575f92ce5c0248232bee2",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+        "start": "2026-10-27T01:48:57.676060+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.687153+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "81564e61cd429fbcdcf6eba704784eb70e9af781d1dd9db1cbfb1628d4356be7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+        "start": "2026-10-27T01:48:57.687443+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.724941+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-python-pytest/host-check",
+        "start": "2026-10-27T01:48:57.725239+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.733961+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "module-selection",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-c",
+          "import pathlib,pages,pytest; assert pathlib.Path(pages.__file__).resolve()==pathlib.Path(\"pages.py\").resolve();print(pages.__file__);print(pytest.__version__)"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-python-pytest/host-check",
+        "start": "2026-10-27T01:48:57.734194+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.842330+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e862c0be97fe70ac9a0e3917ebaf45e0f134cb1d50a5bc7375e7a7f56238e7bb",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+          "-B",
+          "-m",
+          "pytest",
+          "-p",
+          "no:cacheprovider"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-python-pytest/host-check",
+        "start": "2026-10-27T01:48:57.842762+00:00",
+        "status": "completed",
+        "end": "2026-10-27T01:48:57.959129+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "27a302c4e76cff2f27d934286efa35e3c5e6fe27387ae9f2d681d337457fc18f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "expected_original_tests": 4,
+    "observed_passed_tests": 4,
+    "suite_count_verified": true,
+    "production_files_exact_final_copy": true,
+    "test_files_original_base_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "python3 -m pytest"
+      ],
+      "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "============================= test session starts ==============================\nplatform linux -- Python 3.13.16, pytest-9.1.1, pluggy-1.7.0\nrootdir: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest\nconfigfile: pyproject.toml\ntestpaths: tests\ncollected 4 items\n\ntests/test_pages.py ....                                                 [100%]\n\n============================== 4 passed in 0.03s ===============================\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "required_checks_passed": true,
+  "required_review_passed": true,
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "reviewer": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "python",
+      "reason": "pyproject.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-python:10128f1d8789",
+      "image_id": "52cb1b2113e3cb847e89cfd44238293c0df00f956d28f1c24876cf3ab783a1f1",
+      "recipes": [
+        "python"
+      ],
+      "check": "python3 -m pytest",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "pip install -e '.[test]'",
+        "source": "detected",
+        "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+        "exit_code": 0,
+        "duration_ms": 6815,
+        "registry_hosts": [
+          "pypi.org",
+          "files.pythonhosted.org"
+        ],
+        "allowed_connections": 4,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-a9ffdde89197f1fa9d96c104",
+      "probe": {
+        "program": "python3",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 551
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "python",
+      "test_command": "pytest",
+      "host_setup": "pip install -e '.[test]'",
+      "image_contains": "python",
+      "setup_contains": "pip install"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "openai/gpt-oss-120b",
+      "provider": "openrouter",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 76459,
+    "output_tokens": 1982,
+    "cost_microunits": 4157,
+    "cost_usd": 0.004157,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "writer",
+        "sequence": 43,
+        "payload": {
+          "call_id": "01a17b0993795035ee10395eda5b89f8",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "writer",
+        "sequence": 51,
+        "payload": {
+          "call_id": "01a17b09cf0401b5c34ea4a93cd1719f",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "edit_file",
+          "result_bytes": 89,
+          "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 8,
+        "payload": {
+          "call_id": "chatcmpl-tool-920b4e2b36697a25",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 20,
+        "payload": {
+          "call_id": "chatcmpl-tool-98fbf78d083aad90",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 24,
+        "payload": {
+          "call_id": "chatcmpl-tool-99b3a9cf71b0da0a",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 41,
+        "payload": {
+          "call_id": "chatcmpl-tool-9f714a79120f6065",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 68,
+          "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 45,
+        "payload": {
+          "call_id": "chatcmpl-tool-8f9482751d980be2",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "python3",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 551
+    },
+    "failed_activations": []
+  },
+  "gate_scope": "Independent artifact acceptance only; original gate attempts and outcomes are never changed.",
+  "network": {
+    "events": 27,
+    "allowed_connections": 4,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Independent acceptance of a completed actual Mac or Linux b222 artifact; no fresh-authentication, clean-install, whole-gate, or release completion claim.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "c1b3807872087056058cef8f2af32463c507a81515ca329d0df375c57cc3ca79",
+    "run.axorecord.jsonl": "f949ec0b5808280770f54ddf68d16e044a0ba9d1bc05bff5ffb9e617d032847f",
+    "patch.diff": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+    "negative-evidence.json": "2b77c9227cc1479993b14fc8ba7998cdbc4ee3e6e647a74d0f4a7bf36916fa64",
+    "activation-summary.json": "8266c59a0840155dfc9755e8920806c05081903255b97ced3516a4cf1c2b5f0c",
+    "outcome.json": "854b9fa4ae18c5d7ad97f3e07479d1227c731632f03799d7cba14344eeafe586",
+    "original-tests.stdout": "27a302c4e76cff2f27d934286efa35e3c5e6fe27387ae9f2d681d337457fc18f",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

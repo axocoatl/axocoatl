@@ -1,0 +1,22 @@
+{
+  "repo": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+  "gate_dir": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest",
+  "out": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-python-pytest",
+  "fixture": "python-pytest",
+  "label": "openrouter-python-pytest",
+  "trusted_public_key": "/private/tmp/axo-b222-openrouter-fixtures-public-key.txt",
+  "archive": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/candidate-b222302f/axocoatl-v1.5.0-aarch64-apple-darwin.tar.gz",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "execution_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "execution_provenance": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/provenance.json",
+  "artifact_review": "Only pages.py changed: final-page length uses len(items)-start. Original tests and package metadata unchanged; no scratch files.",
+  "sample": false,
+  "source_repo": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+  "verifier": "/usr/local/bin/axocoatl",
+  "verifier_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "node_bin": "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin",
+  "node_deps_source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+  "python": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/python-pytest/acceptance/host-venv/bin/python",
+  "cargo": "/Users/erick/.cargo/bin/cargo",
+  "go": "/opt/homebrew/bin/go"
+}

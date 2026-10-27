@@ -1,0 +1,11 @@
+Axocoatl dev mode
+  Config: /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/config.port18080.yaml
+  Agents: 4
+  Runtime: 2 agents spawned
+  IPC:    /Users/erick/.axocoatl/run/axocoatl.sock
+  Server: http://127.0.0.1:18080
+  Health: http://127.0.0.1:18080/health
+  Sign in: run `axocoatl url --config /Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/config.port18080.yaml` for the browser sign-in link
+
+Axocoatl is running. Press Ctrl+C to stop.
+2026-10-27T01:47:32.621143Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-3d37b402fcd5acf53594f5d47dd45fc082b163a4 tool=search

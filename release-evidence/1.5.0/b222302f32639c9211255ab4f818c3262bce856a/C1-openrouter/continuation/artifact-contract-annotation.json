@@ -1,0 +1,16 @@
+{
+  "schema": "axocoatl.recovery.artifact-contract-annotation/1",
+  "predeclared_shape_score": "FAILED",
+  "score_changed": false,
+  "fixture": "openrouter-node-deps",
+  "actual_explicit_contract": "No test changes",
+  "original_tests_unchanged": true,
+  "independent_original_tests": "4/4 passed once",
+  "artifact": "Correct items.length-start fix plus extra README explanation",
+  "readme_review": "Relevant and correct before/after example and explanation. Redundant headings and doubled period. No unsafe instructions or false capability claims. Extra documentation remains a recorded artifact-quality deviation.",
+  "gate_criteria_weakened": false,
+  "assessment": {
+    "file": "C1-openrouter/continuation/isolated-fixtures/acceptance/openrouter-node-deps/assessment.json",
+    "sha256": "f9f80cb7712a504e73c8def8d2e7aac1173499d9e2c27fc422ec39f8a0bf4ef4"
+  }
+}

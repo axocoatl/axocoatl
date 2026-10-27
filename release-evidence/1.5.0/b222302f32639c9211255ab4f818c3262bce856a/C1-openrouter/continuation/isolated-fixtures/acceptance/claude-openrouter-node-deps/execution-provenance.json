@@ -1,0 +1,23 @@
+{
+  "schema": "axocoatl.recovery.isolated-port-fixtures/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "operator": "Codex assistant through owned PTY",
+  "human_operator": false,
+  "fresh_authentication": false,
+  "onboarding": false,
+  "global_configuration_mutated": false,
+  "owner_configuration_sha256": "9f177371e1fd270bba8fffc192ca00c7cdfb866a82a70e7e5710fed339a48d36",
+  "execution_configuration_sha256": "20edea453f0257fb87321f8f78d549542a9ff3b3066342e28b56f3d4c5a0add2",
+  "configuration_only_difference": {
+    "server.port": {
+      "from": 8080,
+      "to": 18080
+    }
+  },
+  "data_root": "/Users/erick/Library/Application Support/Axocoatl/data",
+  "client_url": "http://127.0.0.1:18080",
+  "authentication_disabled": false,
+  "intervention": "Mac8080 was LimaD1 forwarding, causingMacAPI token401 beforeadmission. OwnedMacdaemon is isolatedon18080; exactpublishedbasecommand gets explicit--config snapshot. Linux and originalfailedgate untouched."
+}

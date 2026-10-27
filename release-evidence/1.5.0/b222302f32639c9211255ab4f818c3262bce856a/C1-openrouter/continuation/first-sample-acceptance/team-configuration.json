@@ -1,0 +1,175 @@
+{
+  "approved": true,
+  "configuration_revision": 1,
+  "dependencies": [],
+  "history_version": "execution_v2",
+  "layout": [],
+  "required_checks": [
+    [
+      "sh",
+      "-c",
+      "npm run test"
+    ]
+  ],
+  "required_review": {
+    "inline": {
+      "definition": {
+        "source": "loadout fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223 review",
+        "tools": [
+          "read_file",
+          "list_dir",
+          "grep",
+          "glob"
+        ]
+      },
+      "instructions": "Review the change against the task and against every contract and edge case the docs, comments and tests describe. Read the code the change touches, not only the diff. Number each finding F1, F2, ... at the start of its line, with file:line, what is wrong and what to change; report only defects, not style. Give the verdict line the host asks for, VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.",
+      "model": "openai/gpt-oss-120b",
+      "name": "reviewer",
+      "provider": "openrouter"
+    },
+    "limits": {
+      "activations": 3,
+      "cost_microunits": 3000000,
+      "invocations": 120,
+      "tokens": 1500000
+    },
+    "max_output_tokens": 8192,
+    "max_rounds": 3,
+    "template_id": "loadout-reviewer"
+  },
+  "reviewers": [
+    "scout",
+    "reviewer"
+  ],
+  "slots": [
+    {
+      "definition": {
+        "source": "loadout fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223 agent writer",
+        "tools": [
+          "read_file",
+          "list_dir",
+          "grep",
+          "glob",
+          "write_file",
+          "edit_file",
+          "bash"
+        ]
+      },
+      "expires_at_ms": 1793068470189,
+      "instructions": "You own this change. Find the relevant code and tests, make the change, run the project's check command and fix failures, then compare your diff with the task. When the host sends you review findings, answer every finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced JSON array with one object per finding, {\"id\": \"F1\", \"decision\": \"accept\" or \"reject\", \"reason\": \"...\"}. Reject only with a concrete reason (the code that shows the finding is wrong). Fix each finding you accept, run the checks again, and give your final answer. Leave no file you created only for testing or debugging (scratch scripts, test binaries such as `go test -c` output, build outputs, reports): delete them, then run the project's check command one last time before your final answer.",
+      "limits": {
+        "activations": 4,
+        "cost_microunits": 10000000,
+        "invocations": 400,
+        "tokens": 4000000
+      },
+      "max_output_tokens": 8192,
+      "model": "qwen/qwen3-coder-30b-a3b-instruct",
+      "name": "writer",
+      "provider": "openrouter",
+      "required": true,
+      "reset_history": true,
+      "slot_id": "writer",
+      "source_slot_id": null,
+      "template_id": null,
+      "tools": [
+        "read_file",
+        "list_dir",
+        "grep",
+        "glob",
+        "write_file",
+        "edit_file",
+        "bash"
+      ],
+      "writes": null
+    }
+  ],
+  "suggested_budget": {
+    "agent": {
+      "activations": 4,
+      "cost_microunits": 10000000,
+      "invocations": 400,
+      "tokens": 4000000
+    },
+    "expires_in_ms": 86400000,
+    "free_providers": [
+      "ollama"
+    ],
+    "from": "fix",
+    "helper": {
+      "activations": 3,
+      "cost_microunits": 3000000,
+      "invocations": 120,
+      "tokens": 1500000
+    }
+  },
+  "suggested_check": [
+    "sh",
+    "-c",
+    "npm run test"
+  ],
+  "templates": [
+    {
+      "expires_at_ms": null,
+      "instructions": "Answer only with tool calls until the change is made and checked; then write a short summary of what you changed. You own this change: find the relevant code and tests (if you have helpers, ask scout to find code you do not know), make the change, run the check command from the project instructions (AXOCOATL.md) or the tests and fix failures, then check your diff against the task (if you have helpers, ask reviewer to review it) and fix each defect found.",
+      "limits": null,
+      "max_output_tokens": 4096,
+      "model": "qwen/qwen3-coder-30b-a3b-instruct",
+      "name": "Lead",
+      "provider": "openrouter",
+      "required": true,
+      "reset_history": true,
+      "slot_id": "slot-lead",
+      "source_slot_id": null,
+      "template_id": "lead",
+      "writes": null
+    },
+    {
+      "expires_at_ms": null,
+      "instructions": "Answer the lead's question with file paths, line numbers and short evidence. Change nothing.",
+      "limits": null,
+      "max_output_tokens": 4096,
+      "model": "qwen/qwen3-coder-30b-a3b-instruct",
+      "name": "Scout",
+      "provider": "openrouter",
+      "required": true,
+      "reset_history": true,
+      "role": "Worker",
+      "slot_id": "slot-scout",
+      "source_slot_id": null,
+      "template_id": "scout",
+      "writes": []
+    },
+    {
+      "expires_at_ms": null,
+      "instructions": "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing.",
+      "limits": null,
+      "max_output_tokens": 2048,
+      "model": "openai/gpt-oss-120b",
+      "name": "Reviewer",
+      "provider": "openrouter",
+      "required": true,
+      "reset_history": true,
+      "role": "Worker",
+      "slot_id": "slot-reviewer",
+      "source_slot_id": null,
+      "template_id": "reviewer",
+      "writes": []
+    },
+    {
+      "expires_at_ms": null,
+      "instructions": "You are a helpful assistant.",
+      "limits": null,
+      "max_output_tokens": 2048,
+      "model": "qwen/qwen3-coder-30b-a3b-instruct",
+      "name": "Assistant",
+      "provider": "openrouter",
+      "required": true,
+      "reset_history": true,
+      "slot_id": "slot-assistant",
+      "source_slot_id": null,
+      "template_id": "assistant",
+      "writes": null
+    }
+  ]
+}

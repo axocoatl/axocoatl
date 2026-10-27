@@ -1,0 +1,104 @@
+{
+  "tool_errors": [
+    {
+      "role": "writer",
+      "sequence": 43,
+      "payload": {
+        "call_id": "01a17b0993795035ee10395eda5b89f8",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "writer",
+      "sequence": 51,
+      "payload": {
+        "call_id": "01a17b09cf0401b5c34ea4a93cd1719f",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 8,
+      "payload": {
+        "call_id": "chatcmpl-tool-920b4e2b36697a25",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 20,
+      "payload": {
+        "call_id": "chatcmpl-tool-98fbf78d083aad90",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 24,
+      "payload": {
+        "call_id": "chatcmpl-tool-99b3a9cf71b0da0a",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 41,
+      "payload": {
+        "call_id": "chatcmpl-tool-9f714a79120f6065",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 68,
+        "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 45,
+      "payload": {
+        "call_id": "chatcmpl-tool-8f9482751d980be2",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 551
+  },
+  "failed_activations": []
+}

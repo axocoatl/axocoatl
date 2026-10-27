@@ -1,0 +1,6 @@
+/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/config.port18080.yaml: providers.openrouter reads the key from secret openrouter; openrouter_billing: credits
+  OpenRouter key: stored as secret openrouter (never shown)
+  Key label: sk-or-v1-d63...8a9
+  Credit limit: $0.90 on this key, $0.894819 left
+  Used by this key: $0.005181 in all, $0.005181 today (UTC)
+  Free tier: no (the account has bought credits)

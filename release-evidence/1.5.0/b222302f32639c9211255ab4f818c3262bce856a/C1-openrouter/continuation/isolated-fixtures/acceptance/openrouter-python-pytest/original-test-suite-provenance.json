@@ -1,0 +1,7 @@
+{
+  "original_tests_copied_from_base": "34d039975d22cd8284c0de745b4aac40f1c37e89",
+  "paths": [
+    "tests/test_pages.py"
+  ],
+  "single_invocation": true
+}

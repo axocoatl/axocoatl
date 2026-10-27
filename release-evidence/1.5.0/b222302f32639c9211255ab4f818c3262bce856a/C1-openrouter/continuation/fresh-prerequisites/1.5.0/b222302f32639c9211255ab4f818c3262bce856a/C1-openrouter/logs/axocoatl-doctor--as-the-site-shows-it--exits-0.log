@@ -1,0 +1,38 @@
+Axocoatl doctor (config: /Users/erick/Library/Application Support/Axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 6.1.4 ready (machine podman-machine-default: applehv, rootless, 6 CPUs / 8 GiB; kernel 7.2.7-200.fc44.aarch64), needed for every Session and every axocoatl run
+  [ OK ] Platform: macOS on Apple silicon, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] Ollama 0.40.11 at http://localhost:11434, a version native Sessions accept
+  [ OK ] Ollama cloud models disabled at http://localhost:11434 (~/.ollama/server.json)
+  [ OK ] OpenRouter API key present (secret openrouter, never shown)
+
+Writers
+  [ OK ] Claude Code: claude-code image built
+  [ OK ] Claude Code: signed in (claude-code-oauth stored)
+  [ OK ] codex image built
+  [ OK ] Codex: signed in (codex-chatgpt stored)
+  [ OK ] claude CLI: /opt/homebrew/bin/claude 2.1.92 (Claude Code)
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: signed in (for `--keep pr`)
+  [ OK ] Stored credentials: claude-code-oauth, codex-chatgpt, openrouter, receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  [ OK ] Data dir writable: /Users/erick/Library/Application Support/Axocoatl/data
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.39.5 (the daemon runs git on your repositories)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix, axocoatl run fix-claude-code, axocoatl run fix-codex, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-claude-code (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ axocoatl run fix-codex (reviewer openrouter:openai/gpt-oss-120b)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes

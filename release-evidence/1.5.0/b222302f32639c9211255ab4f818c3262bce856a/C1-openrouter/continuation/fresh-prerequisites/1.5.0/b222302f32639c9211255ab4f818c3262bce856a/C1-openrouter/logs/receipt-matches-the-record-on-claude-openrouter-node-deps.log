@@ -1,0 +1,2 @@
+problem: receipt.json: No such file or directory (os error 2)
+result: usage (exit 3)

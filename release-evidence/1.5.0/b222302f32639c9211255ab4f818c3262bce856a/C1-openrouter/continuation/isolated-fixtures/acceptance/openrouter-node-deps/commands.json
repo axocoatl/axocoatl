@@ -1,0 +1,85 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-146.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/node-deps",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/node-deps",
+    "start": "2026-10-27T01:46:27.738534+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:46:27.747569+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "1cec9049780ae5cdb4ac90b04fc0ab1c9f49224ce3381d1df958e592483e944b",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/node-deps",
+    "start": "2026-10-27T01:46:27.747800+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:46:27.756448+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "644613488919aea74e8b5f717979a67d3d6295cd8211adfdf5511fbd8d115e10",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/node-deps",
+    "start": "2026-10-27T01:46:27.756638+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:46:27.786131+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check",
+    "start": "2026-10-27T01:46:27.786595+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:46:27.798681+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check",
+    "start": "2026-10-27T01:46:27.812904+00:00",
+    "status": "completed",
+    "end": "2026-10-27T01:46:28.104359+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "cc6a06662a8ef99fe5203cb67f7f330041528232960f140d34f748fe8ef0797c",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

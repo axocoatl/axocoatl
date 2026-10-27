@@ -1,0 +1,73 @@
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261027-005221.log
+
+Step 0 · This computer
+$ /usr/bin/sw_vers -productVersion
+  exit 0
+  | 26.6
+
+$ /usr/sbin/sysctl -n machdep.cpu.brand_string
+  exit 0
+  | Apple M5 Pro
+
+$ xcode-select -p
+  exit 0
+  | /Library/Developer/CommandLineTools
+
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.39.5 (Apple Git-154)
+
+$ brew --version
+  exit 0
+  | Homebrew 7.0.10
+
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 43 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5.
+Not found: codex.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A hosted model (OpenRouter credits) (--writer)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+? Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n]
+  answered yes
+? Model for the writer (vendor/model) → qwen/qwen3-coder-30b-a3b-instruct
+? Model for the reviewer (must be a different model) → openai/gpt-oss-120b
+? How should Axocoatl get your OpenRouter key? → Sign in to OpenRouter in your browser (recommended)
+  ✓ writer qwen/qwen3-coder-30b-a3b-instruct: 262,144 tokens of context, $0.07 in / $0.28 out per million tokens
+  ✓ reviewer openai/gpt-oss-120b: 131,072 tokens of context, $0.15 in / $0.60 out per million tokens
+  Sign in to OpenRouter in your browser and allow Axocoatl to create a key. The browser then returns to http://127.0.0.1:52891/callback on this computer, and Axocoatl stores the key OpenRouter issues as the secret openrouter without showing it.
+  If no browser opens, open this address in a browser on this computer:
+    https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A52891%2Fcallback&code_challenge=vO9dzu3ZKTQpwxHXyyBU8J_62biroXfnD8ZtxAJcx88&code_challenge_method=S256&state=dTrq7ZIQiru02UTZ4dmq6w&key_label=Axocoatl+2026-10-26
+  Waiting up to 10 minutes for the sign-in (Ctrl-C stops it)…
+OpenRouter sign-in: GET /callback (Host 127.0.0.1:52891): the sign-in's code, with its state
+  The browser returned to Axocoatl. Getting the key from OpenRouter (it is not shown)…
+  ✗ OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+
+Not ready yet, 1 step left:
+  1) OpenRouter refused the key it had just issued (HTTP 401), so it was not stored. Run `axocoatl onboard --writer openrouter --writer-model openrouter:qwen/qwen3-coder-30b-a3b-instruct --reviewer openrouter:openai/gpt-oss-120b` again to retry.
+Your configuration was not changed (/Users/erick/Library/Application Support/Axocoatl/config.yaml is as it was). Run `axocoatl onboard` again once the steps are done.

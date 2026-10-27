@@ -1,0 +1,8 @@
+{
+  "docs/RELEASE_GATE.md": "c91818e67e04fcbf778951acb220a936f7387061f66cdf5f21c3f1b99c40881e",
+  "scripts/release-gate/newuser-mac.sh": "4e4ec2ed2b7bd52bbc409708cd38dfb5660182b80f8cd5e132d2f7f2be6730fb",
+  "scripts/release-gate/lib.sh": "cfe0d44083779605c13986fa80061294882d1d4574119117c823b8dc4238fa0b",
+  "scripts/release-gate/evidence.mjs": "bcd138fe8f8c68aa668894cdc2eb4c59f76c3689237fde3569800a05649d9729",
+  "crates/axocoatl-config/loadouts/fix.yaml": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+  "crates/axocoatl-config/loadouts/fix-claude-code.yaml": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140"
+}

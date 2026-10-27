@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-98bc627d-e4b5-436c-907e-55f99bcee746",
+  "verdict": "pass",
+  "statement_sha256": "sha256:6659d03b31bc9c11b9d2e60f44bcbb47ebd329431b9a80006cb6f802aae90993",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/provider-continuation-b222302f-openrouter-fixtures-retry1/python-pytest",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-98bc627d-e4b5-436c-907e-55f99bcee746 (fix@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-4131d1b3-82f2-4c76-a7ca-33234efce9c8, finished at 1793065677369 ms",
+    "Base commit 34d039975d22cd8284c0de745b4aac40f1c37e89",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c python3 -m pytest)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  pages.py  sha256:bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 5): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

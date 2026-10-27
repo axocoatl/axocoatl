@@ -1,0 +1,670 @@
+[
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/.bin/uvu",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/.package-lock.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/dist/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/dist/index.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/dist/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/lite/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/lite/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/lite/index.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/lite/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/dequal/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/CONTRIBUTING.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/LICENSE",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/README.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/dist/diff.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/dist/diff.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/convert/dmp.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/convert/xml.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/array.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/base.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/character.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/css.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/json.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/line.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/sentence.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/diff/word.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/index.es6.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/patch/apply.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/patch/create.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/patch/merge.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/patch/parse.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/patch/reverse.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/util/array.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/util/distance-iterator.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/lib/util/params.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/release-notes.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/diff/runtime.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/colors.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/colors.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/colors.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/kleur/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/license.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/mri/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/sade/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/assert/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/assert/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/assert/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/bin.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/diff/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/diff/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/diff/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/dist/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/dist/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/parse/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/parse/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/parse/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/run/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/run/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/host-check/node_modules/uvu/run/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/claude-openrouter-node-deps/npm-cache/_logs/2026-10-27T01_50_04_225Z-debug-0.log",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/.bin/uvu",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/.package-lock.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/dist/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/dist/index.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/dist/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/lite/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/lite/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/lite/index.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/lite/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/dequal/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/CONTRIBUTING.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/LICENSE",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/README.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/dist/diff.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/dist/diff.min.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/convert/dmp.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/convert/xml.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/array.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/base.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/character.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/css.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/json.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/line.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/sentence.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/diff/word.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/index.es6.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/patch/apply.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/patch/create.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/patch/merge.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/patch/parse.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/patch/reverse.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/util/array.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/util/distance-iterator.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/lib/util/params.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/release-notes.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/diff/runtime.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/colors.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/colors.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/colors.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/kleur/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/license.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/mri/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/lib/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/lib/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/sade/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/assert/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/assert/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/assert/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/bin.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/diff/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/diff/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/diff/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/dist/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/dist/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/license",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/package.json",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/parse/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/parse/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/parse/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/readme.md",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/run/index.d.ts",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/run/index.js",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/host-check/node_modules/uvu/run/index.mjs",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-continuation-b222302f/openrouter-fixtures-retry1/acceptance/openrouter-node-deps/npm-cache/_logs/2026-10-27T01_46_27_860Z-debug-0.log",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  },
+  {
+    "source": "/private/tmp/axocoatl-mac-or-retry1-acceptance/sample-key-corrected/npm-cache/_logs/2026-10-27T01_39_42_707Z-debug-0.log",
+    "reason": "dependency or runtime cache; provenance and original test output retained"
+  }
+]

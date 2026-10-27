@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="1" failures="0" errors="1" skipped="0" time="0.000">
+  <properties>
+    <property name="axocoatl.loadout" value="fix-claude-code"/>
+    <property name="axocoatl.verdict" value="error"/>
+    <property name="axocoatl.exit_code" value="4"/>
+  </properties>
+  <testsuite name="checks" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="1" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <error type="error" message="the daemon refused the API token (401 Unauthorized): "/>
+    </testcase>
+  </testsuite>
+</testsuites>

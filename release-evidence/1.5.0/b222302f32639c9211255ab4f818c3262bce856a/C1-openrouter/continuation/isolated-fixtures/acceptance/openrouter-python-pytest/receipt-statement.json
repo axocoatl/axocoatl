@@ -1,0 +1,167 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "pages.py",
+      "digest": {
+        "sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-98bc627d-e4b5-436c-907e-55f99bcee746",
+      "session_id": "ses-4131d1b3-82f2-4c76-a7ca-33234efce9c8",
+      "started_at_ms": 1793065560554,
+      "finished_at_ms": 1793065677369,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "8df97588f021a44c6c80f155939ddc596fad0a226ca7bcc5bc903ebe316551f0"
+    },
+    "repository": {
+      "base_commit": "34d039975d22cd8284c0de745b4aac40f1c37e89",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix",
+      "version": 1,
+      "kind": "fix",
+      "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 5,
+          "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+          "rules": []
+        }
+      ],
+      "environment": {
+        "toolchain": "python",
+        "reason": "pyproject.toml at the repository root",
+        "image": "localhost/axocoatl-recipe-python:10128f1d8789",
+        "image_id": "52cb1b2113e3cb847e89cfd44238293c0df00f956d28f1c24876cf3ab783a1f1",
+        "recipes": [
+          "python"
+        ],
+        "check": "python3 -m pytest",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "pip install -e '.[test]'",
+          "source": "detected",
+          "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+          "exit_code": 0,
+          "duration_ms": 6815,
+          "registry_hosts": [
+            "pypi.org",
+            "files.pythonhosted.org"
+          ],
+          "allowed_connections": 4,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-a9ffdde89197f1fa9d96c104",
+        "probe": {
+          "program": "python3",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 551
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 27,
+      "allowed_connections": 4,
+      "refused_connections": 0,
+      "route_requests": 0,
+      "routes": []
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "python3 -m pytest"
+        ],
+        "candidate_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 76459,
+      "output_tokens": 1982,
+      "cost_microunits": 4157,
+      "cost_usd": 0.004157,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "49f2ed3e6440a3cd4a1496ef5978bed8e1cf1cd9b9913c651187d6f366fe973a",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

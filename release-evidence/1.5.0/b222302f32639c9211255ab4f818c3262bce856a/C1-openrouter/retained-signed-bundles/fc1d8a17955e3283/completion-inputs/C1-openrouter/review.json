@@ -1,0 +1,16 @@
+{
+  "schema": "axocoatl.recovery.completion-review/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "path": "C1-openrouter",
+  "record_sha256": "ccb9a05df5b756aef2acff292b06119b86569f84abbfac91b61a1df4215c9381",
+  "manifest_sha256": "e202d24ac940fb8600ae7c7de0abc7fb78f69777be1e8b1eeb8b68043a849dbe",
+  "decision": "approved_for_evidence_integration",
+  "actual_observations_reviewed": true,
+  "unchanged_pass_criteria": true,
+  "failed_attempts_preserved": true,
+  "reviewer": "root, independent of composer; directly operated fresh onboarding/browser/sample and reviewed complete fixture evidence",
+  "assessment": "Fresh auth and interactive onboard completed with independent sample3/3. Post-onboard Linux forwarded-port collision rejected Mac API token before any fixture admission; owned Mac18080 configuration differed only by endpoint and fixed harness isolation. All three complete fixture/receipt/record/markup blocks pass with unchanged original4/4tests once each. Extra Node README preserves strict artifact-quality FAILED score separately; documented no-test-changes and functional criteria satisfied. Original OAuth/401failures, intervention, actor attribution and non-uninterrupted chronology preserved.",
+  "reviewed_at": "2026-10-27T01:52:49.953908+00:00",
+  "hashed_members_verified": 287,
+  "dependency_refs_verified": 59
+}

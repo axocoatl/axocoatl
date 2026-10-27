@@ -1,0 +1,12 @@
+
+> newuser-node-deps@0.1.0 test
+> uvu test
+
+paginate.test.js
+• • • •   (4 / 4)
+
+  Total:     4
+  Passed:    4
+  Skipped:   0
+  Duration:  0.51ms
+

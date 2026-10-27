@@ -1,0 +1,259 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "supplemental-openrouter-three-fixtures",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-27T01:43:47Z",
+  "finished_at": "2026-10-27T01:48:47.149Z",
+  "steps": [
+    {
+      "name": "exact candidate and existing provider models verified",
+      "status": "pass",
+      "required": true,
+      "detail": "writer openrouter:qwen/qwen3-coder-30b-a3b-instruct; reviewer openrouter:openai/gpt-oss-120b"
+    },
+    {
+      "name": "capped OpenRouter credit status before fixtures",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.3,
+      "bytes_downloaded": 15849
+    },
+    {
+      "name": "OpenRouter cap at most0.90 nonrenewing",
+      "status": "pass",
+      "required": true,
+      "detail": "actualCLI status verified before inference"
+    },
+    {
+      "name": "listener belongs to owned Mac daemon",
+      "status": "pass",
+      "required": true,
+      "detail": "PID 27113; localhost18080; authenticatedclients use realMacdata root"
+    },
+    {
+      "name": "run fix on openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 118.7,
+      "bytes_downloaded": 369245766
+    },
+    {
+      "name": "run on openrouter-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on openrouter-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on openrouter-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 6216
+    },
+    {
+      "name": "receipt matches the record on openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 4232
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 5128f37d1faf holds any"
+    },
+    {
+      "name": "run fix on openrouter-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 127.2,
+      "bytes_downloaded": 72275280
+    },
+    {
+      "name": "run on openrouter-python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on openrouter-python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on openrouter-python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 2104
+    },
+    {
+      "name": "record verify on openrouter-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 2152
+    },
+    {
+      "name": "receipt matches the record on openrouter-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on openrouter-python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 34d039975d22 holds any"
+    },
+    {
+      "name": "run fix on claude-openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 46.8,
+      "bytes_downloaded": 22755074
+    },
+    {
+      "name": "run on claude-openrouter-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-claude-code-node:5520bc024263"
+    },
+    {
+      "name": "run on claude-openrouter-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on claude-openrouter-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1102
+    },
+    {
+      "name": "record verify on claude-openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 286
+    },
+    {
+      "name": "receipt matches the record on claude-openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1575
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on claude-openrouter-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 5c9cbc2addca holds any"
+    },
+    {
+      "name": "capped OpenRouter credit status after fixtures",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 8733
+    },
+    {
+      "name": "owned isolated Mac daemon stopped with exit0",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "global owner configuration unchanged",
+      "status": "pass",
+      "required": true
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": null
+  },
+  "attachments": [
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/axocoatl-junit.xml",
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/changes.txt",
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/command.txt",
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/receipt.json",
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/run.axorecord.jsonl",
+    "supplemental-openrouter-three-fixtures/claude-openrouter-node-deps/run.log",
+    "supplemental-openrouter-three-fixtures/logs/capped-OpenRouter-credit-status-after-fixtures.log",
+    "supplemental-openrouter-three-fixtures/logs/capped-OpenRouter-credit-status-before-fixtures.log",
+    "supplemental-openrouter-three-fixtures/logs/dev.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-claude-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-matches-the-record-on-openrouter-python-pytest.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-verify-on-claude-openrouter-node-deps--documented-command-.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-verify-on-openrouter-node-deps--documented-command-.log",
+    "supplemental-openrouter-three-fixtures/logs/receipt-verify-on-openrouter-python-pytest--documented-command-.log",
+    "supplemental-openrouter-three-fixtures/logs/record-verify-on-claude-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/record-verify-on-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/record-verify-on-openrouter-python-pytest.log",
+    "supplemental-openrouter-three-fixtures/logs/run-fix-on-claude-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/run-fix-on-openrouter-node-deps.log",
+    "supplemental-openrouter-three-fixtures/logs/run-fix-on-openrouter-python-pytest.log",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/axocoatl-junit.xml",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/changes.txt",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/command.txt",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/receipt.json",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/run.axorecord.jsonl",
+    "supplemental-openrouter-three-fixtures/openrouter-node-deps/run.log",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/axocoatl-junit.xml",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/changes.txt",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/command.txt",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/receipt.json",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.axorecord.jsonl",
+    "supplemental-openrouter-three-fixtures/openrouter-python-pytest/run.log",
+    "supplemental-openrouter-three-fixtures/owned-listener.txt",
+    "supplemental-openrouter-three-fixtures/provenance.json",
+    "supplemental-openrouter-three-fixtures/runner.sh",
+    "supplemental-openrouter-three-fixtures/transcript.txt"
+  ]
+}
