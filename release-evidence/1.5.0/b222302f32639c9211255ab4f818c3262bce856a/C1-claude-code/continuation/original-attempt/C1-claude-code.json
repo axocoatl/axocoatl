@@ -1,0 +1,318 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-claude-code",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-26T19:03:15Z",
+  "finished_at": "2026-10-26T19:20:21.501Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "50925 MiB free; models cached: yes"
+    },
+    {
+      "name": "axocoatl is installed",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "no Claude Code sign-in was stored before this path",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl secret list names no claude-code-oauth"
+    },
+    {
+      "name": "onboard --update --writer claude-code (interactive; every answer is in the transcript)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 206.6,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "onboard --update --writer claude-code: every prompt was answered by the operator (erick); the transcript holds each"
+    },
+    {
+      "name": "Claude Code was signed in through the browser during onboarding",
+      "status": "pass",
+      "required": true,
+      "detail": "claude-code-oauth was stored during the interactive onboarding, and the operator (erick) answered yes: Did onboarding open Claude's sign-in page in the browser, and did you sign in there?"
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.4,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "doctor: ready, no FAIL",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl doctor (as the site shows it) exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.3,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix-claude-code, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on hero-node-deps",
+      "status": "fail",
+      "required": true,
+      "exit_code": 6,
+      "seconds": 593.9,
+      "bytes_downloaded": 0,
+      "detail": "exit 6, expected 0: · JUnit written to axocoatl-junit.xml · record written to run.axorecord.jsonl · receipt written to receipt.json (key 8a7a6b546e72ca24, 0 files covered, 0 removed, workspace_at_finish; it does not cover every path the run changed) "
+    },
+    {
+      "name": "run on hero-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-claude-code-node:5520bc024263"
+    },
+    {
+      "name": "run on hero-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on hero-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "0 accepted answers in the record (verdict interrupted) hold no tool-call markup; no line the run added since d8c23eaba58d holds any"
+    },
+    {
+      "name": "run fix on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 62.4,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "run on hero-python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-claude-code-python:abd396bc9cca"
+    },
+    {
+      "name": "run on hero-python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on hero-python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 96be4466fc2b holds any"
+    },
+    {
+      "name": "the home page's fix-claude-code command passed on node-deps and python-pytest",
+      "status": "fail",
+      "required": true,
+      "detail": "axocoatl run fix-claude-code --task \"Paging skips the last item\" --receipt receipt.json: see the failing steps above"
+    },
+    {
+      "name": "gh is signed in",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.4,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "clone codeoperators/axocoatl-gate-150-recovery-20261026",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.3,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "reset codeoperators/axocoatl-gate-150-recovery-20261026 to the node-deps fixture",
+      "status": "pass",
+      "required": true,
+      "detail": "the docs strict verify-receipt workflow (require-receipt true), pinned to the candidate commit"
+    },
+    {
+      "name": "hero command with --keep pr",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 88.1,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on keep-pr",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since dcb55fbeffbc holds any"
+    },
+    {
+      "name": "--keep pr opened a pull request",
+      "status": "pass",
+      "required": true,
+      "detail": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/pull/3"
+    },
+    {
+      "name": "the verify-receipt workflow's checks pass on the pull request",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 16.7,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "the verify-receipt Action verified the pull request's receipt",
+      "status": "pass",
+      "required": true,
+      "detail": "Verified the receipt of run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb (Actions run 40385751156)"
+    },
+    {
+      "name": "reviewer anthropic:opus is refused: exit 3",
+      "status": "pass",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "the refused run left no Session",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "48328 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-claude-code/answers.txt",
+    "C1-claude-code/doctor.json",
+    "C1-claude-code/hero-command.txt",
+    "C1-claude-code/hero-node-deps/axocoatl-junit.xml",
+    "C1-claude-code/hero-node-deps/changes.txt",
+    "C1-claude-code/hero-node-deps/command.txt",
+    "C1-claude-code/hero-node-deps/receipt.json",
+    "C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+    "C1-claude-code/hero-node-deps/run.log",
+    "C1-claude-code/hero-python-pytest/axocoatl-junit.xml",
+    "C1-claude-code/hero-python-pytest/changes.txt",
+    "C1-claude-code/hero-python-pytest/command.txt",
+    "C1-claude-code/hero-python-pytest/receipt.json",
+    "C1-claude-code/hero-python-pytest/run.axorecord.jsonl",
+    "C1-claude-code/hero-python-pytest/run.log",
+    "C1-claude-code/keep-pr/receipt.json",
+    "C1-claude-code/keep-pr/run.axorecord.jsonl",
+    "C1-claude-code/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+    "C1-claude-code/logs/clone-codeoperators-axocoatl-gate-150-recovery-20261026.log",
+    "C1-claude-code/logs/dev.log",
+    "C1-claude-code/logs/doctor---json-says-ready.log",
+    "C1-claude-code/logs/gh-is-signed-in.log",
+    "C1-claude-code/logs/hero-command-with---keep-pr.log",
+    "C1-claude-code/logs/onboard---update---writer-claude-code--interactive--every-answer-is-in-the-trans.log",
+    "C1-claude-code/logs/onboarding/onboard-20261026-190315.log",
+    "C1-claude-code/logs/pr-repo-reset.log",
+    "C1-claude-code/logs/receipt-matches-the-record-on-hero-node-deps.log",
+    "C1-claude-code/logs/receipt-matches-the-record-on-hero-python-pytest.log",
+    "C1-claude-code/logs/receipt-verify-on-hero-node-deps--documented-command-.log",
+    "C1-claude-code/logs/receipt-verify-on-hero-python-pytest--documented-command-.log",
+    "C1-claude-code/logs/record-verify-on-hero-node-deps.log",
+    "C1-claude-code/logs/record-verify-on-hero-python-pytest.log",
+    "C1-claude-code/logs/reviewer-anthropic-opus-is-refused--exit-3.log",
+    "C1-claude-code/logs/run-fix-on-hero-node-deps.log",
+    "C1-claude-code/logs/run-fix-on-hero-python-pytest.log",
+    "C1-claude-code/logs/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+    "C1-claude-code/logs/verify-receipt-action.log",
+    "C1-claude-code/transcript.txt"
+  ]
+}

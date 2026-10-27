@@ -1,0 +1,504 @@
+[
+  {
+    "successor_step": 0,
+    "name": "free disk at the start",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 0,
+      "step_name": "free disk at the start",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 1,
+    "name": "axocoatl is installed",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 1,
+      "step_name": "axocoatl is installed",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 2,
+    "name": "no Claude Code sign-in was stored before this path",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 2,
+      "step_name": "no Claude Code sign-in was stored before this path",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 3,
+    "name": "onboard --update --writer claude-code (interactive; every answer is in the transcript)",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 3,
+      "step_name": "onboard --update --writer claude-code (interactive; every answer is in the transcript)",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 4,
+    "name": "onboarding was answered live in the terminal",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 4,
+      "step_name": "onboarding was answered live in the terminal",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 5,
+    "name": "Claude Code was signed in through the browser during onboarding",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 5,
+      "step_name": "Claude Code was signed in through the browser during onboarding",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 6,
+    "name": "doctor --json says ready",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 6,
+      "step_name": "doctor --json says ready",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 7,
+    "name": "doctor: ready, no FAIL",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 7,
+      "step_name": "doctor: ready, no FAIL",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 8,
+    "name": "axocoatl doctor (as the site shows it) exits 0",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 8,
+      "step_name": "axocoatl doctor (as the site shows it) exits 0",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 9,
+    "name": "doctor says Ready for: axocoatl run fix-claude-code, Ready: yes, no [FAIL]",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 9,
+      "step_name": "doctor says Ready for: axocoatl run fix-claude-code, Ready: yes, no [FAIL]",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 10,
+    "name": "axocoatl dev answers on port 8080 with the current configuration",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 10,
+      "step_name": "axocoatl dev answers on port 8080 with the current configuration",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 11,
+    "name": "run fix on hero-node-deps",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 9,
+      "step_name": "run fix on claude-node-deps",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 12,
+    "name": "run on hero-node-deps chose a node image",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 10,
+      "step_name": "run on claude-node-deps chose a node image",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 13,
+    "name": "run on hero-node-deps ran setup (npm ci)",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 11,
+      "step_name": "run on claude-node-deps ran setup (npm ci)",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 14,
+    "name": "receipt verify on hero-node-deps (documented command)",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 12,
+      "step_name": "receipt verify on claude-node-deps (documented command)",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 15,
+    "name": "record verify on hero-node-deps",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 13,
+      "step_name": "record verify on claude-node-deps",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 16,
+    "name": "receipt matches the record on hero-node-deps",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 14,
+      "step_name": "receipt matches the record on claude-node-deps",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 17,
+    "name": "no tool-call markup in the accepted output of the run on hero-node-deps",
+    "source": {
+      "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+      "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+      "step_index": 15,
+      "step_name": "no tool-call markup in the accepted output of the run on claude-node-deps",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 18,
+    "name": "run fix on hero-python-pytest",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 18,
+      "step_name": "run fix on hero-python-pytest",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 19,
+    "name": "run on hero-python-pytest chose a python image",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 19,
+      "step_name": "run on hero-python-pytest chose a python image",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 20,
+    "name": "run on hero-python-pytest ran setup (pip install)",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 20,
+      "step_name": "run on hero-python-pytest ran setup (pip install)",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 21,
+    "name": "receipt verify on hero-python-pytest (documented command)",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 21,
+      "step_name": "receipt verify on hero-python-pytest (documented command)",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 22,
+    "name": "record verify on hero-python-pytest",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 22,
+      "step_name": "record verify on hero-python-pytest",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 23,
+    "name": "receipt matches the record on hero-python-pytest",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 23,
+      "step_name": "receipt matches the record on hero-python-pytest",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 24,
+    "name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 24,
+      "step_name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 25,
+    "name": "the home page's fix-claude-code command passed on node-deps and python-pytest",
+    "source": {
+      "dependencies": [
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 9,
+          "step_name": "run fix on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 10,
+          "step_name": "run on claude-node-deps chose a node image",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 11,
+          "step_name": "run on claude-node-deps ran setup (npm ci)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 12,
+          "step_name": "receipt verify on claude-node-deps (documented command)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 13,
+          "step_name": "record verify on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 14,
+          "step_name": "receipt matches the record on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 15,
+          "step_name": "no tool-call markup in the accepted output of the run on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 18,
+          "step_name": "run fix on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 19,
+          "step_name": "run on hero-python-pytest chose a python image",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 20,
+          "step_name": "run on hero-python-pytest ran setup (pip install)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 21,
+          "step_name": "receipt verify on hero-python-pytest (documented command)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 22,
+          "step_name": "record verify on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 23,
+          "step_name": "receipt matches the record on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 24,
+          "step_name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+          "observed_status": "pass"
+        }
+      ]
+    }
+  },
+  {
+    "successor_step": 26,
+    "name": "gh is signed in",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 26,
+      "step_name": "gh is signed in",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 27,
+    "name": "clone codeoperators/axocoatl-gate-150-recovery-20261026",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 27,
+      "step_name": "clone codeoperators/axocoatl-gate-150-recovery-20261026",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 28,
+    "name": "reset codeoperators/axocoatl-gate-150-recovery-20261026 to the node-deps fixture",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 28,
+      "step_name": "reset codeoperators/axocoatl-gate-150-recovery-20261026 to the node-deps fixture",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 29,
+    "name": "hero command with --keep pr",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 29,
+      "step_name": "hero command with --keep pr",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 30,
+    "name": "no tool-call markup in the accepted output of the run on keep-pr",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 30,
+      "step_name": "no tool-call markup in the accepted output of the run on keep-pr",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 31,
+    "name": "--keep pr opened a pull request",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 31,
+      "step_name": "--keep pr opened a pull request",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 32,
+    "name": "the verify-receipt workflow's checks pass on the pull request",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 32,
+      "step_name": "the verify-receipt workflow's checks pass on the pull request",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 33,
+    "name": "the verify-receipt Action verified the pull request's receipt",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 33,
+      "step_name": "the verify-receipt Action verified the pull request's receipt",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 34,
+    "name": "reviewer anthropic:opus is refused: exit 3",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 34,
+      "step_name": "reviewer anthropic:opus is refused: exit 3",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 35,
+    "name": "the refused run left no Session",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 35,
+      "step_name": "the refused run left no Session",
+      "observed_status": "pass"
+    }
+  },
+  {
+    "successor_step": 36,
+    "name": "free disk at the end",
+    "source": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "step_index": 36,
+      "step_name": "free disk at the end",
+      "observed_status": "pass"
+    }
+  }
+]

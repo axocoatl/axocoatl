@@ -1,0 +1,25 @@
+test_altered_candidate_source_refused (__main__.Continuation.test_altered_candidate_source_refused) ... ok
+test_altered_signed_source_refused (__main__.Continuation.test_altered_signed_source_refused) ... ok
+test_authenticated_real_observations_form_complete_successor_and_keep_failure (__main__.Continuation.test_authenticated_real_observations_form_complete_successor_and_keep_failure) ... ok
+test_browser_auth_not_observed_refused (__main__.Continuation.test_browser_auth_not_observed_refused) ... ok
+test_budget_change_refused (__main__.Continuation.test_budget_change_refused) ... ok
+test_changed_archive_identity_refused (__main__.Continuation.test_changed_archive_identity_refused) ... ok
+test_continued_record_interrupted_refused (__main__.Continuation.test_continued_record_interrupted_refused) ... ok
+test_deadline_extension_refused (__main__.Continuation.test_deadline_extension_refused) ... ok
+test_failed_receipt_check_refused_even_if_status_says_pass (__main__.Continuation.test_failed_receipt_check_refused_even_if_status_says_pass) ... ok
+test_fixture_original_identity_mismatch_refused (__main__.Continuation.test_fixture_original_identity_mismatch_refused) ... ok
+test_fresh_onboarding_missing_refused (__main__.Continuation.test_fresh_onboarding_missing_refused) ... ok
+test_independent_receipt_failure_refused (__main__.Continuation.test_independent_receipt_failure_refused) ... ok
+test_loadout_change_refused (__main__.Continuation.test_loadout_change_refused) ... ok
+test_missing_acceptance_dependency_refused (__main__.Continuation.test_missing_acceptance_dependency_refused) ... ok
+test_missing_receipt_dependent_step_refused (__main__.Continuation.test_missing_receipt_dependent_step_refused) ... ok
+test_onboarding_interrupt_cannot_be_pass (__main__.Continuation.test_onboarding_interrupt_cannot_be_pass) ... ok
+test_reviewer_config_change_refused (__main__.Continuation.test_reviewer_config_change_refused) ... ok
+test_unknown_effective_config_field_refused (__main__.Continuation.test_unknown_effective_config_field_refused) ... ok
+test_unrelated_original_failure_cannot_be_erased (__main__.Continuation.test_unrelated_original_failure_cannot_be_erased) ... ok
+test_wrong_candidate_refused (__main__.Continuation.test_wrong_candidate_refused) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 0.260s
+
+OK

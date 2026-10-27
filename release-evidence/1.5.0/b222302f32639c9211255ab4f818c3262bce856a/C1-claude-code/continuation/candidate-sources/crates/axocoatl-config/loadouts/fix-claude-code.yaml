@@ -1,0 +1,87 @@
+# Built-in loadout: fix-claude-code. The fix loadout with the Claude Code CLI
+# as its writer: the same required check, the same review by a different
+# model for up to three rounds, the same ADJUDICATIONS, in the same egress,
+# hardened Session. The writer is the pinned Claude Code from the
+# claude-code recipe image (`axocoatl recipe build claude-code`), whose
+# OAuth token `axocoatl connect claude-code` stores as claude-code-oauth; the
+# route Axocoatl adds sends it to api.anthropic.com, and the container holds
+# a placeholder. Claude Code brings its own tools, so the writer lists none.
+#
+# writer_model defaults to anthropic:sonnet, an alias Claude Code 2.1.292
+# resolves to claude-sonnet-5-5 (its bundled model catalog). The reviewer
+# has no default: it is a native Agent on another model (Ollama or
+# OpenRouter), and a reviewer on the writer's model is warned about.
+#
+# Budgets. Admission refuses a writer whose tokens cannot hold one model call
+# of its model: Claude Code can fill a 1M-token model's whole window in one
+# call, so the floor is 1,000,000 for sonnet, opus, fable and best (200,000
+# for haiku). Claude Code reports every input token of every request it
+# makes, cached context included, and a session re-reads its context on
+# each request, so one program run can report several million tokens. A
+# program run that reports more tokens than its grant still allows fails, so
+# tokens leaves room for the first run and the two revisions three review
+# rounds can ask for. The spending stop is cost_usd: Claude Code runs with
+# --max-budget-usd at what the grant still allows, and settles to the cost it
+# reports. The reviewer's budget is fix's.
+schema: axocoatl.loadout/1
+id: fix-claude-code
+version: 1
+name: Fix with Claude Code
+description: >-
+  The Claude Code CLI makes the change inside the Session; the host runs the
+  required checks on the exact final files and a reviewer on a different
+  model must approve the result.
+kind: fix
+params:
+  writer_model:
+    kind: model
+    default: anthropic:sonnet
+    description: anthropic:<model or alias> that Claude Code runs (default anthropic:sonnet)
+  reviewer_model:
+    kind: model
+    required: true
+    description: provider:model of the reviewer, a native Agent on Ollama or OpenRouter (use a different model than the writer)
+agents:
+  - id: writer
+    role: writer
+    runtime: claude-code
+    model: { param: writer_model }
+    instructions: >-
+      You own this change. Find the relevant code and tests, make the change,
+      run the project's check command and fix failures, then compare your diff
+      with the task. When the host sends you review findings, answer every
+      finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced
+      JSON array with one object per finding, {"id": "F1", "decision":
+      "accept" or "reject", "reason": "..."}. Reject only with a concrete
+      reason (the code that shows the finding is wrong). Fix each finding you
+      accept, run the checks again, and give your final answer. Leave no file
+      you created only for testing or debugging (scratch scripts, test binaries
+      such as `go test -c` output, build outputs, reports): delete them, then
+      run the project's check command one last time before your final answer.
+checks:
+  - name: tests
+    run: { detected: true }
+    timeout: 3m
+review:
+  model: { param: reviewer_model }
+  rounds: 3
+  tools: [read_file, list_dir, grep, glob]
+  adjudicate: true
+  instructions: >-
+    Review the change against the task and against every contract and edge
+    case the docs, comments and tests describe. Read the code the change
+    touches, not only the diff. Number each finding F1, F2, ... at the start
+    of its line, with file:line, what is wrong and what to change; report
+    only defects, not style. Give the verdict line the host asks for,
+    VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.
+budgets:
+  agent: { activations: 4, invocations: 400, tokens: 20000000, cost_usd: 10 }
+  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }
+  wall_clock: 60m
+prompt: |
+  {task}
+sandbox:
+  network: egress
+  workload: hardened
+environment:
+  recipes: [claude-code]

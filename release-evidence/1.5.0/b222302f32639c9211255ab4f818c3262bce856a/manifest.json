@@ -2,7 +2,7 @@
   "schema": "axocoatl.release-evidence/1",
   "version": "1.5.0",
   "commit": "b222302f32639c9211255ab4f818c3262bce856a",
-  "created_at": "2026-10-27T00:17:24.009Z",
+  "created_at": "2026-10-27T00:57:28.796Z",
   "paths": {
     "A-arm": {
       "file": "A-arm.json",
@@ -30,7 +30,7 @@
     },
     "C1-claude-code": {
       "file": "C1-claude-code.json",
-      "pass": false
+      "pass": true
     },
     "C1-codex": {
       "file": "C1-codex.json",
@@ -1879,8 +1879,8 @@
     },
     {
       "path": "C1-claude-code.json",
-      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
-      "bytes": 10551
+      "sha256": "f88be24382026c83dda38b5ca1082191c48d7b346acbfa3d88829ae5ae6bc3f8",
+      "bytes": 57569
     },
     {
       "path": "C1-claude-code/acceptance/claude-sample/accepted-answers.stderr",
@@ -2831,6 +2831,166 @@
       "path": "C1-claude-code/answers.txt",
       "sha256": "7958bc26c65848f8d2e6df6cf7a35f64cc26f749c34fe9d7b6eff2383caa3061",
       "bytes": 115
+    },
+    {
+      "path": "C1-claude-code/continuation/append-provenance.json",
+      "sha256": "2e447622e2cd7a038784f877d1f1ebfabf93bc7e8622d314aa99275b14e298d0",
+      "bytes": 1557
+    },
+    {
+      "path": "C1-claude-code/continuation/append-staging.py",
+      "sha256": "86d1ff473b04427a540a475e121f6d65b9add666e46ab44a24702f73748c0ad3",
+      "bytes": 8745
+    },
+    {
+      "path": "C1-claude-code/continuation/assessment.json",
+      "sha256": "e6f7ba7a0de928b3b0a777b678b1c5f5ecf2f6b951d15f602f2aaa3d46127a07",
+      "bytes": 3659
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/crates/axocoatl-config/loadouts/fix-claude-code.yaml",
+      "sha256": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "bytes": 4203
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/docs/RELEASE_GATE.md",
+      "sha256": "c91818e67e04fcbf778951acb220a936f7387061f66cdf5f21c3f1b99c40881e",
+      "bytes": 77309
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/scripts/release-gate/evidence.mjs",
+      "sha256": "bcd138fe8f8c68aa668894cdc2eb4c59f76c3689237fde3569800a05649d9729",
+      "bytes": 39408
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/scripts/release-gate/lib.sh",
+      "sha256": "cfe0d44083779605c13986fa80061294882d1d4574119117c823b8dc4238fa0b",
+      "bytes": 46975
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/scripts/release-gate/newuser-mac.sh",
+      "sha256": "4e4ec2ed2b7bd52bbc409708cd38dfb5660182b80f8cd5e132d2f7f2be6730fb",
+      "bytes": 65814
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/fixtures.json",
+      "sha256": "0441cc517f6c3128840760496d427e421a9782acaa5812368ad734f6268e461b",
+      "bytes": 3684
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605
+    },
+    {
+      "path": "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745
+    },
+    {
+      "path": "C1-claude-code/continuation/composer-input-manifest.json",
+      "sha256": "88f09d94352ceadc5a5c64980a3e9246ef32ed4330d8f25acd558afd587e3c20",
+      "bytes": 472940
+    },
+    {
+      "path": "C1-claude-code/continuation/composer-output.json",
+      "sha256": "43ec0c3008b9f6b321143113261c90d2091da1b32a080c39b44c3c88692e7271",
+      "bytes": 279074
+    },
+    {
+      "path": "C1-claude-code/continuation/composer-tests.log",
+      "sha256": "2214a22f2277ceedebc78ddac0ac14c4305f1ce90fa6edf3bd5266089879232c",
+      "bytes": 2377
+    },
+    {
+      "path": "C1-claude-code/continuation/composer-tests.py",
+      "sha256": "11e136515513cbe1dbf0557377cefabbe11898fc491a3e00fb264da2d2da79f4",
+      "bytes": 6114
+    },
+    {
+      "path": "C1-claude-code/continuation/composer.py",
+      "sha256": "2724b58e9e302bc2f278d40e2a12299bed4db3a72c92a061e68b52831a2d2705",
+      "bytes": 18667
+    },
+    {
+      "path": "C1-claude-code/continuation/effective-execution-configuration.json",
+      "sha256": "12ee2580044745f9fc31971226f11f38187be8680d1f65a15ab511ca7303ba3c",
+      "bytes": 18421
+    },
+    {
+      "path": "C1-claude-code/continuation/gate-keys.public",
+      "sha256": "9557533cb67e36008500b72a2f1031dec7800246a748a6eb03e4e3020a0aca0f",
+      "bytes": 663
+    },
+    {
+      "path": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "bytes": 10551
+    },
+    {
+      "path": "C1-claude-code/continuation/original-attempt/manifest.dsse.json",
+      "sha256": "8ec1d618a03ce2377b8d079b663dcda9849902190ceba683c190b4dd718481e1",
+      "bytes": 505590
+    },
+    {
+      "path": "C1-claude-code/continuation/original-attempt/manifest.json",
+      "sha256": "aaa872c3d26b7ecb02916e98cf01de65dd6f15a75125827458aa818bbe4638e7",
+      "bytes": 378986
+    },
+    {
+      "path": "C1-claude-code/continuation/resumed-status.json",
+      "sha256": "32dfac8b3493fc08e5fe27da159b5b476c6351c291f836e4ece78318d0e36e1a",
+      "bytes": 849
+    },
+    {
+      "path": "C1-claude-code/continuation/retained-source-verification.json",
+      "sha256": "12360f474040cff2aaa5897f6dec82c03ce4b7370e7d60d0678cc8565bffcc5f",
+      "bytes": 370
+    },
+    {
+      "path": "C1-claude-code/continuation/retention-map.json",
+      "sha256": "f6ea95f4bf39223fdafd07d555af1bc56c9afa045de86d23051cef1ec04f362b",
+      "bytes": 1009
+    },
+    {
+      "path": "C1-claude-code/continuation/source-lock.json",
+      "sha256": "2d2ee8df3fdb44c3df50505fae2531b7e6bfa015b2c4e02adbd6c5cdc1def861",
+      "bytes": 1729
+    },
+    {
+      "path": "C1-claude-code/continuation/source-signature-verification.json",
+      "sha256": "f389bb98b94a631b9b100264dd6e5700ddfdc4a15578a38edf4ae9f628562494",
+      "bytes": 2291
+    },
+    {
+      "path": "C1-claude-code/continuation/step-provenance.json",
+      "sha256": "736d43611c1620bc8cfe11f466ca778108462a60f91cb6c3b832003b433abe33",
+      "bytes": 20459
+    },
+    {
+      "path": "C1-claude-code/continuation/verify-retained-bundle.mjs",
+      "sha256": "bb6a5350f9853cb2ff582e417481e386cd4c3159df5cf2946fb0e9b0fe7e407c",
+      "bytes": 2250
     },
     {
       "path": "C1-claude-code/doctor.json",

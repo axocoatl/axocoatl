@@ -1,0 +1,20 @@
+{
+  "schema": "axocoatl.recovery.claude-composition-inputs/1",
+  "candidate": "b222302f32639c9211255ab4f818c3262bce856a",
+  "manifest_sha256": "aaa872c3d26b7ecb02916e98cf01de65dd6f15a75125827458aa818bbe4638e7",
+  "dsse_sha256": "8ec1d618a03ce2377b8d079b663dcda9849902190ceba683c190b4dd718481e1",
+  "candidate_source_sha256": {
+    "scripts/release-gate/evidence.mjs": "bcd138fe8f8c68aa668894cdc2eb4c59f76c3689237fde3569800a05649d9729",
+    "scripts/release-gate/newuser-mac.sh": "4e4ec2ed2b7bd52bbc409708cd38dfb5660182b80f8cd5e132d2f7f2be6730fb",
+    "scripts/release-gate/lib.sh": "cfe0d44083779605c13986fa80061294882d1d4574119117c823b8dc4238fa0b",
+    "docs/RELEASE_GATE.md": "c91818e67e04fcbf778951acb220a936f7387061f66cdf5f21c3f1b99c40881e",
+    "tests/fixtures/newuser/fixtures.json": "0441cc517f6c3128840760496d427e421a9782acaa5812368ad734f6268e461b",
+    "crates/axocoatl-config/loadouts/fix-claude-code.yaml": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+    "tests/fixtures/newuser/node-deps/.gitignore": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+    "tests/fixtures/newuser/node-deps/README.md": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+    "tests/fixtures/newuser/node-deps/package-lock.json": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+    "tests/fixtures/newuser/node-deps/package.json": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+    "tests/fixtures/newuser/node-deps/src/paginate.js": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+    "tests/fixtures/newuser/node-deps/test/paginate.test.js": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0"
+  }
+}

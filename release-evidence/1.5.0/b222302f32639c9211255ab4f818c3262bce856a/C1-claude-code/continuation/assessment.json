@@ -1,0 +1,106 @@
+{
+  "schema": "axocoatl.recovery.claude-completion/1",
+  "prepared_at": "2026-10-27T00:51:07.983305+00:00",
+  "candidate": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "unsigned": true,
+  "path_pass": true,
+  "original_path_sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+  "original_pass": false,
+  "original_steps": 37,
+  "original_failed_steps": [
+    11,
+    25
+  ],
+  "successor_steps": 37,
+  "successor_passing_steps": 37,
+  "original_signed_files_preserved": 1769,
+  "original_manifest_sha256": "aaa872c3d26b7ecb02916e98cf01de65dd6f15a75125827458aa818bbe4638e7",
+  "original_dsse_sha256": "8ec1d618a03ce2377b8d079b663dcda9849902190ceba683c190b4dd718481e1",
+  "node_artifact": "The patch removes the erroneous remainder-based last-page length and slices each page to start + size. Array.slice bounds the final partial page to the array length, so exact multiples retain their full final page; the existing input guards and empty-input behavior remain. Only src/paginate.js changed. Original tests and manifests are unchanged.",
+  "node_original_tests_passed": 4,
+  "node_negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 18,
+        "payload": {
+          "call_id": "call_ix66aukq",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 26,
+        "payload": {
+          "call_id": "call_6hn8johi",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [
+      {
+        "event": {
+          "conn": "g1:8",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/policy_limits",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 24,
+        "ts_ms": 1793059303637,
+        "v": 1
+      },
+      {
+        "event": {
+          "conn": "g1:7",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/settings",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 26,
+        "ts_ms": 1793059303639,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 282
+    },
+    "failed_activations": []
+  },
+  "node_usage": {
+    "input_tokens": 131822,
+    "output_tokens": 1453,
+    "cost_microunits": 61368,
+    "cost_usd": 0.061368,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "new_inference": false,
+  "new_authentication": false,
+  "global_yaml_historical_hash_known": false,
+  "scope": "New operator-authorized continuation record; immutable original failure remains nested with its complete authenticated bundle. Other release paths remain outside this result."
+}
