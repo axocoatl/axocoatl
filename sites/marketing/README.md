@@ -92,6 +92,37 @@ reuse their historical provenance. Keep original captures immutable, include the
 exact provenance, capture metadata and source-frame archive in the optional slot, and inspect the actual
 frames for private data before publication.
 
+The separate `dashboard-task-1.5` slot follows a new native workbench task below
+that saved-run tour. All nine assets must exist before the build includes it:
+`dashboard-task.mp4`, `result.jpg`, `chapters.vtt`, `captions.vtt`, `provenance.json`,
+`source-capture.tar.gz`, `timeline.json`, `verify-task.mjs`, and
+`artifact-evidence.json`. The source and built payload validators run its full `--repo <repository-root> --probe` verification;
+pending portfolio films do not exempt the task recording from these checks.
+
+This four-turn prepared pagination task started with a local Qwen3-Coder 30B lead
+and read-only GPT-OSS 20B Scout, then finished with GPT-OSS 20B as the lead and helpers
+off. The team required `npm test`, with no required model review or hosted model
+calls. The final host check passed all eight tests, all four original tests were
+retained, and the artifact passed independent review.
+
+The recording retains malformed tool-call failures, operator recovery, and requests
+to restore coverage after file review found two removed original tests. Scout also
+reported tests it had not run; test evidence comes from the host and independent
+artifact checks. Codex operated the actual browser UI. Captured segments are combined, waiting is sped up 6×
+(selected correction waits 8×), and private folder navigation and unrecorded gaps
+are omitted; the provenance and source-to-playback timeline document the edits. This is neither a one-prompt success
+nor a performance or comparative-quality measurement. Passing the host's checks did
+not replace independent artifact review. `artifact-evidence.json` retains the final
+accepted assessment alongside the earlier failed assessment, actual patches and
+test output.
+
+Keep the four chapter labels aligned with the capture: Open workspace, Send request,
+Follow agents & recover, and Review and correct. Explanatory captions identify
+stages, recovery and the model change in the silent video; the caption track is
+enabled by default and the separate chapter track remains available. Use native
+video controls without autoplay and keep the result available at full size. This ordinary workbench turn
+must not be presented as producing a signed receipt.
+
 The separate historical video slot names `assets/demo/cross-model-review.mp4` and
 `assets/demo/cross-model-review.jpg`. It is explicitly labelled Axocoatl 1.1.0 and
 retains the benchmark's scope and limitations. `.gitignore` keeps MP4 and JPEG files

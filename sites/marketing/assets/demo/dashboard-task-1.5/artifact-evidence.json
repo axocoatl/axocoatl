@@ -1,0 +1,390 @@
+{
+  "schema": "axocoatl.dashboard-task-public-artifact-evidence/1",
+  "publication": "Derived public copies with only private audit directory paths removed; original assessment hashes retained. No model reasoning, credentials or dependency cache included.",
+  "baseline_commit": "e012a2112c16d349dd1be50c5374324b908a79ae",
+  "cases": [
+    {
+      "name": "attempt-before-test-restoration",
+      "source_assessment_sha256": "d014991cd3c51ce05544b9ff2134a932071bf2217a6852b2ac1e12da2a73823c",
+      "assessment": {
+        "schema": "axocoatl.dashboard-task.acceptance/1",
+        "baseline_commit": "e012a2112c16d349dd1be50c5374324b908a79ae",
+        "node": "v22.23.2",
+        "verdict": "FAILED",
+        "reason": "Implementation passes independent checks, but two original tests were removed in violation of the frozen contract.",
+        "criteria": {
+          "original_tests_preserved": {
+            "passed": false,
+            "preserved": [
+              "a partial last page keeps the items left over",
+              "the last page is full when the total is a multiple of the page size"
+            ],
+            "missing": [
+              "no items make no pages",
+              "a page size of zero is refused"
+            ]
+          },
+          "regression_tests": {
+            "passed": true,
+            "coverage": {
+              "single_full_page": true,
+              "page_size_one": true
+            }
+          },
+          "npm_test": {
+            "passed": true,
+            "log": "npm-test.log"
+          },
+          "independent_original_tests": {
+            "passed": true,
+            "count": 4,
+            "log": "original-tests.log"
+          },
+          "independent_boundaries": {
+            "passed": true,
+            "valid_cases": 1040,
+            "invalid_size_cases": 11,
+            "properties": [
+              "exact page contents",
+              "item order",
+              "all items preserved",
+              "object identity",
+              "no input mutation",
+              "positive page lengths",
+              "size and page count bounds",
+              "unchanged invalid-size RangeError"
+            ]
+          },
+          "public_api": {
+            "passed": true,
+            "exports": [
+              "paginate"
+            ],
+            "paginate_arity": 2
+          },
+          "scope": {
+            "passed": true,
+            "changed_paths": [
+              "src/paginate.js",
+              "test/paginate.test.js"
+            ],
+            "unchanged_files": [
+              {
+                "file": "README.md",
+                "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e"
+              },
+              {
+                "file": ".gitignore",
+                "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+              },
+              {
+                "file": "package.json",
+                "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26"
+              },
+              {
+                "file": "package-lock.json",
+                "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de"
+              }
+            ]
+          },
+          "no_commit": {
+            "passed": true,
+            "head": "e012a2112c16d349dd1be50c5374324b908a79ae"
+          }
+        },
+        "proof_limits": [
+          "Prepared demonstration fixture, not comparative evidence.",
+          "Artifact tests are independent of any model assertion that it ran tests.",
+          "Runtime delegation, host-required checks and failed turns must be reported from their separate actual event evidence."
+        ],
+        "files": [
+          {
+            "path": ".gitignore",
+            "bytes": 14,
+            "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+          },
+          {
+            "path": "README.md",
+            "bytes": 525,
+            "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e"
+          },
+          {
+            "path": "package-lock.json",
+            "bytes": 2556,
+            "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de"
+          },
+          {
+            "path": "package.json",
+            "bytes": 165,
+            "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26"
+          },
+          {
+            "path": "src/paginate.js",
+            "bytes": 608,
+            "sha256": "e41f25ebc33e5af53964c8d3d729c26fe64490973a18f4e90a03e2cf012602db"
+          },
+          {
+            "path": "test/paginate.test.js",
+            "bytes": 1040,
+            "sha256": "45ae8cd8a558b04d1d164d516d4d686f9df002f145997f87f3458fd4c6b674e9"
+          }
+        ],
+        "patch_sha256": "4f6463efeac56c42438fddd23018a45ef41d9d3a7dc95ccdc95213778bb92254"
+      },
+      "patch": "diff --git a/src/paginate.js b/src/paginate.js\nindex 501ba48..0c8669a 100644\n--- a/src/paginate.js\n+++ b/src/paginate.js\n@@ -12,7 +12,7 @@ function paginate(items, size) {\n   const pages = [];\n   for (let page = 0; page < count; page += 1) {\n     const start = page * size;\n-    const length = page < count - 1 ? size : items.length % size;\n+    const length = page === count - 1 ? items.length - start : size;\n     pages.push(items.slice(start, start + length));\n   }\n   return pages;\ndiff --git a/test/paginate.test.js b/test/paginate.test.js\nindex 70c8674..46c89e1 100644\n--- a/test/paginate.test.js\n+++ b/test/paginate.test.js\n@@ -14,12 +14,20 @@ test('the last page is full when the total is a multiple of the page size', () =\n   assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);\n });\n \n-test('no items make no pages', () => {\n-  assert.equal(paginate([], 5), []);\n+test('a full page with one item per page', () => {\n+  assert.equal(paginate(numbers(1), 1), [[1]]);\n });\n \n-test('a page size of zero is refused', () => {\n-  assert.throws(() => paginate(numbers(3), 0), RangeError);\n+test('a full page with items equal to page size', () => {\n+  assert.equal(paginate(numbers(5), 5), [[1, 2, 3, 4, 5]]);\n });\n \n-test.run();\n+test('full page with page size one', () => {\n+  assert.equal(paginate(numbers(3), 1), [[1], [2], [3]]);\n+});\n+\n+test('regression test for exact multiple of page size', () => {\n+  assert.equal(paginate(numbers(10), 2), [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]);\n+});\n+\n+test.run();\n\\ No newline at end of file\n",
+      "files": [
+        {
+          "path": ".gitignore",
+          "bytes": 14,
+          "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+          "content": "node_modules/\n"
+        },
+        {
+          "path": "README.md",
+          "bytes": 525,
+          "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e",
+          "content": "# Pagination demo\n\nA small Node library that splits a list into pages.\n\n## Develop\n\n```sh\nnpm ci\nnpm test\n```\n\n`paginate(items, size)` returns arrays of at most `size` items, preserving their\norder. Empty input returns no pages. The size must be a positive integer.\n\n## Reported issue\n\nThe final page loses its items when the item count is an exact multiple of the\npage size. Fix the bug without changing the public API, preserve the existing\ntests, and add regression coverage for a single full page and a page size of one.\n"
+        },
+        {
+          "path": "package-lock.json",
+          "bytes": 2556,
+          "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+          "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"newuser-node-deps\",\n      \"version\": \"0.1.0\",\n      \"devDependencies\": {\n        \"uvu\": \"0.5.6\"\n      }\n    },\n    \"node_modules/dequal\": {\n      \"version\": \"2.0.3\",\n      \"resolved\": \"https://registry.npmjs.org/dequal/-/dequal-2.0.3.tgz\",\n      \"integrity\": \"sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/diff\": {\n      \"version\": \"5.2.2\",\n      \"resolved\": \"https://registry.npmjs.org/diff/-/diff-5.2.2.tgz\",\n      \"integrity\": \"sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==\",\n      \"dev\": true,\n      \"license\": \"BSD-3-Clause\",\n      \"engines\": {\n        \"node\": \">=0.3.1\"\n      }\n    },\n    \"node_modules/kleur\": {\n      \"version\": \"4.1.5\",\n      \"resolved\": \"https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz\",\n      \"integrity\": \"sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/mri\": {\n      \"version\": \"1.2.0\",\n      \"resolved\": \"https://registry.npmjs.org/mri/-/mri-1.2.0.tgz\",\n      \"integrity\": \"sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=4\"\n      }\n    },\n    \"node_modules/sade\": {\n      \"version\": \"1.8.1\",\n      \"resolved\": \"https://registry.npmjs.org/sade/-/sade-1.8.1.tgz\",\n      \"integrity\": \"sha512-xal3CZX1Xlo/k4ApwCFrHVACi9fBqJ7V+mwhBsuf/1IOKbBy098Fex+Wa/5QMubw09pSZ/u8EY8PWgevJsXp1A==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"mri\": \"^1.1.0\"\n      },\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/uvu\": {\n      \"version\": \"0.5.6\",\n      \"resolved\": \"https://registry.npmjs.org/uvu/-/uvu-0.5.6.tgz\",\n      \"integrity\": \"sha512-+g8ENReyr8YsOc6fv/NVJs2vFdHBnBNdfE49rshrTzDWOlUx4Gq7KOS2GD8eqhy2j+Ejq29+SbKH8yjkAqXqoA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"dequal\": \"^2.0.0\",\n        \"diff\": \"^5.0.0\",\n        \"kleur\": \"^4.0.3\",\n        \"sade\": \"^1.7.3\"\n      },\n      \"bin\": {\n        \"uvu\": \"bin.js\"\n      },\n      \"engines\": {\n        \"node\": \">=8\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": "package.json",
+          "bytes": 165,
+          "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+          "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"uvu test\"\n  },\n  \"devDependencies\": {\n    \"uvu\": \"0.5.6\"\n  }\n}\n"
+        },
+        {
+          "path": "src/paginate.js",
+          "bytes": 608,
+          "sha256": "e41f25ebc33e5af53964c8d3d729c26fe64490973a18f4e90a03e2cf012602db",
+          "content": "'use strict';\n\n/**\n * Split `items` into pages of `size` items. Every page but the last is full;\n * the last page holds whatever is left.\n */\nfunction paginate(items, size) {\n  if (!Number.isInteger(size) || size <= 0) {\n    throw new RangeError('size must be a positive integer');\n  }\n  const count = Math.ceil(items.length / size);\n  const pages = [];\n  for (let page = 0; page < count; page += 1) {\n    const start = page * size;\n    const length = page === count - 1 ? items.length - start : size;\n    pages.push(items.slice(start, start + length));\n  }\n  return pages;\n}\n\nmodule.exports = { paginate };\n"
+        },
+        {
+          "path": "test/paginate.test.js",
+          "bytes": 1040,
+          "sha256": "45ae8cd8a558b04d1d164d516d4d686f9df002f145997f87f3458fd4c6b674e9",
+          "content": "'use strict';\n\nconst { test } = require('uvu');\nconst assert = require('uvu/assert');\nconst { paginate } = require('../src/paginate');\n\nconst numbers = (count) => Array.from({ length: count }, (_, index) => index + 1);\n\ntest('a partial last page keeps the items left over', () => {\n  assert.equal(paginate(numbers(11), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]);\n});\n\ntest('the last page is full when the total is a multiple of the page size', () => {\n  assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);\n});\n\ntest('a full page with one item per page', () => {\n  assert.equal(paginate(numbers(1), 1), [[1]]);\n});\n\ntest('a full page with items equal to page size', () => {\n  assert.equal(paginate(numbers(5), 5), [[1, 2, 3, 4, 5]]);\n});\n\ntest('full page with page size one', () => {\n  assert.equal(paginate(numbers(3), 1), [[1], [2], [3]]);\n});\n\ntest('regression test for exact multiple of page size', () => {\n  assert.equal(paginate(numbers(10), 2), [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]);\n});\n\ntest.run();"
+        }
+      ],
+      "logs": {
+        "npm-test.log": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\npaginate.test.js\n\u2022 \u2022 \u2022 \u2022 \u2022 \u2022   (6 / 6)\n\n  Total:     6\n  Passed:    6\n  Skipped:   0\n  Duration:  0.68ms\n\n",
+        "original-tests.log": "\u2022 \u2022 \u2022 \u2022   (4 / 4)\n\n  Total:     4\n  Passed:    4\n  Skipped:   0\n  Duration:  0.44ms\n\n",
+        "boundary-matrix.log": "PASS: 1040 valid item-count/page-size combinations; 11 invalid sizes; unchanged API and inputs.\n"
+      }
+    },
+    {
+      "name": "final",
+      "source_assessment_sha256": "ccc5d9e10fb71dc862d964359f7c52d9d252c772bc4e6bf2275cefb397a5e517",
+      "assessment": {
+        "schema": "axocoatl.dashboard-task.acceptance/1",
+        "baseline_commit": "e012a2112c16d349dd1be50c5374324b908a79ae",
+        "node": "v22.23.2",
+        "verdict": "ACCEPTED",
+        "reason": "All frozen artifact acceptance criteria pass.",
+        "criteria": {
+          "original_tests_preserved": {
+            "passed": true,
+            "preserved": [
+              "a partial last page keeps the items left over",
+              "the last page is full when the total is a multiple of the page size",
+              "no items make no pages",
+              "a page size of zero is refused"
+            ],
+            "missing": []
+          },
+          "regression_tests": {
+            "passed": true,
+            "coverage": {
+              "single_full_page": true,
+              "page_size_one": true
+            }
+          },
+          "npm_test": {
+            "passed": true,
+            "log": "npm-test.log"
+          },
+          "independent_original_tests": {
+            "passed": true,
+            "count": 4,
+            "log": "original-tests.log"
+          },
+          "independent_boundaries": {
+            "passed": true,
+            "valid_cases": 1040,
+            "invalid_size_cases": 11,
+            "properties": [
+              "exact page contents",
+              "item order",
+              "all items preserved",
+              "object identity",
+              "no input mutation",
+              "positive page lengths",
+              "size and page count bounds",
+              "unchanged invalid-size RangeError"
+            ]
+          },
+          "public_api": {
+            "passed": true,
+            "exports": [
+              "paginate"
+            ],
+            "paginate_arity": 2
+          },
+          "scope": {
+            "passed": true,
+            "changed_paths": [
+              "src/paginate.js",
+              "test/paginate.test.js"
+            ],
+            "unchanged_files": [
+              {
+                "file": "README.md",
+                "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e"
+              },
+              {
+                "file": ".gitignore",
+                "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+              },
+              {
+                "file": "package.json",
+                "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26"
+              },
+              {
+                "file": "package-lock.json",
+                "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de"
+              }
+            ]
+          },
+          "no_commit": {
+            "passed": true,
+            "head": "e012a2112c16d349dd1be50c5374324b908a79ae"
+          }
+        },
+        "proof_limits": [
+          "Prepared demonstration fixture, not comparative evidence.",
+          "Artifact tests are independent of any model assertion that it ran tests.",
+          "Runtime delegation, host-required checks and failed turns must be reported from their separate actual event evidence."
+        ],
+        "files": [
+          {
+            "path": ".gitignore",
+            "bytes": 14,
+            "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97"
+          },
+          {
+            "path": "README.md",
+            "bytes": 525,
+            "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e"
+          },
+          {
+            "path": "package-lock.json",
+            "bytes": 2556,
+            "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de"
+          },
+          {
+            "path": "package.json",
+            "bytes": 165,
+            "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26"
+          },
+          {
+            "path": "src/paginate.js",
+            "bytes": 608,
+            "sha256": "e41f25ebc33e5af53964c8d3d729c26fe64490973a18f4e90a03e2cf012602db"
+          },
+          {
+            "path": "test/paginate.test.js",
+            "bytes": 1282,
+            "sha256": "a180666fe246eaa56d7578f78b1ab01faf3a28426b2c63121a3d4dc259657fd2"
+          }
+        ],
+        "patch_sha256": "e2b25fb2da7cfa4c2632b19384aa5347039db589bd5c94071d23f8f8a40fa041"
+      },
+      "patch": "diff --git a/src/paginate.js b/src/paginate.js\nindex 501ba48..0c8669a 100644\n--- a/src/paginate.js\n+++ b/src/paginate.js\n@@ -12,7 +12,7 @@ function paginate(items, size) {\n   const pages = [];\n   for (let page = 0; page < count; page += 1) {\n     const start = page * size;\n-    const length = page < count - 1 ? size : items.length % size;\n+    const length = page === count - 1 ? items.length - start : size;\n     pages.push(items.slice(start, start + length));\n   }\n   return pages;\ndiff --git a/test/paginate.test.js b/test/paginate.test.js\nindex 70c8674..a3ed0fe 100644\n--- a/test/paginate.test.js\n+++ b/test/paginate.test.js\n@@ -14,6 +14,23 @@ test('the last page is full when the total is a multiple of the page size', () =\n   assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);\n });\n \n+test('a full page with one item per page', () => {\n+  assert.equal(paginate(numbers(1), 1), [[1]]);\n+});\n+\n+test('a full page with items equal to page size', () => {\n+  assert.equal(paginate(numbers(5), 5), [[1, 2, 3, 4, 5]]);\n+});\n+\n+test('full page with page size one', () => {\n+  assert.equal(paginate(numbers(3), 1), [[1], [2], [3]]);\n+});\n+\n+test('regression test for exact multiple of page size', () => {\n+  assert.equal(paginate(numbers(10), 2), [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]);\n+});\n+\n+// ---- Restored original edge\u2011case tests ----\n test('no items make no pages', () => {\n   assert.equal(paginate([], 5), []);\n });\n@@ -22,4 +39,4 @@ test('a page size of zero is refused', () => {\n   assert.throws(() => paginate(numbers(3), 0), RangeError);\n });\n \n-test.run();\n+test.run();\n\\ No newline at end of file\n",
+      "files": [
+        {
+          "path": ".gitignore",
+          "bytes": 14,
+          "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+          "content": "node_modules/\n"
+        },
+        {
+          "path": "README.md",
+          "bytes": 525,
+          "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e",
+          "content": "# Pagination demo\n\nA small Node library that splits a list into pages.\n\n## Develop\n\n```sh\nnpm ci\nnpm test\n```\n\n`paginate(items, size)` returns arrays of at most `size` items, preserving their\norder. Empty input returns no pages. The size must be a positive integer.\n\n## Reported issue\n\nThe final page loses its items when the item count is an exact multiple of the\npage size. Fix the bug without changing the public API, preserve the existing\ntests, and add regression coverage for a single full page and a page size of one.\n"
+        },
+        {
+          "path": "package-lock.json",
+          "bytes": 2556,
+          "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+          "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"newuser-node-deps\",\n      \"version\": \"0.1.0\",\n      \"devDependencies\": {\n        \"uvu\": \"0.5.6\"\n      }\n    },\n    \"node_modules/dequal\": {\n      \"version\": \"2.0.3\",\n      \"resolved\": \"https://registry.npmjs.org/dequal/-/dequal-2.0.3.tgz\",\n      \"integrity\": \"sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/diff\": {\n      \"version\": \"5.2.2\",\n      \"resolved\": \"https://registry.npmjs.org/diff/-/diff-5.2.2.tgz\",\n      \"integrity\": \"sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==\",\n      \"dev\": true,\n      \"license\": \"BSD-3-Clause\",\n      \"engines\": {\n        \"node\": \">=0.3.1\"\n      }\n    },\n    \"node_modules/kleur\": {\n      \"version\": \"4.1.5\",\n      \"resolved\": \"https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz\",\n      \"integrity\": \"sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/mri\": {\n      \"version\": \"1.2.0\",\n      \"resolved\": \"https://registry.npmjs.org/mri/-/mri-1.2.0.tgz\",\n      \"integrity\": \"sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=4\"\n      }\n    },\n    \"node_modules/sade\": {\n      \"version\": \"1.8.1\",\n      \"resolved\": \"https://registry.npmjs.org/sade/-/sade-1.8.1.tgz\",\n      \"integrity\": \"sha512-xal3CZX1Xlo/k4ApwCFrHVACi9fBqJ7V+mwhBsuf/1IOKbBy098Fex+Wa/5QMubw09pSZ/u8EY8PWgevJsXp1A==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"mri\": \"^1.1.0\"\n      },\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/uvu\": {\n      \"version\": \"0.5.6\",\n      \"resolved\": \"https://registry.npmjs.org/uvu/-/uvu-0.5.6.tgz\",\n      \"integrity\": \"sha512-+g8ENReyr8YsOc6fv/NVJs2vFdHBnBNdfE49rshrTzDWOlUx4Gq7KOS2GD8eqhy2j+Ejq29+SbKH8yjkAqXqoA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"dequal\": \"^2.0.0\",\n        \"diff\": \"^5.0.0\",\n        \"kleur\": \"^4.0.3\",\n        \"sade\": \"^1.7.3\"\n      },\n      \"bin\": {\n        \"uvu\": \"bin.js\"\n      },\n      \"engines\": {\n        \"node\": \">=8\"\n      }\n    }\n  }\n}\n"
+        },
+        {
+          "path": "package.json",
+          "bytes": 165,
+          "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+          "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"uvu test\"\n  },\n  \"devDependencies\": {\n    \"uvu\": \"0.5.6\"\n  }\n}\n"
+        },
+        {
+          "path": "src/paginate.js",
+          "bytes": 608,
+          "sha256": "e41f25ebc33e5af53964c8d3d729c26fe64490973a18f4e90a03e2cf012602db",
+          "content": "'use strict';\n\n/**\n * Split `items` into pages of `size` items. Every page but the last is full;\n * the last page holds whatever is left.\n */\nfunction paginate(items, size) {\n  if (!Number.isInteger(size) || size <= 0) {\n    throw new RangeError('size must be a positive integer');\n  }\n  const count = Math.ceil(items.length / size);\n  const pages = [];\n  for (let page = 0; page < count; page += 1) {\n    const start = page * size;\n    const length = page === count - 1 ? items.length - start : size;\n    pages.push(items.slice(start, start + length));\n  }\n  return pages;\n}\n\nmodule.exports = { paginate };\n"
+        },
+        {
+          "path": "test/paginate.test.js",
+          "bytes": 1282,
+          "sha256": "a180666fe246eaa56d7578f78b1ab01faf3a28426b2c63121a3d4dc259657fd2",
+          "content": "'use strict';\n\nconst { test } = require('uvu');\nconst assert = require('uvu/assert');\nconst { paginate } = require('../src/paginate');\n\nconst numbers = (count) => Array.from({ length: count }, (_, index) => index + 1);\n\ntest('a partial last page keeps the items left over', () => {\n  assert.equal(paginate(numbers(11), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]);\n});\n\ntest('the last page is full when the total is a multiple of the page size', () => {\n  assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);\n});\n\ntest('a full page with one item per page', () => {\n  assert.equal(paginate(numbers(1), 1), [[1]]);\n});\n\ntest('a full page with items equal to page size', () => {\n  assert.equal(paginate(numbers(5), 5), [[1, 2, 3, 4, 5]]);\n});\n\ntest('full page with page size one', () => {\n  assert.equal(paginate(numbers(3), 1), [[1], [2], [3]]);\n});\n\ntest('regression test for exact multiple of page size', () => {\n  assert.equal(paginate(numbers(10), 2), [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10]]);\n});\n\n// ---- Restored original edge\u2011case tests ----\ntest('no items make no pages', () => {\n  assert.equal(paginate([], 5), []);\n});\n\ntest('a page size of zero is refused', () => {\n  assert.throws(() => paginate(numbers(3), 0), RangeError);\n});\n\ntest.run();"
+        }
+      ],
+      "logs": {
+        "npm-test.log": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\npaginate.test.js\n\u2022 \u2022 \u2022 \u2022 \u2022 \u2022 \u2022 \u2022   (8 / 8)\n\n  Total:     8\n  Passed:    8\n  Skipped:   0\n  Duration:  0.60ms\n\n",
+        "original-tests.log": "\u2022 \u2022 \u2022 \u2022   (4 / 4)\n\n  Total:     4\n  Passed:    4\n  Skipped:   0\n  Duration:  0.45ms\n\n",
+        "boundary-matrix.log": "PASS: 1040 valid item-count/page-size combinations; 11 invalid sizes; unchanged API and inputs.\n"
+      }
+    }
+  ],
+  "baseline_files": [
+    {
+      "path": "README.md",
+      "sha256": "a5aa3f0d0eed9645e41b728d274945e075c7bd3fac1d019020481f44876e980e",
+      "bytes": 525,
+      "content": "# Pagination demo\n\nA small Node library that splits a list into pages.\n\n## Develop\n\n```sh\nnpm ci\nnpm test\n```\n\n`paginate(items, size)` returns arrays of at most `size` items, preserving their\norder. Empty input returns no pages. The size must be a positive integer.\n\n## Reported issue\n\nThe final page loses its items when the item count is an exact multiple of the\npage size. Fix the bug without changing the public API, preserve the existing\ntests, and add regression coverage for a single full page and a page size of one.\n"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "content": "node_modules/\n"
+    },
+    {
+      "path": "package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"uvu test\"\n  },\n  \"devDependencies\": {\n    \"uvu\": \"0.5.6\"\n  }\n}\n"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "content": "{\n  \"name\": \"newuser-node-deps\",\n  \"version\": \"0.1.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"newuser-node-deps\",\n      \"version\": \"0.1.0\",\n      \"devDependencies\": {\n        \"uvu\": \"0.5.6\"\n      }\n    },\n    \"node_modules/dequal\": {\n      \"version\": \"2.0.3\",\n      \"resolved\": \"https://registry.npmjs.org/dequal/-/dequal-2.0.3.tgz\",\n      \"integrity\": \"sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/diff\": {\n      \"version\": \"5.2.2\",\n      \"resolved\": \"https://registry.npmjs.org/diff/-/diff-5.2.2.tgz\",\n      \"integrity\": \"sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==\",\n      \"dev\": true,\n      \"license\": \"BSD-3-Clause\",\n      \"engines\": {\n        \"node\": \">=0.3.1\"\n      }\n    },\n    \"node_modules/kleur\": {\n      \"version\": \"4.1.5\",\n      \"resolved\": \"https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz\",\n      \"integrity\": \"sha512-o+NO+8WrRiQEE4/7nwRJhN1HWpVmJm511pBHUxPLtp0BUISzlBplORYSmTclCnJvQq2tKu/sgl3xVpkc7ZWuQQ==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/mri\": {\n      \"version\": \"1.2.0\",\n      \"resolved\": \"https://registry.npmjs.org/mri/-/mri-1.2.0.tgz\",\n      \"integrity\": \"sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"engines\": {\n        \"node\": \">=4\"\n      }\n    },\n    \"node_modules/sade\": {\n      \"version\": \"1.8.1\",\n      \"resolved\": \"https://registry.npmjs.org/sade/-/sade-1.8.1.tgz\",\n      \"integrity\": \"sha512-xal3CZX1Xlo/k4ApwCFrHVACi9fBqJ7V+mwhBsuf/1IOKbBy098Fex+Wa/5QMubw09pSZ/u8EY8PWgevJsXp1A==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"mri\": \"^1.1.0\"\n      },\n      \"engines\": {\n        \"node\": \">=6\"\n      }\n    },\n    \"node_modules/uvu\": {\n      \"version\": \"0.5.6\",\n      \"resolved\": \"https://registry.npmjs.org/uvu/-/uvu-0.5.6.tgz\",\n      \"integrity\": \"sha512-+g8ENReyr8YsOc6fv/NVJs2vFdHBnBNdfE49rshrTzDWOlUx4Gq7KOS2GD8eqhy2j+Ejq29+SbKH8yjkAqXqoA==\",\n      \"dev\": true,\n      \"license\": \"MIT\",\n      \"dependencies\": {\n        \"dequal\": \"^2.0.0\",\n        \"diff\": \"^5.0.0\",\n        \"kleur\": \"^4.0.3\",\n        \"sade\": \"^1.7.3\"\n      },\n      \"bin\": {\n        \"uvu\": \"bin.js\"\n      },\n      \"engines\": {\n        \"node\": \">=8\"\n      }\n    }\n  }\n}\n"
+    },
+    {
+      "path": "src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "content": "'use strict';\n\n/**\n * Split `items` into pages of `size` items. Every page but the last is full;\n * the last page holds whatever is left.\n */\nfunction paginate(items, size) {\n  if (!Number.isInteger(size) || size <= 0) {\n    throw new RangeError('size must be a positive integer');\n  }\n  const count = Math.ceil(items.length / size);\n  const pages = [];\n  for (let page = 0; page < count; page += 1) {\n    const start = page * size;\n    const length = page < count - 1 ? size : items.length % size;\n    pages.push(items.slice(start, start + length));\n  }\n  return pages;\n}\n\nmodule.exports = { paginate };\n"
+    },
+    {
+      "path": "test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "content": "'use strict';\n\nconst { test } = require('uvu');\nconst assert = require('uvu/assert');\nconst { paginate } = require('../src/paginate');\n\nconst numbers = (count) => Array.from({ length: count }, (_, index) => index + 1);\n\ntest('a partial last page keeps the items left over', () => {\n  assert.equal(paginate(numbers(11), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11]]);\n});\n\ntest('the last page is full when the total is a multiple of the page size', () => {\n  assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);\n});\n\ntest('no items make no pages', () => {\n  assert.equal(paginate([], 5), []);\n});\n\ntest('a page size of zero is refused', () => {\n  assert.throws(() => paginate(numbers(3), 0), RangeError);\n});\n\ntest.run();\n"
+    }
+  ]
+}

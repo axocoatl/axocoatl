@@ -495,6 +495,26 @@ if (!existsSync(dashboardDirectory)) {
   }
 }
 
+// A new native-task recording is staged independently. An absent draft remains
+// omitted, but any staged task assets require the complete, strictly verified set.
+const dashboardTaskDirectory = join(root, 'assets/demo/dashboard-task-1.5');
+if (existsSync(dashboardTaskDirectory)) {
+  const required = ['dashboard-task.mp4', 'result.jpg', 'chapters.vtt', 'captions.vtt', 'provenance.json',
+    'source-capture.tar.gz', 'timeline.json', 'verify-task.mjs', 'artifact-evidence.json'];
+  const missing = required.filter((name) => !existsSync(join(dashboardTaskDirectory, name)));
+  if (missing.length) {
+    fail('dashboard task', `incomplete capture assets: ${missing.join(', ')}`);
+  } else {
+    const result = spawnSync(process.execPath, [join(dashboardTaskDirectory, 'verify-task.mjs'),
+      '--repo', repositoryRoot, '--probe'], {
+      encoding: 'utf8', timeout: 300_000, maxBuffer: 2 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) {
+      fail('dashboard task', result.error?.message || result.stderr?.trim() || result.stdout?.trim() || `verifier exited ${result.status}`);
+    }
+  }
+}
+
 // Retain protection on the historical literal excerpt source as well; a future
 // reuse must not reintroduce Cloudflare rewriting of evidence bytes.
 const verifiedFixEmbed = join(sourceRoot, 'assets/demo/verified-fix-1.5/embed.html');

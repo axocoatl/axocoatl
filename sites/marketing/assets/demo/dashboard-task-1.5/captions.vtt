@@ -1,0 +1,47 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:12.537
+A prepared Node pagination task in the actual 1.5 dashboard.
+Recorded in segments; navigation and waits shortened.
+
+00:00:12.537 --> 00:00:22.554
+Create a Session. Approve npm ci and the local team.
+
+00:00:22.554 --> 00:00:31.488
+Request the fix, preserve existing tests, and add regressions.
+
+00:00:31.488 --> 00:00:47.020
+Follow the Qwen3-Coder Lead in the Agent graph.
+
+00:00:47.020 --> 00:00:56.703
+A malformed model response fails. The operator selects Continue.
+
+00:00:56.703 --> 00:01:05.887
+The retry also fails. Guidance hits a Session conflict;
+the operator starts a new recovery request.
+
+00:01:05.887 --> 00:01:21.788
+The Lead delegates a read-only inspection to GPT-OSS Scout.
+
+00:01:21.788 --> 00:01:30.304
+Host checks pass, then the operator inspects the changes.
+
+00:01:30.304 --> 00:01:49.068
+Review finds two original tests removed.
+Restoration is requested; that turn also fails.
+
+00:01:49.068 --> 00:01:53.785
+Switch the Lead to local GPT-OSS20B and disable helpers.
+
+00:01:53.785 --> 00:02:09.815
+A fourth request restores the exact original test blocks.
+
+00:02:09.815 --> 00:02:14.824
+Final turn completes. The host check passes all 8 tests.
+
+00:02:14.824 --> 00:02:21.838
+Review the final implementation and tests; changes stay uncommitted.
+
+00:02:21.838 --> 00:02:25.847
+Independent acceptance: original 4 tests retained, 8 tests pass.
+This was a recovered four-request task, not one-shot success.

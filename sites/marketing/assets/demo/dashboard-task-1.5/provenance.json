@@ -1,0 +1,218 @@
+{
+  "product": {
+    "version": "1.5.0",
+    "release_commit": "19e3c89ca7b4d02cd742bccd671f7274e68b95d7",
+    "runtime_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+    "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+    "session_id": "ses-9d94e404-c818-4a69-8c0a-03c808b3b68c",
+    "turn_ids": [
+      "turn-fa310deb-79a7-4776-9d82-8db1119805d9",
+      "turn-45bacbfd-9cb4-4c2a-b02d-cd1c4d527193",
+      "turn-8a2f33e9-f0f2-4ce3-9da1-0f7aeceb7798",
+      "turn-e115f86c-baf6-48ce-b5ff-63704b24bd82"
+    ]
+  },
+  "capture": {
+    "human_operator": false,
+    "operator": "Codex assistant using the actual browser UI",
+    "origin": "http://127.0.0.1:8082/",
+    "mode": "Awaited screenshot segments, approximately two samples per second; unrecorded gaps omitted and disclosed.",
+    "failed_attempts": "A first screenshot-loop attempt stopped after one frame before any model request; retained privately, excluded from this film."
+  },
+  "presentation": {
+    "new_inference": true,
+    "run_started_from": "dashboard",
+    "label": "Actual local dashboard task, edited from recorded UI segments",
+    "disclosure": "Prepared Node pagination fixture, not a comparative evaluation. Recorded in screenshot segments; folder navigation and gaps omitted and waiting accelerated as documented. Four requests, failed activations, operator recovery, a Lead model change and test restoration are retained. Not one uninterrupted or unattended request. One redundant recorded correction wait was also omitted; its later failure remains visible."
+  },
+  "configuration": {
+    "initial_lead": "ollama:qwen3-coder:30b",
+    "initial_helper": "ollama:gpt-oss:20b",
+    "helper_name": "Scout",
+    "helper_scope": "Read-only file tools, writes: [], no shell",
+    "final_lead": "ollama:gpt-oss:20b",
+    "final_helpers": [],
+    "required_checks": [
+      "npm test"
+    ],
+    "required_review": null,
+    "hosted_model_calls": 0
+  },
+  "task": {
+    "initial_commit": "e012a2112c16d349dd1be50c5374324b908a79ae",
+    "request": "Fix pagination losing the final page for exact multiples. Preserve the public API and existing tests. Add regression tests for one full page and page size one. Ask Scout for a bounded read-only inspection, run npm test, do not commit."
+  },
+  "outcome": {
+    "status": "accepted",
+    "changes_committed": false,
+    "required_host_check": "npm test: 8/8 passed on final turn",
+    "independent_original_tests": 4,
+    "independent_valid_boundary_cases": 1040,
+    "independent_invalid_size_cases": 11,
+    "original_test_blocks_retained": true,
+    "changed_files": [
+      "src/paginate.js",
+      "test/paginate.test.js"
+    ]
+  },
+  "interventions_observed": [
+    "First request changed implementation and tests, then a malformed model tool-call final failed generation1.",
+    "Operator selected Continue; generation2 also failed with malformed output.",
+    "A proposed guidance message was not sent because the resumed composer returned a Session conflict.",
+    "Operator refreshed and finished the failed turn, then sent a new recovery request explicitly asking for Scout delegation.",
+    "Lead and Scout completed the recovery turn and the host ran six passing tests. Independent diff review found two original tests removed.",
+    "Operator sent a third request restoring removed tests. Qwen restored renamed tests but again ended with a malformed tool-call final.",
+    "Operator changed the Lead in Team and budget to local GPT-OSS20B and disabled helpers.",
+    "A fourth request restored the exact original test blocks. GPT-OSS completed; the host check passed8/8.",
+    "Independent artifact review accepted the final uncommitted implementation and tests."
+  ],
+  "private_evidence": {
+    "full_session_history_sha256": "58a2279167408bd12cad6d69edd75ca73a69da32552abceea168e5e762188ddf",
+    "disclosure": "Full session export remains private and is not included; public media contains no raw reasoning export."
+  },
+  "schema": "axocoatl.dashboard-task-provenance/1",
+  "files": [
+    {
+      "file": "dashboard-task.mp4",
+      "sha256": "8191dd380c03bd7f83c900a648549360b7bcebbdc4ff98561c8c15b6ddc847b4",
+      "bytes": 3537053
+    },
+    {
+      "file": "result.jpg",
+      "sha256": "bdfab9258e482f88b695ad07349fd553eeb3240f14acbf929873230b214ff9f8",
+      "bytes": 83313
+    },
+    {
+      "file": "chapters.vtt",
+      "sha256": "2eb0b3525a02977b6769bd32686e84fdf8902c6cebf29680f6eafa0ed2bacc32",
+      "bytes": 202
+    },
+    {
+      "file": "source-capture.tar.gz",
+      "sha256": "592a6cdf712fbac76bf97d1c374175344f6b3d5791c872ed0906f99fc245f2b1",
+      "bytes": 25210665
+    },
+    {
+      "file": "timeline.json",
+      "sha256": "d1ccdf69da0d011d00e2d944b38866eedd846f91cc386c150e9ab30cda3e7b78",
+      "bytes": 247378
+    },
+    {
+      "file": "artifact-evidence.json",
+      "sha256": "84d6862c67b9a7484012aca55ab31b8725a18220e451ba01d4c297ee031f60d5",
+      "bytes": 33084
+    },
+    {
+      "file": "captions.vtt",
+      "sha256": "5ff6a34ad976ae094d9eed4bee81f4c28cad3dafffa17431ede1e40f76911973",
+      "bytes": 1460
+    }
+  ],
+  "source_frames": 568,
+  "actual_duration_ms": 1136398,
+  "playback_duration_ms": 145846.83333333337,
+  "encoding": {
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "fps": 24,
+    "audio": false,
+    "frames": "All retained original samples, chronological; privacy or editorial omissions declared; repeated frames only, no interpolation or generated UI.",
+    "timing": "Explicit privacy omissions, uncaptured segment gaps and declared speedups are mapped in the timeline; every retained sample is preserved.",
+    "encoder_sha256": "43c734bad829c24a3d53d3d49cd67d814b9f39df80e59377e35103d6604d89b9",
+    "color_range": "tv",
+    "color_conversion": "Original full-range JPEG samples converted to standard limited-range yuv420p for H.264; original JPEG bytes retained unchanged.",
+    "verification": "Every retained JPEG sample must match an encoded video frame at SSIM>=0.99 within one24fps frame (1/24second) of its mapped midpoint, allowing only source/seek timestamp quantization. Asset hashes and source mappings remain exact.",
+    "frame_quantization": "Each retained sample receives the interval between its cumulative source-mapped boundaries rounded to24fps; every interval contains at least one output frame. FFconcat input is explicitly24Hz."
+  },
+  "outcome_scope": "Recorded task only; no comparative evaluation or general reliability inference.",
+  "captions": [
+    {
+      "source_ms": 0,
+      "playback_start_ms": 0.0,
+      "playback_end_ms": 12537.0,
+      "text": "A prepared Node pagination task in the actual 1.5 dashboard.\nRecorded in segments; navigation and waits shortened."
+    },
+    {
+      "source_ms": 52965,
+      "playback_start_ms": 12537.0,
+      "playback_end_ms": 22554.0,
+      "text": "Create a Session. Approve npm ci and the local team."
+    },
+    {
+      "source_ms": 98099,
+      "playback_start_ms": 22554.0,
+      "playback_end_ms": 31488.16666666667,
+      "text": "Request the fix, preserve existing tests, and add regressions."
+    },
+    {
+      "source_ms": 125128,
+      "playback_start_ms": 31488.16666666667,
+      "playback_end_ms": 47020.16666666667,
+      "text": "Follow the Qwen3-Coder Lead in the Agent graph."
+    },
+    {
+      "source_ms": 175892,
+      "playback_start_ms": 47020.16666666667,
+      "playback_end_ms": 56703.33333333334,
+      "text": "A malformed model response fails. The operator selects Continue."
+    },
+    {
+      "source_ms": 225636,
+      "playback_start_ms": 56703.33333333334,
+      "playback_end_ms": 65887.16666666666,
+      "text": "The retry also fails. Guidance hits a Session conflict;\nthe operator starts a new recovery request."
+    },
+    {
+      "source_ms": 262395,
+      "playback_start_ms": 65887.16666666666,
+      "playback_end_ms": 81787.83333333334,
+      "text": "The Lead delegates a read-only inspection to GPT-OSS Scout."
+    },
+    {
+      "source_ms": 339653,
+      "playback_start_ms": 81787.83333333334,
+      "playback_end_ms": 90303.83333333331,
+      "text": "Host checks pass, then the operator inspects the changes."
+    },
+    {
+      "source_ms": 382747,
+      "playback_start_ms": 90303.83333333331,
+      "playback_end_ms": 109067.66666666669,
+      "text": "Review finds two original tests removed.\nRestoration is requested; that turn also fails."
+    },
+    {
+      "source_ms": 591830,
+      "playback_start_ms": 109067.66666666669,
+      "playback_end_ms": 113784.66666666669,
+      "text": "Switch the Lead to local GPT-OSS20B and disable helpers."
+    },
+    {
+      "source_ms": 615854,
+      "playback_start_ms": 113784.66666666669,
+      "playback_end_ms": 129814.83333333337,
+      "text": "A fourth request restores the exact original test blocks."
+    },
+    {
+      "source_ms": 677976,
+      "playback_start_ms": 129814.83333333337,
+      "playback_end_ms": 134823.83333333337,
+      "text": "Final turn completes. The host check passes all 8 tests."
+    },
+    {
+      "source_ms": 702834,
+      "playback_start_ms": 134823.83333333337,
+      "playback_end_ms": 141837.83333333337,
+      "text": "Review the final implementation and tests; changes stay uncommitted."
+    },
+    {
+      "source_ms": 1132389,
+      "playback_start_ms": 141837.83333333337,
+      "playback_end_ms": 145846.83333333337,
+      "text": "Independent acceptance: original 4 tests retained, 8 tests pass.\nThis was a recovered four-request task, not one-shot success."
+    }
+  ],
+  "limitations": [
+    "Scout reported tests it had not run: its approved tools were read-only file tools, with no shell. Actual test outcomes are established by the host-required checks and independent artifact checks.",
+    "The prepared fixture and recovered result do not establish comparative quality or general reliability."
+  ]
+}

@@ -120,6 +120,19 @@ pre code { padding: 0; background: transparent; }
 .split .dashboard-shot { align-self: center; }
 @media (max-width: 760px) { .dashboard-gallery { grid-template-columns: minmax(0, 1fr); } }
 
+/* The second recording follows a new task; navigation stays manual. */
+.dashboard-task-video { margin-bottom: var(--s-5); }
+.dashboard-chapters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-3); margin: 0; padding: 0; list-style: none; }
+.dashboard-chapters li { display: flex; align-items: center; gap: var(--s-3); min-width: 0; padding: var(--s-4); border-top: 1px solid var(--border-strong); font-family: var(--font-display); font-size: var(--t-16); }
+.dashboard-chapter-number { color: var(--muted); font-family: var(--font-mono); font-size: var(--t-13); }
+.dashboard-chapters time { display: block; margin-top: var(--s-1); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-13); }
+.dashboard-task-details { margin-top: var(--s-5); padding: var(--s-4) 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: var(--t-14); }
+.dashboard-task-details summary { color: var(--fg); font-family: var(--font-display); font-weight: 600; cursor: pointer; }
+.dashboard-task-details p { max-width: 90ch; margin-top: var(--s-3); }
+.dashboard-task-links { margin-top: var(--s-5); font-size: var(--t-14); }
+@media (max-width: 760px) { .dashboard-chapters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 400px) { .dashboard-chapters li { gap: var(--s-2); padding: var(--s-3) 0; font-size: var(--t-14); } }
+
 ax-product-film {
   display: block; width: min(100%, 1080px); min-width: 0; margin: var(--s-7) auto 0; text-align: left;
 }
