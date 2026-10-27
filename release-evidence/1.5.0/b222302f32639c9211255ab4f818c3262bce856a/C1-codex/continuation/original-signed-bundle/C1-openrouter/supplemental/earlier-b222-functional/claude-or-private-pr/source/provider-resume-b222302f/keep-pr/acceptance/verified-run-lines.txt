@@ -1,0 +1,1 @@
+receipt	Run axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a	2026-10-26T17:59:16.2590396Z Verified the receipt of run run-58600b32-4b16-41cf-8c3d-2aad1f65ff4e (verdict pass), signed by sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d, which .axocoatl/receipt-keys at the base commit trusts; 1 changed file(s), 0 not covered.

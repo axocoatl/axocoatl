@@ -1,0 +1,53 @@
+{
+  "schema": "axocoatl.recovery.keep-pr-acceptance/1",
+  "assessed_at": "2026-10-26T18:03:15.091329+00:00",
+  "accepted": true,
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "run_id": "run-58600b32-4b16-41cf-8c3d-2aad1f65ff4e",
+  "pull_request": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/pull/2",
+  "base": "2c38749059ccd07cf6b5ce6a76f3bdcc652a6076",
+  "head": "14676ff7e60d4c3690059f3e0fe9418cc05e0f74",
+  "artifact_result": "The only source change replaces last-page modulo length with the full requested slice size, retaining all items when the total is an exact multiple. Existing slice behavior still handles partial pages.",
+  "changed_paths": [
+    "src/paginate.js"
+  ],
+  "original_tests": {
+    "passed": 4,
+    "failed": 0,
+    "skipped": 0,
+    "invocations": 1,
+    "test_file_unchanged": true,
+    "package_and_lockfile_unchanged": true,
+    "environment": "Node22.23.2; uvu0.5.6 from unchanged lockfile; isolated acceptance/artifact copy"
+  },
+  "receipt": {
+    "valid": true,
+    "signature": "trusted",
+    "files_complete": true,
+    "repo_mismatches": [],
+    "record_problems": []
+  },
+  "record_integrity_valid": true,
+  "markup": {
+    "accepted_answers_checked": 2,
+    "accepted_answer_markup": false,
+    "added_source_markup": false
+  },
+  "workflow": {
+    "id": 40373611253,
+    "conclusion": "success",
+    "head": "14676ff7e60d4c3690059f3e0fe9418cc05e0f74",
+    "action_pinned_to_candidate": true,
+    "verified_exact_run_line_found": true,
+    "url": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/actions/runs/40373611253",
+    "log_sha256": "171173372557758406f68f985d1c2365ce8b62a4d7ab1b10668631c3c547b972"
+  },
+  "model_calls_by_auditor": 0,
+  "actions_rerun": false,
+  "config_or_remote_mutations_by_auditor": false,
+  "original_clone_mutations_by_auditor": false,
+  "release_ready_claimed": false,
+  "limitations": [
+    "This is targeted --keep pr acceptance evidence; it does not fill missing clean-install/provider onboarding paths or waive any remaining release gate."
+  ]
+}

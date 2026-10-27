@@ -1,0 +1,382 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/2",
+  "fixture": "codex-python-pytest",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T18:04:36.361301+00:00",
+  "repo": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+  "base_commit": "38d7ecafbf03c12edce1e46a4a987331983cfbdb",
+  "run_id": "run-73d034a5-703b-4ee5-bc64-228196f41360",
+  "outcome": "accepted",
+  "artifact_change": {
+    "files": [
+      "pages.py"
+    ],
+    "explanation": "The last page now takes the remaining item count after its start, instead of a remainder modulo page size that discards an exact full final page. Ten items with page size5 now retain both full pages. The unchanged original tests also cover partial pages, empty input, and zero size.",
+    "original_tests_unchanged": true,
+    "all_other_tracked_files_unchanged": true,
+    "tests_added": 0,
+    "hashes": {
+      ".gitignore": {
+        "original_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+        "final_sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+        "unchanged": true
+      },
+      "README.md": {
+        "original_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+        "final_sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+        "unchanged": true
+      },
+      "pages.py": {
+        "original_sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+        "final_sha256": "bde9ff4073f2ae4e533203711e48ab2c922315f2e6c02936f6e339d458f77769",
+        "unchanged": false
+      },
+      "pyproject.toml": {
+        "original_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+        "final_sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+        "unchanged": true
+      },
+      "tests/test_pages.py": {
+        "original_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+        "final_sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+        "unchanged": true
+      }
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/receipt.json",
+          "--key",
+          "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+          "--repo",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+        "start": "2026-10-26T18:04:35.136416+00:00",
+        "end": "2026-10-26T18:04:35.144379+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "6a17cc18b0a4565223fc5b03eacaa3c5cae3d3239fac8f28f643699793fd977d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+        "start": "2026-10-26T18:04:35.144531+00:00",
+        "end": "2026-10-26T18:04:35.152099+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "5e23372a832ff9dd85473319c75b6186a9611d938525b1d93b8c85f7072d26f9",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answer-markup",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+        "start": "2026-10-26T18:04:35.152272+00:00",
+        "end": "2026-10-26T18:04:35.178569+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-base",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "--repo-head",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/record.jsonl"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/repo",
+        "start": "2026-10-26T18:04:35.178752+00:00",
+        "end": "2026-10-26T18:04:35.206031+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "aae70fa5968c77c1b1f232ca4f66b346e25491fe248b3d9c12d971b5ce59956c",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+        "start": "2026-10-26T18:04:35.235328+00:00",
+        "end": "2026-10-26T18:04:35.241902+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "host-venv",
+        "argv": [
+          "/opt/homebrew/bin/uv",
+          "venv",
+          "--offline",
+          "--python",
+          "/Users/erick/.local/share/uv/python/cpython-3.13.7-macos-aarch64-none/bin/python3",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+        "start": "2026-10-26T18:04:35.242085+00:00",
+        "end": "2026-10-26T18:04:35.315270+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "21e84b0e433f85f5af0e9679a1816bcad361ebe6db5fe95a213d26ffcbf3be58"
+      },
+      {
+        "name": "host-setup",
+        "argv": [
+          "/opt/homebrew/bin/uv",
+          "pip",
+          "install",
+          "--python",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv/bin/python",
+          "-e",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo[test]"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+        "start": "2026-10-26T18:04:35.315528+00:00",
+        "end": "2026-10-26T18:04:35.893539+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "b8700946c94907e60af748df1847c0cd9e62177d3c7f9ec68e0c75c5ce128256"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-venv/bin/pytest"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/codex-python-pytest/acceptance/host-repo",
+        "start": "2026-10-26T18:04:35.893762+00:00",
+        "end": "2026-10-26T18:04:36.347181+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "49e81e5937bf64bd3ba22a7485f37fca0a93e8e1711b761e540390e0e428c307",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "host_repo": "A byte-identical tracked-file copy under acceptance; ordinary locked/declaration-based setup, no node_modules copy.",
+    "source_repo_untouched": true,
+    "independent_baseline_rerun": false,
+    "cli": {
+      "path": "/usr/local/bin/axocoatl",
+      "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+    },
+    "markup": {
+      "record_answers_exit": 0,
+      "record_base": "38d7ecafbf03c12edce1e46a4a987331983cfbdb",
+      "added_lines_scanned": 1,
+      "untracked_files_scanned": [],
+      "added_line_matches": [],
+      "new_file_matches": [],
+      "passed": true
+    },
+    "setup_checks": {
+      "toolchain": true,
+      "image_name_matches_fixture": true,
+      "image_id_present": true,
+      "setup_command_matches_fixture": true,
+      "setup_succeeded": true,
+      "run_log_confirms_image": true,
+      "run_log_confirms_setup_before_model": true,
+      "original_baseline_failed": true,
+      "required_check_passed": true
+    },
+    "environment": {
+      "toolchain": "python",
+      "reason": "pyproject.toml at the repository root",
+      "image": "localhost/axocoatl-recipe-codex-python:c75fb26e819a",
+      "image_id": "068213e8a0e1a7848836e7204c854ea2db15d1f8f882c0d10319355cfb9837ca",
+      "recipes": [
+        "codex",
+        "python"
+      ],
+      "check": "python3 -m pytest",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "pip install -e '.[test]'",
+        "source": "detected",
+        "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+        "exit_code": 0,
+        "duration_ms": 5961,
+        "registry_hosts": [
+          "pypi.org",
+          "files.pythonhosted.org"
+        ],
+        "allowed_connections": 4,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-5a584b73ee87adb5d3fd3ad0",
+      "probe": {
+        "program": "python3",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 495
+      }
+    },
+    "junit": {
+      "attributes": {
+        "name": "axocoatl",
+        "tests": "3",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "86.382"
+      },
+      "note": "The three JUnit cases summarize the Axocoatl run/check/review contract; they are not the original fixture test count."
+    }
+  },
+  "configuration": {
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "python3 -m pytest"
+        ],
+        "candidate_sha256": "64d3136648d2bba443ca3e70a454aa2958219170cf163e0da054d95ff958ba92"
+      }
+    ],
+    "activation_summary": [
+      {
+        "role": "writer",
+        "state": "accepted",
+        "failure": null,
+        "counts": {
+          "reasoning_summary": 17,
+          "text": 1,
+          "provider_response": 1
+        },
+        "usage": {
+          "kind": "measured",
+          "usage": {
+            "input_tokens": 115701,
+            "output_tokens": 781,
+            "reasoning_tokens": null
+          }
+        }
+      },
+      {
+        "role": "reviewer",
+        "state": "accepted",
+        "failure": null,
+        "counts": {
+          "reasoning_summary": 16,
+          "provider_response": 8,
+          "tool_proposed": 7,
+          "tool_result": 7,
+          "text": 2
+        },
+        "usage": {
+          "kind": "measured",
+          "usage": {
+            "input_tokens": 21631,
+            "output_tokens": 129,
+            "reasoning_tokens": 778
+          }
+        }
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 137332,
+    "output_tokens": 910,
+    "cost_microunits": 43476,
+    "cost_usd": 0.043476,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": true
+  },
+  "cost_interpretation": "Reported aggregate includes Codex token usage valued at list prices (cost_computed=true); it is not an actual OpenRouter account charge or an OpenAI API invoice. No account usage was read in this audit.",
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 9,
+      "payload": {
+        "call_id": "chatcmpl-tool-a16030d6ffa753be",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    }
+  ],
+  "provider_retries": [],
+  "network": {
+    "events": 63,
+    "allowed_connections": 13,
+    "refused_connections": 6,
+    "route_requests": 9,
+    "routes": [
+      [
+        "chatgpt.com",
+        9
+      ]
+    ]
+  },
+  "network_explanation": "Six requests from one Python3.13 process descended from the Codex writer to pypi.org:443 were denied (HTTP403 not_allowed, revision5), after setup revoked the pypi.org and files.pythonhosted.org exceptions at network sequences17-18. This demonstrates post-setup egress enforcement. The public record does not establish the exact attempted command or motive. The writer finished, required host checks passed, and the reviewer approved.",
+  "adjudications": [],
+  "limitations": [
+    "This validates the completed targeted fixture, not a fresh-install/provider onboarding path.",
+    "The external Codex writer is represented by one aggregate provider_response; it does not prove one network call or expose every nested tool event.",
+    "Public tool-result bodies/arguments are hashed; no unobserved error cause is asserted.",
+    "No new inference, product source edit, service/config/auth mutation, or baseline/model rerun."
+  ],
+  "evidence_hashes": {
+    "receipt.json": "35a76f0e869755f31880a0e47e689e612a5aea4cad92a2411a7113dfd693c566",
+    "record.jsonl": "5675770fc819d16e3beb43dce6b03b5beec04039e7e23e0319580e17933f1bbd",
+    "run.log": "dcdde0f6dd62bef470109426cf49d975292834fb12c074c11f31bc3ea00280ee",
+    "junit.xml": "42e90f95865a93eff410a78c964f0b61ccba3e30fcbc12a14c4a5a0701ae241f",
+    "patch.diff": "d410018905aa0afa0412da082dd9c6b694df9c513d7a427e58a70503fcb06dff",
+    "negative-evidence.json": "8c0058cb9d5144752f8b4d1f5c99d503ea2e6cb3414bd1501c26486d51f4a6a4",
+    "network-events.json": "3dbfd04e9debfee417cc9eb8da01f15466a14672652444859461f74a6cc050e0"
+  }
+}

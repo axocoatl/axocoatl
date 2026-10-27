@@ -1,0 +1,67 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-openrouter",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-26T20:32:01Z",
+  "finished_at": "2026-10-26T23:50:46.612Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "46885 MiB free; models cached: yes"
+    },
+    {
+      "name": "axocoatl is installed",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "no OpenRouter key was stored before this path",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl secret list names no openrouter"
+    },
+    {
+      "name": "onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 11924.3,
+      "bytes_downloaded": 0,
+      "detail": "exit 1, expected 0: interactive step; see the transcript (exit 1) "
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "42145 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-openrouter/logs/onboard---update---writer-openrouter--connect-in-the-browser-when-it-asks---inte.log",
+    "C1-openrouter/logs/onboarding/onboard-20261026-203201.log",
+    "C1-openrouter/transcript.txt"
+  ]
+}

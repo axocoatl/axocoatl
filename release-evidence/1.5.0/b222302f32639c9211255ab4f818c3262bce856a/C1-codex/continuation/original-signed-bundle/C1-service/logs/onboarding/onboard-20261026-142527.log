@@ -1,0 +1,162 @@
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261026-142527.log
+
+Step 0 · This computer
+$ /usr/bin/sw_vers -productVersion
+  exit 0
+  | 26.6
+
+$ /usr/sbin/sysctl -n machdep.cpu.brand_string
+  exit 0
+  | Apple M5 Pro
+
+$ xcode-select -p
+  exit 0
+  | /Library/Developer/CommandLineTools
+
+$ /usr/bin/git --version
+  exit 0
+  | git version 2.39.5 (Apple Git-154)
+
+$ brew --version
+  exit 0
+  | Homebrew 7.0.10
+
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 49 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5, a running Axocoatl 1.5.0 daemon, the Always-On Service (installed, /usr/local/bin/axocoatl).
+Not found: codex.
+Port 8080 is in use; Axocoatl will use the next free port.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+? Check the sandbox with one throwaway container? This pulls docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start from, and runs it rootless with your user mapped in and no network. [Y/n]
+  answered yes
+$ podman pull docker.io/library/alpine:3.20
+  exit 0
+$ podman run --rm --pull=never --userns=keep-id:uid=1000,gid=1000 --user 1000:1000 --network=none --cap-drop=all --security-opt=no-new-privileges docker.io/library/alpine:3.20 id -u
+  exit 0
+  | 1000
+
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.11 at http://localhost:11434, cloud models off (2 models installed)
+  Suggested: writer qwen3-coder:30b (from the models on this server that fit this computer).
+? Model for the writer (Lead; Scout and the chat Assistant use it too) → qwen3-coder:30b (30.5B, 18.6 GB)
+  The reviewer runs on OpenRouter.
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+? Use OpenRouter credits, with no BYOK provider keys connected? (Native Sessions do not support BYOK) [Y/n]
+  answered yes
+  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+  ✓ qwen3-coder:30b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  Changes to /Users/erick/Library/Application Support/Axocoatl/config.yaml:
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     sampling:
+    -       max_tokens: 2048
+    - # Writer: openrouter (axocoatl run fix)
+    + # Writer: ollama (axocoatl run fix)
+    -     writer: "openrouter:qwen/qwen3-coder-30b-a3b-instruct"
+    +     writer: "ollama:qwen3-coder:30b"
+? Write these changes? The current file is kept as config.yaml.bak-20261026-142654 next to it. [Y/n]
+  answered yes
+  ✓ Backed up to /Users/erick/Library/Application Support/Axocoatl/config.yaml.bak-20261026-142654
+wrote /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Configuration written: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Data: /Users/erick/Library/Application Support/Axocoatl/data
+
+Step 5 · Check
+$ /opt/homebrew/bin/ollama --version
+  exit 0
+  | ollama version is 0.40.11
+
+$ /opt/homebrew/bin/claude --version
+  exit 0
+  | 2.1.92 (Claude Code)
+
+$ /opt/homebrew/bin/gh auth status
+  exit 0
+  | github.com
+  |   ✓ Logged in to github.com account cubanerick (keyring)
+  |   - Active account: true
+  |   - Git operations protocol: https
+  |   - Token: gho_************************************
+  |   - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+
+  ! Claude Code: not connected (claude-code-oauth is not stored)
+  ! Codex: not connected
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer openrouter:openai/gpt-oss-120b)
+  ! axocoatl run fix-claude-code (not connected: run `axocoatl connect claude-code`)
+  ! axocoatl run fix-codex (not connected: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+$ /usr/local/bin/axocoatl service status
+  exit 0
+  | Always-On Service (launchd backend)
+  |   installed: yes
+  |   running:   yes
+  |   at login:  yes
+  |   detail:    loaded
+  |   logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+  | 
+  | Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+  | 
+  | Note: this is the Always-On *Service* (keeps the daemon process alive).
+  | Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+
+? The Always-On Service started before /Users/erick/Library/Application Support/Axocoatl/config.yaml changed, so the first run would use the old configuration. Restart it now (this ends any Session turn or run in progress)? [Y/n]
+  answered yes
+$ /usr/local/bin/axocoatl service restart
+  exit 0
+  ✓ Using the daemon running on port 8080
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model writer=ollama:qwen3-coder:30b --model reviewer=openrouter:openai/gpt-oss-120b
+$ /usr/local/bin/axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model writer=ollama:qwen3-coder:30b --model reviewer=openrouter:openai/gpt-oss-120b
+  exit 0
+$ /usr/local/bin/axocoatl receipt key --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+  exit 0
+  | ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15
+
+  $ axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --key "$(axocoatl receipt key)" --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+$ /usr/local/bin/axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --key 'ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+  exit 0
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer ollama:qwen3-coder:30b, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)

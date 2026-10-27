@@ -1,0 +1,17 @@
+name: Axocoatl receipt
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  receipt:
+    if: startsWith(github.head_ref, 'axocoatl/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: axocoatl/axocoatl/actions/verify-receipt@b222302f32639c9211255ab4f818c3262bce856a

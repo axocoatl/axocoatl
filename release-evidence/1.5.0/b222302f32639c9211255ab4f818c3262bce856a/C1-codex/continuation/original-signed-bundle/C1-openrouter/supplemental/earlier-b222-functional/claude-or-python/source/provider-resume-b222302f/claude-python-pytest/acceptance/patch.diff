@@ -1,0 +1,16 @@
+diff --git a/pages.py b/pages.py
+index b9b1243..cb88093 100644
+--- a/pages.py
++++ b/pages.py
+@@ -9,10 +9,4 @@ def paginate(items, size):
+     if size <= 0:
+         raise ValueError("size must be positive")
+     items = list(items)
+-    count = -(-len(items) // size)
+-    pages = []
+-    for page in range(count):
+-        start = page * size
+-        length = size if page < count - 1 else len(items) % size
+-        pages.append(items[start:start + length])
+-    return pages
++    return [items[start:start + size] for start in range(0, len(items), size)]

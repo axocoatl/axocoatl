@@ -1,0 +1,67 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-codex",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": false,
+  "started_at": "2026-10-27T01:04:38Z",
+  "finished_at": "2026-10-27T01:29:30.222Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "41371 MiB free; models cached: yes"
+    },
+    {
+      "name": "axocoatl is installed",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "no Codex sign-in was stored before this path",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl secret list names no codex-chatgpt"
+    },
+    {
+      "name": "onboard --update --writer codex (interactive; every answer is in the transcript)",
+      "status": "fail",
+      "required": true,
+      "exit_code": 130,
+      "seconds": 1490.9,
+      "bytes_downloaded": 685898044,
+      "detail": "exit 130, expected 0: interactive step; see the transcript (exit 130) "
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "34398 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-codex/logs/onboard---update---writer-codex--interactive--every-answer-is-in-the-transcript-.log",
+    "C1-codex/logs/onboarding/onboard-20261027-010438.log",
+    "C1-codex/transcript.txt"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mode": "resume",
+  "clean_install": false,
+  "archive": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/candidate-b222302f/axocoatl-v1.5.0-aarch64-apple-darwin.tar.gz",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "binary": "/usr/local/bin/axocoatl",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "version": "axocoatl 1.5.0"
+}

@@ -1,0 +1,340 @@
+{
+  "schema": "axocoatl.recovery.sample-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T19:07:11.045294+00:00",
+  "fixture": "claude-sample",
+  "sample": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a",
+  "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo",
+  "run_id": "run-db6f78c8-f2ec-40c1-9900-2f0f4fb6ce27",
+  "base_commit": "46f26e7c5302ac8198e53a1d22895fee327bb91a",
+  "result": "ACCEPTED",
+  "actual_fix": "Only src/paging.js changed Math.floor(items.length / size) to Math.ceil(items.length / size), retaining the final partial page without changing full-page behavior or input validation.",
+  "changed_files": [
+    "src/paging.js"
+  ],
+  "original_tests_and_manifests_unchanged": true,
+  "untracked_files": [],
+  "source_fixture_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "final_sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "final_sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "unchanged": true
+    },
+    "src/paging.js": {
+      "original_sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "final_sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "unchanged": false
+    },
+    "test/paging.test.js": {
+      "original_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "final_sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "unchanged": true
+    }
+  },
+  "cli_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "fresh_signer": {
+    "algorithm": "ed25519",
+    "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+    "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "trusted-public-key",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "key"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+        "start": "2026-10-26T19:07:10.752805+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:10.760602+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo",
+          "--record",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo",
+        "start": "2026-10-26T19:07:10.760815+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:10.768979+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "661973ac9e3c0e7de5cf79fc88a3c349d36aaf49c80676888f607313a3c595d3",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/record.jsonl"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo",
+        "start": "2026-10-26T19:07:10.769186+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:10.777007+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c7453ded499eb71265dfd84e0af0fb69f9f3397ed937b0ea8aaaba2ee0b179a7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/record.jsonl"
+        ],
+        "cwd": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-60c41c87e9074a3284958eb341ae509a/repo",
+        "start": "2026-10-26T19:07:10.777239+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:10.806078+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check",
+        "start": "2026-10-26T19:07:10.806488+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:10.818717+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check",
+        "start": "2026-10-26T19:07:10.818958+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:07:11.012666+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "563705cfec072fbe68ba80b997ca8b898e6cb1b388ca5c70457fcf8802241ea9",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "copied_exact_final_bytes": true,
+    "new_dependency_install": false,
+    "no_dependency_symlinks_needed": true
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "40bba6f72ad999f8d1c50f65ad462d647a463a52881eb638d680b8cceb29492c",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.570168ms)\n\u2714 keeps the last item on a page of its own (0.084875ms)\n\u2714 refuses a page size below one (0.169126ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 32.155515\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+      "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+      "recipes": [
+        "claude-code",
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "cache_volume": "axo-tc-b22122786e711060d2729152",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 346
+      }
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "40bba6f72ad999f8d1c50f65ad462d647a463a52881eb638d680b8cceb29492c",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 104256,
+    "output_tokens": 979,
+    "cost_microunits": 45888,
+    "cost_usd": 0.045888,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 48,
+        "payload": {
+          "call_id": "call_fxvwbq4l",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [
+      {
+        "event": {
+          "conn": "g1:1",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/settings",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 8,
+        "ts_ms": 1793041574836,
+        "v": 1
+      },
+      {
+        "event": {
+          "conn": "g1:2",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/policy_limits",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 10,
+        "ts_ms": 1793041574877,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 346
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 23,
+    "allowed_connections": 3,
+    "refused_connections": 0,
+    "route_requests": 4,
+    "routes": [
+      [
+        "api.anthropic.com",
+        4
+      ]
+    ]
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true,
+    "independent_baseline_rerun": false
+  },
+  "scope": "Actual fresh provider onboarding sample acceptance only; no claim the whole provider path or release is complete.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "0cf5d75a33ad4d9d0bd9634189b0765d34432d112602a9b8cd69c68d8ecf960e",
+    "record.jsonl": "a846d6e5678ae0961f16b96d846f2db8a3d32cc90612e15531abcec1cd32da42",
+    "patch.diff": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+    "negative-evidence.json": "0cfd8cc1d457dd28d96b420ee515f0724817e9b4cd21756ebf50cc00c9664c08",
+    "activation-summary.json": "c0f67cecd031a66bb0c4f56a5dd4816e9a79d0528f06643dbdddd63e2ce3ee30",
+    "outcome.json": "f87f8ca469108c74e718cc8a75392c3b24d892568ee8b2dc6dd6b747370ce5d5",
+    "original-tests.stdout": "563705cfec072fbe68ba80b997ca8b898e6cb1b388ca5c70457fcf8802241ea9",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

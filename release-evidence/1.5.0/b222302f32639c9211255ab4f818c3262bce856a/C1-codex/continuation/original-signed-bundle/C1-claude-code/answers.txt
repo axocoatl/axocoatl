@@ -1,0 +1,1 @@
+2026-10-26T19:07:06Z	erick	Did onboarding open Claude's sign-in page in the browser, and did you sign in there?	y	

@@ -1,0 +1,3 @@
+npm error code ENOTCACHED
+npm error request to https://registry.npmjs.org/uvu/-/uvu-0.5.6.tgz failed: cache mode is 'only-if-cached' but no cached response is available.
+npm error A complete log of this run can be found in: /Users/erick/.npm/_logs/2026-10-26T14_19_03_232Z-debug-0.log

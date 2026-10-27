@@ -1,0 +1,32 @@
+Axocoatl 1.5 verification closeout
+
+Candidate: b222302f32639c9211255ab4f818c3262bce856a
+Mac binary SHA-256: d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b
+Result: functional Mac repairs accepted; full required release gate remains incomplete. Not published.
+
+New useful outcomes in this hour:
+- Claude Code 2.1.292 Sonnet repaired the dependency-based Node pagination fixture. The host required tests and a GPT-OSS20B local review. Independent acceptance passed all four original tests; only src/paginate.js changed. Two recovered reviewer search errors and two denied optional Anthropic requests remain recorded.
+- Codex 0.160.1 / gpt-6.1-sol completed onboarding using the existing ChatGPT sign-in and --no-connect, reached Ready, repaired the first-run sample, passed required tests and GPT-OSS20B local review, and produced a valid signed receipt. Independent acceptance passed all three original tests; two valid boundary tests were added. This was recovery, not fresh authentication.
+- Thirteen existing OpenRouter, mixed-provider, private-PR, service and recovery observations were independently tied to the exact candidate archive/binary and preserved. No repeat inference was needed. Full models, checks, errors, usage and interventions are in provider-inventory.json and the copied records.
+
+Previously completed evidence remains valid for this exact candidate:
+- Canonical CI run 40333410399: all 22 jobs passed.
+- Full Linux preflight: 4446 tests passed, 174 intentionally ignored.
+- Linux browser gate: 330 passed, one documented Mac-only skip.
+- Mac WebKit browser gate: 331 passed, no skips.
+- Fresh Mac local installation: 57/57 recorded steps; five language fixtures accepted.
+- Mac service 28/28, recovery 15/15, Safari workbench 24/24; independent artifacts accepted.
+- Codex dependency-based Node/Python recovery fixtures: 27/27 runtime steps, eight original tests accepted.
+- Private PR receipt verification passed. The two real-repository experiments remain negative (0/2 artifacts accepted); the experiment contract permits those negative outcomes, which are not relabeled.
+
+The existing release contract requires twelve paths; eight pass. Original Claude and Codex path JSON files remain byte-identical. The finished OpenRouter failure is now retained rather than missing.
+- C1-Claude: fresh sign-in and onboarding passed, but its original Node execution was interrupted. The missing artifact now passes independently; the current verifier cannot compose that later result into the original full path.
+- C1-Codex: the original fresh-onboarding attempt expired while browser automation stalled. The user subsequently completed sign-in. The recovery fixtures and onboarding sample pass, but the required fresh-authentication-in-onboarding observation is absent.
+- C1-OpenRouter: the final fresh sign-in attempt was stopped at the user's direction; no local key was stored by it. Earlier exact-candidate functional outcomes remain accepted, but do not supply the missing fresh-onboarding observation.
+- D1: the fresh Linux installation path stopped after an apt package-index failure on an earlier candidate. The fix has focused tests and exact-candidate Linux CI coverage. The complete clean-host install, fresh sign-in, provider fixtures and systemd lifecycle remain unobserved.
+
+Why repeating tests consumed time:
+The provider paths combine authentication and subsequent fixtures into one result, refuse --resume, and reset path evidence on normal reruns. An interrupted fixture therefore pushes the harness toward repeating already successful authentication. Browser automation also stalled during one Codex attempt. Successful exact-candidate results have now been consolidated instead of rerun. No change to the release contract or verifier was made to turn missing observations into passes.
+
+Operational state:
+No more questions were asked. No new authentication was attempted. The Linux test stayed stopped; no OpenRouter inference ran. Automatic approval review rejected restarting Linux and accessing OpenRouter account settings because the earlier stop instructions remained in force. Those actions were not retried by another route. Source code, candidate bytes, release tag and main were not changed during this hour.

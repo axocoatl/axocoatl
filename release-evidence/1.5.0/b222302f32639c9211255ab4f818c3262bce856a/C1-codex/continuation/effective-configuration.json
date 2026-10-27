@@ -1,0 +1,27 @@
+{
+  "owner_configuration_sha256": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990",
+  "execution_identity": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11"
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true
+  },
+  "different_fixture_environments_retained_in_records": true,
+  "no_full_record_identity_claim": true
+}

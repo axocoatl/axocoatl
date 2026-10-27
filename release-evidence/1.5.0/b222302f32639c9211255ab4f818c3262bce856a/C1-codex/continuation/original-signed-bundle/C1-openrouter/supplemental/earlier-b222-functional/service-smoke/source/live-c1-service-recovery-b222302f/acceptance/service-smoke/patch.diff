@@ -1,0 +1,13 @@
+diff --git a/src/paging.js b/src/paging.js
+index 01080f4..e8e6300 100644
+--- a/src/paging.js
++++ b/src/paging.js
+@@ -4,7 +4,7 @@ function paginate(items, size) {
+     throw new RangeError("size must be a positive integer");
+   }
+   const pages = [];
+-  const count = Math.floor(items.length / size);
++  const count = Math.ceil(items.length / size);
+   for (let page = 0; page < count; page += 1) {
+     pages.push(items.slice(page * size, (page + 1) * size));
+   }

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="3" failures="0" errors="0" skipped="0" time="107.261">
+  <properties>
+    <property name="axocoatl.run_id" value="run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3"/>
+    <property name="axocoatl.session_id" value="ses-4e194c4f-858c-4162-a7d1-7744ed401723"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"/>
+    <property name="axocoatl.verdict" value="pass"/>
+    <property name="axocoatl.exit_code" value="0"/>
+    <property name="axocoatl.usage" value="128710 input + 3578 output tokens, $0.0000"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: sh -c npm run test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <system-out>reviewer ollama:gpt-oss:20b (native), 1 of 3 rounds
+round 1: approve, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <system-out>note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

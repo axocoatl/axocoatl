@@ -1,0 +1,29 @@
+{
+  "operator": "Codex assistant",
+  "interactive_answers": "Each observed prompt answered individually by Codex, not human",
+  "source_head": "b222302f32639c9211255ab4f818c3262bce856a",
+  "authorization": "User asked to finish remaining Mac clean-install checks; existing shared-runtime reset authorization retained",
+  "D1": "stopped; do not resume",
+  "openrouter": {
+    "cumulative_mac_limit": 1,
+    "prior_key_usage": 0.051152,
+    "second_key_usage_rounded": 0.0471,
+    "second_key_disabled": true,
+    "fresh_key_maximum_limit": 0.9
+  },
+  "human_operator": false,
+  "method": "tool-owned PTY and CUA",
+  "claude_authentication": {
+    "organization": "Lord Danger",
+    "scope": "user:inference",
+    "operator_observed": true,
+    "browser_success_screenshot": "claude-connected.png"
+  },
+  "chatgpt_authentication": {
+    "status": "waiting on OpenAI phone verification",
+    "account": "erick@codeoperators.com",
+    "human_input_requested": true,
+    "screenshot": "chatgpt-phone-verification.png"
+  },
+  "updated_at": "2026-10-26T19:24:28.415815+00:00"
+}

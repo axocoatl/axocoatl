@@ -1,0 +1,39 @@
+{
+  "prepared_at": "2026-10-26T13:45:45.010765+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "packaging_source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_build_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "build_evidence": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/claude-differential-redraw/mac-b222-build.log",
+  "binary_source": "/private/tmp/axo-b222302f/axocoatl",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/candidate-b222302f/axocoatl-v1.5.0-aarch64-apple-darwin.tar.gz",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "packaging_command": [
+    "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-artifact.sh",
+    "package",
+    "v1.5.0",
+    "aarch64-apple-darwin",
+    "/private/tmp/axo-b222302f/axocoatl",
+    "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/candidate-b222302f"
+  ],
+  "packaging_exit": 0,
+  "archive_entries": [
+    {
+      "name": "LICENSE",
+      "bytes": 10203,
+      "sha256": "d58ee7e01d54b9189f2c4d6cb109aad38c7bb7a789e6e5b438ab042ab5f7ee5d"
+    },
+    {
+      "name": "THIRD_PARTY_LICENSES.txt",
+      "bytes": 685111,
+      "sha256": "4179878b6d0beb804ecaa4cdd0a0d17909236432244db08860c1b5eaba799af6"
+    },
+    {
+      "name": "axocoatl",
+      "bytes": 80740768,
+      "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+    }
+  ],
+  "source_tree_clean": true,
+  "published": false
+}

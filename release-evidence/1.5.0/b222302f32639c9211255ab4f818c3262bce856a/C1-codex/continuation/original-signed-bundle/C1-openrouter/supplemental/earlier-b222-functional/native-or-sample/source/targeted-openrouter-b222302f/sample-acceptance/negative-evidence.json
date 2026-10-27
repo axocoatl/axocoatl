@@ -1,0 +1,19 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 7,
+      "payload": {
+        "call_id": "chatcmpl-tool-9804dd13836b3a22",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "cause": "Unknown: exported record contains argument/result hashes and lengths, not raw tool arguments or error body. Reviewer continued with successful list_dir and read_file calls."
+    }
+  ],
+  "recorded_baseline_exit": 1,
+  "retry_scope": "One accepted activation per role, no failure, one review round and no retry/refusal event in the exported streams; raw transport attempts are not independently visible."
+}

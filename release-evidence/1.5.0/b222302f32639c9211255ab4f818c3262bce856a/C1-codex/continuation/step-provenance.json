@@ -1,0 +1,221 @@
+[
+  {
+    "name": "no Codex sign-in was stored before this path",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/fresh-interrupted/C1-codex.json",
+        "sha256": "e2789b13a61fdb70b7ad83cc0cf7d5b6fd0ef622895572a77e2b840f63c7fed3",
+        "step_index": 2,
+        "step_name": "no Codex sign-in was stored before this path",
+        "observed_status": "pass"
+      }
+    ],
+    "detail": "Actual name-only absence immediately before today's fresh Codex browser sign-in."
+  },
+  {
+    "name": "onboarding was answered live in the terminal",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/one-hour-onboarding-no-connect/transcript.txt",
+        "sha256": "230a5a2129482cdd3059136b8ddbe35ce491410824f1dba8d19c311dbcf86bcb"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/one-hour-onboarding-no-connect/acceptance/onboarding.log",
+        "sha256": "d24d3c21d4ad80d6c9186753ff91d2e5b360781c9438890e94ba6b87aa3c5536"
+      },
+      {
+        "file": "C1-codex/continuation/fresh-interrupted/C1-codex/transcript.txt",
+        "sha256": "410db53e9db8c5e53aa607d7feac3819d24d9a2187804d12086c46b279defafd"
+      }
+    ],
+    "detail": "Earlier interactive saved-token onboarding completed Ready with a passing sample; its sandbox consent was answered live. Today's fresh-sign-in onboarding was also answered live until user-directed cancellation before another sample. These are separate observations, not one uninterrupted command; original exit130 is preserved."
+  },
+  {
+    "name": "Codex billing was set to the ChatGPT plan",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/one-hour-onboarding-no-connect/transcript.txt",
+        "sha256": "230a5a2129482cdd3059136b8ddbe35ce491410824f1dba8d19c311dbcf86bcb"
+      },
+      {
+        "file": "C1-codex/continuation/fresh-interrupted/C1-codex/transcript.txt",
+        "sha256": "410db53e9db8c5e53aa607d7feac3819d24d9a2187804d12086c46b279defafd"
+      }
+    ],
+    "detail": "Both actual onboard transcripts explicitly selected ChatGPT-plan codex-chatgpt billing; no OpenAI API key supplied."
+  },
+  {
+    "name": "Codex was signed in with ChatGPT in the browser during onboarding",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/fresh-interrupted/C1-codex.json",
+        "sha256": "e2789b13a61fdb70b7ad83cc0cf7d5b6fd0ef622895572a77e2b840f63c7fed3",
+        "step_index": 2,
+        "step_name": "no Codex sign-in was stored before this path",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/fresh-interrupted/C1-codex/transcript.txt",
+        "sha256": "410db53e9db8c5e53aa607d7feac3819d24d9a2187804d12086c46b279defafd"
+      },
+      {
+        "file": "C1-codex/continuation/authentication-and-restoration.json",
+        "sha256": "69f24c8402314bd17d7c33f16f50bc240e3118873b43a82b486038d738212980"
+      }
+    ],
+    "detail": "Today's fresh absent-to-stored transition came from the browser callback within live onboarding. New and saved credentials explicitly identify the same account. User then required restoring the saved credential before inference; the restored bytes are not used to claim fresh sign-in."
+  },
+  {
+    "name": "doctor: ready, no FAIL",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 4,
+        "step_name": "doctor JSON ready for supplemental Codex checks",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 5,
+        "step_name": "doctor ready with no failing item",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 6,
+        "step_name": "doctor text ready",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 7,
+        "step_name": "doctor says Ready for: axocoatl run fix-codex, Ready: yes, no [FAIL]",
+        "observed_status": "pass"
+      }
+    ],
+    "detail": "Actual earlier exact-candidate doctor JSON and text passed under the identical owner configuration; the full dependent source steps are retained."
+  },
+  {
+    "name": "the site's fix-codex command passed on node-deps and python-pytest",
+    "sources": [
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 10,
+        "step_name": "run fix on codex-node-deps",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 11,
+        "step_name": "run on codex-node-deps chose a node image",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 12,
+        "step_name": "run on codex-node-deps ran setup (npm ci)",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 13,
+        "step_name": "receipt verify on codex-node-deps (documented command)",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 14,
+        "step_name": "record verify on codex-node-deps",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 15,
+        "step_name": "receipt matches the record on codex-node-deps",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 16,
+        "step_name": "no tool-call markup in the accepted output of the run on codex-node-deps",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 17,
+        "step_name": "configuration unchanged before python-pytest",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 18,
+        "step_name": "run fix on codex-python-pytest",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 19,
+        "step_name": "run on codex-python-pytest chose a python image",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 20,
+        "step_name": "run on codex-python-pytest ran setup (pip install)",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 21,
+        "step_name": "receipt verify on codex-python-pytest (documented command)",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 22,
+        "step_name": "record verify on codex-python-pytest",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 23,
+        "step_name": "receipt matches the record on codex-python-pytest",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/supplemental-codex-fixtures-only.json",
+        "sha256": "1ed0542dc3b6557fde2bb88b2a99da2c7180c01fc02c4f864a4d29ca43fb0a14",
+        "step_index": 24,
+        "step_name": "no tool-call markup in the accepted output of the run on codex-python-pytest",
+        "observed_status": "pass"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/acceptance/node-deps/assessment.json",
+        "sha256": "623fee7638aa0afc45a7db9a3d2729df4be5db014a447b87507e8ce7066771c8"
+      },
+      {
+        "file": "C1-codex/continuation/original-signed-bundle/C1-codex/supplemental/acceptance/python-pytest/assessment.json",
+        "sha256": "f4172d91fc880e282d943f3ad7d9ebea65bcd18bc18a24bdaa15c1ec8ecf7ec0"
+      }
+    ],
+    "detail": "Earlier actual published fix-codex command passed both complete fixture blocks, receipt/record/markup validation and independent original4/4tests once each; exact candidate and owner configuration match. No fixture rerun."
+  }
+]

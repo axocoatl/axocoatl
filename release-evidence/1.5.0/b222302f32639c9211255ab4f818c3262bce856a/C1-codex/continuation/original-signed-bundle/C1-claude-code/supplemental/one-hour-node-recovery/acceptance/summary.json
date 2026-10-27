@@ -1,0 +1,103 @@
+{
+  "schema": "axocoatl.recovery.supplemental-acceptance/1",
+  "recorded_at": "2026-10-27T00:03:12.176383+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "scope": "One missing Claude Node fixture using existing sign-in; no onboarding, authentication, configuration changes, or PR. Earlier interrupted failure retained.",
+  "result": "ACCEPTED",
+  "run_id": "run-776fe067-8014-45a4-9391-8b7a918b281d",
+  "gate_result": "1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+  "gate_sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+  "assessment": "acceptance/node-deps/assessment.json",
+  "assessment_sha256": "ff0afae5749ebda8e3439b40a48a29c6e1f4dda0a3eaef0010806ee4c975f585",
+  "artifact": "Replaced remainder-based final-page sizing with Array.slice(start, start + size); only src/paginate.js changed.",
+  "original_tests": {
+    "passed": 4,
+    "total": 4,
+    "suite_invocations": 1,
+    "tests_and_manifests_unchanged": true,
+    "unexpected_scratch_files": []
+  },
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+      "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+      "recipes": [
+        "claude-code",
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "npm ci --prefer-offline --no-audit --no-fund",
+        "source": "detected",
+        "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+        "exit_code": 0,
+        "duration_ms": 1544,
+        "registry_hosts": [
+          "registry.npmjs.org"
+        ],
+        "allowed_connections": 6,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-87cea03b014c7e38584c402d",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 282
+      }
+    }
+  },
+  "recoverable_reviewer_tool_errors": 2,
+  "provider_retries": 0,
+  "denied_optional_anthropic_requests": 2,
+  "negative_evidence_retained": true,
+  "recorded_usage": {
+    "input_tokens": 131822,
+    "output_tokens": 1453,
+    "cost_microunits": 61368,
+    "cost_usd": 0.061368,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "openrouter_inference": false,
+  "daemon": "Runner-owned daemon stopped exit0",
+  "owner_configuration": "Hash unchanged before and after execution",
+  "prior_failed_attempt": {
+    "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/claude-node-cancellation.json",
+    "sha256": "39f1688d5a0319d41314adbe5150e082468fe2104fc7883aec7e289bf3460ca5",
+    "overwritten": false
+  },
+  "formal_C1_claude_code": "Original failed fresh gate remains failed; this separate supplemental artifact completes the missing useful Claude Node outcome but is not relabeled as a clean-install path pass.",
+  "new_required_paths_claimed": [],
+  "operator": "Codex assistant",
+  "human_operator": false
+}

@@ -1,0 +1,99 @@
+[
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/receipt.json",
+      "--key",
+      "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+      "--repo",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/repo",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/repo",
+    "start": "2026-10-26T17:56:33.187913+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:56:33.195092+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "bb6edd348eda33c9c0bd421667ba856fc89ac5c268b5cc662576ebf3ee0a7da6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/record.jsonl"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/repo",
+    "start": "2026-10-26T17:56:33.195262+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:56:33.202200+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "2987f7aeeb72d1528e2ab997ca1513713d55f96dbc0fda70ad3722f924b35954",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/record.jsonl"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/repo",
+    "start": "2026-10-26T17:56:33.202361+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:56:33.228530+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/acceptance/host-check",
+    "start": "2026-10-26T17:56:33.249980+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:56:33.261390+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/acceptance/host-check",
+    "start": "2026-10-26T17:56:33.265374+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:56:33.507060+00:00",
+    "exit_code": 1,
+    "stdout_sha256": "29e0ac2c16d8d48fe72532d5494a0c59c6e90ce951a1f8f2f45f8552ba7f5cf8",
+    "stderr_sha256": "0029da7684be5782778082fad69b080fad5596596ca8d38327a980ad50c5bd1b"
+  },
+  {
+    "name": "original-tests-after-audit-repair",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/provider-resume-b222302f/claude-node-deps/acceptance/host-check",
+    "start": "2026-10-26T17:58:40.037314+00:00",
+    "status": "completed",
+    "end": "2026-10-26T17:58:40.439287+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "8031bca1f0ee9ca562ffc29532af25a6c661811dfeef853e5e999051954d45c0",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

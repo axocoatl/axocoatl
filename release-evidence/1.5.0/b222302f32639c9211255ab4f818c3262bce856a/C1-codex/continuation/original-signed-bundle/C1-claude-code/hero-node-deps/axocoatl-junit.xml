@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="4" failures="2" errors="2" skipped="0" time="585.980">
+  <properties>
+    <property name="axocoatl.run_id" value="run-8ff54b58-1904-4ddf-9193-3e983357cc38"/>
+    <property name="axocoatl.session_id" value="ses-1671c084-363e-45bb-84bb-6fd274fb251b"/>
+    <property name="axocoatl.loadout" value="fix-claude-code@1 sha256:1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140"/>
+    <property name="axocoatl.verdict" value="interrupted"/>
+    <property name="axocoatl.exit_code" value="6"/>
+    <property name="axocoatl.usage" value="0 input + 0 output tokens, cost unknown (reserved up to $10.0000) (known subtotal: usage or cost not reported for writer (generation 1): 1 of 1 model calls)"/>
+    <property name="axocoatl.warning.receipt_incomplete" value="The receipt does not cover every path the run changed, so it does not prove what the run left: team-node-4da61d4aaa5c7272058428c6 (generation 1) in turn turn-613968b2-0883-48ea-9908-11e706fcecbb: its After capture is unavailable (Execution was stopped, revoked, or expired before this repository observation). Review the repository&apos;s changes themselves. The verdict and exit code are unchanged."/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="1" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <error type="not_run" message="tests did not run on the final result"/>
+      <system-out>argv: sh -c npm run test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <failure type="not_run" message="The reviewer runs after the required Agents finish and the required checks pass."/>
+      <system-out>reviewer ollama:gpt-oss:20b (native), 0 of 3 rounds</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.coverage" name="writer">
+      <failure type="not_covered" message="stopped: writer ended without a result"/>
+    </testcase>
+  </testsuite>
+  <testsuite name="run" tests="1" failures="0" errors="1" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <error type="interrupted" message="the run was interrupted"/>
+      <system-out>note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+note: Agent writer (claude-code) sends the stored credential claude-code-oauth (Claude Code's OAuth token, sent to api.anthropic.com).
+note: image localhost/axocoatl-recipe-claude-code-node:5520bc024263 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.4 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

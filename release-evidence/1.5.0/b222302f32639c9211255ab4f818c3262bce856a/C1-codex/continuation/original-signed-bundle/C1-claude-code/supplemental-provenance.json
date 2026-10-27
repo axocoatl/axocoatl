@@ -1,0 +1,1654 @@
+{
+  "schema": "axocoatl.recovery.supplemental-provenance/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "path": "C1-claude-code",
+  "staged_at": "2026-10-26T19:28:21.508846+00:00",
+  "official_path_json_unchanged": true,
+  "official_path_sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+  "operator": "Codex assistant using tool-owned PTY and native CUA",
+  "human_operator": false,
+  "os_account": "erick",
+  "scope": "Supplemental independent artifact acceptance, operator attribution and interventions. Does not add a gate step or alter any recorded result.",
+  "recorded_path_pass": false,
+  "sources": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code.json",
+      "staged_relative": "C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+      "bytes": 10551,
+      "category": "fresh-official-path"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/answers.txt",
+      "staged_relative": "C1-claude-code/answers.txt",
+      "sha256": "7958bc26c65848f8d2e6df6cf7a35f64cc26f749c34fe9d7b6eff2383caa3061",
+      "bytes": 115,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/doctor.json",
+      "staged_relative": "C1-claude-code/doctor.json",
+      "sha256": "10777f6f25f9d54aa8d81bdd42a90eadfbcfa6032786d8884c4cebfe14303120",
+      "bytes": 4442,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-command.txt",
+      "staged_relative": "C1-claude-code/hero-command.txt",
+      "sha256": "486c5d26b2488c8b9ff4c672a987e2dbda7e0ec462b234aae75c008724b0775d",
+      "bytes": 88,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-claude-code/hero-node-deps/axocoatl-junit.xml",
+      "sha256": "5d82a33276fe9d94ce60b755b191128a64c09a7730ec4c8d74c6c0234e518630",
+      "bytes": 3397,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/changes.txt",
+      "staged_relative": "C1-claude-code/hero-node-deps/changes.txt",
+      "sha256": "0227f8c42228c360aa43e911396ae788bec59d38cca506d7858d510637f45617",
+      "bytes": 996,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/command.txt",
+      "staged_relative": "C1-claude-code/hero-node-deps/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/receipt.json",
+      "staged_relative": "C1-claude-code/hero-node-deps/receipt.json",
+      "sha256": "2943bbecc199c416bdf929fed001f9b82baa44f634904464216f57779b90401a",
+      "bytes": 5292,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+      "sha256": "278d469d2504920a8111d6f9a90a92604fc2d6c98285f0abc164433979402582",
+      "bytes": 72209,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.log",
+      "staged_relative": "C1-claude-code/hero-node-deps/run.log",
+      "sha256": "6599a3d9f0e6d95adf497c6f213ac925a0f3405f104c02c8d52796ef5ac4d052",
+      "bytes": 3794,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-claude-code/hero-python-pytest/axocoatl-junit.xml",
+      "sha256": "b38f42312f7ad1751cf024619b132fcf7e2ba28f370dac8f498b5c1e8f526b58",
+      "bytes": 2398,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/changes.txt",
+      "staged_relative": "C1-claude-code/hero-python-pytest/changes.txt",
+      "sha256": "8b85efd2011df1699e2f53dc393509ea7883b4e9dbffd531a8aa942816e5ff62",
+      "bytes": 632,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/command.txt",
+      "staged_relative": "C1-claude-code/hero-python-pytest/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/receipt.json",
+      "staged_relative": "C1-claude-code/hero-python-pytest/receipt.json",
+      "sha256": "e6155d1e007887709ce067df6bed14b6c0e187144cb3fbfaf6a1b47d5eaea99c",
+      "bytes": 5096,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/hero-python-pytest/run.axorecord.jsonl",
+      "sha256": "793c35bf0c812926952969ae21bc6bb2af5c87751d0aba175f44fd6ac0717c0b",
+      "bytes": 326841,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-python-pytest/run.log",
+      "staged_relative": "C1-claude-code/hero-python-pytest/run.log",
+      "sha256": "6149bc443114580d067b561ab361ae8d68c38a287620832cf1cb1f8e06eb3c0f",
+      "bytes": 8317,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/receipt.json",
+      "staged_relative": "C1-claude-code/keep-pr/receipt.json",
+      "sha256": "bac430bc20bfe9551bd3e4074934aa7386184c969699d9b3e62cbd8b5787f1ca",
+      "bytes": 5200,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/keep-pr/run.axorecord.jsonl",
+      "sha256": "587ad748256262ec8f65b716fd306845295a59ab99c5a0a267616d0773cdd5e0",
+      "bytes": 520112,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+      "staged_relative": "C1-claude-code/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+      "sha256": "60f3ff56c2a617d509b72ec5f31e0a125cdff626bd99d6402fdce5d8ef4137b8",
+      "bytes": 2188,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/clone-codeoperators-axocoatl-gate-150-recovery-20261026.log",
+      "staged_relative": "C1-claude-code/logs/clone-codeoperators-axocoatl-gate-150-recovery-20261026.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/dev.log",
+      "staged_relative": "C1-claude-code/logs/dev.log",
+      "sha256": "82a2c51c1ee5c4c27232a149211a07dd5910357a6fe94293ee8e85c9e80bd149",
+      "bytes": 1312,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/doctor---json-says-ready.log",
+      "staged_relative": "C1-claude-code/logs/doctor---json-says-ready.log",
+      "sha256": "567e05a2883fa79b29d3e2e733feda23a3dc9144475395be462ffa0178a5474f",
+      "bytes": 52,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/gh-is-signed-in.log",
+      "staged_relative": "C1-claude-code/logs/gh-is-signed-in.log",
+      "sha256": "f2ae887c802c9126b8215a416c4428f4b8d356f46d36f7f30e6f997810a70fdd",
+      "bytes": 239,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/hero-command-with---keep-pr.log",
+      "staged_relative": "C1-claude-code/logs/hero-command-with---keep-pr.log",
+      "sha256": "2d6de31e696922d29f357b9181753f35215d1f4a4580288b57e4f4981ec34b9b",
+      "bytes": 3248,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/onboard---update---writer-claude-code--interactive--every-answer-is-in-the-trans.log",
+      "staged_relative": "C1-claude-code/logs/onboard---update---writer-claude-code--interactive--every-answer-is-in-the-trans.log",
+      "sha256": "54daf12ad4f4300b033e2680cef3b67acc2e0a923f443169bf74b1379c85a09f",
+      "bytes": 46,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/onboarding/onboard-20261026-190315.log",
+      "staged_relative": "C1-claude-code/logs/onboarding/onboard-20261026-190315.log",
+      "sha256": "a75b6adbdec55d4c7a60ed34201e0fd9872549fa072d83808d3dac5f1528eb6d",
+      "bytes": 8423,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/pr-repo-reset.log",
+      "staged_relative": "C1-claude-code/logs/pr-repo-reset.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/receipt-matches-the-record-on-hero-node-deps.log",
+      "staged_relative": "C1-claude-code/logs/receipt-matches-the-record-on-hero-node-deps.log",
+      "sha256": "51dc2c6d453e8dda034230c2e578d2894892c803e64a34814153ff2c5447834a",
+      "bytes": 286,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/receipt-matches-the-record-on-hero-python-pytest.log",
+      "staged_relative": "C1-claude-code/logs/receipt-matches-the-record-on-hero-python-pytest.log",
+      "sha256": "ea86b9112e5531b1d92203deae8f52c76693757d656a93984b4c480425a799ee",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/receipt-verify-on-hero-node-deps--documented-command-.log",
+      "staged_relative": "C1-claude-code/logs/receipt-verify-on-hero-node-deps--documented-command-.log",
+      "sha256": "137566fad2ad73322e93ee2555804615cecb4e603ad450bc5db31bdb8aa68761",
+      "bytes": 340,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/receipt-verify-on-hero-python-pytest--documented-command-.log",
+      "staged_relative": "C1-claude-code/logs/receipt-verify-on-hero-python-pytest--documented-command-.log",
+      "sha256": "0a12201a300e95c9b6b7d2746a5245a641ec246ffc7719d04dc981b1d561202c",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/record-verify-on-hero-node-deps.log",
+      "staged_relative": "C1-claude-code/logs/record-verify-on-hero-node-deps.log",
+      "sha256": "6daad99de55c59c7966f9ebe3edd9225d7bcdadc902d1c4b2449bb9ad7889a9e",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/record-verify-on-hero-python-pytest.log",
+      "staged_relative": "C1-claude-code/logs/record-verify-on-hero-python-pytest.log",
+      "sha256": "2e5f7b11e913a25029e260505e769e7a3afaf4fa0443ee9a97fb281fd22b4302",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/reviewer-anthropic-opus-is-refused--exit-3.log",
+      "staged_relative": "C1-claude-code/logs/reviewer-anthropic-opus-is-refused--exit-3.log",
+      "sha256": "ae20edd989e22de99202915857527efac9139e19775ab1c069bf001fb864564d",
+      "bytes": 307,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/run-fix-on-hero-node-deps.log",
+      "staged_relative": "C1-claude-code/logs/run-fix-on-hero-node-deps.log",
+      "sha256": "6599a3d9f0e6d95adf497c6f213ac925a0f3405f104c02c8d52796ef5ac4d052",
+      "bytes": 3794,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/run-fix-on-hero-python-pytest.log",
+      "staged_relative": "C1-claude-code/logs/run-fix-on-hero-python-pytest.log",
+      "sha256": "6149bc443114580d067b561ab361ae8d68c38a287620832cf1cb1f8e06eb3c0f",
+      "bytes": 8317,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+      "staged_relative": "C1-claude-code/logs/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+      "sha256": "b812670ea52a22e4c76feff298b3fa175b07fb92d2e348134bdf30d2c5370bc1",
+      "bytes": 454,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/logs/verify-receipt-action.log",
+      "staged_relative": "C1-claude-code/logs/verify-receipt-action.log",
+      "sha256": "73b1b3fdc0de87700d15f482ed5cbda0dc82ea128d43570689f17d76de0f390a",
+      "bytes": 26728,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/transcript.txt",
+      "staged_relative": "C1-claude-code/transcript.txt",
+      "sha256": "8c932be9e1cbdcda3aabced493c55bc6cca72909a30a3dadbcf85ccee76700d6",
+      "bytes": 158263,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/operator.json",
+      "staged_relative": "C1-claude-code/operator.json",
+      "sha256": "4479718c414fdce3e050fafd8b30650689d82a93db2f6feb01a6a4fb337df25d",
+      "bytes": 1071,
+      "category": "supplemental-operator"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/accepted-answers.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/accepted-answers.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/activation-summary.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/activation-summary.json",
+      "sha256": "c0f67cecd031a66bb0c4f56a5dd4816e9a79d0528f06643dbdddd63e2ce3ee30",
+      "bytes": 31265,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/assessment.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/assessment.json",
+      "sha256": "d6010ab18be13da3cede6977b06e6b826b95a51461bc8585ac18fac39b765687",
+      "bytes": 13088,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/commands.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/commands.json",
+      "sha256": "67491921fcaa0f433467c6d3ff4f225fe75598d7edfb4b6b7803431ae3df1bc3",
+      "bytes": 4484,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/daemon.log",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/daemon.log",
+      "sha256": "14a46e3ab3f6913a01816d68e70f8383cc0315afa91231f13cba2ca240a75b39",
+      "bytes": 447,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/final/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/final/README.md",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/final/package.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/final/src/paging.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/final/test/paging.test.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/git-status-after.txt",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/git-status-before.txt",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check/README.md",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/host-check/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check/package.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/host-check/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check/src/paging.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/host-check/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/host-check/test/paging.test.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/host-check/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/negative-evidence.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/negative-evidence.json",
+      "sha256": "0cfd8cc1d457dd28d96b420ee515f0724817e9b4cd21756ebf50cc00c9664c08",
+      "bytes": 1323,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/network-events.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/network-events.json",
+      "sha256": "df0729e5291ee56d11e3f88d1be2cd5a41542eed4b45eedcefc9398c0e4faff3",
+      "bytes": 9477,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original/README.md",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original/package.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original/src/paging.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original/test/paging.test.js",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original-tests.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/original-tests.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/original-tests.stdout",
+      "sha256": "563705cfec072fbe68ba80b997ca8b898e6cb1b388ca5c70457fcf8802241ea9",
+      "bytes": 571,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/outcome.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/outcome.json",
+      "sha256": "f87f8ca469108c74e718cc8a75392c3b24d892568ee8b2dc6dd6b747370ce5d5",
+      "bytes": 2862,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/patch.diff",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/receipt-statement.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/receipt-statement.json",
+      "sha256": "dff5912835acfbfe24c2df8b5b540b10fcac91b6cfc47a17919ac6f1f5860743",
+      "bytes": 4773,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/receipt-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/receipt-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/receipt-verify.stdout",
+      "sha256": "661973ac9e3c0e7de5cf79fc88a3c349d36aaf49c80676888f607313a3c595d3",
+      "bytes": 2226,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/receipt.json",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/receipt.json",
+      "sha256": "0cf5d75a33ad4d9d0bd9634189b0765d34432d112602a9b8cd69c68d8ecf960e",
+      "bytes": 4692,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/record-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/record-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/record-verify.stdout",
+      "sha256": "c7453ded499eb71265dfd84e0af0fb69f9f3397ed937b0ea8aaaba2ee0b179a7",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/record.jsonl",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/record.jsonl",
+      "sha256": "a846d6e5678ae0961f16b96d846f2db8a3d32cc90612e15531abcec1cd32da42",
+      "bytes": 264242,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/runtime-version.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/runtime-version.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/trusted-public-key.stderr",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/trusted-public-key.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/trusted-public-key.stdout",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/trusted-public-key.stdout",
+      "sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "bytes": 91,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/accepted-answers.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/accepted-answers.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/accepted-answers.stdout",
+      "sha256": "fa78db9c5fcf9bcc3cfcb94ef58a1a70581603312b802a378939e3cc18eb6f22",
+      "bytes": 80,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/activation-summary.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/activation-summary.json",
+      "sha256": "2041161ccb9c60713dd8fcac061e72bc81a610ba1cb5929e52fc595232f1dcbd",
+      "bytes": 241,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/assessment.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/assessment.json",
+      "sha256": "e9466505c5ad0b8eaf52b3539426e567b37a43765573932151cddd425fc8f220",
+      "bytes": 14924,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/audit-post-test-metadata-error.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/audit-post-test-metadata-error.json",
+      "sha256": "c957588eebea1c1225e907cf70b0d14e22a1f43628d0d2e9ff3360d5a9b1ba1d",
+      "bytes": 273,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/axocoatl-junit.xml",
+      "sha256": "5d82a33276fe9d94ce60b755b191128a64c09a7730ec4c8d74c6c0234e518630",
+      "bytes": 3397,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/changes.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/changes.txt",
+      "sha256": "0227f8c42228c360aa43e911396ae788bec59d38cca506d7858d510637f45617",
+      "bytes": 996,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/command.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/commands.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/commands.json",
+      "sha256": "d387f80899cf12dfef1784644c37875ecc95255cba32c20e6ca8c4cacc57f70e",
+      "bytes": 5262,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/package.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/final/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/final/test/paginate.test.js",
+      "sha256": "bf9669539f1f3e50a8a7fd359793891606e11cf2c5c44d29f40c0a10fd51fe1a",
+      "bytes": 871,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/gate-output-exclusions.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/gate-output-exclusions.json",
+      "sha256": "d9553be646a9dab8351f56896a5b12e326e31755069e2044a761f3a2528cb070",
+      "bytes": 658,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/git-status-after.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/git-status-after.txt",
+      "sha256": "12aef4c672eccac0f05c5bcdafdc8b18992fb61abfa8fa80765c06862af350e0",
+      "bytes": 105,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/git-status-before.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/git-status-before.txt",
+      "sha256": "12aef4c672eccac0f05c5bcdafdc8b18992fb61abfa8fa80765c06862af350e0",
+      "bytes": 105,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/package.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-dependency-provenance.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/independent-receipt-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/independent-receipt-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/independent-receipt-verify.stdout",
+      "sha256": "f736c32ab2292f4065a4917d269c5e438c22d2b64997e2a9bc3a2b752c40e129",
+      "bytes": 2903,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/independent-record-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/independent-record-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/independent-record-verify.stdout",
+      "sha256": "6daad99de55c59c7966f9ebe3edd9225d7bcdadc902d1c4b2449bb9ad7889a9e",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/negative-evidence.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/negative-evidence.json",
+      "sha256": "1143d1089f77bdce92a1f18ae40b0c3036fafdc929ecfa09efab2ae7a90ca211",
+      "bytes": 1357,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/network-events.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/network-events.json",
+      "sha256": "aa7a61b0824c3f7a39ab46035aac27c7950f83c9c93e5117e5d4fa5fcd309be6",
+      "bytes": 23845,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/operator-cancellation.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/operator-cancellation.json",
+      "sha256": "39f1688d5a0319d41314adbe5150e082468fe2104fc7883aec7e289bf3460ca5",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/package.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original-tests.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/original-tests.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/original-tests.stdout",
+      "sha256": "20d9b828dc49d7d27fb1fc5178b6694fa77e1c84912fdec2957b923163d230e4",
+      "bytes": 154,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/outcome.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/outcome.json",
+      "sha256": "ca69a3b3f886c2bcabccae820adb7cb56a1d4329db409fb90a373b078a84cb10",
+      "bytes": 3555,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/patch.diff",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/patch.diff",
+      "sha256": "8d757f7904eb6f0061ce906db473ef2ea4e8de3ad73e3f83f8e486a4ee4e6f05",
+      "bytes": 891,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/receipt-statement.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/receipt-statement.json",
+      "sha256": "54df218c205352b6a4900a11de8d59144082875cd1f050fd2eed7c9571b7bd81",
+      "bytes": 5356,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/receipt.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/receipt.json",
+      "sha256": "2943bbecc199c416bdf929fed001f9b82baa44f634904464216f57779b90401a",
+      "bytes": 5292,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/run.axorecord.jsonl",
+      "sha256": "278d469d2504920a8111d6f9a90a92604fc2d6c98285f0abc164433979402582",
+      "bytes": 72209,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/run.log",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/run.log",
+      "sha256": "6599a3d9f0e6d95adf497c6f213ac925a0f3405f104c02c8d52796ef5ac4d052",
+      "bytes": 3794,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/runtime-version.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/runtime-version.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stdout",
+      "sha256": "81e7a5c6e0601edc832b0736f5d14d6ca343b03aff08b595f5a3d331cb486454",
+      "bytes": 2811,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/accepted-answers.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/accepted-answers.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/activation-summary.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/activation-summary.json",
+      "sha256": "941c81b9f4b9466958dbdf308e44756a37348963f615ba9d2c509195f2382441",
+      "bytes": 36077,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/assessment.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/assessment.json",
+      "sha256": "7aed992cc2d9692c98aeb0c1cb9ec492873054cc09952940c65739cbfe955470",
+      "bytes": 15696,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/axocoatl-junit.xml",
+      "sha256": "b38f42312f7ad1751cf024619b132fcf7e2ba28f370dac8f498b5c1e8f526b58",
+      "bytes": 2398,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/changes.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/changes.txt",
+      "sha256": "8b85efd2011df1699e2f53dc393509ea7883b4e9dbffd531a8aa942816e5ff62",
+      "bytes": 632,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/command.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/command.txt",
+      "sha256": "9b1386108f217c359729c9f4f08fbb030605c9114ba12c7c343f07465fee7177",
+      "bytes": 144,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/commands.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/commands.json",
+      "sha256": "2ec11273260b0fdc3cdc38efab1945619b3637dd97384bd9e89a4d56ff1f2fd9",
+      "bytes": 5269,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/final/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/final/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/final/pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/final/pages.py",
+      "sha256": "c79b04d0b7d7b66d8c67a50d9465be88c18ba018fc03c5e099c5e834dc7047f6",
+      "bytes": 380,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/final/pyproject.toml",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/final/tests/test_pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/gate-output-exclusions.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/gate-output-exclusions.json",
+      "sha256": "be8c566db54f61ebf102cbd8483de8e5b048ebca592174365ae90b6ad04ff5c5",
+      "bytes": 658,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/git-status-after.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/git-status-after.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/git-status-before.txt",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/git-status-before.txt",
+      "sha256": "b759757219a4f436b358c47a159d417881b0089d0d99b03cbe4d6b665a8d9b96",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-check/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-check/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check/pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-check/pages.py",
+      "sha256": "c79b04d0b7d7b66d8c67a50d9465be88c18ba018fc03c5e099c5e834dc7047f6",
+      "bytes": 380,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check/pyproject.toml",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-check/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-check/tests/test_pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-check/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/host-dependency-provenance.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/host-dependency-provenance.json",
+      "sha256": "5a6ed248aaf27aa8df0736f24ca7cda710934752a27a1780a9c4b0c314a2e033",
+      "bytes": 255,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/independent-receipt-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/independent-receipt-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/independent-receipt-verify.stdout",
+      "sha256": "d71c25025927d7362a952ebaf75646ffe5071afd7ed5f487fa54f075b98f11de",
+      "bytes": 2258,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/independent-record-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/independent-record-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/independent-record-verify.stdout",
+      "sha256": "2e5f7b11e913a25029e260505e769e7a3afaf4fa0443ee9a97fb281fd22b4302",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/module-selection.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/module-selection.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/module-selection.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/module-selection.stdout",
+      "sha256": "bc9cd306972318d7e067083c32d99955321832813b76f423f6f10b8271baee38",
+      "bytes": 166,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/negative-evidence.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/negative-evidence.json",
+      "sha256": "67bab7828d2892d5b80e2a8578caaf51cbe48919f7be27a69bac49c242ce0bdc",
+      "bytes": 2507,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/network-events.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/network-events.json",
+      "sha256": "0aa1297c06552fe8d5729927ed45fab0eca6eacaec9b17ecd8e4a54dc58feaff",
+      "bytes": 17888,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original/README.md",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original/pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original/pyproject.toml",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original/tests/test_pages.py",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original-tests.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/original-tests.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/original-tests.stdout",
+      "sha256": "a67e83d5ee55e627bcf3a336fd7c27c7d7737455b8ee239af73bdd2e16c5cab3",
+      "bytes": 527,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/outcome.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/outcome.json",
+      "sha256": "50a47730dca1e056db40e9f99db365fc8a182216d53be2e424513222f5598319",
+      "bytes": 3398,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/patch.diff",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/patch.diff",
+      "sha256": "9b4d26e3dced102d2d79e9358d09f2ad26a030d0f747da3b5f3141411c603f96",
+      "bytes": 559,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/receipt-statement.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/receipt-statement.json",
+      "sha256": "494d4986e320b82c2c99dacdb57099a43737e320c45c90d75c2cfb1ab069bb20",
+      "bytes": 5229,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/receipt.json",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/receipt.json",
+      "sha256": "e6155d1e007887709ce067df6bed14b6c0e187144cb3fbfaf6a1b47d5eaea99c",
+      "bytes": 5096,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/run.axorecord.jsonl",
+      "sha256": "793c35bf0c812926952969ae21bc6bb2af5c87751d0aba175f44fd6ac0717c0b",
+      "bytes": 326841,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/run.log",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/run.log",
+      "sha256": "6149bc443114580d067b561ab361ae8d68c38a287620832cf1cb1f8e06eb3c0f",
+      "bytes": 8317,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/runtime-version.stderr",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-python-pytest/runtime-version.stdout",
+      "staged_relative": "C1-claude-code/acceptance/hero-python-pytest/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/accepted-answers.stderr",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/accepted-answers.stdout",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/activation-summary.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/activation-summary.json",
+      "sha256": "61f940469aaab7c99f288cdac7c74862b0d827001cc6a41b8f3cd95405625454",
+      "bytes": 28842,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/assessment.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/assessment.json",
+      "sha256": "238b3ef3be2ee1008fc0f2e1caad93481afc316c23fec92b466ba6f35ea7e83e",
+      "bytes": 15519,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/axocoatl-junit.xml",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/axocoatl-junit.xml",
+      "sha256": "acd163d5f6a649df45f0360a9fa8f227317853817be13229f0b88e3a924a9551",
+      "bytes": 2394,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/commands.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/commands.json",
+      "sha256": "3850b23d8363504e8d7b5208e92fe12924493700ebc88dee2c0332d249b1d7a0",
+      "bytes": 3985,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/.axocoatl/receipt-keys",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/.axocoatl/receipt-keys",
+      "sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "bytes": 91,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/.github/workflows/verify-receipt.yml",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/.github/workflows/verify-receipt.yml",
+      "sha256": "88f5ca12c98c61817e5606dd7ab09bb47245ba82d7e9c9f2e9b056ae7cd10c15",
+      "bytes": 533,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/README.md",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/package.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/final/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/gate-output-exclusions.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/gate-output-exclusions.json",
+      "sha256": "e1723b8b4da92badf8d4936d853191378d0d9a6ba44dd65bcc790433b76276dd",
+      "bytes": 658,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/git-status-after.txt",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/git-status-after.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/git-status-before.txt",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/git-status-before.txt",
+      "sha256": "dcf5608b9c3b173d94b746cf16453ad3de74d264ce501e57bd32a9e17a3008c6",
+      "bytes": 80,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/hero-command-with---keep-pr.log",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/hero-command-with---keep-pr.log",
+      "sha256": "2d6de31e696922d29f357b9181753f35215d1f4a4580288b57e4f4981ec34b9b",
+      "bytes": 3248,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/.axocoatl/receipt-keys",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/.axocoatl/receipt-keys",
+      "sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "bytes": 91,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/.github/workflows/verify-receipt.yml",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/.github/workflows/verify-receipt.yml",
+      "sha256": "88f5ca12c98c61817e5606dd7ab09bb47245ba82d7e9c9f2e9b056ae7cd10c15",
+      "bytes": 533,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/README.md",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/package.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/src/paginate.js",
+      "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "bytes": 537,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-dependency-provenance.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/independent-receipt-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/independent-receipt-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/independent-receipt-verify.stdout",
+      "sha256": "5fcf8559a9650a478b54d30b708f5033302b25b63f513b10fb561b564e48bc7a",
+      "bytes": 2308,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/independent-record-verify.stderr",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/independent-record-verify.stdout",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/independent-record-verify.stdout",
+      "sha256": "269b26f6778fde46058a36b57c8bbc452c1ba3b69220375942de7e0553fceccc",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/keep-pr-provenance.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/keep-pr-provenance.json",
+      "sha256": "0d0d65e7d10f2911d8f2a99c1001b4b89e9fff087d3a4a46e683371754fe9c5b",
+      "bytes": 821,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/negative-evidence.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/negative-evidence.json",
+      "sha256": "3364f25332ba1d14ba43be4302cbfc886db292401d7357f4c7f0818f8e555ebd",
+      "bytes": 2106,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/network-events.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/network-events.json",
+      "sha256": "4f20e25d34d83a0424e8bd7927de25e677fc0ef97375290b10d83af1d3a1f8cd",
+      "bytes": 20642,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/.axocoatl/receipt-keys",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/.axocoatl/receipt-keys",
+      "sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "bytes": 91,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/.github/workflows/verify-receipt.yml",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/.github/workflows/verify-receipt.yml",
+      "sha256": "88f5ca12c98c61817e5606dd7ab09bb47245ba82d7e9c9f2e9b056ae7cd10c15",
+      "bytes": 533,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/.gitignore",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/README.md",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/package-lock.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/package.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/src/paginate.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original/test/paginate.test.js",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original-tests.stderr",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/original-tests.stdout",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/original-tests.stdout",
+      "sha256": "b384b52648f9c263fecd7238e4370fd2f68a5375e7b015de48be7e4dbe140208",
+      "bytes": 154,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/outcome.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/outcome.json",
+      "sha256": "c16938678b1b995e44f2ac81fa37ba6951b0f72d70734304285a71c7fdd41d8b",
+      "bytes": 3307,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/patch.diff",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/patch.diff",
+      "sha256": "feb646c65b6b81ce998b5d87f1a5643d26c9265d8d8861c5dac265c7d51da365",
+      "bytes": 470,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/pr-repo-reset.log",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/pr-repo-reset.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/receipt-statement.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/receipt-statement.json",
+      "sha256": "e7cbbc729b5dc0e7a22b763132c794c7e88d919abb8128d26ba9213895fcf4a2",
+      "bytes": 5302,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/receipt.json",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/receipt.json",
+      "sha256": "bac430bc20bfe9551bd3e4074934aa7386184c969699d9b3e62cbd8b5787f1ca",
+      "bytes": 5200,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/run.axorecord.jsonl",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/run.axorecord.jsonl",
+      "sha256": "587ad748256262ec8f65b716fd306845295a59ab99c5a0a267616d0773cdd5e0",
+      "bytes": 520112,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/runtime-version.stderr",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/runtime-version.stdout",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+      "sha256": "b812670ea52a22e4c76feff298b3fa175b07fb92d2e348134bdf30d2c5370bc1",
+      "bytes": 454,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/verify-receipt-action.log",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/verify-receipt-action.log",
+      "sha256": "73b1b3fdc0de87700d15f482ed5cbda0dc82ea128d43570689f17d76de0f390a",
+      "bytes": 26728,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/claude-node-cancellation.json",
+      "staged_relative": "C1-claude-code/operator-cancellation.json",
+      "sha256": "39f1688d5a0319d41314adbe5150e082468fe2104fc7883aec7e289bf3460ca5",
+      "bytes": 1000,
+      "category": "supplemental-cancellation"
+    }
+  ],
+  "excluded_payloads": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/claude-sample/npm-cache",
+      "staged_relative": "C1-claude-code/acceptance/claude-sample/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check/node_modules",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/host-check/node_modules",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/npm-cache",
+      "staged_relative": "C1-claude-code/acceptance/hero-node-deps/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/host-check/node_modules",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/host-check/node_modules",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/keep-pr/npm-cache",
+      "staged_relative": "C1-claude-code/acceptance/keep-pr/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    }
+  ],
+  "qualification": "Path failed: hero Node run interrupted exit6; checks/review did not run, usage unknown, receipt incomplete, and a test changed contrary to instructions. Passing sample/Python/PR and independent original tests do not replace this failed attempt."
+}

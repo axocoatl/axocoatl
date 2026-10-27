@@ -1,0 +1,46 @@
+[
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+    "start": "2026-10-26T18:08:37.461419+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:08:37.472994+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check",
+    "start": "2026-10-26T18:08:37.473197+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:08:37.749985+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "be79a04dd7b81235b149022393fc33a33bc965c1df84751c6af904ab4fff1315",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "--export",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/session-export.json"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance",
+    "start": "2026-10-26T18:08:37.802970+00:00",
+    "status": "completed",
+    "end": "2026-10-26T18:08:37.827289+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "fc61ab9572f0396e063a3accfc0d1c534fbfc954c55694b2fe3b3167addbf779",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

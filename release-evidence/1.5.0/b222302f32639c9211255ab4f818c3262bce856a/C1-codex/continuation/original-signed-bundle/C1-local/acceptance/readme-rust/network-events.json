@@ -1,0 +1,497 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793041140942,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793041140942,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793041142965,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793041143208,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-allow:index.crates.io",
+        "host": "index.crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "cdbe05c89f383a89c00b84ba9f6634766973b0dd1be849751c64f80f5214b59c",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793041144615,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-allow:static.crates.io",
+        "host": "static.crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "fc8a9ad43f4a9f5f7b75a73a0cc279b97e93eb461655c83fc8bd00117ba3732d",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)",
+        "static.crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 6,
+    "ts_ms": 1793041144615,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-allow:crates.io",
+        "host": "crates.io",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "4de1cecf24d873b6f55dfca0c309016643cb5a4253ce83112f8d6f9d338f99aa",
+      "kind": "policy",
+      "revision": 4,
+      "rules": [
+        "index.crates.io:443 (allowed for this Session)",
+        "static.crates.io:443 (allowed for this Session)",
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 7,
+    "ts_ms": 1793041144620,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "fbf09ed181fb5b82"
+    },
+    "seq": 8,
+    "ts_ms": 1793041144626,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42:11::649",
+        "146.75.94.137"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "index.crates.io",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/bin/cargo",
+        "exe_sha256": "25b6901ec9ecffaa6a88591a77d3036a63a96ecffd1a45dd622a88385d0956af",
+        "gid": 1000,
+        "pid": 24,
+        "uid": 1000
+      },
+      "policy_revision": 4,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "fbf09ed181fb5b82"
+    },
+    "seq": 9,
+    "ts_ms": 1793041144865,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2a04:4e42:11::649",
+        "146.75.94.137"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "static.crates.io",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/rustup/toolchains/1.99.1-aarch64-unknown-linux-gnu/bin/cargo",
+        "exe_sha256": "25b6901ec9ecffaa6a88591a77d3036a63a96ecffd1a45dd622a88385d0956af",
+        "gid": 1000,
+        "pid": 24,
+        "uid": 1000
+      },
+      "policy_revision": 4,
+      "port": 443,
+      "rule": "session#rev3",
+      "scope": "session",
+      "token": "fbf09ed181fb5b82"
+    },
+    "seq": 10,
+    "ts_ms": 1793041145259,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 31273,
+      "ip": "146.75.94.137",
+      "kind": "close",
+      "ms": 648,
+      "outcome": "closed",
+      "up": 2270
+    },
+    "seq": 11,
+    "ts_ms": 1793041145456,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "fbf09ed181fb5b82"
+    },
+    "seq": 12,
+    "ts_ms": 1793041145479,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-revoke:index.crates.io",
+        "host": "index.crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "7654a7c7be6658da6e73486c633b62d55ccbc180b7e58681ce134ce47bf96e7a",
+      "kind": "policy",
+      "revision": 5,
+      "rules": [
+        "static.crates.io:443 (allowed for this Session)",
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 13,
+    "ts_ms": 1793041145479,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-revoke:static.crates.io",
+        "host": "static.crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "af681ff424f44bb5ba5043f03ca994e436dad67ec27f2c2d396b729069244240",
+      "kind": "policy",
+      "revision": 6,
+      "rules": [
+        "crates.io:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 14,
+    "ts_ms": 1793041145479,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+      "change": {
+        "command_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f:setup-revoke:crates.io",
+        "host": "crates.io",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 7,
+      "rules": [],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 15,
+    "ts_ms": 1793041145479,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 209915,
+      "ip": "146.75.94.137",
+      "kind": "close",
+      "ms": 264,
+      "outcome": "revoked",
+      "up": 2179
+    },
+    "seq": 16,
+    "ts_ms": 1793041145480,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-c005317e70d7ee687d004f7c1afae49881788f6edc9e6bfaacfb7441753d6ca3",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-c005317e70d7ee687d004f7c1afae49881788f6edc9e6bfaacfb7441753d6ca3:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "1c6c7dac593dd2dc"
+    },
+    "seq": 17,
+    "ts_ms": 1793041165644,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "1c6c7dac593dd2dc"
+    },
+    "seq": 18,
+    "ts_ms": 1793041165814,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-d35d75372d94a1d6d9a0526bb076592df230ecd266f9ac500255c3a3ec29097d",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-d35d75372d94a1d6d9a0526bb076592df230ecd266f9ac500255c3a3ec29097d:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "fcf711f99695f211"
+    },
+    "seq": 19,
+    "ts_ms": 1793041191163,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "fcf711f99695f211"
+    },
+    "seq": 20,
+    "ts_ms": 1793041191456,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-2cb7c261710dea1fe6817294d21e42d6f498801a730b7f0615d7b738d6e03046",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-2cb7c261710dea1fe6817294d21e42d6f498801a730b7f0615d7b738d6e03046:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "afcfd336ffbc5d48"
+    },
+    "seq": 21,
+    "ts_ms": 1793041193607,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "afcfd336ffbc5d48"
+    },
+    "seq": 22,
+    "ts_ms": 1793041193726,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-63a860e166f37dbee883a22bbd7c2477ac813601a10682a8d8ae624facfb70c4",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-63a860e166f37dbee883a22bbd7c2477ac813601a10682a8d8ae624facfb70c4:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "298037db75544e8a"
+    },
+    "seq": 23,
+    "ts_ms": 1793041204750,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "298037db75544e8a"
+    },
+    "seq": 24,
+    "ts_ms": 1793041205039,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-fb7198c17c935dcd4ba3e0b28bb3f14764d0f4916cb2aebf33f105e246aa0d6c",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-fb7198c17c935dcd4ba3e0b28bb3f14764d0f4916cb2aebf33f105e246aa0d6c:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "77386dd77faec68d"
+    },
+    "seq": 25,
+    "ts_ms": 1793041206833,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "77386dd77faec68d"
+    },
+    "seq": 26,
+    "ts_ms": 1793041206944,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:25a5299d-7c26-4183-b589-e61bb9b38551",
+        "agent": "team-definition-ef04c3b5c8ff3bcff0d3bc1bca07a19c0c356bcb5011a4fd7766f8c8ee1b98c0",
+        "invocation_id": "tool-106aa01114b6063dd37c7794cebfd72ba88f5e81ccf04d38c36ae1b370311e43",
+        "kind": "agent",
+        "node_id": "team-node-f64f865094a63a49d5ed01e8",
+        "process": "tool-106aa01114b6063dd37c7794cebfd72ba88f5e81ccf04d38c36ae1b370311e43:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "9066a7385b82363a"
+    },
+    "seq": 27,
+    "ts_ms": 1793041214115,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "9066a7385b82363a"
+    },
+    "seq": 28,
+    "ts_ms": 1793041214249,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 29,
+    "ts_ms": 1793041282526,
+    "v": 1
+  }
+]

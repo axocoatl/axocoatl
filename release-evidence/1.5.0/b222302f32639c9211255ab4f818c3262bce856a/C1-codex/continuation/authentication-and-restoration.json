@@ -1,0 +1,23 @@
+{
+  "schema": "axocoatl.recovery.observed-authentication/1",
+  "operator": "Codex assistant through owned PTY; root and user through dedicated browser",
+  "human_operator": false,
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "new_credential_was_stored": true,
+  "credential_name": "codex-chatgpt",
+  "fresh_absence_observed": true,
+  "new_and_saved_account_email_equal": true,
+  "email_claim_field": "$.access_token.JWT_claims.https://api.openai.com/profile.email",
+  "account_email_sha256": "f32ee7b63b7794d8ee2205a63aca6ea62d97466ba53a40035fe167f56107b822",
+  "actual_authentication_result": "successful browser callback during live onboarding before user-directed cancellation",
+  "new_credential_preserved_privately": true,
+  "saved_credential_restored_byte_identically": true,
+  "saved_credential_sha256": "80711da32dd90c46bec3330b7c369bd41617d8840dc2ea49621d482b42faed09",
+  "restoration_finished_at": "2026-10-27T01:30:43.712819+00:00",
+  "global_config_unchanged_before_OR": true,
+  "owner_configuration_sha256": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990",
+  "fresh_runner_exit": 130,
+  "new_inference_after_callback": false,
+  "authority": "User explicitly directed saved-token reuse; root authorized this criterion-level composite and preserving both failed attempts",
+  "private_credential_files_included": false
+}

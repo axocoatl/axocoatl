@@ -1,0 +1,334 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T20:52:25.449626+00:00",
+  "fixture": "node-deps",
+  "label": "codex-node-deps",
+  "repo": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps",
+  "base_commit": "41fd99d540aeb7960c3a166e03f98054b32834a4",
+  "run_id": "run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a",
+  "result": "ACCEPTED",
+  "artifact_review": "Only src/paginate.js changed: the final-page branch uses items.length minus start, retaining a full last page for exact multiples and the remaining items otherwise. Original tests/manifests are unchanged. This assesses the completed fixture only, not the earlier failed onboarding path.",
+  "changed_files": [
+    "src/paginate.js"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "unchanged": true
+    },
+    "package-lock.json": {
+      "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "unchanged": true
+    },
+    "src/paginate.js": {
+      "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "final_sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+      "unchanged": false
+    },
+    "test/paginate.test.js": {
+      "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps",
+        "start": "2026-10-26T20:52:24.876713+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:52:24.885339+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "f4921b49512e785c37924e823dcab3baab1575221c239e1e7df609b1c3abc0cd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps",
+        "start": "2026-10-26T20:52:24.885513+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:52:24.893692+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "713ce7d4b3b5f07d1a10c24e8796f681f309eb59835d0f14f323a6a9daf594bb",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only/codex-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps",
+        "start": "2026-10-26T20:52:24.893901+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:52:24.924738+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check",
+        "start": "2026-10-26T20:52:24.925218+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:52:24.937126+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/acceptance/node-deps/host-check",
+        "start": "2026-10-26T20:52:24.961210+00:00",
+        "status": "completed",
+        "end": "2026-10-26T20:52:25.431969+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "226575e2267747b2331ee56ff4116a4c37a43854c38a3074d70459d8c73af4a3",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\n\u001b[1m\u001b[4m\u001b[37mpaginate.test.js\u001b[22m\u001b[24m\u001b[39m\n\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[90m\u2022 \u001b[39m\u001b[32m  (4 / 4)\n\u001b[39m\n  Total:     4\u001b[32m\n  Passed:    4\u001b[39m\n  Skipped:   0\n  Duration:  1.07ms\n\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "codex",
+        "program_version": "0.160.1",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "credential": "codex-chatgpt"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-codex-node:9ecb56968dac",
+      "image_id": "fb8504e8724e0d17d2fc4f468a206c03076fd68caa1a372c46d509d187451dd8",
+      "recipes": [
+        "codex",
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "npm ci --prefer-offline --no-audit --no-fund",
+        "source": "detected",
+        "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+        "exit_code": 0,
+        "duration_ms": 1436,
+        "registry_hosts": [
+          "registry.npmjs.org"
+        ],
+        "allowed_connections": 6,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-973aa5678dc602c3651d6097",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 304
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "npm ci --ignore-scripts --no-audit --no-fund",
+      "image_contains": "node",
+      "setup_contains": "npm ci"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "226575e2267747b2331ee56ff4116a4c37a43854c38a3074d70459d8c73af4a3",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 70157,
+    "output_tokens": 1928,
+    "cost_microunits": 18071,
+    "cost_usd": 0.018071,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": true
+  },
+  "negative_evidence": {
+    "tool_errors": [
+      {
+        "role": "reviewer",
+        "sequence": 17,
+        "payload": {
+          "call_id": "call_kznxzwd9",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "search",
+          "result_bytes": 144,
+          "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      },
+      {
+        "role": "reviewer",
+        "sequence": 21,
+        "payload": {
+          "call_id": "call_7isr303f",
+          "is_error": true,
+          "kind": "tool_result",
+          "name": "grep",
+          "result_bytes": 77,
+          "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+        },
+        "raw_cause": "Not inferred from public result hash/length"
+      }
+    ],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 304
+    },
+    "failed_activations": []
+  },
+  "formal_C1_codex": "Original fresh onboarding path remains failed; this is supplemental fixture-only acceptance.",
+  "network": {
+    "events": 39,
+    "allowed_connections": 10,
+    "refused_connections": 0,
+    "route_requests": 4,
+    "routes": [
+      [
+        "chatgpt.com",
+        4
+      ]
+    ]
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this supplemental Codex fixture after user-completed connector authentication; does not establish fresh onboarding or change the original failed C1-codex path.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "19f2657b7bb6489046f008315de794307c4de3794c89d6153dfdb9d08d998bff",
+    "run.axorecord.jsonl": "fbd0ff15b23f6463621c9010baf1faaa29dfbf7bcd97aec99ae1b7a15782c04f",
+    "patch.diff": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+    "negative-evidence.json": "ec0a7297fbad1102addc02ab9aca98e99a7990c80e624d449c58f0d5c9e01542",
+    "activation-summary.json": "55c65ac6715bfdaa6dfb798ee4a0a36940b072196ca4bc45eb3a3f443abca47a",
+    "outcome.json": "d19b733dc0ae6df7a499df43e62decb5db727b5431c33bb169affb06ebca66e0",
+    "original-tests.stdout": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

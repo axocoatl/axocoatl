@@ -1,0 +1,1 @@
+axocoatl run fix --task "Fix the bug: paging skips the last item" --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt receipt.json

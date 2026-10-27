@@ -1,0 +1,21 @@
+diff --git a/pages.py b/pages.py
+index b9b1243..e9f8654 100644
+--- a/pages.py
++++ b/pages.py
+@@ -1,6 +1,5 @@
+ """Split a list of items into pages."""
+ 
+-
+ def paginate(items, size):
+     """Return `items` split into pages of `size` items.
+ 
+@@ -13,6 +12,6 @@ def paginate(items, size):
+     pages = []
+     for page in range(count):
+         start = page * size
+-        length = size if page < count - 1 else len(items) % size
++        length = size if page < count - 1 else len(items) - start
+         pages.append(items[start:start + length])
+-    return pages
++    return pages
+\ No newline at end of file

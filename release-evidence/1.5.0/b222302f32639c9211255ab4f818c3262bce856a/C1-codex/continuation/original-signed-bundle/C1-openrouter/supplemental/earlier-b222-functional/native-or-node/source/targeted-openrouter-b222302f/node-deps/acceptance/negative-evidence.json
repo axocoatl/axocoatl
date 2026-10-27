@@ -1,0 +1,48 @@
+{
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 0,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    }
+  ],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 12,
+      "payload": {
+        "call_id": "call-bc6fa07b-04fc-4652-aaad-ada7a49417e9",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 24,
+      "payload": {
+        "call_id": "call-320e7555-7f7c-457b-b9d4-a54fa95dd96e",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "read_file",
+        "result_bytes": 91,
+        "result_sha256": "7a01ee0639a7a34b4782a6faee772f14094d1d9e20ae77f361bd96bd6254c197"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "refused_connections": [],
+  "network_explanation": "No refused connections were recorded.",
+  "baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 277
+  }
+}

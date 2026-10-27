@@ -1,0 +1,12 @@
+{
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "installed_cli_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "archive_binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "source_head": "37f16b309ebbe0ada1ef01c481d3a356e3f74edf",
+  "only_evidence_changed_since_candidate": true,
+  "fresh_authentication": false,
+  "existing_sign_in_reused": true,
+  "operator": "Codex assistant",
+  "human_operator": false
+}

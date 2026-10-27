@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/Users/erick/.cargo/bin/cargo",
+    "+1.95.0",
+    "test",
+    "--offline",
+    "--jobs",
+    "1"
+  ],
+  "cwd": "/private/tmp/axo-b222-rust-artifact-audit-t_z9m1xi",
+  "start": "2026-10-26T19:02:33.569326+00:00",
+  "status": "completed",
+  "reason": "Initial invocation loaded no tests due to ancestor workspace discovery; execute identical fixture outside enclosing workspace without changing manifest.",
+  "exit_code": 0,
+  "end": "2026-10-26T19:02:35.113407+00:00",
+  "stdout_sha256": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+  "stderr_sha256": "b17361c7540074b9ee5e92010cf41ed53ac69935531e29f26cce2db9fc3176ab"
+}

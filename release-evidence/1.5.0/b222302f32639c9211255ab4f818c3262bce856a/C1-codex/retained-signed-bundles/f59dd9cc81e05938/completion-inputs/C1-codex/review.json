@@ -1,0 +1,21 @@
+{
+  "reviewed_at": "2026-10-27T01:42:27.351109+00:00",
+  "reviewer": "root, independent of composer",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "path": "C1-codex",
+  "result": "ACCEPTED_CRITERION_COMPOSITION",
+  "verified_manifest_members": 1817,
+  "original_files_preserved": 1801,
+  "candidate_source_unchanged": true,
+  "credential_bytes_not_published": true,
+  "original_failures_retained": true,
+  "scope": "Actual fresh authentication, saved-token interactive onboarding/sample, doctor and both original fixture suites independently observed for the same candidate and effective configuration. Order and user-directed saved-token restoration remain explicit. Not a single uninterrupted onboarding invocation. No weaker checks or inferred outcomes.",
+  "record_sha256": "c834b3973999632912a85b2c260f4947bb20d81a315f7e0c81263d15408a8b6f",
+  "schema": "axocoatl.recovery.completion-review/1",
+  "manifest_sha256": "2e779982209717336aa352803c766e3dff314e101c26c2ecda8c8b49b9ba41a9",
+  "decision": "approved_for_evidence_integration",
+  "actual_observations_reviewed": true,
+  "unchanged_pass_criteria": true,
+  "failed_attempts_preserved": true,
+  "assessment": "Actual fresh authentication, saved-token interactive onboarding/sample, doctor and both original fixture suites independently observed for the same candidate and effective configuration. Order and user-directed saved-token restoration remain explicit. Not a single uninterrupted onboarding invocation. No weaker checks or inferred outcomes."
+}

@@ -1,0 +1,2345 @@
+{
+  "schema": "axocoatl.recovery.supplemental-provenance/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "path": "C1-local",
+  "staged_at": "2026-10-26T19:28:21.508846+00:00",
+  "official_path_json_unchanged": true,
+  "official_path_sha256": "9029f9a753b670cebb033c13b9b61907fdca57b7ec7a77f46a64f2dea7e4e0a5",
+  "operator": "Codex assistant using tool-owned PTY and native CUA",
+  "human_operator": false,
+  "os_account": "erick",
+  "scope": "Supplemental independent artifact acceptance, operator attribution and interventions. Does not add a gate step or alter any recorded result.",
+  "recorded_path_pass": true,
+  "sources": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local.json",
+      "staged_relative": "C1-local.json",
+      "sha256": "9029f9a753b670cebb033c13b9b61907fdca57b7ec7a77f46a64f2dea7e4e0a5",
+      "bytes": 14942,
+      "category": "fresh-official-path"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/answers.txt",
+      "staged_relative": "C1-local/answers.txt",
+      "sha256": "855a57ca1e8631a85a6fb9d737265b91de8e44acf542b27cfa483963089fbf99",
+      "bytes": 116,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/doctor.json",
+      "staged_relative": "C1-local/doctor.json",
+      "sha256": "037cfc3112cc3f3ae5842e9fb59ba5d8d7da58f66259c68c5fec15b513486ac3",
+      "bytes": 4885,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/install-command.txt",
+      "staged_relative": "C1-local/install-command.txt",
+      "sha256": "73d0275603aac321135ada10923165fe45197b8dd09c2edda1a3328d95585b84",
+      "bytes": 47,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+      "staged_relative": "C1-local/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+      "sha256": "ec98d142557ef776e43c278698112f31831e7b1c08e259fd9d8ba2f9182f4a14",
+      "bytes": 2541,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/dev.log",
+      "staged_relative": "C1-local/logs/dev.log",
+      "sha256": "20a62dad9bf98b43b881d31952a9dd12d08778c306bc0a71a0319ae3de52002f",
+      "bytes": 649,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/doctor---json-says-ready.log",
+      "staged_relative": "C1-local/logs/doctor---json-says-ready.log",
+      "sha256": "ec02f9dfb7c7c87e0a97095553d45c3fe464154457344968165ceba29af7c433",
+      "bytes": 108,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/install-curl-urls.log",
+      "staged_relative": "C1-local/logs/install-curl-urls.log",
+      "sha256": "03110623e3a30e656cbc7dc4c0911bae74772e5715d604f0ff728da4cf9fc5ca",
+      "bytes": 401,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/install.log",
+      "staged_relative": "C1-local/logs/install.log",
+      "sha256": "928064a04dbbecc9a728e356454f6b3642324125a75cae3106aa9083838551f6",
+      "bytes": 949,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/onboard--local-models--interactive--every-answer-is-in-the-transcript-.log",
+      "staged_relative": "C1-local/logs/onboard--local-models--interactive--every-answer-is-in-the-transcript-.log",
+      "sha256": "54daf12ad4f4300b033e2680cef3b67acc2e0a923f443169bf74b1379c85a09f",
+      "bytes": 46,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/onboarding/onboard-20261026-184741.log",
+      "staged_relative": "C1-local/logs/onboarding/onboard-20261026-184741.log",
+      "sha256": "7d48ba94d50032be412ba035520033c8ec8b1b0adca2748242d34ef085bc7b1e",
+      "bytes": 9808,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-matches-the-record-on-readme-go.log",
+      "staged_relative": "C1-local/logs/receipt-matches-the-record-on-readme-go.log",
+      "sha256": "4e042ece2d8e053efce2a8bf57ea01d2ea275adb59b21a9d4b9c95200bb47591",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-matches-the-record-on-readme-node-deps.log",
+      "staged_relative": "C1-local/logs/receipt-matches-the-record-on-readme-node-deps.log",
+      "sha256": "2b6f34d06123c0aaf5f6626554054e1dfef1d111c73a92a90922bc81782207f8",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-matches-the-record-on-readme-node-plain.log",
+      "staged_relative": "C1-local/logs/receipt-matches-the-record-on-readme-node-plain.log",
+      "sha256": "66c0f8a9fb5654494e80974c98c9e201415538ed0404394cff056f757eb43cc3",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-matches-the-record-on-readme-python-pytest.log",
+      "staged_relative": "C1-local/logs/receipt-matches-the-record-on-readme-python-pytest.log",
+      "sha256": "2e1eccce333712a6c1b7daa873e5b11f4fc9621d9d78a35fe94225e3380d8251",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-matches-the-record-on-readme-rust.log",
+      "staged_relative": "C1-local/logs/receipt-matches-the-record-on-readme-rust.log",
+      "sha256": "de753688338cc06cbce8704da1ab9d4e903b6d8603b7d0744f00333fbd9ddde5",
+      "bytes": 279,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-go--documented-command-.log",
+      "staged_relative": "C1-local/logs/receipt-verify-on-readme-go--documented-command-.log",
+      "sha256": "3fb7d30a104e95ff086713b3bc5b0a0e4a99d8db95af9ad03a73328e6c72b0cf",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+      "staged_relative": "C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+      "sha256": "da17e0c70b587cf30379aa541c0b35c6f4b08ea707fbcc55cac1eeaa3cb71e39",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-plain--documented-command-.log",
+      "staged_relative": "C1-local/logs/receipt-verify-on-readme-node-plain--documented-command-.log",
+      "sha256": "02a3e1e8247bcb4b6d30d8156dfe778fc07348e046706df61090d4e79682923f",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-python-pytest--documented-command-.log",
+      "staged_relative": "C1-local/logs/receipt-verify-on-readme-python-pytest--documented-command-.log",
+      "sha256": "246d7cdae7f80197dde715e52f4082b5535c6fcb60d26ec924b9efaf5544f6a4",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-rust--documented-command-.log",
+      "staged_relative": "C1-local/logs/receipt-verify-on-readme-rust--documented-command-.log",
+      "sha256": "fb62cb2e0c6134692aafb7ce58e54b383fbe7c72d693b18de2966d54a6a463c0",
+      "bytes": 273,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/record-verify-on-readme-go.log",
+      "staged_relative": "C1-local/logs/record-verify-on-readme-go.log",
+      "sha256": "f0b591434711ee87bfaf5ef724b5fcaa09277f1cdf915fdf97fed2aae670af24",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/record-verify-on-readme-node-deps.log",
+      "staged_relative": "C1-local/logs/record-verify-on-readme-node-deps.log",
+      "sha256": "7783548ecfc261482e6c29a6897a34d4a4172093103713b27ae9a31b5ccdbf86",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/record-verify-on-readme-node-plain.log",
+      "staged_relative": "C1-local/logs/record-verify-on-readme-node-plain.log",
+      "sha256": "dfbe9ff81580b6ce0ee4977bd23ac1abdda222ebc9992a2e5710d0a3b8fa0779",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/record-verify-on-readme-python-pytest.log",
+      "staged_relative": "C1-local/logs/record-verify-on-readme-python-pytest.log",
+      "sha256": "5dbcbab98d7c71cb9c3b5e21beafecae473e902bda190bdcd39e5ffd419b4b8e",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/record-verify-on-readme-rust.log",
+      "staged_relative": "C1-local/logs/record-verify-on-readme-rust.log",
+      "sha256": "81d14db68a136fa004a9d20b9cdce9446008b5c5e8bc36bdcb511f24097ec008",
+      "bytes": 278,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/run-fix-on-readme-go.log",
+      "staged_relative": "C1-local/logs/run-fix-on-readme-go.log",
+      "sha256": "34bda09fca89cdcce9e7543d2c63c47ce4fb6dd25c1410053e27dc9d8ed4f5a5",
+      "bytes": 5555,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/run-fix-on-readme-node-deps.log",
+      "staged_relative": "C1-local/logs/run-fix-on-readme-node-deps.log",
+      "sha256": "cc663a7e31194a4ef41b969d7cb863babd4c2114264b9473b3ffdceffeb990d1",
+      "bytes": 2839,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/run-fix-on-readme-node-plain.log",
+      "staged_relative": "C1-local/logs/run-fix-on-readme-node-plain.log",
+      "sha256": "06fddd0bacdeb2a2fd6280f5f21a6333c22d1d25e1bc2c2e9c195f64b4486956",
+      "bytes": 2120,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/run-fix-on-readme-python-pytest.log",
+      "staged_relative": "C1-local/logs/run-fix-on-readme-python-pytest.log",
+      "sha256": "469f6326651e814378399b60e9f0eb32b5cab4592decf5dbc192e0851fd28ed5",
+      "bytes": 16055,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/run-fix-on-readme-rust.log",
+      "staged_relative": "C1-local/logs/run-fix-on-readme-rust.log",
+      "sha256": "b2a97bafaec2514e98c1496d2bb23baeacc2ff15f53d90d9f444395e604bfbdd",
+      "bytes": 14903,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/axocoatl-junit.xml",
+      "staged_relative": "C1-local/readme-go/axocoatl-junit.xml",
+      "sha256": "128f0b439609eb82f8883e703f853a8df847090203478d0d95ddaaffd6dbf605",
+      "bytes": 2404,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/changes.txt",
+      "staged_relative": "C1-local/readme-go/changes.txt",
+      "sha256": "822032d3bc279b96c6441d102864f6e7afbc3427d9c50493aaf2891b618b8fad",
+      "bytes": 428,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/command.txt",
+      "staged_relative": "C1-local/readme-go/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.axorecord.jsonl",
+      "staged_relative": "C1-local/readme-go/run.axorecord.jsonl",
+      "sha256": "0df7eb8fd90f88957ad96f1c4b709ab410bbd36751144e2477d5a70ab6cc3bfd",
+      "bytes": 479658,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.log",
+      "staged_relative": "C1-local/readme-go/run.log",
+      "sha256": "34bda09fca89cdcce9e7543d2c63c47ce4fb6dd25c1410053e27dc9d8ed4f5a5",
+      "bytes": 5555,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.receipt.json",
+      "staged_relative": "C1-local/readme-go/run.receipt.json",
+      "sha256": "f6685f726d1cd8d112bb0e00021da70d4835b294f0afa7c21365732352e7467f",
+      "bytes": 4732,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-local/readme-node-deps/axocoatl-junit.xml",
+      "sha256": "e05cdc66cae8644c23b4bc121de57b90555c297f13060cc6aff40cc504765c3b",
+      "bytes": 2338,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/changes.txt",
+      "staged_relative": "C1-local/readme-node-deps/changes.txt",
+      "sha256": "2346d909df1b5334dfe23ca1802824487d0cfc1e8923fdfbbe6e9940fbab59d7",
+      "bytes": 575,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt",
+      "staged_relative": "C1-local/readme-node-deps/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-local/readme-node-deps/run.axorecord.jsonl",
+      "sha256": "6979771b1d6b5db565ca06c035f7c4455f844f20b97e3bb72abe3cf2355428d8",
+      "bytes": 529295,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log",
+      "staged_relative": "C1-local/readme-node-deps/run.log",
+      "sha256": "cc663a7e31194a4ef41b969d7cb863babd4c2114264b9473b3ffdceffeb990d1",
+      "bytes": 2839,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.receipt.json",
+      "staged_relative": "C1-local/readme-node-deps/run.receipt.json",
+      "sha256": "6d96d422d6946c480c410be883a27c862e1540c490bb926a12f3de75f1b01575",
+      "bytes": 4704,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/axocoatl-junit.xml",
+      "staged_relative": "C1-local/readme-node-plain/axocoatl-junit.xml",
+      "sha256": "bc88470b940ceaf775df391e6e9e2fcf3dd024e1a561be59d716e49915916f6b",
+      "bytes": 1978,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/changes.txt",
+      "staged_relative": "C1-local/readme-node-plain/changes.txt",
+      "sha256": "cd25251683add6f28f1917ad16e17df264f96990df980bbbaa094e98237fa5d4",
+      "bytes": 543,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/command.txt",
+      "staged_relative": "C1-local/readme-node-plain/command.txt",
+      "sha256": "26a7aba76f2fe2cb4e985b5e2fcfe2dc13b78914c61e55ee6a1df626798a1865",
+      "bytes": 145,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/receipt.json",
+      "staged_relative": "C1-local/readme-node-plain/receipt.json",
+      "sha256": "2a0e66118ae19713eee4f7e0bb90336520f03f11804b51e84d9edf3d9917a5c9",
+      "bytes": 4312,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/run.axorecord.jsonl",
+      "staged_relative": "C1-local/readme-node-plain/run.axorecord.jsonl",
+      "sha256": "0d52807ccf0f0fefb8b8b42dd75ab245e168d56bce21ced54b6911896cf64206",
+      "bytes": 357115,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-plain/run.log",
+      "staged_relative": "C1-local/readme-node-plain/run.log",
+      "sha256": "06fddd0bacdeb2a2fd6280f5f21a6333c22d1d25e1bc2c2e9c195f64b4486956",
+      "bytes": 2120,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-local/readme-python-pytest/axocoatl-junit.xml",
+      "sha256": "30546b3dd4f77b971bc76796edd5e2e0611008691b306148e10b88b12565edb6",
+      "bytes": 2340,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/changes.txt",
+      "staged_relative": "C1-local/readme-python-pytest/changes.txt",
+      "sha256": "99efbb7a93bd39ff2b5850a1f17bf802ce4f49a488d0f76db9af10a5480eb598",
+      "bytes": 687,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/command.txt",
+      "staged_relative": "C1-local/readme-python-pytest/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-local/readme-python-pytest/run.axorecord.jsonl",
+      "sha256": "bbdb312c1390164f9b572ea65e9ec684ddd2e9ab61926e70168b6d8e88f31fcc",
+      "bytes": 479005,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/run.log",
+      "staged_relative": "C1-local/readme-python-pytest/run.log",
+      "sha256": "469f6326651e814378399b60e9f0eb32b5cab4592decf5dbc192e0851fd28ed5",
+      "bytes": 16055,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-python-pytest/run.receipt.json",
+      "staged_relative": "C1-local/readme-python-pytest/run.receipt.json",
+      "sha256": "9c72446a7900a5cd035e4e12430a549edd9590be1722e652eb2cb0bbc133632d",
+      "bytes": 4716,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/axocoatl-junit.xml",
+      "staged_relative": "C1-local/readme-rust/axocoatl-junit.xml",
+      "sha256": "e1cfe250c9d1f8a6f0bfd2c09b235f41e585acc5f5edba75a59b8485e7e047cd",
+      "bytes": 2318,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/changes.txt",
+      "staged_relative": "C1-local/readme-rust/changes.txt",
+      "sha256": "f3d4d4b16a2db6be0265ff70fd7265ceabcdd5f7c6389c4af1945d2560afcd13",
+      "bytes": 491,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/command.txt",
+      "staged_relative": "C1-local/readme-rust/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl",
+      "staged_relative": "C1-local/readme-rust/run.axorecord.jsonl",
+      "sha256": "e634e0f3b650b2204c211e03cada0431ee8d9385ea60b411f97aa91cd431f3ef",
+      "bytes": 686471,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.log",
+      "staged_relative": "C1-local/readme-rust/run.log",
+      "sha256": "b2a97bafaec2514e98c1496d2bb23baeacc2ff15f53d90d9f444395e604bfbdd",
+      "bytes": 14903,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.receipt.json",
+      "staged_relative": "C1-local/readme-rust/run.receipt.json",
+      "sha256": "b812411c930a1818975ba24c70d5009e0d97c961181cb3975d6e4019a3852249",
+      "bytes": 4688,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/transcript.txt",
+      "staged_relative": "C1-local/transcript.txt",
+      "sha256": "2d8d70b39ff3406939f04e00ece76e6a66ca8e15aff530881999b680cf3da83e",
+      "bytes": 111633,
+      "category": "fresh-official-attachments"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/operator.json",
+      "staged_relative": "C1-local/operator.json",
+      "sha256": "4479718c414fdce3e050fafd8b30650689d82a93db2f6feb01a6a4fb337df25d",
+      "bytes": 1071,
+      "category": "supplemental-operator"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/local-sample/activation-summary.json",
+      "sha256": "fab324e62f3e03a4e2f8957477baf2d50f8b5d90e8fcdfbce28872a80a02e7be",
+      "bytes": 40934,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/assessment.json",
+      "staged_relative": "C1-local/acceptance/local-sample/assessment.json",
+      "sha256": "4ce730e4b9cd8661f2b42ecd1d714209a743fe4a08ec9b0df0ef743c4ddf2477",
+      "bytes": 11759,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/commands.json",
+      "staged_relative": "C1-local/acceptance/local-sample/commands.json",
+      "sha256": "467c57f6d2b9fb38f756c96c2a6c13ae155e11714c79e87426bba2d68d43260f",
+      "bytes": 4482,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/daemon.log",
+      "staged_relative": "C1-local/acceptance/local-sample/daemon.log",
+      "sha256": "85be6a4e8cff4d8e6c1da1d5f9c7519916f9bcefc40fec363f5a1400125b5da8",
+      "bytes": 226,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/final/.gitignore",
+      "staged_relative": "C1-local/acceptance/local-sample/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/final/README.md",
+      "staged_relative": "C1-local/acceptance/local-sample/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/final/package.json",
+      "staged_relative": "C1-local/acceptance/local-sample/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/final/src/paging.js",
+      "staged_relative": "C1-local/acceptance/local-sample/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/final/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/local-sample/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/local-sample/git-status-after.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/local-sample/git-status-before.txt",
+      "sha256": "69fda243b4a4837402af29c4a6130213219773ada3fdd753f9fa0ee0e12f0d38",
+      "bytes": 17,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check/.gitignore",
+      "staged_relative": "C1-local/acceptance/local-sample/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/local-sample/host-check/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check/package.json",
+      "staged_relative": "C1-local/acceptance/local-sample/host-check/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check/src/paging.js",
+      "staged_relative": "C1-local/acceptance/local-sample/host-check/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/host-check/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/local-sample/host-check/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/local-sample/negative-evidence.json",
+      "sha256": "6ee409448afb03eef6fdbcb46faf81fbf0c1f53ae7a8dc521cdd396331473794",
+      "bytes": 233,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/network-events.json",
+      "staged_relative": "C1-local/acceptance/local-sample/network-events.json",
+      "sha256": "1eb7b1917f749b855344cc6e0737e3ec2411a508ee23d56bb12123d803014f7a",
+      "bytes": 5581,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original/.gitignore",
+      "staged_relative": "C1-local/acceptance/local-sample/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original/README.md",
+      "staged_relative": "C1-local/acceptance/local-sample/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original/package.json",
+      "staged_relative": "C1-local/acceptance/local-sample/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original/src/paging.js",
+      "staged_relative": "C1-local/acceptance/local-sample/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/local-sample/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/original-tests.stdout",
+      "sha256": "2af85c6fa640a195744ffd8be5a01c9ac1a797f243580334ec30972e5360d9d6",
+      "bytes": 573,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/outcome.json",
+      "staged_relative": "C1-local/acceptance/local-sample/outcome.json",
+      "sha256": "a508b790ed7c297ded3966347f2bd91e54e25df9463ecb0c181c1d90f68ccff8",
+      "bytes": 2685,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/patch.diff",
+      "staged_relative": "C1-local/acceptance/local-sample/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/local-sample/receipt-statement.json",
+      "sha256": "53a3053068c4c1231b46d9a5ffd64d666dfda2c8231cc4f949b241c69ee50086",
+      "bytes": 4300,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/receipt-verify.stdout",
+      "sha256": "d87eacb9eea92bfc0031f7ca211df930a96b37277a1b10c7db7801f4466b11c0",
+      "bytes": 2043,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/receipt.json",
+      "staged_relative": "C1-local/acceptance/local-sample/receipt.json",
+      "sha256": "3eb6f2e86b66aa54811edf0cb0befd2ff8636f47d987fd90a269cdb8beeff8b5",
+      "bytes": 4312,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/record-verify.stdout",
+      "sha256": "ce0b9bc5144351fc5747f63ac50b5f140c710fb8eece6772bbd0791436551633",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/record.jsonl",
+      "staged_relative": "C1-local/acceptance/local-sample/record.jsonl",
+      "sha256": "bbc9d42ff9194ac7dfd529133d351c6960085998197fb099a9d62e81e7fc6f4a",
+      "bytes": 336583,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/trusted-public-key.stderr",
+      "staged_relative": "C1-local/acceptance/local-sample/trusted-public-key.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/trusted-public-key.stdout",
+      "staged_relative": "C1-local/acceptance/local-sample/trusted-public-key.stdout",
+      "sha256": "66085d59fc63b2dca2d5afc0370b955f2915df2d7cc1e80d1abd27585ebe2d08",
+      "bytes": 91,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/activation-summary.json",
+      "sha256": "7322f67cf2a324095f05ca1b38f4a4b85d916f98f0cc66788824df797a03b0f9",
+      "bytes": 38541,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/assessment.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/assessment.json",
+      "sha256": "d193fe6d26d84fdcb21c2239dd3c676cb922310894317deef2f941a7398d1f74",
+      "bytes": 11699,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/axocoatl-junit.xml",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/axocoatl-junit.xml",
+      "sha256": "bc88470b940ceaf775df391e6e9e2fcf3dd024e1a561be59d716e49915916f6b",
+      "bytes": 1978,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/changes.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/changes.txt",
+      "sha256": "cd25251683add6f28f1917ad16e17df264f96990df980bbbaa094e98237fa5d4",
+      "bytes": 543,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/command.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/command.txt",
+      "sha256": "26a7aba76f2fe2cb4e985b5e2fcfe2dc13b78914c61e55ee6a1df626798a1865",
+      "bytes": 145,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/commands.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/commands.json",
+      "sha256": "70f25d96c9c231fb9f527d9470a6ee17726d5f7ce70b67045472d904ef457b23",
+      "bytes": 4085,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/final/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/final/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/final/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/final/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/final/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/final/src/paging.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/final/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/final/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/final/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/gate-output-exclusions.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/gate-output-exclusions.json",
+      "sha256": "0142830211216eb1b291f5322593b9d96187f43713dacc808dbf800e3327cc87",
+      "bytes": 658,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/git-status-after.txt",
+      "sha256": "764237ba99eca5c2a5a00c12772d51da7f3352d7097865ae794a3de7e45f09b8",
+      "bytes": 78,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/git-status-before.txt",
+      "sha256": "764237ba99eca5c2a5a00c12772d51da7f3352d7097865ae794a3de7e45f09b8",
+      "bytes": 78,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-check/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-check/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check/src/paging.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-check/src/paging.js",
+      "sha256": "c3d43b0279469287f1ccd82a33e4046e07e4808270bc6cee8685739731724e99",
+      "bytes": 424,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-check/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-check/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/host-dependency-provenance.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/host-dependency-provenance.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "bytes": 3,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/independent-receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/independent-receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/independent-receipt-verify.stdout",
+      "sha256": "e8f4480f507f9a8c22865677937cd242d6f3f9cc0db2e40084fc063ebf80ceab",
+      "bytes": 2067,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/independent-record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/independent-record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/independent-record-verify.stdout",
+      "sha256": "dfbe9ff81580b6ce0ee4977bd23ac1abdda222ebc9992a2e5710d0a3b8fa0779",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/negative-evidence.json",
+      "sha256": "7a6c0b3670f45a9fee67520dd90e59c0f78fdfd2ecabcf60feaef18a17e7a3fd",
+      "bytes": 632,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/network-events.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/network-events.json",
+      "sha256": "7d3f36bb0b599c40f0ba06eccf90cbfea0a3fe00cac8a510e7d04648338034e0",
+      "bytes": 3951,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original/README.md",
+      "sha256": "ace597f7acfac34d5e70c5838d6a30539db0329027a2922432ab30e3fec777aa",
+      "bytes": 391,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original/package.json",
+      "sha256": "bbf90ca1a0db8aa8e79f179c4d7688a5bcc63d6a03147d1dd59b216faebb43b3",
+      "bytes": 210,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original/src/paging.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original/src/paging.js",
+      "sha256": "b2534f03ec296cb7e8c6f7f6ac6152a424f810bb48eef8a269fbd2aeeed62a25",
+      "bytes": 425,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original/test/paging.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original/test/paging.test.js",
+      "sha256": "f8202630cd8996d6138155e59b68eaa968961ef52dcfacf0a8f3752667659cdb",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/original-tests.stdout",
+      "sha256": "6f1a739e4bb8a3a68412b78dc75a041dcfa30fd78ddad65a12145193a9f9584f",
+      "bytes": 572,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/outcome.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/outcome.json",
+      "sha256": "3a405576ba0da42067e26bdfdf2aada4a02e6536cc8df723b738aec1e0cdfef5",
+      "bytes": 2892,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/patch.diff",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/patch.diff",
+      "sha256": "2a14b8352cb010009e1528f32c7386eb3aa6cbdd8a53f2d2d6ed7435152963c6",
+      "bytes": 465,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/receipt-statement.json",
+      "sha256": "07030b19b5db391ffaa3ec302d696fc0b2506895e708a476bb44e412f7a6beb1",
+      "bytes": 4300,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/receipt.json",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/receipt.json",
+      "sha256": "2a0e66118ae19713eee4f7e0bb90336520f03f11804b51e84d9edf3d9917a5c9",
+      "bytes": 4312,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/run.axorecord.jsonl",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/run.axorecord.jsonl",
+      "sha256": "0d52807ccf0f0fefb8b8b42dd75ab245e168d56bce21ced54b6911896cf64206",
+      "bytes": 357115,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/run.log",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/run.log",
+      "sha256": "06fddd0bacdeb2a2fd6280f5f21a6333c22d1d25e1bc2c2e9c195f64b4486956",
+      "bytes": 2120,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/activation-summary.json",
+      "sha256": "3820fe18e07eabb46c0a16c2777602aaeb26f3675394fc2f0289a0f56adec79b",
+      "bytes": 60286,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/assessment.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/assessment.json",
+      "sha256": "eef0517ba395b4907cf714b21f2e99f3379e50820b1d44489449cd5e90ce38ff",
+      "bytes": 12731,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/axocoatl-junit.xml",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/axocoatl-junit.xml",
+      "sha256": "e05cdc66cae8644c23b4bc121de57b90555c297f13060cc6aff40cc504765c3b",
+      "bytes": 2338,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/changes.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/changes.txt",
+      "sha256": "2346d909df1b5334dfe23ca1802824487d0cfc1e8923fdfbbe6e9940fbab59d7",
+      "bytes": 575,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/command.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/commands.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/commands.json",
+      "sha256": "43f9e1b554f794fabbda1bcb301f68eb4e597eb9ca8eb24d4f468d25fb22d962",
+      "bytes": 4079,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/package-lock.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/src/paginate.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/src/paginate.js",
+      "sha256": "a010054ab3170d2de1b39d739d5a82dce7b3b6c68952f1ed7d7cf2df5454369b",
+      "bytes": 613,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/final/test/paginate.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/gate-output-exclusions.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/gate-output-exclusions.json",
+      "sha256": "976552e8e05672d81dd5ee9ef17f030d36487a1315f4eb9beb500b5586104a22",
+      "bytes": 662,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/git-status-after.txt",
+      "sha256": "338e5c02418bfaba889c1b1e1f2a9bc48537acb507798aa9b4e83d12eda124b5",
+      "bytes": 84,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/git-status-before.txt",
+      "sha256": "338e5c02418bfaba889c1b1e1f2a9bc48537acb507798aa9b4e83d12eda124b5",
+      "bytes": 84,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/package-lock.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/src/paginate.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/src/paginate.js",
+      "sha256": "a010054ab3170d2de1b39d739d5a82dce7b3b6c68952f1ed7d7cf2df5454369b",
+      "bytes": 613,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/test/paginate.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-dependency-provenance.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-dependency-provenance.json",
+      "sha256": "c142f2c955382d233f7a4ded44ca73d6ad196952811f5068a7e35966fed05980",
+      "bytes": 323,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/independent-receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/independent-receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/independent-receipt-verify.stdout",
+      "sha256": "434b9df2e0a3f1faa306dfab9d93a5e86b53269c56e209d319cdfbcdbda6f7a6",
+      "bytes": 2067,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/independent-record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/independent-record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/independent-record-verify.stdout",
+      "sha256": "7783548ecfc261482e6c29a6897a34d4a4172093103713b27ae9a31b5ccdbf86",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/negative-evidence.json",
+      "sha256": "b11fd835c997daf82898a04e3093aa6efb6104d0dcc3fa56e429050df860fa2e",
+      "bytes": 1020,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/network-events.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/network-events.json",
+      "sha256": "e158f1517c1008910c194018381f38bbfc4c162f414ee16fa8ebe4d97b70fceb",
+      "bytes": 17527,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/.gitignore",
+      "sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/README.md",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/README.md",
+      "sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "bytes": 1005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/package-lock.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/package-lock.json",
+      "sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "bytes": 2556,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/package.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/package.json",
+      "sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "bytes": 165,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/src/paginate.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original/test/paginate.test.js",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/outcome.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/outcome.json",
+      "sha256": "28d2fd3478ae2fee73d871bd1f81005c1585c8fdc7d5d360fcb7411e25bfc447",
+      "bytes": 3280,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/patch.diff",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/patch.diff",
+      "sha256": "121d2af3e44c8dd0f57cafd2d6b9843e560d030040f87d38f051276f4bb6a6a1",
+      "bytes": 491,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/receipt-statement.json",
+      "sha256": "a870efca64138fc6e2ce5d212b2991b07d23d72544c0f305730531f45ffc637a",
+      "bytes": 4733,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/run.axorecord.jsonl",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/run.axorecord.jsonl",
+      "sha256": "6979771b1d6b5db565ca06c035f7c4455f844f20b97e3bb72abe3cf2355428d8",
+      "bytes": 529295,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/run.log",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/run.log",
+      "sha256": "cc663a7e31194a4ef41b969d7cb863babd4c2114264b9473b3ffdceffeb990d1",
+      "bytes": 2839,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/run.receipt.json",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/run.receipt.json",
+      "sha256": "6d96d422d6946c480c410be883a27c862e1540c490bb926a12f3de75f1b01575",
+      "bytes": 4704,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/runtime-version.stdout",
+      "sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+      "bytes": 9,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/activation-summary.json",
+      "sha256": "7bcaf68ee70def785cb5ae7603481f117858d0bdcad6afd09504c5c255f65d9e",
+      "bytes": 50664,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/assessment.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/assessment.json",
+      "sha256": "621da6ccce253d3b1d82fb18098fc0cb21a55c49fcd2746c95f9c4c932f35413",
+      "bytes": 13944,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/axocoatl-junit.xml",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/axocoatl-junit.xml",
+      "sha256": "30546b3dd4f77b971bc76796edd5e2e0611008691b306148e10b88b12565edb6",
+      "bytes": 2340,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/changes.txt",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/changes.txt",
+      "sha256": "99efbb7a93bd39ff2b5850a1f17bf802ce4f49a488d0f76db9af10a5480eb598",
+      "bytes": 687,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/command.txt",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/commands.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/commands.json",
+      "sha256": "b5c386037ae12d56bf3cdf7dc0af20efe4b3e7fc7debfad50b90e9d066d28f32",
+      "bytes": 5271,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/final/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/final/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/final/README.md",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/final/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/final/pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/final/pages.py",
+      "sha256": "41c1b2a22dba96b27aedde11409935cb921b98e3f2e37e2696a15c560336400e",
+      "bytes": 540,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/final/pyproject.toml",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/final/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/final/tests/test_pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/final/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/gate-output-exclusions.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/gate-output-exclusions.json",
+      "sha256": "66d9d886e3c1f352e7793d21ff9592ae7710ce60b98ef8d3424c69d204b4ac86",
+      "bytes": 662,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/git-status-after.txt",
+      "sha256": "67ff61f7dc016f115e20640339dcefa869b7d187c35f3879e2d6fa7827311a6f",
+      "bytes": 77,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/git-status-before.txt",
+      "sha256": "67ff61f7dc016f115e20640339dcefa869b7d187c35f3879e2d6fa7827311a6f",
+      "bytes": 77,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-check/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-check/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check/pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-check/pages.py",
+      "sha256": "41c1b2a22dba96b27aedde11409935cb921b98e3f2e37e2696a15c560336400e",
+      "bytes": 540,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check/pyproject.toml",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-check/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-check/tests/test_pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-check/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/host-dependency-provenance.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/host-dependency-provenance.json",
+      "sha256": "5a6ed248aaf27aa8df0736f24ca7cda710934752a27a1780a9c4b0c314a2e033",
+      "bytes": 255,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/independent-receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/independent-receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/independent-receipt-verify.stdout",
+      "sha256": "70a9f4872e5ecd60067b4170cf8c602dd95060bee9a325a177d16e425a27e9b9",
+      "bytes": 2073,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/independent-record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/independent-record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/independent-record-verify.stdout",
+      "sha256": "5dbcbab98d7c71cb9c3b5e21beafecae473e902bda190bdcd39e5ffd419b4b8e",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/module-selection.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/module-selection.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/module-selection.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/module-selection.stdout",
+      "sha256": "7f6dbe1aecb7330494c60822f69c49388a2200bd0761f6ca07b4657e0fb7903a",
+      "bytes": 168,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/negative-evidence.json",
+      "sha256": "6739d5b65ffc3a941bfbe22b261f48d7a676b2961f898a48aa6a7efd9b89a783",
+      "bytes": 1027,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/network-events.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/network-events.json",
+      "sha256": "903bdd221deda62642f7ba2e50d2a9517b8ed29877ca3f7a63d984ce97bf2f8b",
+      "bytes": 12695,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original/.gitignore",
+      "sha256": "241dd668fa16c9a958837ed2ef87466c240260937cea0c9d5e4bb3419063d9ad",
+      "bytes": 47,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original/README.md",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original/README.md",
+      "sha256": "b7d31abad0cc51636c8e5ca80d42aebacdcedade57e3a52afd87ef26a2b40e46",
+      "bytes": 1000,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original/pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original/pages.py",
+      "sha256": "d8ee677f6fd38aa27d477f5d14fc757c9bdd426370d8e3fc57ae456727395c5b",
+      "bytes": 541,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original/pyproject.toml",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original/pyproject.toml",
+      "sha256": "5513ae7479ae44721845d130202d7b1ed50ad42c92e8d6c0cbfce141aa06d0ea",
+      "bytes": 335,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original/tests/test_pages.py",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original/tests/test_pages.py",
+      "sha256": "1492928498529321ed44d93602c0b40d3da339f8a31dffb5f9e1d45ca78da71d",
+      "bytes": 582,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/original-tests.stdout",
+      "sha256": "b3d7d67ba7fac674e3b52162829ae3697adf6c2b7c41ac801630e7fc30c68ba7",
+      "bytes": 529,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/outcome.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/outcome.json",
+      "sha256": "547b19f9e5629d2bfe848d0eb9f3bfa93fb80b23597e7440dbc53b93b782124a",
+      "bytes": 3372,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/patch.diff",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/patch.diff",
+      "sha256": "ce4b0ac0c61aff7224d2c4e3694b8407af10637fa382d5b136fa7a9287be9917",
+      "bytes": 610,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/receipt-statement.json",
+      "sha256": "0946adeb99bcd50c8a9152f109564132992d3655a4b7a8cc386805c8d5774c03",
+      "bytes": 4755,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/run.axorecord.jsonl",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/run.axorecord.jsonl",
+      "sha256": "bbdb312c1390164f9b572ea65e9ec684ddd2e9ab61926e70168b6d8e88f31fcc",
+      "bytes": 479005,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/run.log",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/run.log",
+      "sha256": "469f6326651e814378399b60e9f0eb32b5cab4592decf5dbc192e0851fd28ed5",
+      "bytes": 16055,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/run.receipt.json",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/run.receipt.json",
+      "sha256": "9c72446a7900a5cd035e4e12430a549edd9590be1722e652eb2cb0bbc133632d",
+      "bytes": 4716,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-python-pytest/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/readme-python-pytest/runtime-version.stdout",
+      "sha256": "01623849c8d1730b6d859e0d292d5459342aeee8145d1eeb2813bd6cd516419a",
+      "bytes": 14,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/activation-summary.json",
+      "sha256": "c44abdef9d7d97070d5c38fa136233225ac3cb026765374eeaa4ee347f12edfb",
+      "bytes": 57891,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/assessment.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/assessment.json",
+      "sha256": "dfd00bae612c173874380955e700b9f07802b80775195bf4136ca98ea5851d08",
+      "bytes": 14466,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/axocoatl-junit.xml",
+      "staged_relative": "C1-local/acceptance/readme-rust/axocoatl-junit.xml",
+      "sha256": "e1cfe250c9d1f8a6f0bfd2c09b235f41e585acc5f5edba75a59b8485e7e047cd",
+      "bytes": 2318,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/changes.txt",
+      "staged_relative": "C1-local/acceptance/readme-rust/changes.txt",
+      "sha256": "f3d4d4b16a2db6be0265ff70fd7265ceabcdd5f7c6389c4af1945d2560afcd13",
+      "bytes": 491,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/command.txt",
+      "staged_relative": "C1-local/acceptance/readme-rust/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/commands.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/commands.json",
+      "sha256": "d3bbaea8e3d9f8d64c1004f392d0c7556aceffe05c58ba09304ecc3bccf37b57",
+      "bytes": 4022,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/final/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-rust/final/.gitignore",
+      "sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "bytes": 8,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/final/Cargo.lock",
+      "staged_relative": "C1-local/acceptance/readme-rust/final/Cargo.lock",
+      "sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "bytes": 814,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/final/Cargo.toml",
+      "staged_relative": "C1-local/acceptance/readme-rust/final/Cargo.toml",
+      "sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "bytes": 115,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/final/README.md",
+      "staged_relative": "C1-local/acceptance/readme-rust/final/README.md",
+      "sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "bytes": 1003,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/final/src/lib.rs",
+      "staged_relative": "C1-local/acceptance/readme-rust/final/src/lib.rs",
+      "sha256": "5a4ca1b9177f617cb55401b72019ef75edcbb9ed99d99f8ea6d98aa6fad07519",
+      "bytes": 1599,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/gate-output-exclusions.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/gate-output-exclusions.json",
+      "sha256": "edf9ca2599b4628b6866f32373f300b5b6a4c34a189a2e7b4a4c0c9fff046544",
+      "bytes": 662,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/readme-rust/git-status-after.txt",
+      "sha256": "051e835ad3a258519f8c0dc2452b100423b9883bb8ac3d5252aa0cb10a83c0b9",
+      "bytes": 79,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/readme-rust/git-status-before.txt",
+      "sha256": "051e835ad3a258519f8c0dc2452b100423b9883bb8ac3d5252aa0cb10a83c0b9",
+      "bytes": 79,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-check/.gitignore",
+      "sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "bytes": 8,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check/Cargo.lock",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-check/Cargo.lock",
+      "sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "bytes": 814,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check/Cargo.toml",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-check/Cargo.toml",
+      "sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "bytes": 115,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-check/README.md",
+      "sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "bytes": 1003,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-check/src/lib.rs",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-check/src/lib.rs",
+      "sha256": "5a4ca1b9177f617cb55401b72019ef75edcbb9ed99d99f8ea6d98aa6fad07519",
+      "bytes": 1599,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/host-dependency-provenance.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/host-dependency-provenance.json",
+      "sha256": "aca83878a66760bf84cf88fea6ae164ff23358a4842b08417bc340b92e92420e",
+      "bytes": 247,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/independent-receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/independent-receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/independent-receipt-verify.stdout",
+      "sha256": "bb103e318c7609f47caba7329103fe9844970bee2bfccc51920e37758e1c9895",
+      "bytes": 2050,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/independent-record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/independent-record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/independent-record-verify.stdout",
+      "sha256": "81d14db68a136fa004a9d20b9cdce9446008b5c5e8bc36bdcb511f24097ec008",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/initial-assessment-setup-failure.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/initial-assessment-setup-failure.json",
+      "sha256": "6f03cdd2a0d6c199d1257ed14b6446916f77911a6099b0da0bf71296a5bf1402",
+      "bytes": 12854,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/negative-evidence.json",
+      "sha256": "fbe505ad0af3320bd30d4fbb323a980c78dd3ec93d8dcec0755c85a27239bc30",
+      "bytes": 1024,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/network-events.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/network-events.json",
+      "sha256": "b8b9e7afe5ea9d1a3b5616864f1f59eb5547f827c506e4398fa4082a4d577e52",
+      "bytes": 13050,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original/.gitignore",
+      "staged_relative": "C1-local/acceptance/readme-rust/original/.gitignore",
+      "sha256": "b53ee26e6ff1da219b0563333a76d2c9ec19eec713d6ee54e11a1edacb0e9f3d",
+      "bytes": 8,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original/Cargo.lock",
+      "staged_relative": "C1-local/acceptance/readme-rust/original/Cargo.lock",
+      "sha256": "9f51eea8c1465491346a901cf089308c7cc0bf42ef8a16cd2e8734a978c100f4",
+      "bytes": 814,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original/Cargo.toml",
+      "staged_relative": "C1-local/acceptance/readme-rust/original/Cargo.toml",
+      "sha256": "56bbcb6d0832a2bb2bf1359d8626b1da8a56cea5dd1fbea900968687a364da6d",
+      "bytes": 115,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original/README.md",
+      "staged_relative": "C1-local/acceptance/readme-rust/original/README.md",
+      "sha256": "4c7a8064e6c648fc67f6947f36e264fb530b5eed6c81acf6f2e5a0e627b53880",
+      "bytes": 1003,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original/src/lib.rs",
+      "staged_relative": "C1-local/acceptance/readme-rust/original/src/lib.rs",
+      "sha256": "0252b65275ba544b33e24f370dfb262339d40fd391095adbc1a50427523d111f",
+      "bytes": 1598,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original-tests-outside-workspace-command.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/original-tests-outside-workspace-command.json",
+      "sha256": "4c24fb0c6301f0990405a50bf2ec1487dd2ff37f00cd972e5e57ad9207b2da14",
+      "bytes": 663,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original-tests-outside-workspace.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/original-tests-outside-workspace.stderr",
+      "sha256": "b17361c7540074b9ee5e92010cf41ed53ac69935531e29f26cce2db9fc3176ab",
+      "bytes": 498,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original-tests-outside-workspace.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/original-tests-outside-workspace.stdout",
+      "sha256": "64cc168d9c0d7f540c823783c888b3a05d44acecd5353f650df7a582ed0e20a6",
+      "bytes": 485,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/original-tests.stderr",
+      "sha256": "9d813c3589b1e5c99bd8a563fe768602eed8aaf4bec6841fe00b4722be05b2bc",
+      "bytes": 725,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/original-tests.stdout",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/outcome.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/outcome.json",
+      "sha256": "14ee64c7c90340d7d11405fe598c0d8fd5234c2e75440395df49f733fdcdbe80",
+      "bytes": 3609,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/patch.diff",
+      "staged_relative": "C1-local/acceptance/readme-rust/patch.diff",
+      "sha256": "428fe5d2b8e4273a229e17acbb59262da3cb9511fd09f655af825d511e1285b9",
+      "bytes": 412,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/receipt-statement.json",
+      "sha256": "6b38eaf206f99dffa3ad6053ba7c15aa99e0b7fccae73b343aef3a6806ab8b5c",
+      "bytes": 4747,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/run.axorecord.jsonl",
+      "staged_relative": "C1-local/acceptance/readme-rust/run.axorecord.jsonl",
+      "sha256": "e634e0f3b650b2204c211e03cada0431ee8d9385ea60b411f97aa91cd431f3ef",
+      "bytes": 686471,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/run.log",
+      "staged_relative": "C1-local/acceptance/readme-rust/run.log",
+      "sha256": "b2a97bafaec2514e98c1496d2bb23baeacc2ff15f53d90d9f444395e604bfbdd",
+      "bytes": 14903,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/run.receipt.json",
+      "staged_relative": "C1-local/acceptance/readme-rust/run.receipt.json",
+      "sha256": "b812411c930a1818975ba24c70d5009e0d97c961181cb3975d6e4019a3852249",
+      "bytes": 4688,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/readme-rust/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/readme-rust/runtime-version.stdout",
+      "sha256": "c10ec31b8c6e6e2693cf65fc1971b41edbc3da1ae7db6f9f3f36c4823f8dcab5",
+      "bytes": 36,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/accepted-answers.stderr",
+      "staged_relative": "C1-local/acceptance/readme-go/accepted-answers.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/accepted-answers.stdout",
+      "staged_relative": "C1-local/acceptance/readme-go/accepted-answers.stdout",
+      "sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+      "bytes": 73,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/activation-summary.json",
+      "staged_relative": "C1-local/acceptance/readme-go/activation-summary.json",
+      "sha256": "5ee0686c2364af504c7eb14feeba2db9e94bc38b9128de4f6ca36f298b0893e2",
+      "bytes": 45800,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/assessment.json",
+      "staged_relative": "C1-local/acceptance/readme-go/assessment.json",
+      "sha256": "a5c44262dc014cfc27bacf9d471271ddb462737ad8f11ecff93a2aee0ded4cc2",
+      "bytes": 11226,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/axocoatl-junit.xml",
+      "staged_relative": "C1-local/acceptance/readme-go/axocoatl-junit.xml",
+      "sha256": "128f0b439609eb82f8883e703f853a8df847090203478d0d95ddaaffd6dbf605",
+      "bytes": 2404,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/changes.txt",
+      "staged_relative": "C1-local/acceptance/readme-go/changes.txt",
+      "sha256": "822032d3bc279b96c6441d102864f6e7afbc3427d9c50493aaf2891b618b8fad",
+      "bytes": 428,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/command.txt",
+      "staged_relative": "C1-local/acceptance/readme-go/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/commands.json",
+      "staged_relative": "C1-local/acceptance/readme-go/commands.json",
+      "sha256": "818a2848a539d53e3f6db998737f0ddb1a1cb0ccc4fc44b0da3e2643ab30ae22",
+      "bytes": 3938,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/final/README.md",
+      "staged_relative": "C1-local/acceptance/readme-go/final/README.md",
+      "sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c",
+      "bytes": 961,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/final/go.mod",
+      "staged_relative": "C1-local/acceptance/readme-go/final/go.mod",
+      "sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0",
+      "bytes": 83,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/final/go.sum",
+      "staged_relative": "C1-local/acceptance/readme-go/final/go.sum",
+      "sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec",
+      "bytes": 167,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/final/pages.go",
+      "staged_relative": "C1-local/acceptance/readme-go/final/pages.go",
+      "sha256": "2d0192e1af685e7d728557b514809a5f446944997c15848c11c701cf29be587a",
+      "bytes": 621,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/final/pages_test.go",
+      "staged_relative": "C1-local/acceptance/readme-go/final/pages_test.go",
+      "sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79",
+      "bytes": 1070,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/gate-output-exclusions.json",
+      "staged_relative": "C1-local/acceptance/readme-go/gate-output-exclusions.json",
+      "sha256": "d6f6355cad175a267233298efe7aa952df4934e3b80e020f77e81089e9ebda74",
+      "bytes": 662,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/git-status-after.txt",
+      "staged_relative": "C1-local/acceptance/readme-go/git-status-after.txt",
+      "sha256": "3e4ac903f999b472ba132a5de97358e49a401b79742b0beb911ba66a06d805a0",
+      "bytes": 77,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/git-status-before.txt",
+      "staged_relative": "C1-local/acceptance/readme-go/git-status-before.txt",
+      "sha256": "3e4ac903f999b472ba132a5de97358e49a401b79742b0beb911ba66a06d805a0",
+      "bytes": 77,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check/README.md",
+      "staged_relative": "C1-local/acceptance/readme-go/host-check/README.md",
+      "sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c",
+      "bytes": 961,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check/go.mod",
+      "staged_relative": "C1-local/acceptance/readme-go/host-check/go.mod",
+      "sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0",
+      "bytes": 83,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check/go.sum",
+      "staged_relative": "C1-local/acceptance/readme-go/host-check/go.sum",
+      "sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec",
+      "bytes": 167,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check/pages.go",
+      "staged_relative": "C1-local/acceptance/readme-go/host-check/pages.go",
+      "sha256": "2d0192e1af685e7d728557b514809a5f446944997c15848c11c701cf29be587a",
+      "bytes": 621,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check/pages_test.go",
+      "staged_relative": "C1-local/acceptance/readme-go/host-check/pages_test.go",
+      "sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79",
+      "bytes": 1070,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-dependency-provenance.json",
+      "staged_relative": "C1-local/acceptance/readme-go/host-dependency-provenance.json",
+      "sha256": "fa162bc16a76a4ba0797952431797cb16993bdbcb76258f3f3e8b48efec5052d",
+      "bytes": 246,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/independent-receipt-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-go/independent-receipt-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/independent-receipt-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-go/independent-receipt-verify.stdout",
+      "sha256": "6a15443c6cd8978924e7345bb05212fb9ce98e428471a898e068bbebfc9a935b",
+      "bytes": 2047,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/independent-record-verify.stderr",
+      "staged_relative": "C1-local/acceptance/readme-go/independent-record-verify.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/independent-record-verify.stdout",
+      "staged_relative": "C1-local/acceptance/readme-go/independent-record-verify.stdout",
+      "sha256": "f0b591434711ee87bfaf5ef724b5fcaa09277f1cdf915fdf97fed2aae670af24",
+      "bytes": 278,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/negative-evidence.json",
+      "staged_relative": "C1-local/acceptance/readme-go/negative-evidence.json",
+      "sha256": "51a606418fe31a929c136cc20c8256ed4c66999b827d09c8d5104b069e92e79b",
+      "bytes": 233,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/network-events.json",
+      "staged_relative": "C1-local/acceptance/readme-go/network-events.json",
+      "sha256": "08f4078f3d1013edb05decb31c15ac442ffeac829a1d88e3d2bd09e5e6963e2a",
+      "bytes": 11293,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original/README.md",
+      "staged_relative": "C1-local/acceptance/readme-go/original/README.md",
+      "sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c",
+      "bytes": 961,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original/go.mod",
+      "staged_relative": "C1-local/acceptance/readme-go/original/go.mod",
+      "sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0",
+      "bytes": 83,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original/go.sum",
+      "staged_relative": "C1-local/acceptance/readme-go/original/go.sum",
+      "sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec",
+      "bytes": 167,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original/pages.go",
+      "staged_relative": "C1-local/acceptance/readme-go/original/pages.go",
+      "sha256": "f81e07d31890707518232eb0c8faad548cdfc38f7a283cb6f7fe8820a5a8e3af",
+      "bytes": 620,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original/pages_test.go",
+      "staged_relative": "C1-local/acceptance/readme-go/original/pages_test.go",
+      "sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79",
+      "bytes": 1070,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original-tests.stderr",
+      "staged_relative": "C1-local/acceptance/readme-go/original-tests.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/original-tests.stdout",
+      "staged_relative": "C1-local/acceptance/readme-go/original-tests.stdout",
+      "sha256": "9bd0a7f1891c786cb797df1ad47443370340ea049d9a7acb7df6c1ce37f56bc2",
+      "bytes": 38,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/outcome.json",
+      "staged_relative": "C1-local/acceptance/readme-go/outcome.json",
+      "sha256": "82c1b97dada81068d6705a1e5e1fd7815966be314723d1a8f23689c4e9890c77",
+      "bytes": 3034,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/patch.diff",
+      "staged_relative": "C1-local/acceptance/readme-go/patch.diff",
+      "sha256": "dc686d290ecbf6c368893c0bc352208347ca919f702658addaca02f84d0861d5",
+      "bytes": 351,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/receipt-statement.json",
+      "staged_relative": "C1-local/acceptance/readme-go/receipt-statement.json",
+      "sha256": "3c4b4236bc95d1c2dbeeae92d515a052a7d8d387629090497c41f1468057ca48",
+      "bytes": 4766,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/run.axorecord.jsonl",
+      "staged_relative": "C1-local/acceptance/readme-go/run.axorecord.jsonl",
+      "sha256": "0df7eb8fd90f88957ad96f1c4b709ab410bbd36751144e2477d5a70ab6cc3bfd",
+      "bytes": 479658,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/run.log",
+      "staged_relative": "C1-local/acceptance/readme-go/run.log",
+      "sha256": "34bda09fca89cdcce9e7543d2c63c47ce4fb6dd25c1410053e27dc9d8ed4f5a5",
+      "bytes": 5555,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/run.receipt.json",
+      "staged_relative": "C1-local/acceptance/readme-go/run.receipt.json",
+      "sha256": "f6685f726d1cd8d112bb0e00021da70d4835b294f0afa7c21365732352e7467f",
+      "bytes": 4732,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/runtime-version.stderr",
+      "staged_relative": "C1-local/acceptance/readme-go/runtime-version.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/runtime-version.stdout",
+      "staged_relative": "C1-local/acceptance/readme-go/runtime-version.stdout",
+      "sha256": "a3d12e3f8d79970b066e2e997bcea464edca36b9feff785b459c6b7a587c7077",
+      "bytes": 33,
+      "category": "supplemental-acceptance"
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/reset.log",
+      "staged_relative": "C1-local/reset.log",
+      "sha256": "d83d8f643bf6d8715bb610a7000925a0c486200dbb1b4015e241edeb53caaaed",
+      "bytes": 1322,
+      "category": "supplemental-reset"
+    }
+  ],
+  "excluded_payloads": [
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/local-sample/npm-cache",
+      "staged_relative": "C1-local/acceptance/local-sample/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-plain/npm-cache",
+      "staged_relative": "C1-local/acceptance/readme-node-plain/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/host-check/node_modules",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/host-check/node_modules",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-node-deps/npm-cache",
+      "staged_relative": "C1-local/acceptance/readme-node-deps/npm-cache",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/cargo-target",
+      "staged_relative": "C1-local/acceptance/readme-rust/cargo-target",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    },
+    {
+      "source": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/go-build",
+      "staged_relative": "C1-local/acceptance/readme-go/go-build",
+      "reason": "Reproducible dependency/build/cache or Git metadata; original retained. Acceptance commands, original/final source snapshots, lockfiles and dependency provenance remain included."
+    }
+  ],
+  "qualification": "All six artifacts accepted."
+}

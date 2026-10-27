@@ -1,0 +1,31 @@
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /tmp/axo-gate.Or3u2w/repos/python-poetry
+· run run-2e76eda7-933f-4494-b305-bfb00aa4c9c5 in Session ses-3a6e333e-949a-4e5e-971c-9e92455ba491
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8.0,<9' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e . 'pytest>=8.0,<9'` (detected): exited 0 (7.6 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-46bfff24-845f-4809-af2a-b8683d3d64ce started (run)
+· turn turn-46bfff24-845f-4809-af2a-b8683d3d64ce ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-python:10128f1d8789 · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e . 'pytest>=8.0,<9' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e . 'pytest>=8.0,<9'` (detected): exited 0 (7.6 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 10495 input + 466 output tokens, $0.0000
+Network: 19 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-2e76eda7-933f-4494-b305-bfb00aa4c9c5
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key dca4a52536891bc7, 1 file covered, 0 removed, judged_capture)

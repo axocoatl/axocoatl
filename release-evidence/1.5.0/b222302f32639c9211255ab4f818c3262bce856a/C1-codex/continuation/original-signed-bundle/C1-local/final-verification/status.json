@@ -1,0 +1,50 @@
+{
+  "started_at": "2026-10-26T23:54:25Z",
+  "deadline": "2026-10-27T00:54:25Z",
+  "candidate": "b222302f32639c9211255ab4f818c3262bce856a",
+  "source_head": "37f16b309ebbe0ada1ef01c481d3a356e3f74edf",
+  "user_scope": "Fully verify within one hour; no further questions. Reuse existing observations and credentials; preserve failures.",
+  "active": "Final evidence assembly and release decision check; no test process remains active.",
+  "completed_before_hour": [
+    "CI22/22",
+    "MacWebKit331/331",
+    "C1local57/57",
+    "CodexNode/Python8/8 original tests and27/27 runtime checks",
+    "OpenRouter native Node/Python functional cases on exact b222",
+    "service/recovery/Safari/PR receipt proof"
+  ],
+  "approval_review_denials": [
+    {
+      "action": "start existing Linux test VM",
+      "reason": "Earlier explicit Linux stop not clearly revoked; no action performed"
+    },
+    {
+      "action": "navigate own browser window to OpenRouter key settings",
+      "reason": "Earlier explicit OpenRouter stop; private account access denied. No key restored/enabled/used."
+    }
+  ],
+  "old_openrouter_run": "Stopped by user; PTY56759 ended exit1, C1-openrouter4/5 failure, no local key stored/config unchanged. Prior pending state is superseded.",
+  "questions_asked": 0,
+  "updated_at": "2026-10-27T00:15:21.423024+00:00",
+  "completed_during_hour": [
+    "Claude Node recovery: 18/18 runtime steps; independent original 4/4 tests; only src/paginate.js changed",
+    "Codex recovery onboarding with --no-connect: Ready yes, sample run/check/review/receipt passed; independent original 3/3 tests preserved plus two valid added tests",
+    "13 prior OpenRouter/mixed/service functional observations tied to exact b222 binary; no new OpenRouter inference",
+    "356 CI attachment hashes and nine preflight hashes verified; stopped Linux VM untouched"
+  ],
+  "release_ready": false,
+  "published": false,
+  "formal_required_paths_passing": 8,
+  "formal_required_paths_total": 12,
+  "required_paths_unfinished": [
+    "C1-claude-code",
+    "C1-codex",
+    "C1-openrouter",
+    "D1"
+  ],
+  "all_original_failures_preserved": true,
+  "candidate_source_changed": false,
+  "new_authentication_attempted": false,
+  "new_openrouter_inference": false,
+  "linux_test_restarted": false
+}

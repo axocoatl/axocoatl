@@ -1,0 +1,16 @@
+{
+  "schema": "axocoatl.recovery.retained-bundle-map/1",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "default_location": "unchanged relative path in this bundle",
+  "overrides": {
+    "manifest.json": "C1-claude-code/continuation/original-attempt/manifest.json",
+    "manifest.dsse.json": "C1-claude-code/continuation/original-attempt/manifest.dsse.json",
+    "C1-claude-code.json": "C1-claude-code/continuation/original-attempt/C1-claude-code.json"
+  },
+  "manifest_sha256": "aaa872c3d26b7ecb02916e98cf01de65dd6f15a75125827458aa818bbe4638e7",
+  "dsse_sha256": "8ec1d618a03ce2377b8d079b663dcda9849902190ceba683c190b4dd718481e1",
+  "original_file_count": 1769,
+  "standalone_composer_reference_prefix": "C1-claude-code/continuation/original-signed-bundle/",
+  "instruction": "Remove the standalone prefix, then apply overrides; all other original files remain at the same relative path. Verify with verify-retained-bundle.mjs, not verifyBundle on original-attempt alone."
+}

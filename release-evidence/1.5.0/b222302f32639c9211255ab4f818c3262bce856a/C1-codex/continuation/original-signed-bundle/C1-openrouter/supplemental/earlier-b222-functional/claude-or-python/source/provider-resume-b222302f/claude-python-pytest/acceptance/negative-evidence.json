@@ -1,0 +1,295 @@
+{
+  "provider_retries": [],
+  "tool_errors": [],
+  "refused_connections": [
+    {
+      "event": {
+        "conn": "g1:5",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/policy_limits",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 22,
+      "ts_ms": 1793037145144,
+      "v": 1
+    },
+    {
+      "event": {
+        "conn": "g1:6",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/settings",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 24,
+      "ts_ms": 1793037145183,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:8",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 33,
+      "ts_ms": 1793037149625,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:9",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 34,
+      "ts_ms": 1793037149628,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:10",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 35,
+      "ts_ms": 1793037150136,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:11",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 36,
+      "ts_ms": 1793037151145,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:12",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 37,
+      "ts_ms": 1793037153154,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:cea93974-65fb-4303-a81e-35dc0a47c03f",
+          "agent": "team-definition-43fae18ecee3baf40687ed8416b79bf6c8dbf5192462ade696f0c1834ddac94d",
+          "kind": "agent",
+          "node_id": "team-node-2246b5c476301feb4a8c027b",
+          "process": "external:activation:cea93974-65fb-4303-a81e-35dc0a47c03f"
+        },
+        "conn": "g1:13",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/bash",
+            "/usr/bin/bash",
+            "/opt/axocoatl/claude-code/claude",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 235,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "50d9a7f78ac76eec"
+      },
+      "seq": 38,
+      "ts_ms": 1793037157163,
+      "v": 1
+    }
+  ],
+  "baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 486
+  },
+  "network_explanation": "All denied events retained; no unobserved cause or motive inferred."
+}

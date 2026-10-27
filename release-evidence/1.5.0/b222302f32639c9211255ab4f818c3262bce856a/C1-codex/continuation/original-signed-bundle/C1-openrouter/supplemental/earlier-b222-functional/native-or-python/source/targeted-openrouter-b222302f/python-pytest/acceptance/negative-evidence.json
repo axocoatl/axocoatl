@@ -1,0 +1,296 @@
+{
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 0,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    }
+  ],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 8,
+      "payload": {
+        "call_id": "call-caf4bb0b-9ea9-4bae-9c15-d5b2792bd751",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 28,
+      "payload": {
+        "call_id": "call-2bd923e5-34ea-4245-ba6f-6f568fc919d5",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 32,
+      "payload": {
+        "call_id": "call-14dacd96-676a-405e-9d83-4547bda49fa3",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "refused_connections": [
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:5",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 20,
+      "ts_ms": 1793023966735,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:6",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 21,
+      "ts_ms": 1793023966736,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:7",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 22,
+      "ts_ms": 1793023967252,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:8",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 23,
+      "ts_ms": 1793023968260,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:9",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 24,
+      "ts_ms": 1793023970271,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:709a32a2-a745-4768-ad9a-aae037e44818",
+          "agent": "team-definition-87b7ae393a4f56ef3e82dd87b943eaccd4376e9454f031a74e1403b354e164c9",
+          "invocation_id": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794",
+          "kind": "agent",
+          "node_id": "team-node-bb33b77977ef01902c5fb014",
+          "process": "tool-d083620eac32c544d40b7416b1118ee65eaab44cae3b958a644ff4a164033794:0"
+        },
+        "conn": "g1:10",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 200,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "2f7a37649b8d9849"
+      },
+      "seq": 25,
+      "ts_ms": 1793023974277,
+      "v": 1
+    }
+  ],
+  "network_explanation": "Six attempts by one writer-bound Python3.13 process/tool invocation to pypi.org:443 were denied with HTTP403 not_allowed at policy revision5, after setup revoked both registry exceptions (network seq17-18). This establishes enforced post-setup egress policy, not a registry outage. The writer subsequently completed, required host checks passed, and the review approved. The exported record hashes the tool arguments/results, so the exact attempted command and motive cannot be independently established.",
+  "baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 466
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-10-26T20:50:28.455750+00:00",
+  "operator": "Codex assistant",
+  "formal_gate_pid": 75809,
+  "openrouter_onboard_pid": 94868,
+  "stopped_owned_daemon_pid": 84554,
+  "signal": "SIGINT",
+  "reason": "Gate-owned daemon stale after Codex configuration write; formal OpenRouter held at authorization before further writes/inference. Supplemental exact-candidate Codex fixtures require an owned current daemon.",
+  "prelaunch_attempt": "First fixture-only script refused stale existing listener before creating evidence or running inference. Prior sandbox probe incorrectly saw none; unrestricted probe showed stale.",
+  "hold": "Do not advance OpenRouter config-write or inference until supplemental cleanup finishes.",
+  "linux": "untouched and stopped"
+}

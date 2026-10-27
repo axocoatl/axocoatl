@@ -1,0 +1,17 @@
+ M src/paginate.js
+?? axocoatl-junit.xml
+?? run.axorecord.jsonl
+?? run.receipt.json
+diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..df45ba8 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,7 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page < count; page += 1) {
+     const start = page * size;
+-    const length = page < count - 1 ? size : items.length % size;
++    const length = page < count - 1 ? size : items.length % size || size;
+     pages.push(items.slice(start, start + length));
+   }
+   return pages;

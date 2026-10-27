@@ -1,0 +1,39 @@
+{
+  "operator": "Codex assistant",
+  "interactive_answers": "Each observed prompt answered individually by Codex, not human",
+  "source_head": "b222302f32639c9211255ab4f818c3262bce856a",
+  "authorization": "User asked to finish remaining Mac clean-install checks; existing shared-runtime reset authorization retained",
+  "D1": "stopped; do not resume",
+  "openrouter": {
+    "cumulative_mac_limit": 1,
+    "prior_key_usage": 0.051152,
+    "second_key_usage_rounded": 0.0471,
+    "second_key_disabled": true,
+    "fresh_key_maximum_limit": 0.9,
+    "fresh_authorization": "Awaiting user at dedicated window; requested nonresetting 0.90 USD cap. No fresh-key inference yet."
+  },
+  "human_operator": false,
+  "method": "tool-owned PTY and CUA",
+  "claude_authentication": {
+    "organization": "Lord Danger",
+    "scope": "user:inference",
+    "operator_observed": true,
+    "browser_success_screenshot": "claude-connected.png"
+  },
+  "chatgpt_authentication": {
+    "original_flow": {
+      "status": "waiting on OpenAI phone verification",
+      "account": "erick@codeoperators.com",
+      "human_input_requested": true,
+      "screenshot": "chatgpt-phone-verification.png"
+    },
+    "original_outcome": "Failed: connector expired during a 3384.5556-second browser-control tool stall; original C1-codex evidence remains failed.",
+    "recovery": "User completed separate fresh connect codex; connector exited 0, stored codex-chatgpt, removed temporary login container.",
+    "recovery_is_fresh_onboarding_gate_pass": false
+  },
+  "updated_at": "2026-10-26T20:46:02.844884+00:00",
+  "browser_rules": {
+    "authentication": "User operates sign-in, account choice, verification and authorization screens.",
+    "window": "Dedicated Chrome window 458686187 only. Other tasks windows untouched."
+  }
+}

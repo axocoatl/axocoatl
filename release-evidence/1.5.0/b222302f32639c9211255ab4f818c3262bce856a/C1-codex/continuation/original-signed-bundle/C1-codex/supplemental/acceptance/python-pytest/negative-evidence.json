@@ -1,0 +1,286 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 49,
+      "payload": {
+        "call_id": "call_i18egrgi",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "reviewer",
+      "sequence": 53,
+      "payload": {
+        "call_id": "call_ib15tq0u",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:9",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 36,
+      "ts_ms": 1793047963949,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:10",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 37,
+      "ts_ms": 1793047963951,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:11",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 38,
+      "ts_ms": 1793047964457,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:12",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 39,
+      "ts_ms": 1793047965466,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:13",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 40,
+      "ts_ms": 1793047967472,
+      "v": 1
+    },
+    {
+      "event": {
+        "addrs": [],
+        "binding": {
+          "activation_id": "activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38",
+          "agent": "team-definition-a4d74782cbdbb3655b918e18a8f19fa25a403ffcb124ccb08b31aa46781ae966",
+          "kind": "agent",
+          "node_id": "team-node-9456f2e32aadd00a107fe0e7",
+          "process": "external:activation:eefb31e4-3bb3-44f3-a73c-6d9a81d51f38"
+        },
+        "conn": "g1:14",
+        "conn_kind": "connect",
+        "decision": "deny",
+        "host": "pypi.org",
+        "kind": "open",
+        "peer": {
+          "ancestors": [
+            "/usr/local/bin/python3.13",
+            "/usr/bin/dash",
+            "/opt/axocoatl/codex/bin/codex",
+            "/usr/bin/dash",
+            "/usr/bin/dash",
+            "/axocoatl-exec-supervisor"
+          ],
+          "exe": "/usr/local/bin/python3.13",
+          "exe_sha256": "cb4548d280f38c2b1df4cba45f12c90a034729e08fce5bf1a223c58add0e21e3",
+          "gid": 1000,
+          "pid": 278,
+          "uid": 1000
+        },
+        "policy_revision": 5,
+        "port": 443,
+        "reason": "not_allowed",
+        "scope": "session",
+        "status": 403,
+        "token": "b7a506fa7f1f609c"
+      },
+      "seq": 41,
+      "ts_ms": 1793047971479,
+      "v": 1
+    }
+  ],
+  "recorded_baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 539
+  },
+  "failed_activations": []
+}

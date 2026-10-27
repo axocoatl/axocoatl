@@ -1,0 +1,736 @@
+{
+  "schema": "axocoatl.recovery.linux-evidence-inventory/1",
+  "created_at": "2026-10-27T00:03:26.683550+00:00",
+  "scope": "Read-only local source and preserved evidence audit. No Linux VM access, tests, auth, inference, reset, account changes or source edits.",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "review_checkout_head": "37f16b309ebbe0ada1ef01c481d3a356e3f74edf",
+  "d1_pass": false,
+  "release_ready": false,
+  "validation": {
+    "ci_manifest_entries_rehashed": 356,
+    "ci_manifest_bytes": 5985351,
+    "ci_manifest_hash_failures": [],
+    "preflight_preserved_hashes_rechecked": 9,
+    "preflight_hash_failures": []
+  },
+  "verified_since_original_d1_failure": [
+    {
+      "behavior": "Apt metadata is refreshed before Podman installation, with separate consent; decline/failure stops installation; --yes without --allow-sudo does neither.",
+      "kind": "Source plus Linux fake-command onboarding seam; not an actual cold apt download",
+      "first_fix_commit": "b3266e0857da1cf93d4a63d8b469c14f1de5cfcd",
+      "evidence_refs": [
+        "apt_focused_linux_log",
+        "apt_focused_linux_result",
+        "preflight_log"
+      ],
+      "focused_tests_passed": 6,
+      "repeated_in_exact_b222_preflight": true
+    },
+    {
+      "behavior": "Missing-Podman onboarding prints sudo apt-get update && sudo apt-get install -y podman and refuses privileged changes without authorization.",
+      "kind": "Actual b222 CLI on both Linux CI architectures, scripted model endpoint",
+      "evidence_refs": [
+        "a_arm_missing_podman_log",
+        "a_x86_missing_podman_log"
+      ]
+    },
+    {
+      "behavior": "Candidate installer resolves archive, verifies checksum, installs the archive binary, reports version 1.5.0, and new shells find it.",
+      "kind": "Actual installer and candidate binaries on CI; public URL command routed to staged local candidate files, not a published release download",
+      "evidence_refs": [
+        "a_arm",
+        "a_x86",
+        "a_x86_refusal",
+        "a_arm_install_log",
+        "a_x86_install_log",
+        "a_arm_install_curl_urls_log",
+        "a_x86_install_curl_urls_log"
+      ]
+    },
+    {
+      "behavior": "Repository detection, language image/setup, fix pipeline, receipt/record verification and markup checks for 12 fixtures on each Ubuntu 24.04 architecture.",
+      "kind": "Real CLI/daemon/Podman with scripted model server; deterministic execution plumbing, not live-model coding quality",
+      "evidence_refs": [
+        "a_arm",
+        "a_x86"
+      ]
+    },
+    {
+      "behavior": "Absent check program and unsupported reviewer fail before model work; missing subordinate IDs produce the usermod fix without unauthorized sudo.",
+      "kind": "Actual CI CLI refusal seams",
+      "evidence_refs": [
+        "a_arm",
+        "a_x86"
+      ]
+    },
+    {
+      "behavior": "Ubuntu 22.04 Podman 3.4.4 refusal and not-ready doctor output, with no sudo/package action.",
+      "kind": "Actual CI refusal path; not a supported installation claim",
+      "evidence_refs": [
+        "a_x86_refusal"
+      ]
+    },
+    {
+      "behavior": "Linux native tests, Chromium/WebKit browser jobs, cross-build, minimum Rust, supervisor runtime on both architectures, Podman suite groups and live Ollama CI job completed successfully.",
+      "kind": "Canonical GitHub CI job metadata; per-case counts not inferred from job names",
+      "evidence_refs": [
+        "ci_run",
+        "ci_jobs"
+      ]
+    }
+  ],
+  "local_preflight": {
+    "pass": true,
+    "invocations": 1,
+    "command": "./scripts/preflight.sh 05e930f91a3a394f0839c4520298ce07031e5dae",
+    "exit_status": 0,
+    "native": {
+      "tests": {
+        "passed": 4446,
+        "failed": 0,
+        "ignored": 174
+      },
+      "docs": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    "browser": {
+      "files": 43,
+      "tests": 331,
+      "passed": 330,
+      "failed": 0,
+      "skipped": 1
+    },
+    "browser_files_rerun": 0,
+    "pinned_tools_observed": {
+      "rustc": "1.95.0",
+      "cargo": "1.95.0",
+      "node": "22.23.2",
+      "python": "3.13.7",
+      "go": "1.26.2 linux/arm64"
+    },
+    "binary_provenance": {
+      "native_release": {
+        "path": "/home/erick.guest/r15-preflight/target/release/axocoatl",
+        "resolved_path": "/home/erick.guest/r15s3a/target/release/axocoatl",
+        "bytes": 84375480,
+        "sha256": "9e03af65d461cf23f8577bc3cee14667efc44db4726a8a3556dd3a5c6419c0b8",
+        "version": "axocoatl 1.5.0"
+      },
+      "linux_arm_release": {
+        "path": "/home/erick.guest/r15-preflight/target/aarch64-unknown-linux-gnu/release/axocoatl",
+        "resolved_path": "/home/erick.guest/r15s3a/target/aarch64-unknown-linux-gnu/release/axocoatl",
+        "bytes": 84441016,
+        "sha256": "c4fbbfb48b1e4c6178692beb53fe2df452f56739a39564234eac447e0243347c",
+        "version": "axocoatl 1.5.0"
+      }
+    },
+    "limits": [
+      "The one browser skip is the existing Mac-only installation journey on Linux.",
+      "The174 explicitly ignored native cases retain their declared prerequisites; this preflight does not claim those separate live/Podman/stress cases were all executed.",
+      "This deterministic result does not complete C1 live-provider sign-in or the user-canceled D1 fresh-install/account gate.",
+      "No provider auth/inference, new account/VM, reset, commit/push, official archive packaging or publication occurred."
+    ],
+    "evidence_refs": [
+      "preflight_assessment",
+      "preflight_log",
+      "preflight_invocation",
+      "preflight_binary_provenance"
+    ]
+  },
+  "canonical_ci": {
+    "run_id": 40333410399,
+    "attempt": 1,
+    "head_sha": "b222302f32639c9211255ab4f818c3262bce856a",
+    "conclusion": "success",
+    "jobs_total": 22,
+    "jobs_passed": 22,
+    "jobs": [
+      {
+        "name": "Minimum Rust 1.88",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464117"
+      },
+      {
+        "name": "Product browser regressions (x86_64, Chromium)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464440"
+      },
+      {
+        "name": "Cross-build (aarch64-linux)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464441"
+      },
+      {
+        "name": "New user (Linux, aarch64)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464469"
+      },
+      {
+        "name": "Marketing site",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464587"
+      },
+      {
+        "name": "New user (Linux, ubuntu-22.04 refusal)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464620"
+      },
+      {
+        "name": "Podman and live suites (isolation)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464629"
+      },
+      {
+        "name": "Docs site",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464630"
+      },
+      {
+        "name": "Product browser regressions (macOS arm64, WebKit)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464650"
+      },
+      {
+        "name": "Workflow contracts",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464669"
+      },
+      {
+        "name": "Live Ollama suites (Ollama 0.40.6)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464683"
+      },
+      {
+        "name": "New user (Linux, x86_64)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464685"
+      },
+      {
+        "name": "Product browser regressions (x86_64, WebKit)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464699"
+      },
+      {
+        "name": "New user (macOS plumbing, Intel)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464700"
+      },
+      {
+        "name": "Execution supervisor runtime (aarch64)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464751"
+      },
+      {
+        "name": "Execution supervisor runtime (x86_64)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464769"
+      },
+      {
+        "name": "New user (macOS plumbing, arm64)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464819"
+      },
+      {
+        "name": "Podman and live suites (other)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464843"
+      },
+      {
+        "name": "Test (Linux)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464852"
+      },
+      {
+        "name": "Product browser regressions (aarch64, Chromium)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464880"
+      },
+      {
+        "name": "Podman and live suites (daemon)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608464991"
+      },
+      {
+        "name": "Podman and live suites (cli)",
+        "conclusion": "success",
+        "url": "https://github.com/axocoatl/axocoatl/actions/runs/40333410399/job/121608465004"
+      }
+    ],
+    "linux_gate_paths": [
+      {
+        "path": "A-arm",
+        "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+        "pass": true,
+        "steps": 132,
+        "passed": 132,
+        "required": 131,
+        "host": {
+          "os": "Linux",
+          "release": "ubuntu 24.04",
+          "kernel": "6.17.0-1022-azure",
+          "arch": "aarch64",
+          "runner": "github-hosted ubuntu24-arm64 20261023.149.3",
+          "memory_bytes": 16722010112,
+          "cpus": 4,
+          "user": "runner"
+        },
+        "tools": {
+          "podman": "4.9.3",
+          "git": "2.55.0",
+          "node": "v22.23.3",
+          "axocoatl": "axocoatl 1.5.0",
+          "ollama": "gate stub reporting 0.40.6"
+        },
+        "fixtures": [
+          "node-plain",
+          "node-deps",
+          "python-pytest",
+          "rust",
+          "go",
+          "node-pnpm",
+          "node-yarn",
+          "node-yarn-berry",
+          "python-poetry",
+          "python-uv",
+          "python-pdm",
+          "python-hatch"
+        ],
+        "installed_binary_sha256": "f56e94b207e405faf1d1a2a5f81a45efca50c9d984d00dddb5dbd919e5f40a42",
+        "evidence_ref": "a_arm"
+      },
+      {
+        "path": "A-x86",
+        "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+        "pass": true,
+        "steps": 132,
+        "passed": 132,
+        "required": 131,
+        "host": {
+          "os": "Linux",
+          "release": "ubuntu 24.04",
+          "kernel": "6.17.0-1022-azure",
+          "arch": "x86_64",
+          "runner": "github-hosted ubuntu24 20261023.334.3",
+          "memory_bytes": 16766414848,
+          "cpus": 4,
+          "user": "runner"
+        },
+        "tools": {
+          "podman": "4.9.3",
+          "git": "2.55.0",
+          "node": "v22.23.3",
+          "axocoatl": "axocoatl 1.5.0",
+          "ollama": "gate stub reporting 0.40.6"
+        },
+        "fixtures": [
+          "node-plain",
+          "node-deps",
+          "python-pytest",
+          "rust",
+          "go",
+          "node-pnpm",
+          "node-yarn",
+          "node-yarn-berry",
+          "python-poetry",
+          "python-uv",
+          "python-pdm",
+          "python-hatch"
+        ],
+        "installed_binary_sha256": "da3d17bf208191dcc0c1da0886b96433221d4fd3f621485f604c44ae671e98aa",
+        "evidence_ref": "a_x86"
+      },
+      {
+        "path": "A-x86-refusal",
+        "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+        "pass": true,
+        "steps": 13,
+        "passed": 13,
+        "required": 13,
+        "host": {
+          "os": "Linux",
+          "release": "ubuntu 22.04",
+          "kernel": "6.8.0-1064-azure",
+          "arch": "x86_64",
+          "runner": "github-hosted ubuntu22 20261023.322.3",
+          "memory_bytes": 16765411328,
+          "cpus": 4,
+          "user": "runner"
+        },
+        "tools": {
+          "podman": "3.4.4",
+          "git": "2.55.0",
+          "node": "v22.23.3",
+          "axocoatl": "axocoatl 1.5.0",
+          "ollama": "gate stub reporting 0.40.6"
+        },
+        "fixtures": [],
+        "installed_binary_sha256": "396697b6cd99926e8688b86208ac13c92821d6a9ddcb649b168e009ecf019c60",
+        "evidence_ref": "a_x86_refusal"
+      }
+    ],
+    "artifact_metadata": [
+      {
+        "id": 12657915765,
+        "name": "newuser-B-intel",
+        "size_in_bytes": 28542,
+        "url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12657915765",
+        "archive_download_url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12657915765/zip",
+        "expired": false,
+        "created_at": "2026-10-26T14:13:07Z",
+        "expires_at": "2026-11-25T14:13:06Z",
+        "updated_at": "2026-10-26T14:13:07Z",
+        "digest": "sha256:12547872b5ac204a15273e738746c364767664dcee90de09cdb4a02d9751b678",
+        "workflow_run": {
+          "id": 40333410399,
+          "repository_id": 1258994885,
+          "head_repository_id": 1258994885,
+          "head_branch": "dev",
+          "head_sha": "b222302f32639c9211255ab4f818c3262bce856a"
+        }
+      },
+      {
+        "id": 12656999859,
+        "name": "newuser-B-arm",
+        "size_in_bytes": 32636,
+        "url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656999859",
+        "archive_download_url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656999859/zip",
+        "expired": false,
+        "created_at": "2026-10-26T14:15:51Z",
+        "expires_at": "2026-11-25T14:15:50Z",
+        "updated_at": "2026-10-26T14:15:51Z",
+        "digest": "sha256:57ec52b25b5838dae9258737cb9050eeeadcc8384bd745ad49ba11885d883dde",
+        "workflow_run": {
+          "id": 40333410399,
+          "repository_id": 1258994885,
+          "head_repository_id": 1258994885,
+          "head_branch": "dev",
+          "head_sha": "b222302f32639c9211255ab4f818c3262bce856a"
+        }
+      },
+      {
+        "id": 12656957171,
+        "name": "newuser-A-x86-refusal",
+        "size_in_bytes": 11265,
+        "url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656957171",
+        "archive_download_url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656957171/zip",
+        "expired": false,
+        "created_at": "2026-10-26T13:59:19Z",
+        "expires_at": "2026-11-25T13:59:18Z",
+        "updated_at": "2026-10-26T13:59:19Z",
+        "digest": "sha256:0fe0242b1e5a413191012caa79227227244a11be03e9f94b8ede91fae878e7ec",
+        "workflow_run": {
+          "id": 40333410399,
+          "repository_id": 1258994885,
+          "head_repository_id": 1258994885,
+          "head_branch": "dev",
+          "head_sha": "b222302f32639c9211255ab4f818c3262bce856a"
+        }
+      },
+      {
+        "id": 12656803363,
+        "name": "newuser-A-arm",
+        "size_in_bytes": 608309,
+        "url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656803363",
+        "archive_download_url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656803363/zip",
+        "expired": false,
+        "created_at": "2026-10-26T14:06:10Z",
+        "expires_at": "2026-11-25T14:06:10Z",
+        "updated_at": "2026-10-26T14:06:10Z",
+        "digest": "sha256:b60fd531dee25fc865b69f444bc0539960665396a5a979edf64a4984ee9a3f55",
+        "workflow_run": {
+          "id": 40333410399,
+          "repository_id": 1258994885,
+          "head_repository_id": 1258994885,
+          "head_branch": "dev",
+          "head_sha": "b222302f32639c9211255ab4f818c3262bce856a"
+        }
+      },
+      {
+        "id": 12656383555,
+        "name": "newuser-A-x86",
+        "size_in_bytes": 608295,
+        "url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656383555",
+        "archive_download_url": "https://api.github.com/repos/axocoatl/axocoatl/actions/artifacts/12656383555/zip",
+        "expired": false,
+        "created_at": "2026-10-26T14:03:51Z",
+        "expires_at": "2026-11-25T14:03:50Z",
+        "updated_at": "2026-10-26T14:03:51Z",
+        "digest": "sha256:521e366df9da40f411245d037429adfb691169d00e6216027bcf3a0a25fd595e",
+        "workflow_run": {
+          "id": 40333410399,
+          "repository_id": 1258994885,
+          "head_repository_id": 1258994885,
+          "head_branch": "dev",
+          "head_sha": "b222302f32639c9211255ab4f818c3262bce856a"
+        }
+      }
+    ],
+    "unsigned_ci_bundle": true,
+    "ci_bundle_does_not_complete_d1": true
+  },
+  "package_evidence_limits": {
+    "local_preflight_produced_official_archive": false,
+    "local_candidate_directory": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/candidate-b222302f",
+    "host_copied_linux_archive_present_in_candidate_directory": false,
+    "host_linux_provenance_json_present": false,
+    "ci_installer_exercised_linux_archives": true,
+    "ci_installer_verified_checksums": true,
+    "ci_installer_binary_hashes_in_paths": true,
+    "ci_archives_published": false,
+    "note": "Local preflight preserves guest release-binary hashes; CI preserves staged archive installation proof. No Linux package file or linux-provenance.json is present in candidate-b222302f on this host; do not imply a downloadable final Linux release was produced."
+  },
+  "original_d1_attempt": {
+    "commit": "7afbb3ffabb6f66d1e294e4b3cd81e099e7ef5cd",
+    "date": "2026-10-26T09:37:00.702139+00:00",
+    "result": "Incomplete. Actual published installation and browser callback passed. Podman apt installation failed with no candidate: enabled universe indexes absent. Onboarding interrupted before provider sign-in/inference. The gate continued into dependent failures; the verified gate and service-onboarding child were then terminated, exit130. Cleanup restored subordinate IDs. All original transcript, gate steps, onboarding logs and test outcomes retained.",
+    "operator": "Codex via its own SSH PTY and Chrome, no user attestations",
+    "openrouter_inference_calls": 0,
+    "openrouter_spent_usd": 0,
+    "archive_sha256": "a184f28587a60b451b18d6dbda8559556302953799e5f0e1cf6d6f17392a2002",
+    "original_vm_and_account_preserved": true,
+    "vm": "axo-d1-recovery-20261026-043450",
+    "account": "d1gate",
+    "evidence_refs": [
+      "d1_original_assessment",
+      "d1_original_archive_hash"
+    ],
+    "reuse_limit": "Historical 7af observations are not exact-b222 D1 evidence."
+  },
+  "remaining_unobserved_d1_behavior": [
+    {
+      "id": "fresh-install-apt",
+      "behavior": "Exact-candidate clean-account onboarding refreshes configured Ubuntu package indexes and installs Podman successfully on the original cold-index condition.",
+      "existing_coverage": "Command order/consent/failure seams pass; actual cold-host apt success remains unobserved."
+    },
+    {
+      "id": "subid-collision",
+      "behavior": "Live onboarding allocates the gate account a nonoverlapping subordinate UID/GID range in the prescribed real collision case.",
+      "existing_coverage": "Source/tests and CI missing-range refusal are verified; actual fresh-account sudo allocation in D1 remains unobserved."
+    },
+    {
+      "id": "openrouter-oauth",
+      "behavior": "Fresh OpenRouter browser OAuth completes inside Linux onboarding and stores the credential safely.",
+      "existing_coverage": "Historical loopback proof passed before apt failure; no D1 OAuth or inference occurred."
+    },
+    {
+      "id": "live-fixtures",
+      "behavior": "Every required D1 fixture completes through real configured OpenRouter writer/reviewer with receipts/records.",
+      "existing_coverage": "CI scripted-provider fixture plumbing passes; no live D1 model task observed."
+    },
+    {
+      "id": "systemd-service",
+      "behavior": "Onboarding installs the real systemd user service; changed config/model restarts it; fixture runs through it; status/stop/uninstall succeed.",
+      "existing_coverage": "Onboarding fake-command seam and other runtime tests pass; the required live D1 service sequence remains unobserved."
+    },
+    {
+      "id": "formal-d1-result",
+      "behavior": "One exact-candidate D1.json includes the full live path and provenance.",
+      "existing_coverage": "No passing exact-b222 D1 exists; prior failed account has Axocoatl state and cannot pass the unmodified freshness guard."
+    }
+  ],
+  "blocker": {
+    "kind": "Authorization restriction and automatic approval denial",
+    "action_denied": "Start only existing axo-d1-recovery-20261026-043450 VM for inspection",
+    "reason": "Automatic approval review found the earlier user instruction to keep Linux testing stopped had not clearly been revoked.",
+    "executed": false,
+    "retry_or_workaround": false,
+    "additional_scope_absent": [
+      "new account",
+      "sudo permission grant",
+      "VM/account reset",
+      "fresh provider sign-in"
+    ],
+    "current_live_state_inspected": false
+  },
+  "smallest_honest_next_action": "No more Linux execution under the current stopped-testing restriction. Retain D1 as incomplete. Existing deterministic Linux results resolve the installer-code and stale-hint regressions; they cannot replace the required live fresh-install/provider/service observations. A future explicitly authorized formal D1 run would need clean state plus capped fresh OAuth, not another broad preflight.",
+  "evidence": {
+    "preflight_assessment": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/result.json",
+      "bytes": 4880,
+      "sha256": "db5a7268799fff37d89c7eb6df23daceca90a7ff4ce0db4557df36cbe0a4de16"
+    },
+    "preflight_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/canonical.log",
+      "bytes": 610140,
+      "sha256": "10ee09c447df153ff5a274145285914c9d15c7866fd4695694220b3558c58c42"
+    },
+    "preflight_invocation": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/invocation.json",
+      "bytes": 1852,
+      "sha256": "2dbd82eef55cf088f577e44a592bfe458eeae219f1f579f0c897bd71db6fcd9d"
+    },
+    "preflight_binary_provenance": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/postflight-metadata.json",
+      "bytes": 1603,
+      "sha256": "6cf55a8b2060965b442b44845552a423c57e51029efa10925547017e765652cb"
+    },
+    "preflight_suite_inventory": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/native-suites.json",
+      "bytes": 62826,
+      "sha256": "95fa50a4da9fdaa1879c5fc28d3cf3d9837e5f78fafd731040f9c3ab4d80b1d6"
+    },
+    "preflight_ignored_inventory": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-preflight-b222302f/native-ignored.txt",
+      "bytes": 35703,
+      "sha256": "a09c1d366d528046031c78215086767a1748270eaaec81ad4a4d04cef751fd8c"
+    },
+    "ci_run": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/run-final.json",
+      "bytes": 600,
+      "sha256": "1d35f2b33ebd0dd1b1ab6e442126bd337129545de2851ef0d09af0000910653d"
+    },
+    "ci_jobs": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/jobs-final.json",
+      "bytes": 90368,
+      "sha256": "2c4059dbdca2f4b448b8d9734d07530d14c773d0ca848ab191827487584d981b"
+    },
+    "ci_artifacts": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/artifacts-final.json",
+      "bytes": 3956,
+      "sha256": "8ad13d9097d00d26a417d164d85854c874a3e1f67ab75b26200a5dd69e336807"
+    },
+    "ci_validation": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/ci-only-validation.json",
+      "bytes": 2632,
+      "sha256": "679ad59aab885df1216e49d05469c911b8fed4e9773ee795384c6cd55cd17ec6"
+    },
+    "ci_manifest": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/manifest.json",
+      "bytes": 61386,
+      "sha256": "1b1404a3cbeb396d612d2bfd585dfc0737aa54558568d99b51265feb35fa852f"
+    },
+    "d1_original_assessment": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-d1-7afbb3ff-failed-install/assessment.json",
+      "bytes": 842,
+      "sha256": "7702b2df2a68c68d788e53cd2e69d349fdb6170d000a9adb91ac7786a4d92a81"
+    },
+    "d1_original_archive_hash": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-d1-7afbb3ff-failed-install/remote-archive-sha256.txt",
+      "bytes": 97,
+      "sha256": "0868551262e09f726773e7119e5dbf92ca23ae6a2d15fc16b57bc8007ac090a9"
+    },
+    "apt_focused_linux_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-final-b3266e08/full.log",
+      "bytes": 4554,
+      "sha256": "89ecd63cd212fe6a8e0920e1ab0e5ad34e84b2366a2caa599ebe691c8145d02e"
+    },
+    "apt_focused_linux_result": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/linux-final-b3266e08/result.json",
+      "bytes": 267,
+      "sha256": "9a205ba15f93a730b1f642f1f07e905813f52c383e1e4ca41954b4da9672290b"
+    },
+    "a_arm": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-arm.json",
+      "bytes": 30524,
+      "sha256": "e0f759a5f5bf09f862236d3264302a1544cefefff445af38f13ece329ce08d0e"
+    },
+    "a_arm_install_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-arm/logs/install.log",
+      "bytes": 508,
+      "sha256": "dfd374001a15096289e86c8f19bd8c70b9063692c208d9c0313ab40c7d362ee2"
+    },
+    "a_arm_install_curl_urls_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-arm/logs/install-curl-urls.log",
+      "bytes": 311,
+      "sha256": "c18e287c8b18be8f5e97d22789ea706af9489b0f3fe384a5c935d863beca06bd"
+    },
+    "a_arm_missing_podman_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-arm/logs/onboard-without-Podman--exit-1.log",
+      "bytes": 2332,
+      "sha256": "1e2756feffd7442dbd651a504538ef94276ae1cd9328c3c358e9f2abf96fb2a2"
+    },
+    "a_x86": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86.json",
+      "bytes": 30509,
+      "sha256": "dbfe28b43db2979d665fd229f2bf1daaa5ac074505af5bfce661fcbd832d891d"
+    },
+    "a_x86_install_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86/logs/install.log",
+      "bytes": 507,
+      "sha256": "6ee0951b1d35818ca571102af95704bb917438d8fd09eccc53b34aa774d6ffeb"
+    },
+    "a_x86_install_curl_urls_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86/logs/install-curl-urls.log",
+      "bytes": 309,
+      "sha256": "34461510dfd9b8ff16ccb58f1532d43f23b10aa770f2834e078b51d283fc43cc"
+    },
+    "a_x86_missing_podman_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86/logs/onboard-without-Podman--exit-1.log",
+      "bytes": 2330,
+      "sha256": "f4e159fcf264938c67758d290f1224a77abff1e6bf081b541394bd972ebf037a"
+    },
+    "a_x86_refusal": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86-refusal.json",
+      "bytes": 3431,
+      "sha256": "e4f7f6cfe8c786d4ef1be4396a49b58df7c3823721afbdd189737f41cd2e9207"
+    },
+    "a_x86_refusal_install_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86-refusal/logs/install.log",
+      "bytes": 507,
+      "sha256": "6ee0951b1d35818ca571102af95704bb917438d8fd09eccc53b34aa774d6ffeb"
+    },
+    "a_x86_refusal_install_curl_urls_log": {
+      "path": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/ci-40333410399/collected-ci/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/A-x86-refusal/logs/install-curl-urls.log",
+      "bytes": 309,
+      "sha256": "dfa6b91e8c7d601c685f160206f8d7e8d2cdc3bdbd4377bdd4a2e1501271fe9a"
+    }
+  },
+  "candidate_source_refs": [
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": "scripts/release-gate/newuser-linux.sh",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 42769,
+      "sha256": "83472f106f85d52686d3e70ec3d68eb93caff73c64fdf8632bca65336f16116c",
+      "current_worktree_bytes_identical": true
+    },
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": "docs/RELEASE_GATE.md",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 77309,
+      "sha256": "c91818e67e04fcbf778951acb220a936f7387061f66cdf5f21c3f1b99c40881e",
+      "current_worktree_bytes_identical": true
+    },
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": "axocoatl-cli/src/onboard/sandbox.rs",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 48159,
+      "sha256": "737f13483c2dcb1bdaeee332497fd6fe54f959a93cca0f6e91985ead2b46cc58",
+      "current_worktree_bytes_identical": true
+    },
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": "axocoatl-cli/src/onboard/tests.rs",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 241371,
+      "sha256": "e79f549ea7d651abc33fe7b9c09d63804413264a4c6c46f85a57062818057775",
+      "current_worktree_bytes_identical": true
+    },
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": ".github/workflows/ci.yml",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 23574,
+      "sha256": "0d880b6abaa8ee96502b001f05c4e4109349ada4823c51d7fe78e8535e42a730",
+      "current_worktree_bytes_identical": true
+    },
+    {
+      "repository": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl",
+      "path": "scripts/release-gate/lib.sh",
+      "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+      "bytes": 46975,
+      "sha256": "cfe0d44083779605c13986fa80061294882d1d4574119117c823b8dc4238fa0b",
+      "current_worktree_bytes_identical": true
+    }
+  ],
+  "audit_reads_excluded": [
+    "raw provider/auth logs",
+    "credential contents",
+    "stopped VM disk contents"
+  ]
+}

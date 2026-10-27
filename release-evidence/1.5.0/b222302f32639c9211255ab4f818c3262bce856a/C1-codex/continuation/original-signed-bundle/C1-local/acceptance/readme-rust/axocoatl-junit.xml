@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="3" failures="0" errors="0" skipped="0" time="136.366">
+  <properties>
+    <property name="axocoatl.run_id" value="run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f"/>
+    <property name="axocoatl.session_id" value="ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"/>
+    <property name="axocoatl.verdict" value="pass"/>
+    <property name="axocoatl.exit_code" value="0"/>
+    <property name="axocoatl.usage" value="119271 input + 4744 output tokens, $0.0000"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: sh -c cargo test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <system-out>reviewer ollama:gpt-oss:20b (native), 1 of 3 rounds
+round 1: approve, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <system-out>note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+note: image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+note: setup `cargo fetch` (detected): exited 0 (1.1 s); 2 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

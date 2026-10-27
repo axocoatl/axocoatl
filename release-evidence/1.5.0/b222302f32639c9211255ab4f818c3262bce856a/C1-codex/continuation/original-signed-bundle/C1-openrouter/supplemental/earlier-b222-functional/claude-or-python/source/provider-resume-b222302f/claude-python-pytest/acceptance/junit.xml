@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="3" failures="0" errors="0" skipped="0" time="39.634">
+  <properties>
+    <property name="axocoatl.run_id" value="run-063e310e-9266-4207-bd3f-678e67acf6db"/>
+    <property name="axocoatl.session_id" value="ses-abb2fa77-70d8-4ac5-a78d-1de794972c90"/>
+    <property name="axocoatl.loadout" value="fix-claude-code@1 sha256:1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140"/>
+    <property name="axocoatl.verdict" value="pass"/>
+    <property name="axocoatl.exit_code" value="0"/>
+    <property name="axocoatl.usage" value="89286 input + 700 output tokens, $0.0511"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: sh -c python3 -m pytest</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <system-out>reviewer openrouter:openai/gpt-oss-120b (native), 1 of 3 rounds
+round 1: approve, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <system-out>note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+note: Agent writer (claude-code) sends the stored credential claude-code-oauth (Claude Code's OAuth token, sent to api.anthropic.com).
+note: image localhost/axocoatl-recipe-claude-code-python:abd396bc9cca · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+note: setup `pip install -e '.[test]'` (detected): exited 0 (6.0 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+note: openai/gpt-oss-120b on OpenRouter: 7 calls answered by endpoint near-ai/fp4 (Near AI)</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

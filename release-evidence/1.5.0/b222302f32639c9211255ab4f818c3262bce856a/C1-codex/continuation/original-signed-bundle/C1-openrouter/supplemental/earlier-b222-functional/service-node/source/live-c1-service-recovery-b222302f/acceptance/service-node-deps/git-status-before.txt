@@ -1,0 +1,5 @@
+ M src/paginate.js
+ M test/paginate.test.js
+?? axocoatl-junit.xml
+?? run.axorecord.jsonl
+?? run.receipt.json

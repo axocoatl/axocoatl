@@ -1,0 +1,14 @@
+
+running 4 tests
+test tests::no_items_make_no_pages ... ok
+test tests::the_last_page_is_full_when_the_total_is_a_multiple_of_the_page_size ... ok
+test tests::a_partial_last_page_keeps_the_items_left_over ... ok
+test tests::a_page_size_of_zero_is_refused - should panic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

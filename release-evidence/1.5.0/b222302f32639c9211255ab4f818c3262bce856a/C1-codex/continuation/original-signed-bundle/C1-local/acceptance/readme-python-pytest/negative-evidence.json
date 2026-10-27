@@ -1,0 +1,39 @@
+{
+  "tool_errors": [
+    {
+      "role": "writer",
+      "sequence": 50,
+      "payload": {
+        "call_id": "call_1rapms1p",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    },
+    {
+      "role": "writer",
+      "sequence": 58,
+      "payload": {
+        "call_id": "call_8ahy3mh8",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "edit_file",
+        "result_bytes": 89,
+        "result_sha256": "4ddc17ce1a276462b2060499a13f6afb45658ec66bbc2dae524a43537d4e24ac"
+      },
+      "raw_cause": "Not inferred from public result hash/length"
+    }
+  ],
+  "provider_retries": [],
+  "denied_events": [],
+  "recorded_baseline_probe": {
+    "program": "python3",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 601
+  },
+  "failed_activations": []
+}

@@ -1,0 +1,39 @@
+{
+  "provider_retries": [],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 16,
+      "payload": {
+        "call_id": "call-af30d524-b3da-4141-9b7b-271d015fd4d2",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 68,
+        "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 20,
+      "payload": {
+        "call_id": "call-8d967b09-7991-44df-9218-3cdd5a0ff260",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "refused_connections": [],
+  "network_explanation": "No refused connections were recorded.",
+  "baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 335
+  }
+}

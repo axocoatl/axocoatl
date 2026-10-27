@@ -1,0 +1,183 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "pages.py",
+      "digest": {
+        "sha256": "c79b04d0b7d7b66d8c67a50d9465be88c18ba018fc03c5e099c5e834dc7047f6"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-37594920-dcc6-42d0-8863-c53853ab293b",
+      "session_id": "ses-2540f7ea-a311-4381-af06-71782a0d3f96",
+      "started_at_ms": 1793042253347,
+      "finished_at_ms": 1793042292859,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "ba552c6d5359e75beb337d8f39fbf4af3b21a4408308480ef461560dd1e10468"
+    },
+    "repository": {
+      "base_commit": "96be4466fc2b04665722fa9ed051e3f6b59cd790",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix-claude-code",
+      "version": 1,
+      "kind": "fix",
+      "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 5,
+          "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+          "rules": [
+            "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+          ],
+          "routes": [
+            {
+              "id": "route#0",
+              "host": "api.anthropic.com",
+              "provider_fetch": "refuse"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "toolchain": "python",
+        "reason": "pyproject.toml at the repository root",
+        "image": "localhost/axocoatl-recipe-claude-code-python:abd396bc9cca",
+        "image_id": "8897022aaf3fc1ad67feb657139da16986d0e401819f77166db514a0a0202578",
+        "recipes": [
+          "claude-code",
+          "python"
+        ],
+        "check": "python3 -m pytest",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "pip install -e '.[test]'",
+          "source": "detected",
+          "script_sha256": "0af6f946f399d2d1f0deb2cef2c8bc76b441f3e1fde68cec2a6d5ecbcff952d0",
+          "exit_code": 0,
+          "duration_ms": 6641,
+          "registry_hosts": [
+            "pypi.org",
+            "files.pythonhosted.org"
+          ],
+          "allowed_connections": 4,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-c338d783897b2cf14fae2b4f",
+        "probe": {
+          "program": "python3",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 524
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 37,
+      "allowed_connections": 7,
+      "refused_connections": 0,
+      "route_requests": 4,
+      "routes": [
+        [
+          "api.anthropic.com",
+          4
+        ]
+      ]
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "python3 -m pytest"
+        ],
+        "candidate_sha256": "133d32ada2c98a63956aae8bc4dfd5cbc8ee8aae198fa84f95feefc58e62f88a"
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 116128,
+      "output_tokens": 1562,
+      "cost_microunits": 49573,
+      "cost_usd": 0.049573,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "133d32ada2c98a63956aae8bc4dfd5cbc8ee8aae198fa84f95feefc58e62f88a",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

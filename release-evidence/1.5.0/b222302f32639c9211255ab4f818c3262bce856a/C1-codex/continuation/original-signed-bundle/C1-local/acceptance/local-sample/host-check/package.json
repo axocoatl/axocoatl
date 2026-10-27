@@ -1,0 +1,9 @@
+{
+  "name": "axocoatl-first-run",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small repository with one failing test, for a first Axocoatl run.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

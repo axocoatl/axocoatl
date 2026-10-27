@@ -1,0 +1,1047 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "A-x86",
+  "tier": "A",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T13:58:44Z",
+  "finished_at": "2026-10-26T14:03:33.693Z",
+  "steps": [
+    {
+      "name": "start without axocoatl on PATH",
+      "status": "pass",
+      "required": true,
+      "detail": "HOME=/tmp/axo-gate.Or3u2w/home"
+    },
+    {
+      "name": "scripted model server (gate stub reporting 0.40.6, cloud off)",
+      "status": "pass",
+      "required": true,
+      "detail": "http://127.0.0.1:37199"
+    },
+    {
+      "name": "install with the published command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.7,
+      "bytes_downloaded": 4460,
+      "detail": "curl -fsSL https://axocoatl.ai/install.sh | sh"
+    },
+    {
+      "name": "installed binary is where the installer said",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "a new shell finds axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "bash -lc: /usr/local/bin/axocoatl; bash -ic: /usr/local/bin/axocoatl"
+    },
+    {
+      "name": "installed binary is the tarball's",
+      "status": "pass",
+      "required": true,
+      "detail": "da3d17bf208191dcc0c1da0886b96433221d4fd3f621485f604c44ae671e98aa"
+    },
+    {
+      "name": "axocoatl --version names 1.5.0",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl 1.5.0"
+    },
+    {
+      "name": "onboard --yes --writer ollama with no terminal",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 9.2,
+      "bytes_downloaded": 7557698
+    },
+    {
+      "name": "onboard ran no sudo and no package manager through PATH",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard ran no sudo by any path (system journal)",
+      "status": "pass",
+      "required": true,
+      "detail": "the journal shows no sudo command"
+    },
+    {
+      "name": "--no-pull pulled nothing",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "config.yaml holds the run models (run.models)",
+      "status": "pass",
+      "required": true,
+      "detail": "/tmp/axo-gate.Or3u2w/home/.config/axocoatl/config.yaml"
+    },
+    {
+      "name": "config.yaml uses the free port 8200",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.2,
+      "bytes_downloaded": 354
+    },
+    {
+      "name": "doctor: ready, no FAIL in sandbox, models, writers, daemon",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.4,
+      "bytes_downloaded": 118
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl dev serves on its configured port",
+      "status": "pass",
+      "required": true,
+      "detail": "port 8200"
+    },
+    {
+      "name": "run fix on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 24.5,
+      "bytes_downloaded": 254748160
+    },
+    {
+      "name": "run on node-plain chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "receipt verify on node-plain (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on node-plain",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-plain",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 1963235a7b69 holds any"
+    },
+    {
+      "name": "the model fixed node-plain once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 8.1,
+      "bytes_downloaded": 400706
+    },
+    {
+      "name": "run on node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since a7083c154f8f holds any"
+    },
+    {
+      "name": "the model fixed node-deps once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 28.2,
+      "bytes_downloaded": 102536128
+    },
+    {
+      "name": "run on python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since d4c4d91a5707 holds any"
+    },
+    {
+      "name": "the model fixed python-pytest once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 43,
+      "bytes_downloaded": 661941668
+    },
+    {
+      "name": "run on rust chose a rust image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-rust:0e5acf3d40e2"
+    },
+    {
+      "name": "run on rust ran setup (cargo fetch)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on rust (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on rust",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on rust",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 43ddb7687441 holds any"
+    },
+    {
+      "name": "the model fixed rust once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 38.9,
+      "bytes_downloaded": 622793884
+    },
+    {
+      "name": "run on go chose a go image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-go:6063b3e9fdc6"
+    },
+    {
+      "name": "run on go ran setup (go mod download)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on go (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on go",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on go",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 468dc79edb70 holds any"
+    },
+    {
+      "name": "the model fixed go once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on node-pnpm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 10.7,
+      "bytes_downloaded": 10488946
+    },
+    {
+      "name": "run on node-pnpm chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on node-pnpm ran setup (pnpm install --frozen-lockfile)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on node-pnpm (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 236
+    },
+    {
+      "name": "record verify on node-pnpm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on node-pnpm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-pnpm",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 6d261e7af3c2 holds any"
+    },
+    {
+      "name": "the model fixed node-pnpm once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on node-yarn",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 9.3,
+      "bytes_downloaded": 2974280
+    },
+    {
+      "name": "run on node-yarn chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on node-yarn ran setup (yarn install --frozen-lockfile)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on node-yarn (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on node-yarn",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on node-yarn",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-yarn",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since c05c034c20b3 holds any"
+    },
+    {
+      "name": "the model fixed node-yarn once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on node-yarn-berry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 9.2,
+      "bytes_downloaded": 3146474
+    },
+    {
+      "name": "run on node-yarn-berry chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-node:3b267c748259"
+    },
+    {
+      "name": "run on node-yarn-berry ran setup (yarn install --immutable)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on node-yarn-berry (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on node-yarn-berry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on node-yarn-berry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-yarn-berry",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 90b8989d2c81 holds any"
+    },
+    {
+      "name": "the model fixed node-yarn-berry once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on python-poetry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 17.1,
+      "bytes_downloaded": 4919092
+    },
+    {
+      "name": "run on python-poetry chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-poetry ran setup ('pytest>=8.0,<9')",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-poetry (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on python-poetry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on python-poetry",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-poetry",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 9de9bef6b5ce holds any"
+    },
+    {
+      "name": "the model fixed python-poetry once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on python-uv",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 16.8,
+      "bytes_downloaded": 4780394
+    },
+    {
+      "name": "run on python-uv chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-uv ran setup (pip install -e . 'pytest>=8')",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-uv (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on python-uv",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on python-uv",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-uv",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 3ae60e9b6647 holds any"
+    },
+    {
+      "name": "the model fixed python-uv once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on python-pdm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 17.6,
+      "bytes_downloaded": 4497710
+    },
+    {
+      "name": "run on python-pdm chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-pdm ran setup (pip install -e . 'pytest>=8')",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-pdm (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on python-pdm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on python-pdm",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-pdm",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 56cd640509de holds any"
+    },
+    {
+      "name": "the model fixed python-pdm once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on python-hatch",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 16.4,
+      "bytes_downloaded": 4771558
+    },
+    {
+      "name": "run on python-hatch chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-python:10128f1d8789"
+    },
+    {
+      "name": "run on python-hatch ran setup (pip install -e . 'pytest>=8')",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "receipt verify on python-hatch (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "record verify on python-hatch",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "receipt matches the record on python-hatch",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 118
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on python-hatch",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 45c9a9dd97f3 holds any"
+    },
+    {
+      "name": "the model fixed python-hatch once",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "the README's command passed on every fixture, each receipt and record verified",
+      "status": "pass",
+      "required": true,
+      "detail": "fixtures: node-plain node-deps python-pytest rust go node-pnpm node-yarn node-yarn-berry python-poetry python-uv python-pdm python-hatch"
+    },
+    {
+      "name": "a check program that is absent: exit 3",
+      "status": "pass",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 5.9,
+      "bytes_downloaded": 7486
+    },
+    {
+      "name": "refused within 15 s",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "refused before any model call (0 tokens)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "reviewer anthropic:x: exit 3",
+      "status": "pass",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no Session, container or model call for the refused run",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard without Podman: exit 1",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 0.2,
+      "bytes_downloaded": 8038
+    },
+    {
+      "name": "onboard prints the Podman install command",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard did not run sudo without --allow-sudo (PATH)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard did not run sudo without --allow-sudo (system journal)",
+      "status": "pass",
+      "required": true,
+      "detail": "the journal shows no sudo command"
+    },
+    {
+      "name": "onboard without a subuid range: exit 1",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 2.4,
+      "bytes_downloaded": 826
+    },
+    {
+      "name": "onboard names the usermod --add-subuids fix",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard did not run sudo for the subuid range (PATH)",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "onboard did not run sudo for the subuid range (system journal)",
+      "status": "pass",
+      "required": true,
+      "detail": "the journal shows no sudo command"
+    },
+    {
+      "name": "doctor --json without a subuid range",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 1.3,
+      "bytes_downloaded": 118
+    },
+    {
+      "name": "doctor FAILs the subuid range with the usermod fix",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "install the lint's YAML parser (npm ci in sites/docs)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 4.6,
+      "bytes_downloaded": 277621854
+    },
+    {
+      "name": "copy-paste lint (scripts/check-copy-paste.mjs)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.1,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "Ctrl+C stops axocoatl dev with exit 0",
+      "status": "pass",
+      "required": false
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 24.04",
+    "kernel": "6.17.0-1022-azure",
+    "arch": "x86_64",
+    "runner": "github-hosted ubuntu24 20261023.334.3",
+    "memory_bytes": 16766414848,
+    "cpus": 4,
+    "user": "runner"
+  },
+  "tools": {
+    "podman": "4.9.3",
+    "git": "2.55.0",
+    "node": "v22.23.3",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "gate stub reporting 0.40.6"
+  },
+  "attachments": [
+    "A-x86/doctor-no-subuid.json",
+    "A-x86/doctor.json",
+    "A-x86/go/axocoatl-junit.xml",
+    "A-x86/go/changes.txt",
+    "A-x86/go/command.txt",
+    "A-x86/go/run.axorecord.jsonl",
+    "A-x86/go/run.log",
+    "A-x86/go/run.receipt.json",
+    "A-x86/install-command.txt",
+    "A-x86/logs/a-check-program-that-is-absent--exit-3.log",
+    "A-x86/logs/copy-paste-lint--scripts-check-copy-paste.mjs-.log",
+    "A-x86/logs/dev.log",
+    "A-x86/logs/doctor---json-says-ready.log",
+    "A-x86/logs/doctor---json-without-a-subuid-range.log",
+    "A-x86/logs/doctor-exits-0.log",
+    "A-x86/logs/guard.log",
+    "A-x86/logs/install-curl-urls.log",
+    "A-x86/logs/install-the-lint-s-YAML-parser--npm-ci-in-sites-docs-.log",
+    "A-x86/logs/install.log",
+    "A-x86/logs/onboard---yes---writer-ollama-with-no-terminal.log",
+    "A-x86/logs/onboard-without-Podman--exit-1.log",
+    "A-x86/logs/onboard-without-a-subuid-range--exit-1.log",
+    "A-x86/logs/onboarding/onboard-20261026-135847.log",
+    "A-x86/logs/receipt-matches-the-record-on-go.log",
+    "A-x86/logs/receipt-matches-the-record-on-node-deps.log",
+    "A-x86/logs/receipt-matches-the-record-on-node-plain.log",
+    "A-x86/logs/receipt-matches-the-record-on-node-pnpm.log",
+    "A-x86/logs/receipt-matches-the-record-on-node-yarn-berry.log",
+    "A-x86/logs/receipt-matches-the-record-on-node-yarn.log",
+    "A-x86/logs/receipt-matches-the-record-on-python-hatch.log",
+    "A-x86/logs/receipt-matches-the-record-on-python-pdm.log",
+    "A-x86/logs/receipt-matches-the-record-on-python-poetry.log",
+    "A-x86/logs/receipt-matches-the-record-on-python-pytest.log",
+    "A-x86/logs/receipt-matches-the-record-on-python-uv.log",
+    "A-x86/logs/receipt-matches-the-record-on-rust.log",
+    "A-x86/logs/receipt-verify-on-go--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-node-deps--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-node-plain--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-node-pnpm--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-node-yarn--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-node-yarn-berry--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-python-hatch--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-python-pdm--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-python-poetry--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-python-pytest--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-python-uv--documented-command-.log",
+    "A-x86/logs/receipt-verify-on-rust--documented-command-.log",
+    "A-x86/logs/record-verify-on-go.log",
+    "A-x86/logs/record-verify-on-node-deps.log",
+    "A-x86/logs/record-verify-on-node-plain.log",
+    "A-x86/logs/record-verify-on-node-pnpm.log",
+    "A-x86/logs/record-verify-on-node-yarn-berry.log",
+    "A-x86/logs/record-verify-on-node-yarn.log",
+    "A-x86/logs/record-verify-on-python-hatch.log",
+    "A-x86/logs/record-verify-on-python-pdm.log",
+    "A-x86/logs/record-verify-on-python-poetry.log",
+    "A-x86/logs/record-verify-on-python-pytest.log",
+    "A-x86/logs/record-verify-on-python-uv.log",
+    "A-x86/logs/record-verify-on-rust.log",
+    "A-x86/logs/reviewer-anthropic-x--exit-3.log",
+    "A-x86/logs/run-fix-on-go.log",
+    "A-x86/logs/run-fix-on-node-deps.log",
+    "A-x86/logs/run-fix-on-node-plain.log",
+    "A-x86/logs/run-fix-on-node-pnpm.log",
+    "A-x86/logs/run-fix-on-node-yarn-berry.log",
+    "A-x86/logs/run-fix-on-node-yarn.log",
+    "A-x86/logs/run-fix-on-python-hatch.log",
+    "A-x86/logs/run-fix-on-python-pdm.log",
+    "A-x86/logs/run-fix-on-python-poetry.log",
+    "A-x86/logs/run-fix-on-python-pytest.log",
+    "A-x86/logs/run-fix-on-python-uv.log",
+    "A-x86/logs/run-fix-on-rust.log",
+    "A-x86/logs/stub-model-server.jsonl",
+    "A-x86/logs/stub-model-server.log",
+    "A-x86/node-deps/axocoatl-junit.xml",
+    "A-x86/node-deps/changes.txt",
+    "A-x86/node-deps/command.txt",
+    "A-x86/node-deps/run.axorecord.jsonl",
+    "A-x86/node-deps/run.log",
+    "A-x86/node-deps/run.receipt.json",
+    "A-x86/node-plain/axocoatl-junit.xml",
+    "A-x86/node-plain/changes.txt",
+    "A-x86/node-plain/command.txt",
+    "A-x86/node-plain/receipt.json",
+    "A-x86/node-plain/run.axorecord.jsonl",
+    "A-x86/node-plain/run.log",
+    "A-x86/node-pnpm/axocoatl-junit.xml",
+    "A-x86/node-pnpm/changes.txt",
+    "A-x86/node-pnpm/command.txt",
+    "A-x86/node-pnpm/run.axorecord.jsonl",
+    "A-x86/node-pnpm/run.log",
+    "A-x86/node-pnpm/run.receipt.json",
+    "A-x86/node-yarn-berry/axocoatl-junit.xml",
+    "A-x86/node-yarn-berry/changes.txt",
+    "A-x86/node-yarn-berry/command.txt",
+    "A-x86/node-yarn-berry/run.axorecord.jsonl",
+    "A-x86/node-yarn-berry/run.log",
+    "A-x86/node-yarn-berry/run.receipt.json",
+    "A-x86/node-yarn/axocoatl-junit.xml",
+    "A-x86/node-yarn/changes.txt",
+    "A-x86/node-yarn/command.txt",
+    "A-x86/node-yarn/run.axorecord.jsonl",
+    "A-x86/node-yarn/run.log",
+    "A-x86/node-yarn/run.receipt.json",
+    "A-x86/python-hatch/axocoatl-junit.xml",
+    "A-x86/python-hatch/changes.txt",
+    "A-x86/python-hatch/command.txt",
+    "A-x86/python-hatch/run.axorecord.jsonl",
+    "A-x86/python-hatch/run.log",
+    "A-x86/python-hatch/run.receipt.json",
+    "A-x86/python-pdm/axocoatl-junit.xml",
+    "A-x86/python-pdm/changes.txt",
+    "A-x86/python-pdm/command.txt",
+    "A-x86/python-pdm/run.axorecord.jsonl",
+    "A-x86/python-pdm/run.log",
+    "A-x86/python-pdm/run.receipt.json",
+    "A-x86/python-poetry/axocoatl-junit.xml",
+    "A-x86/python-poetry/changes.txt",
+    "A-x86/python-poetry/command.txt",
+    "A-x86/python-poetry/run.axorecord.jsonl",
+    "A-x86/python-poetry/run.log",
+    "A-x86/python-poetry/run.receipt.json",
+    "A-x86/python-pytest/axocoatl-junit.xml",
+    "A-x86/python-pytest/changes.txt",
+    "A-x86/python-pytest/command.txt",
+    "A-x86/python-pytest/run.axorecord.jsonl",
+    "A-x86/python-pytest/run.log",
+    "A-x86/python-pytest/run.receipt.json",
+    "A-x86/python-uv/axocoatl-junit.xml",
+    "A-x86/python-uv/changes.txt",
+    "A-x86/python-uv/command.txt",
+    "A-x86/python-uv/run.axorecord.jsonl",
+    "A-x86/python-uv/run.log",
+    "A-x86/python-uv/run.receipt.json",
+    "A-x86/readme-command.txt",
+    "A-x86/rust/axocoatl-junit.xml",
+    "A-x86/rust/changes.txt",
+    "A-x86/rust/command.txt",
+    "A-x86/rust/run.axorecord.jsonl",
+    "A-x86/rust/run.log",
+    "A-x86/rust/run.receipt.json",
+    "A-x86/transcript.txt"
+  ]
+}

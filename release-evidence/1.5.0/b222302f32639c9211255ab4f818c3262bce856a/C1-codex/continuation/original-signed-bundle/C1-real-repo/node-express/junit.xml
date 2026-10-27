@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="4" failures="4" errors="0" skipped="0" time="562.880">
+  <properties>
+    <property name="axocoatl.run_id" value="run-d5b54fe1-d139-4bb6-a30b-254c8f7fda13"/>
+    <property name="axocoatl.session_id" value="ses-245c0513-3b14-4cfe-95d7-f3192b3417f6"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"/>
+    <property name="axocoatl.verdict" value="checks_failed"/>
+    <property name="axocoatl.exit_code" value="1"/>
+    <property name="axocoatl.usage" value="1188606 input + 13955 output tokens, $0.0027"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <failure type="failed" message="tests failed (exit code 1)">stdout:
+
+&gt; express@5.1.0 test
+&gt; mocha --require test/support/env --reporter spec --check-leaks test/ test/acceptance/
+
+
+stderr:
+
+ Exception during run: /Users/erick/axocoatl-gate-work/repos/real-node-express/test/res.location.js:332
+})
+^
+
+SyntaxError: Unexpected token '}'
+    at wrapSafe (node:internal/modules/cjs/loader:1861:18)
+    at Module._compile (node:internal/modules/cjs/loader:1903:20)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at loadCJSModuleWithModuleLoad (node:internal/modules/esm/translators:372:15)
+    at ModuleWrap.&lt;anonymous&gt; (node:internal/modules/esm/translators:244:9)
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async formattedImport (/Users/erick/axocoatl-gate-work/repos/real-node-express/node_modules/mocha/lib/nodejs/esm-utils.js:9:14)
+    at async exports.requireOrImport (/Users/erick/axocoatl-gate-work/repos/real-node-express/node_modules/mocha/lib/nodejs/esm-utils.js:42:28)
+    at async exports.loadFilesAsync (/Users/erick/axocoatl-gate-work/repos/real-node-express/node_modules/mocha/lib/nodejs/esm-utils.js:100:20)
+    at async singleRun (/Users/erick/axocoatl-gate-work/repos/real-node-express/node_modules/mocha/lib/cli/run-helpers.js:162:3)
+    at async exports.handler (/Users/erick/axocoatl-gate-work/repos/real-node-express/node_modules/mocha/lib/cli/run.js:375:5)
+
+</failure>
+      <system-out>argv: sh -c npm run test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <failure type="changes" message="The reviewer asked for changes in round 1 of 3; the host sent its findings to the lead. The result has changed since; the review runs again on the new result."/>
+      <system-out>reviewer openrouter:openai/gpt-oss-120b (native), 1 of 3 rounds
+round 1: changes, 1 finding</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.adjudication" name="round 1 F1">
+      <failure type="missing" message="unreadable adjudications block: the ADJUDICATIONS block is not a JSON array"/>
+      <system-out>test/res.location.js:0: The requested test for `res.location('back')` when no Referrer header is missing. Add a test case that creates an app, makes a request without Referrer, calls `res.location('back')`, and expects `Location` header to be `'/'`.</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="1" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <failure type="checks_failed" message="The required check tests failed (exit code 1); The required review did not pass: The reviewer asked for changes in round 1 of 3; the host sent its findings to the lead. The result has changed since; the review runs again on the new result.; The writer did not answer 1 review finding; A turn ended needing attention: A check failed."/>
+      <system-out>note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm install --no-package-lock --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+note: setup `npm install --no-package-lock --prefer-offline --no-audit --no-fund` (detected): exited 0 (31.3 s); 15 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+note: openai/gpt-oss-120b on OpenRouter: 11 calls answered by endpoint venice/int4 (Venice)</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

@@ -1,0 +1,18 @@
+{
+  "schema": "axocoatl.recovery.reviewed-completions-plan/1",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "version": "1.5.0",
+  "source_bundle": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a",
+  "source_manifest_sha256": "f59dd9cc81e059387ffea77f33654af7763464c6a7b001e0430deb5782ff1fb7",
+  "source_dsse_sha256": "4b19414257658a439776963fec5ac56ff1bd7d28b27b9071ac65378045241481",
+  "completions": [
+    {
+      "path": "C1-codex",
+      "source_bundle": "/private/tmp/axocoatl-b222-codex-completion-20261027",
+      "manifest_sha256": "2e779982209717336aa352803c766e3dff314e101c26c2ecda8c8b49b9ba41a9",
+      "record_sha256": "c834b3973999632912a85b2c260f4947bb20d81a315f7e0c81263d15408a8b6f",
+      "review_file": "/private/tmp/axocoatl-codex-completion-independent-review.json",
+      "review_sha256": "d76b0190bddbec2d1f3db206c817a3c5fe36beee1bf3418f94cfad7d2ef8529f"
+    }
+  ]
+}

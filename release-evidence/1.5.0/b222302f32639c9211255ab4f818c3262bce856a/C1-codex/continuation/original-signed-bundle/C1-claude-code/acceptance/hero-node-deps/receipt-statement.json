@@ -1,0 +1,182 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-8ff54b58-1904-4ddf-9193-3e983357cc38",
+      "session_id": "ses-1671c084-363e-45bb-84bb-6fd274fb251b",
+      "started_at_ms": 1793041643570,
+      "finished_at_ms": 1793042229550,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "ba552c6d5359e75beb337d8f39fbf4af3b21a4408308480ef461560dd1e10468"
+    },
+    "repository": {
+      "base_commit": "d8c23eaba58dba12bad0f3f5b2857f12821b0daa",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix-claude-code",
+      "version": 1,
+      "kind": "fix",
+      "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 3,
+          "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+          "rules": [
+            "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+          ],
+          "routes": [
+            {
+              "id": "route#0",
+              "host": "api.anthropic.com",
+              "provider_fetch": "refuse"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "toolchain": "node",
+        "reason": "package.json at the repository root",
+        "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+        "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+        "recipes": [
+          "claude-code",
+          "node"
+        ],
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "npm ci --prefer-offline --no-audit --no-fund",
+          "source": "detected",
+          "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+          "exit_code": 0,
+          "duration_ms": 1429,
+          "registry_hosts": [
+            "registry.npmjs.org"
+          ],
+          "allowed_connections": 6,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-d86694cf74f1badd5e6c7a81",
+        "probe": {
+          "program": "npm",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 293
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 49,
+      "allowed_connections": 10,
+      "refused_connections": 0,
+      "route_requests": 8,
+      "routes": [
+        [
+          "api.anthropic.com",
+          8
+        ]
+      ]
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "not_run",
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ]
+      }
+    ],
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "verdict": "not_run",
+      "passed": false,
+      "rounds": 0,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "interrupted",
+    "exit_code": 6,
+    "attention": [
+      "The required check tests did not run on the final result",
+      "The required review did not pass: The reviewer runs after the required Agents finish and the required checks pass.",
+      "1 area was not covered",
+      "A turn ended needing attention"
+    ],
+    "not_covered": {
+      "count": 1,
+      "areas": [
+        "writer"
+      ]
+    },
+    "warnings": [
+      "receipt_incomplete"
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_microunits": 10000000,
+      "cost_usd": 10.0,
+      "complete": false,
+      "cost_known": false,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "workspace_at_finish",
+      "removed": [],
+      "complete": false,
+      "unattributed": [
+        "team-node-4da61d4aaa5c7272058428c6 (generation 1) in turn turn-613968b2-0883-48ea-9908-11e706fcecbb: its After capture is unavailable (Execution was stopped, revoked, or expired before this repository observation)"
+      ]
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw=",
+      "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce"
+    }
+  }
+}

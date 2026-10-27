@@ -1,0 +1,1124 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-claude-code",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T19:03:15Z",
+  "finished_at": "2026-10-27T00:02:10.587Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "50925 MiB free; models cached: yes",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 0,
+        "step_name": "free disk at the start",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "axocoatl is installed",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 1,
+        "step_name": "axocoatl is installed",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "no Claude Code sign-in was stored before this path",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl secret list names no claude-code-oauth",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 2,
+        "step_name": "no Claude Code sign-in was stored before this path",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "onboard --update --writer claude-code (interactive; every answer is in the transcript)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 206.6,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 3,
+        "step_name": "onboard --update --writer claude-code (interactive; every answer is in the transcript)",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "onboarding was answered live in the terminal",
+      "status": "pass",
+      "required": true,
+      "detail": "onboard --update --writer claude-code: every prompt was answered by the operator (erick); the transcript holds each",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 4,
+        "step_name": "onboarding was answered live in the terminal",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "Claude Code was signed in through the browser during onboarding",
+      "status": "pass",
+      "required": true,
+      "detail": "claude-code-oauth was stored during the interactive onboarding, and the operator (erick) answered yes: Did onboarding open Claude's sign-in page in the browser, and did you sign in there?",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 5,
+        "step_name": "Claude Code was signed in through the browser during onboarding",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "doctor --json says ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.4,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 6,
+        "step_name": "doctor --json says ready",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "doctor: ready, no FAIL",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 7,
+        "step_name": "doctor: ready, no FAIL",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "axocoatl doctor (as the site shows it) exits 0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 3.3,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 8,
+        "step_name": "axocoatl doctor (as the site shows it) exits 0",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "doctor says Ready for: axocoatl run fix-claude-code, Ready: yes, no [FAIL]",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 9,
+        "step_name": "doctor says Ready for: axocoatl run fix-claude-code, Ready: yes, no [FAIL]",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 10,
+        "step_name": "axocoatl dev answers on port 8080 with the current configuration",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run fix on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 33.6,
+      "bytes_downloaded": 2472096,
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 9,
+        "step_name": "run fix on claude-node-deps",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run on hero-node-deps chose a node image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 10,
+        "step_name": "run on claude-node-deps chose a node image",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run on hero-node-deps ran setup (npm ci)",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 11,
+        "step_name": "run on claude-node-deps ran setup (npm ci)",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "receipt verify on hero-node-deps (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 1388,
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 12,
+        "step_name": "receipt verify on claude-node-deps (documented command)",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "record verify on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 13,
+        "step_name": "record verify on claude-node-deps",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "receipt matches the record on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 771,
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 14,
+        "step_name": "receipt matches the record on claude-node-deps",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on hero-node-deps",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since ee62d7947702 holds any",
+      "observation": {
+        "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+        "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+        "step_index": 15,
+        "step_name": "no tool-call markup in the accepted output of the run on claude-node-deps",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run fix on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 62.4,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 18,
+        "step_name": "run fix on hero-python-pytest",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run on hero-python-pytest chose a python image",
+      "status": "pass",
+      "required": true,
+      "detail": "localhost/axocoatl-recipe-claude-code-python:abd396bc9cca",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 19,
+        "step_name": "run on hero-python-pytest chose a python image",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "run on hero-python-pytest ran setup (pip install)",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 20,
+        "step_name": "run on hero-python-pytest ran setup (pip install)",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "receipt verify on hero-python-pytest (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 21,
+        "step_name": "receipt verify on hero-python-pytest (documented command)",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "record verify on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 22,
+        "step_name": "record verify on hero-python-pytest",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "receipt matches the record on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 23,
+        "step_name": "receipt matches the record on hero-python-pytest",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since 96be4466fc2b holds any",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 24,
+        "step_name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "the home page's fix-claude-code command passed on node-deps and python-pytest",
+      "status": "pass",
+      "required": true,
+      "detail": "Operator-authorized continuation: the original Python block and later complete Node block satisfy the unchanged criterion. The original failed attempt remains preserved.",
+      "observation_kind": "derived-from-verified-dependent-observations",
+      "dependencies": [
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 9,
+          "step_name": "run fix on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 10,
+          "step_name": "run on claude-node-deps chose a node image",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 11,
+          "step_name": "run on claude-node-deps ran setup (npm ci)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 12,
+          "step_name": "receipt verify on claude-node-deps (documented command)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 13,
+          "step_name": "record verify on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 14,
+          "step_name": "receipt matches the record on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+          "sha256": "2755cafeedef9cf7ccee97b72ee270a01291a13c9de9d5dc13791fe2217908d8",
+          "step_index": 15,
+          "step_name": "no tool-call markup in the accepted output of the run on claude-node-deps",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 18,
+          "step_name": "run fix on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 19,
+          "step_name": "run on hero-python-pytest chose a python image",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 20,
+          "step_name": "run on hero-python-pytest ran setup (pip install)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 21,
+          "step_name": "receipt verify on hero-python-pytest (documented command)",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 22,
+          "step_name": "record verify on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 23,
+          "step_name": "receipt matches the record on hero-python-pytest",
+          "observed_status": "pass"
+        },
+        {
+          "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+          "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+          "step_index": 24,
+          "step_name": "no tool-call markup in the accepted output of the run on hero-python-pytest",
+          "observed_status": "pass"
+        }
+      ],
+      "acceptance": [
+        {
+          "file": "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/assessment.json",
+          "sha256": "ff0afae5749ebda8e3439b40a48a29c6e1f4dda0a3eaef0010806ee4c975f585"
+        },
+        {
+          "file": "C1-claude-code/acceptance/hero-python-pytest/assessment.json",
+          "sha256": "7aed992cc2d9692c98aeb0c1cb9ec492873054cc09952940c65739cbfe955470"
+        }
+      ]
+    },
+    {
+      "name": "gh is signed in",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.4,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 26,
+        "step_name": "gh is signed in",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "clone codeoperators/axocoatl-gate-150-recovery-20261026",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.3,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 27,
+        "step_name": "clone codeoperators/axocoatl-gate-150-recovery-20261026",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "reset codeoperators/axocoatl-gate-150-recovery-20261026 to the node-deps fixture",
+      "status": "pass",
+      "required": true,
+      "detail": "the docs strict verify-receipt workflow (require-receipt true), pinned to the candidate commit",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 28,
+        "step_name": "reset codeoperators/axocoatl-gate-150-recovery-20261026 to the node-deps fixture",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "hero command with --keep pr",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 88.1,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 29,
+        "step_name": "hero command with --keep pr",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on keep-pr",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since dcb55fbeffbc holds any",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 30,
+        "step_name": "no tool-call markup in the accepted output of the run on keep-pr",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "--keep pr opened a pull request",
+      "status": "pass",
+      "required": true,
+      "detail": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/pull/3",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 31,
+        "step_name": "--keep pr opened a pull request",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "the verify-receipt workflow's checks pass on the pull request",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 16.7,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 32,
+        "step_name": "the verify-receipt workflow's checks pass on the pull request",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "the verify-receipt Action verified the pull request's receipt",
+      "status": "pass",
+      "required": true,
+      "detail": "Verified the receipt of run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb (Actions run 40385751156)",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 33,
+        "step_name": "the verify-receipt Action verified the pull request's receipt",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "reviewer anthropic:opus is refused: exit 3",
+      "status": "pass",
+      "required": true,
+      "exit_code": 3,
+      "seconds": 0,
+      "bytes_downloaded": 0,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 34,
+        "step_name": "reviewer anthropic:opus is refused: exit 3",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "the refused run left no Session",
+      "status": "pass",
+      "required": true,
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 35,
+        "step_name": "the refused run left no Session",
+        "observed_status": "pass"
+      }
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "48328 MiB free",
+      "observation": {
+        "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+        "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+        "step_index": 36,
+        "step_name": "free disk at the end",
+        "observed_status": "pass"
+      }
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-claude-code/acceptance/claude-sample/accepted-answers.stderr",
+    "C1-claude-code/acceptance/claude-sample/accepted-answers.stdout",
+    "C1-claude-code/acceptance/claude-sample/activation-summary.json",
+    "C1-claude-code/acceptance/claude-sample/assessment.json",
+    "C1-claude-code/acceptance/claude-sample/commands.json",
+    "C1-claude-code/acceptance/claude-sample/daemon.log",
+    "C1-claude-code/acceptance/claude-sample/final/.gitignore",
+    "C1-claude-code/acceptance/claude-sample/final/README.md",
+    "C1-claude-code/acceptance/claude-sample/final/package.json",
+    "C1-claude-code/acceptance/claude-sample/final/src/paging.js",
+    "C1-claude-code/acceptance/claude-sample/final/test/paging.test.js",
+    "C1-claude-code/acceptance/claude-sample/git-status-after.txt",
+    "C1-claude-code/acceptance/claude-sample/git-status-before.txt",
+    "C1-claude-code/acceptance/claude-sample/host-check/.gitignore",
+    "C1-claude-code/acceptance/claude-sample/host-check/README.md",
+    "C1-claude-code/acceptance/claude-sample/host-check/package.json",
+    "C1-claude-code/acceptance/claude-sample/host-check/src/paging.js",
+    "C1-claude-code/acceptance/claude-sample/host-check/test/paging.test.js",
+    "C1-claude-code/acceptance/claude-sample/negative-evidence.json",
+    "C1-claude-code/acceptance/claude-sample/network-events.json",
+    "C1-claude-code/acceptance/claude-sample/original-tests.stderr",
+    "C1-claude-code/acceptance/claude-sample/original-tests.stdout",
+    "C1-claude-code/acceptance/claude-sample/original/.gitignore",
+    "C1-claude-code/acceptance/claude-sample/original/README.md",
+    "C1-claude-code/acceptance/claude-sample/original/package.json",
+    "C1-claude-code/acceptance/claude-sample/original/src/paging.js",
+    "C1-claude-code/acceptance/claude-sample/original/test/paging.test.js",
+    "C1-claude-code/acceptance/claude-sample/outcome.json",
+    "C1-claude-code/acceptance/claude-sample/patch.diff",
+    "C1-claude-code/acceptance/claude-sample/receipt-statement.json",
+    "C1-claude-code/acceptance/claude-sample/receipt-verify.stderr",
+    "C1-claude-code/acceptance/claude-sample/receipt-verify.stdout",
+    "C1-claude-code/acceptance/claude-sample/receipt.json",
+    "C1-claude-code/acceptance/claude-sample/record-verify.stderr",
+    "C1-claude-code/acceptance/claude-sample/record-verify.stdout",
+    "C1-claude-code/acceptance/claude-sample/record.jsonl",
+    "C1-claude-code/acceptance/claude-sample/runtime-version.stderr",
+    "C1-claude-code/acceptance/claude-sample/runtime-version.stdout",
+    "C1-claude-code/acceptance/claude-sample/trusted-public-key.stderr",
+    "C1-claude-code/acceptance/claude-sample/trusted-public-key.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/accepted-answers.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/accepted-answers.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/activation-summary.json",
+    "C1-claude-code/acceptance/hero-node-deps/assessment.json",
+    "C1-claude-code/acceptance/hero-node-deps/audit-post-test-metadata-error.json",
+    "C1-claude-code/acceptance/hero-node-deps/axocoatl-junit.xml",
+    "C1-claude-code/acceptance/hero-node-deps/changes.txt",
+    "C1-claude-code/acceptance/hero-node-deps/command.txt",
+    "C1-claude-code/acceptance/hero-node-deps/commands.json",
+    "C1-claude-code/acceptance/hero-node-deps/final/.gitignore",
+    "C1-claude-code/acceptance/hero-node-deps/final/README.md",
+    "C1-claude-code/acceptance/hero-node-deps/final/package-lock.json",
+    "C1-claude-code/acceptance/hero-node-deps/final/package.json",
+    "C1-claude-code/acceptance/hero-node-deps/final/src/paginate.js",
+    "C1-claude-code/acceptance/hero-node-deps/final/test/paginate.test.js",
+    "C1-claude-code/acceptance/hero-node-deps/gate-output-exclusions.json",
+    "C1-claude-code/acceptance/hero-node-deps/git-status-after.txt",
+    "C1-claude-code/acceptance/hero-node-deps/git-status-before.txt",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/.gitignore",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/README.md",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/package-lock.json",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/package.json",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/src/paginate.js",
+    "C1-claude-code/acceptance/hero-node-deps/host-check/test/paginate.test.js",
+    "C1-claude-code/acceptance/hero-node-deps/host-dependency-provenance.json",
+    "C1-claude-code/acceptance/hero-node-deps/independent-receipt-verify.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/independent-receipt-verify.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/independent-record-verify.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/independent-record-verify.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/negative-evidence.json",
+    "C1-claude-code/acceptance/hero-node-deps/network-events.json",
+    "C1-claude-code/acceptance/hero-node-deps/operator-cancellation.json",
+    "C1-claude-code/acceptance/hero-node-deps/original-tests.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/original-tests.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/original/.gitignore",
+    "C1-claude-code/acceptance/hero-node-deps/original/README.md",
+    "C1-claude-code/acceptance/hero-node-deps/original/package-lock.json",
+    "C1-claude-code/acceptance/hero-node-deps/original/package.json",
+    "C1-claude-code/acceptance/hero-node-deps/original/src/paginate.js",
+    "C1-claude-code/acceptance/hero-node-deps/original/test/paginate.test.js",
+    "C1-claude-code/acceptance/hero-node-deps/outcome.json",
+    "C1-claude-code/acceptance/hero-node-deps/patch.diff",
+    "C1-claude-code/acceptance/hero-node-deps/receipt-statement.json",
+    "C1-claude-code/acceptance/hero-node-deps/receipt.json",
+    "C1-claude-code/acceptance/hero-node-deps/run.axorecord.jsonl",
+    "C1-claude-code/acceptance/hero-node-deps/run.log",
+    "C1-claude-code/acceptance/hero-node-deps/runtime-version.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/runtime-version.stdout",
+    "C1-claude-code/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stderr",
+    "C1-claude-code/acceptance/hero-node-deps/signed-interrupted-receipt-verify.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/accepted-answers.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/accepted-answers.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/activation-summary.json",
+    "C1-claude-code/acceptance/hero-python-pytest/assessment.json",
+    "C1-claude-code/acceptance/hero-python-pytest/axocoatl-junit.xml",
+    "C1-claude-code/acceptance/hero-python-pytest/changes.txt",
+    "C1-claude-code/acceptance/hero-python-pytest/command.txt",
+    "C1-claude-code/acceptance/hero-python-pytest/commands.json",
+    "C1-claude-code/acceptance/hero-python-pytest/final/.gitignore",
+    "C1-claude-code/acceptance/hero-python-pytest/final/README.md",
+    "C1-claude-code/acceptance/hero-python-pytest/final/pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/final/pyproject.toml",
+    "C1-claude-code/acceptance/hero-python-pytest/final/tests/test_pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/gate-output-exclusions.json",
+    "C1-claude-code/acceptance/hero-python-pytest/git-status-after.txt",
+    "C1-claude-code/acceptance/hero-python-pytest/git-status-before.txt",
+    "C1-claude-code/acceptance/hero-python-pytest/host-check/.gitignore",
+    "C1-claude-code/acceptance/hero-python-pytest/host-check/README.md",
+    "C1-claude-code/acceptance/hero-python-pytest/host-check/pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/host-check/pyproject.toml",
+    "C1-claude-code/acceptance/hero-python-pytest/host-check/tests/test_pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/host-dependency-provenance.json",
+    "C1-claude-code/acceptance/hero-python-pytest/independent-receipt-verify.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/independent-receipt-verify.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/independent-record-verify.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/independent-record-verify.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/module-selection.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/module-selection.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/negative-evidence.json",
+    "C1-claude-code/acceptance/hero-python-pytest/network-events.json",
+    "C1-claude-code/acceptance/hero-python-pytest/original-tests.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/original-tests.stdout",
+    "C1-claude-code/acceptance/hero-python-pytest/original/.gitignore",
+    "C1-claude-code/acceptance/hero-python-pytest/original/README.md",
+    "C1-claude-code/acceptance/hero-python-pytest/original/pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/original/pyproject.toml",
+    "C1-claude-code/acceptance/hero-python-pytest/original/tests/test_pages.py",
+    "C1-claude-code/acceptance/hero-python-pytest/outcome.json",
+    "C1-claude-code/acceptance/hero-python-pytest/patch.diff",
+    "C1-claude-code/acceptance/hero-python-pytest/receipt-statement.json",
+    "C1-claude-code/acceptance/hero-python-pytest/receipt.json",
+    "C1-claude-code/acceptance/hero-python-pytest/run.axorecord.jsonl",
+    "C1-claude-code/acceptance/hero-python-pytest/run.log",
+    "C1-claude-code/acceptance/hero-python-pytest/runtime-version.stderr",
+    "C1-claude-code/acceptance/hero-python-pytest/runtime-version.stdout",
+    "C1-claude-code/acceptance/keep-pr/accepted-answers.stderr",
+    "C1-claude-code/acceptance/keep-pr/accepted-answers.stdout",
+    "C1-claude-code/acceptance/keep-pr/activation-summary.json",
+    "C1-claude-code/acceptance/keep-pr/assessment.json",
+    "C1-claude-code/acceptance/keep-pr/axocoatl-junit.xml",
+    "C1-claude-code/acceptance/keep-pr/commands.json",
+    "C1-claude-code/acceptance/keep-pr/final/.axocoatl/receipt-keys",
+    "C1-claude-code/acceptance/keep-pr/final/.github/workflows/verify-receipt.yml",
+    "C1-claude-code/acceptance/keep-pr/final/.gitignore",
+    "C1-claude-code/acceptance/keep-pr/final/README.md",
+    "C1-claude-code/acceptance/keep-pr/final/package-lock.json",
+    "C1-claude-code/acceptance/keep-pr/final/package.json",
+    "C1-claude-code/acceptance/keep-pr/final/src/paginate.js",
+    "C1-claude-code/acceptance/keep-pr/final/test/paginate.test.js",
+    "C1-claude-code/acceptance/keep-pr/gate-output-exclusions.json",
+    "C1-claude-code/acceptance/keep-pr/git-status-after.txt",
+    "C1-claude-code/acceptance/keep-pr/git-status-before.txt",
+    "C1-claude-code/acceptance/keep-pr/hero-command-with---keep-pr.log",
+    "C1-claude-code/acceptance/keep-pr/host-check/.axocoatl/receipt-keys",
+    "C1-claude-code/acceptance/keep-pr/host-check/.github/workflows/verify-receipt.yml",
+    "C1-claude-code/acceptance/keep-pr/host-check/.gitignore",
+    "C1-claude-code/acceptance/keep-pr/host-check/README.md",
+    "C1-claude-code/acceptance/keep-pr/host-check/package-lock.json",
+    "C1-claude-code/acceptance/keep-pr/host-check/package.json",
+    "C1-claude-code/acceptance/keep-pr/host-check/src/paginate.js",
+    "C1-claude-code/acceptance/keep-pr/host-check/test/paginate.test.js",
+    "C1-claude-code/acceptance/keep-pr/host-dependency-provenance.json",
+    "C1-claude-code/acceptance/keep-pr/independent-receipt-verify.stderr",
+    "C1-claude-code/acceptance/keep-pr/independent-receipt-verify.stdout",
+    "C1-claude-code/acceptance/keep-pr/independent-record-verify.stderr",
+    "C1-claude-code/acceptance/keep-pr/independent-record-verify.stdout",
+    "C1-claude-code/acceptance/keep-pr/keep-pr-provenance.json",
+    "C1-claude-code/acceptance/keep-pr/negative-evidence.json",
+    "C1-claude-code/acceptance/keep-pr/network-events.json",
+    "C1-claude-code/acceptance/keep-pr/original-tests.stderr",
+    "C1-claude-code/acceptance/keep-pr/original-tests.stdout",
+    "C1-claude-code/acceptance/keep-pr/original/.axocoatl/receipt-keys",
+    "C1-claude-code/acceptance/keep-pr/original/.github/workflows/verify-receipt.yml",
+    "C1-claude-code/acceptance/keep-pr/original/.gitignore",
+    "C1-claude-code/acceptance/keep-pr/original/README.md",
+    "C1-claude-code/acceptance/keep-pr/original/package-lock.json",
+    "C1-claude-code/acceptance/keep-pr/original/package.json",
+    "C1-claude-code/acceptance/keep-pr/original/src/paginate.js",
+    "C1-claude-code/acceptance/keep-pr/original/test/paginate.test.js",
+    "C1-claude-code/acceptance/keep-pr/outcome.json",
+    "C1-claude-code/acceptance/keep-pr/patch.diff",
+    "C1-claude-code/acceptance/keep-pr/pr-repo-reset.log",
+    "C1-claude-code/acceptance/keep-pr/receipt-statement.json",
+    "C1-claude-code/acceptance/keep-pr/receipt.json",
+    "C1-claude-code/acceptance/keep-pr/run.axorecord.jsonl",
+    "C1-claude-code/acceptance/keep-pr/runtime-version.stderr",
+    "C1-claude-code/acceptance/keep-pr/runtime-version.stdout",
+    "C1-claude-code/acceptance/keep-pr/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+    "C1-claude-code/acceptance/keep-pr/verify-receipt-action.log",
+    "C1-claude-code/answers.txt",
+    "C1-claude-code/continuation/append-provenance.json",
+    "C1-claude-code/continuation/append-staging.py",
+    "C1-claude-code/continuation/assessment.json",
+    "C1-claude-code/continuation/candidate-sources/crates/axocoatl-config/loadouts/fix-claude-code.yaml",
+    "C1-claude-code/continuation/candidate-sources/docs/RELEASE_GATE.md",
+    "C1-claude-code/continuation/candidate-sources/scripts/release-gate/evidence.mjs",
+    "C1-claude-code/continuation/candidate-sources/scripts/release-gate/lib.sh",
+    "C1-claude-code/continuation/candidate-sources/scripts/release-gate/newuser-mac.sh",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/fixtures.json",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/.gitignore",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/README.md",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/package-lock.json",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/package.json",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/src/paginate.js",
+    "C1-claude-code/continuation/candidate-sources/tests/fixtures/newuser/node-deps/test/paginate.test.js",
+    "C1-claude-code/continuation/composer-input-manifest.json",
+    "C1-claude-code/continuation/composer-output.json",
+    "C1-claude-code/continuation/composer-tests.log",
+    "C1-claude-code/continuation/composer-tests.py",
+    "C1-claude-code/continuation/composer.py",
+    "C1-claude-code/continuation/effective-execution-configuration.json",
+    "C1-claude-code/continuation/gate-keys.public",
+    "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+    "C1-claude-code/continuation/original-attempt/manifest.dsse.json",
+    "C1-claude-code/continuation/original-attempt/manifest.json",
+    "C1-claude-code/continuation/resumed-status.json",
+    "C1-claude-code/continuation/retained-source-verification.json",
+    "C1-claude-code/continuation/retention-map.json",
+    "C1-claude-code/continuation/source-lock.json",
+    "C1-claude-code/continuation/source-signature-verification.json",
+    "C1-claude-code/continuation/step-provenance.json",
+    "C1-claude-code/continuation/verify-retained-bundle.mjs",
+    "C1-claude-code/doctor.json",
+    "C1-claude-code/hero-command.txt",
+    "C1-claude-code/hero-node-deps/axocoatl-junit.xml",
+    "C1-claude-code/hero-node-deps/changes.txt",
+    "C1-claude-code/hero-node-deps/command.txt",
+    "C1-claude-code/hero-node-deps/receipt.json",
+    "C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+    "C1-claude-code/hero-node-deps/run.log",
+    "C1-claude-code/hero-python-pytest/axocoatl-junit.xml",
+    "C1-claude-code/hero-python-pytest/changes.txt",
+    "C1-claude-code/hero-python-pytest/command.txt",
+    "C1-claude-code/hero-python-pytest/receipt.json",
+    "C1-claude-code/hero-python-pytest/run.axorecord.jsonl",
+    "C1-claude-code/hero-python-pytest/run.log",
+    "C1-claude-code/keep-pr/receipt.json",
+    "C1-claude-code/keep-pr/run.axorecord.jsonl",
+    "C1-claude-code/logs/axocoatl-doctor--as-the-site-shows-it--exits-0.log",
+    "C1-claude-code/logs/clone-codeoperators-axocoatl-gate-150-recovery-20261026.log",
+    "C1-claude-code/logs/dev.log",
+    "C1-claude-code/logs/doctor---json-says-ready.log",
+    "C1-claude-code/logs/gh-is-signed-in.log",
+    "C1-claude-code/logs/hero-command-with---keep-pr.log",
+    "C1-claude-code/logs/onboard---update---writer-claude-code--interactive--every-answer-is-in-the-trans.log",
+    "C1-claude-code/logs/onboarding/onboard-20261026-190315.log",
+    "C1-claude-code/logs/pr-repo-reset.log",
+    "C1-claude-code/logs/receipt-matches-the-record-on-hero-node-deps.log",
+    "C1-claude-code/logs/receipt-matches-the-record-on-hero-python-pytest.log",
+    "C1-claude-code/logs/receipt-verify-on-hero-node-deps--documented-command-.log",
+    "C1-claude-code/logs/receipt-verify-on-hero-python-pytest--documented-command-.log",
+    "C1-claude-code/logs/record-verify-on-hero-node-deps.log",
+    "C1-claude-code/logs/record-verify-on-hero-python-pytest.log",
+    "C1-claude-code/logs/reviewer-anthropic-opus-is-refused--exit-3.log",
+    "C1-claude-code/logs/run-fix-on-hero-node-deps.log",
+    "C1-claude-code/logs/run-fix-on-hero-python-pytest.log",
+    "C1-claude-code/logs/the-verify-receipt-workflow-s-checks-pass-on-the-pull-request.log",
+    "C1-claude-code/logs/verify-receipt-action.log",
+    "C1-claude-code/operator-cancellation.json",
+    "C1-claude-code/operator.json",
+    "C1-claude-code/supplemental-provenance.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/axocoatl-junit.xml",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/changes.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/command.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/receipt.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.axorecord.jsonl",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/configuration.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/doctor.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/dev.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/doctor-JSON-ready-for-supplemental-Claude-checks.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/doctor-text-ready.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/receipt-matches-the-record-on-claude-node-deps.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/receipt-verify-on-claude-node-deps--documented-command-.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/record-verify-on-claude-node-deps.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/logs/run-fix-on-claude-node-deps.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/provenance.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/published-command.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/runner.sh",
+    "C1-claude-code/supplemental/one-hour-node-recovery/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/transcript.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/accepted-answers.stderr",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/accepted-answers.stdout",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/activation-summary.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/assessment.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/axocoatl-junit.xml",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/changes.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/command.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/commands.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/.gitignore",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/README.md",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/package-lock.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/package.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/src/paginate.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/final/test/paginate.test.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/gate-output-exclusions.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/git-status-after.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/git-status-before.txt",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/.gitignore",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/README.md",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/package-lock.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/package.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/src/paginate.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-check/test/paginate.test.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/host-dependency-provenance.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-receipt-verify.stderr",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-receipt-verify.stdout",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-record-verify.stderr",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/independent-record-verify.stdout",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/negative-evidence.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/network-events.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-test-suite-provenance.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-tests.stderr",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original-tests.stdout",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/.gitignore",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/README.md",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/package-lock.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/package.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/src/paginate.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/original/test/paginate.test.js",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/outcome.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/patch.diff",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/receipt-statement.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/receipt.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/run.axorecord.jsonl",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/run.log",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/runtime-version.stderr",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/node-deps/runtime-version.stdout",
+    "C1-claude-code/supplemental/one-hour-node-recovery/acceptance/summary.json",
+    "C1-claude-code/supplemental/one-hour-node-recovery/transcript.txt",
+    "C1-claude-code/transcript.txt"
+  ],
+  "continuation": {
+    "schema": "axocoatl.recovery.operator-continuation/1",
+    "prepared_at": "2026-10-27T00:51:07.870330+00:00",
+    "operator": "Codex assistant",
+    "authority": "Maintainer authorized completion from the previously observed fresh prerequisites and the later missing Node block; unchanged pass criteria.",
+    "unsigned": true,
+    "original_attempt": {
+      "file": "C1-claude-code/continuation/original-attempt/C1-claude-code.json",
+      "sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b"
+    },
+    "original_attempt_pass": false,
+    "original_failed_steps": [
+      11,
+      25
+    ],
+    "replaced_dependent_steps": [
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17
+    ],
+    "rederived_summary_step": 25,
+    "fresh_onboarding_repeated": false,
+    "new_inference": false,
+    "tracked_source_changed": false,
+    "observation_intervals": [
+      [
+        "2026-10-26T19:03:15Z",
+        "2026-10-26T19:20:21.501Z"
+      ],
+      [
+        "2026-10-27T00:01:19Z",
+        "2026-10-27T00:02:10.587Z"
+      ]
+    ],
+    "global_configuration_identity": "Historical global YAML hash was not recorded and is not claimed known. Equality is established for the recorded effective execution configuration, built-in loadout, fixture originals, image, setup, checks, review and budgets.",
+    "operator_attribution": "Original path labels name the OS account erick; the signed operator record attributes the actions to Codex using a tool-owned PTY and CUA, with browser authentication observed. This successor makes no human-only operator claim.",
+    "excluded_per_attempt_fields": [
+      "manifest.repo",
+      "manifest.repo_head",
+      "manifest.session_id",
+      "manifest.workspace_id",
+      "manifest.run_id",
+      "manifest.started_at_ms",
+      "manifest.options.request_id",
+      "manifest.options.environment.cache_volume",
+      "manifest.options.environment.setup.duration_ms",
+      "manifest.options.environment.probe.duration_ms",
+      "session.created_at",
+      "session.last_active",
+      "session.id",
+      "session.workspace_id",
+      "session.working_dir",
+      "session.environment.runtime.id",
+      "session.environment.prepared_at",
+      "session.loadout.run_id",
+      "team.slots.0.expires_at_ms"
+    ],
+    "effective_configuration_sha256": "12ee2580044745f9fc31971226f11f38187be8680d1f65a15ab511ca7303ba3c",
+    "supplemental_owner_configuration_sha256": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990",
+    "source_signature": {
+      "problems": [],
+      "key": "55371c0d1106a8f9",
+      "paths": [
+        {
+          "name": "A-arm",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "A-x86-refusal",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "A-x86",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "B-arm",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "B-intel",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-browser-webkit",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-claude-code",
+          "pass": false,
+          "problems": [
+            "C1-claude-code: did not pass",
+            "C1-claude-code: step \"run fix on hero-node-deps\" failed: exit 6, expected 0: · JUnit written to axocoatl-junit.xml · record written to run.axorecord.jsonl · receipt written to receipt.json (key 8a7a6b546e72ca24, 0 files covered, 0 removed, workspace_at_fini",
+            "C1-claude-code: step \"the home page's fix-claude-code command passed on node-deps and python-pytest\" failed: axocoatl run fix-claude-code --task \"Paging skips the last item\" --receipt receipt.json: see the failing steps above"
+          ]
+        },
+        {
+          "name": "C1-codex",
+          "pass": false,
+          "problems": [
+            "C1-codex: did not pass",
+            "C1-codex: step \"onboard --update --writer codex (interactive; every answer is in the transcript)\" failed: exit 1, expected 0: interactive step; see the transcript (exit 1) "
+          ]
+        },
+        {
+          "name": "C1-local",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-openrouter",
+          "pass": false,
+          "problems": [
+            "C1-openrouter: did not pass",
+            "C1-openrouter: step \"onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)\" failed: exit 1, expected 0: interactive step; see the transcript (exit 1) "
+          ]
+        },
+        {
+          "name": "C1-real-repo",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-recovery",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-service",
+          "pass": true,
+          "problems": []
+        },
+        {
+          "name": "C1-workbench-webkit",
+          "pass": true,
+          "problems": []
+        }
+      ]
+    },
+    "remaining_release_conditions": "This is Claude path completion only; it is unsigned until maintainer review and does not establish other paths, main CI or publication readiness."
+  }
+}

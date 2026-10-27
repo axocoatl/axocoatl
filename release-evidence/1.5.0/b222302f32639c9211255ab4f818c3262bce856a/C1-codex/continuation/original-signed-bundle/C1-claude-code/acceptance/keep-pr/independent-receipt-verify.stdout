@@ -1,0 +1,37 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb",
+  "verdict": "pass",
+  "statement_sha256": "sha256:32cb1d15327661e3ac2bca8087c615a849b559733edeb26206cf28ce3184166e",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/pr-repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/keep-pr/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-da6ea8e6-e0cb-4cd7-be57-c9dbf27d8ecb (fix-claude-code@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-265af712-0f54-4eb5-9f9f-8d83924607d0, finished at 1793042380039 ms",
+    "Base commit dcb55fbeffbc01afe7f3b0ac5fd3787cdf5ef0e3 of https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026.git",
+    "Agent writer (writer): claude-code 2.1.292, anthropic:sonnet",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by ollama:gpt-oss:20b (ollama 0.40.11): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paginate.js  sha256:838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 3): api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)",
+    "  route#0 api.anthropic.com: model-call bodies checked, provider fetches refused",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

@@ -1,0 +1,18 @@
+0 verbose cli /Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node /Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm
+1 info using npm@10.9.8
+2 info using node@v22.23.2
+3 silly config load:file:/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check/.npmrc
+5 silly config load:file:/Users/erick/.npmrc
+6 silly config load:file:/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/etc/npmrc
+7 verbose title npm test
+8 verbose argv "test"
+9 verbose logfile logs-max:10 dir:/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/npm-cache/_logs/2026-10-26T18_08_37_517Z-
+10 verbose logfile /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/npm-cache/_logs/2026-10-26T18_08_37_517Z-debug-0.log
+11 silly logfile done cleaning log files
+12 verbose cwd /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-workbench-b222302f/acceptance/host-check
+13 verbose os Darwin 25.6.0
+14 verbose node v22.23.2
+15 verbose npm  v10.9.8
+16 verbose exit 0
+17 info ok

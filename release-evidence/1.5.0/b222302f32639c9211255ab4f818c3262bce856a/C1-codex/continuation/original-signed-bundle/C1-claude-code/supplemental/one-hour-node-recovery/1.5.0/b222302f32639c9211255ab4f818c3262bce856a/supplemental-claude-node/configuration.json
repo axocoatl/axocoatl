@@ -1,0 +1,10 @@
+{
+  "loadout": "fix-claude-code",
+  "credential": "claude-code-oauth",
+  "reviewer": "ollama:gpt-oss:20b",
+  "configuration_snapshot_sha256": "bc0877f914dcabba791ffcc6b9c56ab23d1a0b363ff5ba2674bb8e11a6dfc990",
+  "onboarding": false,
+  "configuration_mutated": false,
+  "configuration_source": "Existing owner config, verified unchanged before each fixture and after all runs",
+  "snapshot_mode": "0400"
+}

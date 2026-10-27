@@ -1,0 +1,98 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "a611583de28c46d0b41fe4ab21e98bd4462dc1301625d9ecabb86524aa2950f9",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.50654ms)\n\u2714 keeps the last item on a page of its own (0.062666ms)\n\u2714 keeps items when there are fewer than a full page (0.055624ms)\n\u2714 returns no pages for empty input (0.042583ms)\n\u2714 refuses a page size below one (0.135458ms)\n\u2139 tests 5\n\u2139 suites 0\n\u2139 pass 5\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 30.587294\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793059453084,
+  "loadout": {
+    "builtin": true,
+    "digest": "6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd",
+    "id": "fix-codex",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 6,
+    "events": 31,
+    "refused_connections": 0,
+    "route_requests": 6,
+    "routes": [
+      [
+        "chatgpt.com",
+        6
+      ]
+    ]
+  },
+  "not_covered": [],
+  "notes": [
+    "Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com).",
+    "image localhost/axocoatl-recipe-codex-node:9ecb56968dac \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup none"
+  ],
+  "ollama_versions": {
+    "gpt-oss:20b": [
+      "0.40.11"
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "a611583de28c46d0b41fe4ab21e98bd4462dc1301625d9ecabb86524aa2950f9",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-36e29dc3-a54c-480e-8145-5c36967b1441",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-9979020b-ce3e-4ce9-919c-6dd8f0631f57",
+  "started_at_ms": 1793059404601,
+  "task": "Fix the bug: paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-22982ea5-3ce4-4a02-b0d5-dae6250282e8"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_computed": true,
+    "cost_known": true,
+    "cost_microunits": 45894,
+    "input_tokens": 99717,
+    "output_tokens": 1715,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-ed434b04-de7b-4615-b47f-096b6c401691"
+}

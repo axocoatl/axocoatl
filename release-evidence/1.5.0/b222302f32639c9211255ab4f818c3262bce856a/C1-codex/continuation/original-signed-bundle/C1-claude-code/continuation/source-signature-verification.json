@@ -1,0 +1,86 @@
+{
+  "problems": [],
+  "key": "55371c0d1106a8f9",
+  "paths": [
+    {
+      "name": "A-arm",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "A-x86-refusal",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "A-x86",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "B-arm",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "B-intel",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-browser-webkit",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-claude-code",
+      "pass": false,
+      "problems": [
+        "C1-claude-code: did not pass",
+        "C1-claude-code: step \"run fix on hero-node-deps\" failed: exit 6, expected 0: · JUnit written to axocoatl-junit.xml · record written to run.axorecord.jsonl · receipt written to receipt.json (key 8a7a6b546e72ca24, 0 files covered, 0 removed, workspace_at_fini",
+        "C1-claude-code: step \"the home page's fix-claude-code command passed on node-deps and python-pytest\" failed: axocoatl run fix-claude-code --task \"Paging skips the last item\" --receipt receipt.json: see the failing steps above"
+      ]
+    },
+    {
+      "name": "C1-codex",
+      "pass": false,
+      "problems": [
+        "C1-codex: did not pass",
+        "C1-codex: step \"onboard --update --writer codex (interactive; every answer is in the transcript)\" failed: exit 1, expected 0: interactive step; see the transcript (exit 1) "
+      ]
+    },
+    {
+      "name": "C1-local",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-openrouter",
+      "pass": false,
+      "problems": [
+        "C1-openrouter: did not pass",
+        "C1-openrouter: step \"onboard --update --writer openrouter (connect in the browser when it asks) (interactive; every answer is in the transcript)\" failed: exit 1, expected 0: interactive step; see the transcript (exit 1) "
+      ]
+    },
+    {
+      "name": "C1-real-repo",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-recovery",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-service",
+      "pass": true,
+      "problems": []
+    },
+    {
+      "name": "C1-workbench-webkit",
+      "pass": true,
+      "problems": []
+    }
+  ]
+}

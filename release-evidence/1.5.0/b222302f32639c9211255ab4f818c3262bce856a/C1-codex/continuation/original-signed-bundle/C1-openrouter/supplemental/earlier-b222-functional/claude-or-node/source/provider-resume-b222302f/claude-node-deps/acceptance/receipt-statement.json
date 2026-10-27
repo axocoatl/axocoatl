@@ -1,0 +1,182 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "src/paginate.js",
+      "digest": {
+        "sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab"
+      }
+    }
+  ],
+  "predicateType": "https://axocoatl.ai/receipt/v1",
+  "predicate": {
+    "run": {
+      "run_id": "run-76219595-26cc-4753-bee7-71fd7c803721",
+      "session_id": "ses-8a294f1e-c0a3-447d-bf9f-e7d66fbdf90a",
+      "started_at_ms": 1793037095110,
+      "finished_at_ms": 1793037134406,
+      "axocoatl_version": "1.5.0",
+      "task_sha256": "8df97588f021a44c6c80f155939ddc596fad0a226ca7bcc5bc903ebe316551f0"
+    },
+    "repository": {
+      "base_commit": "90cf19015534989984365e7b521ae34a0bac798d",
+      "dirty_paths": []
+    },
+    "loadout": {
+      "id": "fix-claude-code",
+      "version": 1,
+      "kind": "fix",
+      "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "builtin": true
+    },
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "sandbox": {
+      "backend": "podman",
+      "network": "egress",
+      "workload": "hardened",
+      "policies": [
+        {
+          "scope": "provisioning",
+          "revision": 1,
+          "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+          "rules": [
+            "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+            "deb.debian.org:80,443 (preset debian)",
+            "security.debian.org:80,443 (preset debian)",
+            "archive.ubuntu.com:80,443 (preset ubuntu)",
+            "security.ubuntu.com:80,443 (preset ubuntu)",
+            "ports.ubuntu.com:80,443 (preset ubuntu)"
+          ]
+        },
+        {
+          "scope": "session",
+          "revision": 3,
+          "digest": "a7d544fd475c4c672bd01c4b622e9c12e1eff051a76c4dd14971037b5202d399",
+          "rules": [
+            "api.anthropic.com:443 (route#0: 1 rule, credential claude-code-oauth, for agent, provider fetches refused)"
+          ],
+          "routes": [
+            {
+              "id": "route#0",
+              "host": "api.anthropic.com",
+              "provider_fetch": "refuse"
+            }
+          ]
+        }
+      ],
+      "environment": {
+        "toolchain": "node",
+        "reason": "package.json at the repository root",
+        "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+        "image_id": "f0b898486d81d2bc678b029f6ee8d3f0666ebda054c324243117b18f087b4fee",
+        "recipes": [
+          "claude-code",
+          "node"
+        ],
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "setup": {
+          "command": "npm ci --prefer-offline --no-audit --no-fund",
+          "source": "detected",
+          "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+          "exit_code": 0,
+          "duration_ms": 1349,
+          "registry_hosts": [
+            "registry.npmjs.org"
+          ],
+          "allowed_connections": 6,
+          "refused_connections": 0
+        },
+        "cache_volume": "axo-tc-497fbbbdc70df41f308bd957",
+        "probe": {
+          "program": "npm",
+          "program_found": true,
+          "baseline_exit": 1,
+          "duration_ms": 291
+        }
+      },
+      "limits": {
+        "memory": "2g",
+        "cpus": "2",
+        "pids": 512
+      }
+    },
+    "network": {
+      "events": 41,
+      "allowed_connections": 9,
+      "refused_connections": 0,
+      "route_requests": 5,
+      "routes": [
+        [
+          "api.anthropic.com",
+          5
+        ]
+      ]
+    },
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "da0aa908d9b4cdf5875e9e683cb7db0fe05383d2087478dec5b83009ffad32aa"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint near-ai/fp4 (Near AI)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "adjudications": [],
+    "verdict": "pass",
+    "exit_code": 0,
+    "attention": [],
+    "not_covered": {
+      "count": 0,
+      "areas": []
+    },
+    "warnings": [],
+    "usage": {
+      "input_tokens": 100544,
+      "output_tokens": 990,
+      "cost_microunits": 58822,
+      "cost_usd": 0.058822,
+      "complete": true,
+      "cost_known": true,
+      "cost_computed": false
+    },
+    "files": {
+      "source": "judged_capture",
+      "tree_sha256": "da0aa908d9b4cdf5875e9e683cb7db0fe05383d2087478dec5b83009ffad32aa",
+      "removed": [],
+      "complete": true,
+      "unattributed": []
+    },
+    "signer": {
+      "algorithm": "ed25519",
+      "public_key": "1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM=",
+      "key_id": "sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d"
+    }
+  }
+}

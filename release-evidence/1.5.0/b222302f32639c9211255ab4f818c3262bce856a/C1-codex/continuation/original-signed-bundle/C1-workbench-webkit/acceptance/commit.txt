@@ -1,0 +1,7 @@
+commit 83f61151707d2f47d262ef4f776c2d1526bf02b4
+Author:     Erick Echeverria <erick@codeoperators.com>
+AuthorDate: Mon Oct 26 11:04:38 2026 -0700
+Commit:     Erick Echeverria <erick@codeoperators.com>
+CommitDate: Mon Oct 26 11:04:38 2026 -0700
+
+    Fix full last page pagination

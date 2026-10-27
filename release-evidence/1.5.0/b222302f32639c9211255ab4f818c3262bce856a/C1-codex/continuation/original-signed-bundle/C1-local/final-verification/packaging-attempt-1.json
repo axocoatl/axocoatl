@@ -1,0 +1,6 @@
+{
+  "result": "stopped_before_completion",
+  "reason": "Packaging filter rejected a previously signed npm diagnostic log; original bundle untouched. Corrected filter allows this preserved log and continues excluding dependency payloads.",
+  "partial_stage_preserved": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/staged-attempt-1-preserved",
+  "source_or_test_result_changed": false
+}

@@ -1,0 +1,19 @@
+{
+  "pull_request": "https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/pull/3",
+  "kept_branch": "axocoatl/fix-claude-code-da6ea8e6",
+  "kept_commit": "eaf2c9ab1a85e8586a4fc18fb9446c4006f80439",
+  "kept_commit_matches_assessed_files": true,
+  "kept_changed_paths": [
+    "src/paginate.js"
+  ],
+  "receipt_trailer_digest": "sha256:32cb1d15327661e3ac2bca8087c615a849b559733edeb26206cf28ce3184166e",
+  "base_signer_matches_fresh_trust": true,
+  "workflow_pinned_to_source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "strict_action_verified_this_run": true,
+  "action_run": "40385751156",
+  "action_evidence_source": "Unmodified official gate-collected logs; no additional network call",
+  "gate_baseline_extras": [
+    ".axocoatl/receipt-keys",
+    ".github/workflows/verify-receipt.yml"
+  ]
+}

@@ -1,0 +1,7 @@
+   Compiling diff v0.1.13
+   Compiling yansi v1.0.1
+   Compiling pretty_assertions v1.4.1
+   Compiling newuser-rust v0.1.0 (/private/tmp/axo-b222-rust-artifact-audit-t_z9m1xi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+     Running unittests src/lib.rs (/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-rust/cargo-target/debug/deps/newuser_rust-ef88723a5ae84dbe)
+   Doc-tests newuser_rust

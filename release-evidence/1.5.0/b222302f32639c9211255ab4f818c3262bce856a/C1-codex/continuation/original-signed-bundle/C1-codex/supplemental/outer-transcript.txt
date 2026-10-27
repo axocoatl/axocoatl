@@ -1,0 +1,259 @@
+gate: PASS  exact b222 installed binary and candidate archive verified
+gate: PASS  existing Codex ChatGPT secret is stored
+Fixture-only run: no onboarding, configuration writes, or new authentication.
+gate: PASS  Codex uses the ChatGPT-plan credential
+gate: PASS  reviewer is local Ollama
+gate: RUN   doctor JSON ready for supplemental Codex checks
+  (loading gpt-oss:20b once to read its context…)
+gate: PASS  doctor JSON ready for supplemental Codex checks (10.6s)
+gate: PASS  doctor ready with no failing item
+gate: RUN   doctor text ready
+  (loading gpt-oss:20b once to read its context…)
+Axocoatl doctor (config: /Users/erick/Library/Application Support/Axocoatl/config.yaml)
+
+Sandbox
+  [ OK ] Podman 6.1.4 ready (machine podman-machine-default: applehv, rootless, 6 CPUs / 8 GiB; kernel 7.2.7-200.fc44.aarch64), needed for every Session and every axocoatl run
+  [ OK ] Platform: macOS on Apple silicon, as the release gate verifies
+  [ OK ] Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)
+  [ OK ] Sandbox workload: image (commands run as the image's own user)
+
+Models
+  [ OK ] Ollama 0.40.11 at http://localhost:11434, a version native Sessions accept
+  [ OK ] Ollama cloud models disabled at http://localhost:11434 (~/.ollama/server.json)
+  [ OK ] gpt-oss:20b: GGUF; 13.8 GB, fits in memory; 32768-token context, contract probes passed; 12.8 GB loaded, all in GPU memory
+
+Writers
+  [ OK ] Claude Code: claude-code image built
+  [ OK ] Claude Code: signed in (claude-code-oauth stored)
+  [ OK ] codex image built
+  [ OK ] Codex: signed in (codex-chatgpt stored)
+  [ OK ] claude CLI: /opt/homebrew/bin/claude 2.1.92 (Claude Code)
+  [ OK ] codex CLI: not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container
+  [ OK ] gh: signed in (for `--keep pr`)
+  [ OK ] Stored credentials: claude-code-oauth, codex-chatgpt, receipt-signing-key
+
+Daemon
+  [ OK ] Config valid: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  [ OK ] Data dir writable: /Users/erick/Library/Application Support/Axocoatl/data
+  [ OK ] Data dir ownership: recorded for this directory
+  [ OK ] git 2.39.5 (the daemon runs git on your repositories)
+  [WARN] Daemon: no daemon running; `axocoatl run` and the workbench need one
+         → Start it with `axocoatl dev` (or `axocoatl service start`)
+  [ OK ] Webhooks: none (no outbound event egress)
+
+Ready for: axocoatl run fix-claude-code, axocoatl run fix-codex --param credential=codex-chatgpt, workbench Sessions
+  ✓ axocoatl run fix-claude-code (reviewer ollama:gpt-oss:20b)
+  ✓ axocoatl run fix-codex --param credential=codex-chatgpt (reviewer ollama:gpt-oss:20b)
+  ✓ workbench Sessions (Lead ollama:gpt-oss:20b)
+Ready: yes
+gate: PASS  doctor text ready (3.4s)
+gate: PASS  doctor says Ready for: axocoatl run fix-codex, Ready: yes, no [FAIL]
+gate: PASS  owned supplemental daemon ready
+gate: PASS  configuration unchanged before node-deps
+gate: RUN   run fix on codex-node-deps
+· building the run's image localhost/axocoatl-recipe-codex-node:9ecb56968dac (codex + node, from docker.io/library/node:24.21.0-bookworm-slim): about 100 MB to download plus codex, about 770 MB on disk, once on this computer; later runs reuse it
+STEP 1/11: FROM docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+STEP 2/11: ENV NPM_CONFIG_UPDATE_NOTIFIER=false     NPM_CONFIG_FUND=false     NPM_CONFIG_AUDIT=false
+--> Using cache 722261635eb48d074e3bdf1b86b28e473829176d0192e9eb10e5b96c1493fdda
+--> 722261635eb4
+STEP 3/11: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git  && rm -rf /var/lib/apt/lists/*  && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!(major > 24 || (major === 24 && minor >= 8))) { console.error("recipe base needs Node >= 24.8, found " + process.version); process.exit(1); }'  && for command in sh git env grep tee rm mkdir mv cp cat head wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "recipe base lacks $command" >&2; exit 1; };     done
+--> Using cache 794afd719c5fa4d16a1e872066985e50ca6d3f8e343a1a84e6ede5b38c3c2855
+--> 794afd719c5f
+STEP 4/11: RUN printf '%s\n'       '#!/usr/bin/env node'       'const crypto = require("crypto"), fs = require("fs");'       'const [file, wanted] = process.argv.slice(2);'       'const [algorithm, expected] = wanted.split(/-(.*)/s);'       'const actual = crypto.createHash(algorithm).update(fs.readFileSync(file)).digest("base64");'       'if (actual !== expected) { console.error("integrity mismatch for " + file + ": " + algorithm + "-" + actual); process.exit(1); }'       > /usr/local/bin/axocoatl-verify-integrity  && chmod 0755 /usr/local/bin/axocoatl-verify-integrity
+--> Using cache 08e6cb97abcb2a5876e89c3c1a8262ae5e9d39598973d2fc8f93b6226c64bd27
+--> 08e6cb97abcb
+STEP 5/11: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=node-24.21.0-bookworm
+--> Using cache f667d96649b06b689f6d2ce98338d0fd0a86ab3d49f30daa54b8deb0fceac3c4
+--> f667d96649b0
+STEP 6/11: ENV AXOCOATL_TOOLCHAIN=node     AXOCOATL_CACHE=/opt/axocoatl-cache     npm_config_cache=/opt/axocoatl-cache/node/npm     npm_config_logs_max=0     COREPACK_HOME=/opt/axocoatl-cache/node/corepack     COREPACK_ENABLE_DOWNLOAD_PROMPT=0     YARN_CACHE_FOLDER=/opt/axocoatl-cache/node/yarn     YARN_GLOBAL_FOLDER=/opt/axocoatl-cache/node/yarn-berry     YARN_ENABLE_TELEMETRY=0
+--> Using cache cd18b48239ed022bd5fc81f194b382216a8aa36ff52341a12c9be33656418eef
+--> cd18b48239ed
+STEP 7/11: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends make  && rm -rf /var/lib/apt/lists/*  && corepack enable  && mkdir -p /opt/axocoatl-cache  && node --version  && npm --version
+--> Using cache 1febc6444d2b84dd25ba1dc99a5021f833253766d27b71981b62f1e7d01ad345
+--> 1febc6444d2b
+STEP 8/11: LABEL io.axocoatl.toolchain=node       io.axocoatl.toolchain.version=node-24.21.0
+--> Using cache 91f7441e0850e118611efd5b2d84c71e9f0fde779fe3191028809db18f4a6346
+--> 91f7441e0850
+STEP 9/11: RUN set -eu;     case "$(uname -m)" in       x86_64) platform=linux-x64; triple=x86_64-unknown-linux-musl; integrity='sha512-sIDhqV+bsZKKVaVFVY5iB+pAzyOz2XRm3H1KXCsSJwGj5p98qnrT0Fweo1Hfe7WnyTp8mfBNdbVzUeO+mHYugA==' ;;       aarch64) platform=linux-arm64; triple=aarch64-unknown-linux-musl; integrity='sha512-JLyjBlmjPvwTaicHemw+y5xQSz3Uja2r7F/xkvS8gFufTA2g132Ak+0fo35xnJ/k2uc9fTtjm0LrsEGI78L6Ng==' ;;       *) echo "codex: no pinned build for $(uname -m)" >&2; exit 1 ;;     esac;     work=$(mktemp -d); cd "$work";     npm pack --silent "@openai/codex@0.160.1-${platform}" >/dev/null;     axocoatl-verify-integrity "openai-codex-0.160.1-${platform}.tgz" "$integrity";     mkdir -p /opt/axocoatl/codex;     tar -xzf "openai-codex-0.160.1-${platform}.tgz" -C /opt/axocoatl/codex --strip-components=3 --no-same-owner "package/vendor/${triple}";     chmod -R a+rX /opt/axocoatl/codex;     ln -s /opt/axocoatl/codex/bin/codex /usr/local/bin/codex;     cd /; rm -rf "$work" /root/.npm;     codex --version
+codex-cli 0.160.1
+--> 2fc5bfd6416c
+STEP 10/11: LABEL io.axocoatl.recipe.codex=0.160.1
+--> af9eb317dbc1
+STEP 11/11: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="codex,node" "io.axocoatl.recipe-digest"="9ecb56968dacbc3c419f88396fafe7cd13be33069dc4a2647fb68c53f3c5faf9"
+COMMIT localhost/axocoatl-recipe-codex-node:9ecb56968dac
+--> fb8504e8724e
+Successfully tagged localhost/axocoatl-recipe-codex-node:9ecb56968dac
+fb8504e8724e0d17d2fc4f468a206c03076fd68caa1a372c46d509d187451dd8
+· built localhost/axocoatl-recipe-codex-node:9ecb56968dac in 8 s (image id fb8504e8724e)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix-codex in /Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/node-deps
+· run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a in Session ses-df73cdf6-67de-4be0-b467-5d389f8d57a8
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+· note: image localhost/axocoatl-recipe-codex-node:9ecb56968dac · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.4 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix-codex
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-78455907-0e80-49d9-85e8-b36962660e6c started (run)
+· turn turn-78455907-0e80-49d9-85e8-b36962660e6c ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix-codex@1 sha256:6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+  image localhost/axocoatl-recipe-codex-node:9ecb56968dac · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.4 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 70157 input + 1928 output tokens, $0.0181 (includes cost computed from reported tokens at list prices)
+Network: 39 recorded events, 10 allowed and 0 refused connections, 4 route requests
+Record: run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key 8a7a6b546e72ca24, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on codex-node-deps (74.0s)
+gate: PASS  run on codex-node-deps chose a node image
+gate: PASS  run on codex-node-deps ran setup (npm ci)
+gate: RUN   receipt verify on codex-node-deps (documented command)
+receipt of run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on codex-node-deps (documented command) (0.0s)
+gate: RUN   record verify on codex-node-deps
+valid: run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a in Session ses-df73cdf6-67de-4be0-b467-5d389f8d57a8, written by Axocoatl 1.5.0, 60 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 39
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on codex-node-deps (0.0s)
+gate: RUN   receipt matches the record on codex-node-deps
+receipt of run run-bfa77bfa-4eb3-436f-9798-b6a89c9e495a, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on codex-node-deps (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on codex-node-deps
+gate: PASS  configuration unchanged before python-pytest
+gate: RUN   run fix on codex-python-pytest
+· building the run's image localhost/axocoatl-recipe-codex-python:c75fb26e819a (codex + python, from docker.io/library/python:3.13.16-slim-bookworm): about 65 MB to download plus Node.js and codex, about 795 MB on disk, once on this computer; later runs reuse it
+STEP 1/15: FROM docker.io/library/python:3.13.16-slim-bookworm@sha256:a1165e272e578941b84abc79e4ab38a0305cd12803a5c4247979ac7655f4d641
+STEP 2/15: RUN export DEBIAN_FRONTEND=noninteractive  && apt-get update -qq  && apt-get install -y --no-install-recommends ca-certificates git make  && rm -rf /var/lib/apt/lists/*  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+--> Using cache dc46d63047f92b8b516d9cff2819be1e0b16a77d7264d208ba4bc8b9a59f2b99
+--> dc46d63047f9
+STEP 3/15: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=python-3.13.16-bookworm
+--> Using cache c6ebb129a97277f7a849a963555df6a9e2314cb7987940d941830e5116224dbb
+--> c6ebb129a972
+STEP 4/15: COPY --from=docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/bin/node /usr/local/bin/node
+--> Using cache 526da03ae880f084d0d2f12677af477b9147794092b959b5c424c61a15324804
+--> 526da03ae880
+STEP 5/15: COPY --from=docker.io/library/node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 /usr/local/lib/node_modules /usr/local/lib/node_modules
+--> Using cache 60fce8034df3e5ed1853664ec68988b01c42e3aa0457f477e04a25c5fec325a2
+--> 60fce8034df3
+STEP 6/15: ENV NPM_CONFIG_UPDATE_NOTIFIER=false     NPM_CONFIG_FUND=false     NPM_CONFIG_AUDIT=false
+--> Using cache 9748ed6a0fed58b666edd0c4fbffa595eeca2cb9332a215b462404dbf3a50a64
+--> 9748ed6a0fed
+STEP 7/15: RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx  && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack  && node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!(major > 24 || (major === 24 && minor >= 8))) { console.error("the node graft needs Node >= 24.8, found " + process.version); process.exit(1); }'  && npm --version >/dev/null
+--> Using cache 56e134a4309dc49732cddd408782e9f7c85e48facf5d99129a7a1a54ef888a02
+--> 56e134a4309d
+STEP 8/15: RUN printf '%s\n'       '#!/usr/bin/env node'       'const crypto = require("crypto"), fs = require("fs");'       'const [file, wanted] = process.argv.slice(2);'       'const [algorithm, expected] = wanted.split(/-(.*)/s);'       'const actual = crypto.createHash(algorithm).update(fs.readFileSync(file)).digest("base64");'       'if (actual !== expected) { console.error("integrity mismatch for " + file + ": " + algorithm + "-" + actual); process.exit(1); }'       > /usr/local/bin/axocoatl-verify-integrity  && chmod 0755 /usr/local/bin/axocoatl-verify-integrity
+--> Using cache b5c84f5f1a4e8d7bb3bb15169459f95b7d5d85eb56c6ba3d79c5495b47d2a971
+--> b5c84f5f1a4e
+STEP 9/15: ENV AXOCOATL_TOOLCHAIN=python     AXOCOATL_CACHE=/opt/axocoatl-cache     VIRTUAL_ENV=/opt/axocoatl-cache/python/venv     PIP_CACHE_DIR=/opt/axocoatl-cache/python/pip     PIP_DISABLE_PIP_VERSION_CHECK=1     PIP_NO_INPUT=1     PIP_ROOT_USER_ACTION=ignore     PYTHONDONTWRITEBYTECODE=1     PYTEST_ADDOPTS="-p no:cacheprovider"     DIST_EXTRA_CONFIG=/etc/axocoatl/setuptools.cfg
+--> Using cache 857b496068fa72f1f502fc385e63f6375fd89876be67808051306e0459b8c214
+--> 857b496068fa
+STEP 10/15: ENV PATH=/opt/axocoatl-cache/python/venv/bin:$PATH
+--> Using cache 61314517848612fc1c5fbfa92bdf431eabc6f9c9f0b7fc39c68571dbf22b6ec1
+--> 613145178486
+STEP 11/15: RUN mkdir -p /opt/axocoatl-cache /etc/axocoatl  && printf '[egg_info]\negg_base = /tmp\n' > /etc/axocoatl/setuptools.cfg  && python3 --version  && python3 -m venv --help >/dev/null  && python3 -m pip --version >/dev/null
+--> Using cache 6f8a26fbd1f2fb9ac8b476875096226ad1d6a1fc486e52d584d1b678b5e7047d
+--> 6f8a26fbd1f2
+STEP 12/15: LABEL io.axocoatl.toolchain=python       io.axocoatl.toolchain.version=python-3.13.16
+--> Using cache ea86a7ab3dfb626e1e2224afd630cd7f93076e9c5ac4645aca30542747b2f5e3
+--> ea86a7ab3dfb
+STEP 13/15: RUN set -eu;     case "$(uname -m)" in       x86_64) platform=linux-x64; triple=x86_64-unknown-linux-musl; integrity='sha512-sIDhqV+bsZKKVaVFVY5iB+pAzyOz2XRm3H1KXCsSJwGj5p98qnrT0Fweo1Hfe7WnyTp8mfBNdbVzUeO+mHYugA==' ;;       aarch64) platform=linux-arm64; triple=aarch64-unknown-linux-musl; integrity='sha512-JLyjBlmjPvwTaicHemw+y5xQSz3Uja2r7F/xkvS8gFufTA2g132Ak+0fo35xnJ/k2uc9fTtjm0LrsEGI78L6Ng==' ;;       *) echo "codex: no pinned build for $(uname -m)" >&2; exit 1 ;;     esac;     work=$(mktemp -d); cd "$work";     npm pack --silent "@openai/codex@0.160.1-${platform}" >/dev/null;     axocoatl-verify-integrity "openai-codex-0.160.1-${platform}.tgz" "$integrity";     mkdir -p /opt/axocoatl/codex;     tar -xzf "openai-codex-0.160.1-${platform}.tgz" -C /opt/axocoatl/codex --strip-components=3 --no-same-owner "package/vendor/${triple}";     chmod -R a+rX /opt/axocoatl/codex;     ln -s /opt/axocoatl/codex/bin/codex /usr/local/bin/codex;     cd /; rm -rf "$work" /root/.npm;     codex --version
+codex-cli 0.160.1
+--> 3195deedbe2f
+STEP 14/15: LABEL io.axocoatl.recipe.codex=0.160.1
+--> 8d6f68426674
+STEP 15/15: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="codex,python" "io.axocoatl.recipe-digest"="c75fb26e819a3415216b29c0dcbdadb337be8eba3349c4ee8f91ad8b08b985cf"
+COMMIT localhost/axocoatl-recipe-codex-python:c75fb26e819a
+--> 29e132408b37
+Successfully tagged localhost/axocoatl-recipe-codex-python:c75fb26e819a
+29e132408b37bbf799f9d3ac202fb88da0b3ae7519e6fe13017878a56293992a
+· built localhost/axocoatl-recipe-codex-python:c75fb26e819a in 8 s (image id 29e132408b37)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix-codex in /Users/erick/axocoatl-gate-work/supplemental-codex-fixtures-only-b222302f/python-pytest
+· run run-ccb1bfbc-b435-4596-abc8-22c102bc93c9 in Session ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+· note: image localhost/axocoatl-recipe-codex-python:c75fb26e819a · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+· note: setup `pip install -e '.[test]'` (detected): exited 0 (6.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix-codex
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea started (run)
+· turn turn-5e56a70a-3000-4dfa-a60c-79067bbe55ea ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix-codex@1 sha256:6ac7c49221f5f52b70c7c2c2bee84d0d641d78dc9e6dac3135b74bebbc78a7bd
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  Agent writer (codex) sends the stored credential codex-chatgpt (a ChatGPT sign-in, sent to chatgpt.com); credential auto chose it, the first of codex-openai and codex-chatgpt that is stored.
+  image localhost/axocoatl-recipe-codex-python:c75fb26e819a · toolchain python (pyproject.toml at the repository root) · check python3 -m pytest (detected from the repository) · setup pip install -e '.[test]' (detected; registries pypi.org, files.pythonhosted.org open for it alone)
+  setup `pip install -e '.[test]'` (detected): exited 0 (6.5 s); 4 connections to pypi.org, files.pythonhosted.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 124340 input + 1791 output tokens, $0.0281 (includes cost computed from reported tokens at list prices)
+Network: 59 recorded events, 12 allowed and 6 refused connections, 8 route requests
+Record: run-ccb1bfbc-b435-4596-abc8-22c102bc93c9
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key 8a7a6b546e72ca24, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on codex-python-pytest (91.8s)
+gate: PASS  run on codex-python-pytest chose a python image
+gate: PASS  run on codex-python-pytest ran setup (pip install)
+gate: RUN   receipt verify on codex-python-pytest (documented command)
+receipt of run run-ccb1bfbc-b435-4596-abc8-22c102bc93c9, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on codex-python-pytest (documented command) (0.0s)
+gate: RUN   record verify on codex-python-pytest
+valid: run run-ccb1bfbc-b435-4596-abc8-22c102bc93c9 in Session ses-d31c39dd-83bc-4323-98fd-d9fd6125ca65, written by Axocoatl 1.5.0, 80 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 59
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on codex-python-pytest (0.0s)
+gate: RUN   receipt matches the record on codex-python-pytest
+receipt of run run-ccb1bfbc-b435-4596-abc8-22c102bc93c9, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on codex-python-pytest (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on codex-python-pytest
+gate: PASS  supplemental daemon stopped with exit 0
+gate: PASS  owner configuration hash is unchanged after fixtures
+supplemental-codex-fixtures-only: PASS (27/27 steps passed)
+gate: evidence: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/supplemental-codex-fixtures-only-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-codex-fixtures-only.json

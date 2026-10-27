@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce",
+  "run_id": "run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f",
+  "verdict": "pass",
+  "statement_sha256": "sha256:76c22fe24a76dd7e7650038b4cd3554347cccb4c49b015d4f2124c5536551a5d",
+  "files": {
+    "repo": "/Users/erick/axocoatl-gate-work/repos/readme-rust",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-rust/run.axorecord.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-4ddb74ad-def1-4e1a-aa38-ce872fe26d9f (fix@1), verdict pass, exit code 0",
+    "Signed by key 8a7a6b546e72ca24 (ed25519 sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)",
+    "Axocoatl 1.5.0, Session ses-a514a75a-8856-4a9d-b5a0-b48ea39541a3, finished at 1793041282780 ms",
+    "Base commit f2a5b630d4edaa45c5e297cba9f22a51390e7a8b",
+    "Agent writer (writer): native ollama 0.40.11, ollama:qwen3-coder:30b",
+    "Check tests: passed, exit 0 (sh -c cargo test)",
+    "Review by ollama:gpt-oss:20b (ollama 0.40.11): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/lib.rs  sha256:5a4ca1b9177f617cb55401b72019ef75edcbb9ed99d99f8ea6d98aa6fad07519",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 7): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

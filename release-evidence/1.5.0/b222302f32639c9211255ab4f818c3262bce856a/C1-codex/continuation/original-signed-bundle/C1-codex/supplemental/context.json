@@ -1,0 +1,56 @@
+{
+  "schema": "axocoatl.recovery.supplemental-context/1",
+  "recorded_at": "2026-10-26T20:56:22.906199+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "scope": "Separate existing-install Codex fixtures after user-completed authentication; no fresh onboarding claim.",
+  "runtime_steps": {
+    "pass": true,
+    "passed": 27,
+    "recorded": 27,
+    "finished_at": "2026-10-26T20:53:40.884Z"
+  },
+  "artifact_acceptance": {
+    "node-deps": {
+      "result": "ACCEPTED",
+      "sha256": "623fee7638aa0afc45a7db9a3d2729df4be5db014a447b87507e8ce7066771c8",
+      "original_tests_unchanged": true,
+      "original_suite_invocations": 1,
+      "verification": {
+        "receipt_exit": 0,
+        "record_exit": 0,
+        "markup_exit": 0,
+        "original_repo_unchanged_by_audit": true
+      }
+    },
+    "python-pytest": {
+      "result": "ACCEPTED",
+      "sha256": "f4172d91fc880e282d943f3ad7d9ebea65bcd18bc18a24bdaa15c1ec8ecf7ec0",
+      "original_tests_unchanged": true,
+      "original_suite_invocations": 1,
+      "verification": {
+        "receipt_exit": 0,
+        "record_exit": 0,
+        "markup_exit": 0,
+        "original_repo_unchanged_by_audit": true
+      }
+    }
+  },
+  "formal_C1_codex": {
+    "pass": false,
+    "passed_steps": 4,
+    "recorded_steps": 5,
+    "original_path_unchanged": true
+  },
+  "preceding_context": "Earlier operator-qualification.json records supplemental checks as pending at the time. This later completed evidence supersedes only that pending status, without altering the failed original onboarding.",
+  "root_reported_wrapper": {
+    "exit_code": 0,
+    "owned_daemon_stop_exit": 0,
+    "owner_configuration_unchanged": true,
+    "source": "Root execution report; corresponding runner/provenance/logs retained."
+  },
+  "openrouter": "Paused at authorization. Automatic approval review rejected extending the authorization wait as human-only; explicit user approval was pending when root requested this addition. No OpenRouter evidence is read or copied here.",
+  "D1": "Stopped at user direction; incomplete and not waived.",
+  "new_formal_paths": [],
+  "required_paths_satisfied": [],
+  "credential_contents_copied": false
+}

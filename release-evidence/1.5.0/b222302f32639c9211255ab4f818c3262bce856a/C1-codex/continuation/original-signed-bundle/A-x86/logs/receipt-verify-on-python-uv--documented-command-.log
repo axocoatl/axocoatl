@@ -1,0 +1,4 @@
+receipt of run run-79abe04a-f310-474d-8d66-394732a76ffe, verdict pass
+signature: valid, by trusted key dca4a52536891bc7 (sha256:dca4a52536891bc7ea25096e395830fa999ca9a13719332b949defbbbae46bfa)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)

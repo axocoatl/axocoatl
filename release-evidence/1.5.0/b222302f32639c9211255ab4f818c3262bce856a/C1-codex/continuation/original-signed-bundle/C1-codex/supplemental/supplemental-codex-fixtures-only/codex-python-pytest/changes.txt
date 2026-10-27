@@ -1,0 +1,16 @@
+ M pages.py
+?? axocoatl-junit.xml
+?? receipt.json
+?? run.axorecord.jsonl
+diff --git a/pages.py b/pages.py
+index b9b1243..afb90f1 100644
+--- a/pages.py
++++ b/pages.py
+@@ -13,6 +13,6 @@ def paginate(items, size):
+     pages = []
+     for page in range(count):
+         start = page * size
+-        length = size if page < count - 1 else len(items) % size
++        length = size if page < count - 1 else len(items) - start
+         pages.append(items[start:start + length])
+     return pages

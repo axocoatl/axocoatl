@@ -1,0 +1,618 @@
+[
+  {
+    "event": {
+      "digest": "3d761d88932ffab82279a9cd1316414f61a84406bb9f521fd34f7424ce8ac22f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+      ],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793059401272,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793059401272,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-9979020b-ce3e-4ce9-919c-6dd8f0631f57",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793059403149,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-9979020b-ce3e-4ce9-919c-6dd8f0631f57",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793059403340,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 5,
+    "ts_ms": 1793059405200,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 6,
+    "ts_ms": 1793059405879,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 7,
+    "ts_ms": 1793059405883,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "cookies_dropped": 3,
+      "down": 99575,
+      "kind": "response",
+      "ms": 5204,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 55530
+    },
+    "seq": 8,
+    "ts_ms": 1793059411087,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 104581,
+      "kind": "close",
+      "ms": 5212,
+      "outcome": "closed",
+      "up": 58590
+    },
+    "seq": 9,
+    "ts_ms": 1793059411089,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 10,
+    "ts_ms": 1793059411113,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 11,
+    "ts_ms": 1793059411116,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "cookies_dropped": 3,
+      "down": 82634,
+      "kind": "response",
+      "ms": 2683,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 56949
+    },
+    "seq": 12,
+    "ts_ms": 1793059413800,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 86541,
+      "kind": "close",
+      "ms": 2689,
+      "outcome": "closed",
+      "up": 61032
+    },
+    "seq": 13,
+    "ts_ms": 1793059413801,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 14,
+    "ts_ms": 1793059413812,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 15,
+    "ts_ms": 1793059413815,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "cookies_dropped": 3,
+      "down": 81283,
+      "kind": "response",
+      "ms": 2421,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 59474
+    },
+    "seq": 16,
+    "ts_ms": 1793059416236,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 85087,
+      "kind": "close",
+      "ms": 2450,
+      "outcome": "closed",
+      "up": 63557
+    },
+    "seq": 17,
+    "ts_ms": 1793059416261,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:4",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 18,
+    "ts_ms": 1793059416386,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 19,
+    "ts_ms": 1793059416389,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "cookies_dropped": 3,
+      "down": 166402,
+      "kind": "response",
+      "ms": 5694,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 62123
+    },
+    "seq": 20,
+    "ts_ms": 1793059422083,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "down": 171282,
+      "kind": "close",
+      "ms": 5700,
+      "outcome": "closed",
+      "up": 66206
+    },
+    "seq": 21,
+    "ts_ms": 1793059422085,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:5",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 22,
+    "ts_ms": 1793059422207,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 23,
+    "ts_ms": 1793059422210,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "cookies_dropped": 3,
+      "down": 103916,
+      "kind": "response",
+      "ms": 3543,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 65366
+    },
+    "seq": 24,
+    "ts_ms": 1793059425753,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "down": 108285,
+      "kind": "close",
+      "ms": 3549,
+      "outcome": "closed",
+      "up": 69471
+    },
+    "seq": 25,
+    "ts_ms": 1793059425756,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700:4408::ac40:9bd1",
+        "2a06:98c1:3101::6812:202f",
+        "172.64.155.209",
+        "104.18.32.47"
+      ],
+      "binding": {
+        "activation_id": "activation:d8671a05-7e85-418b-a745-26e4fb9ddc43",
+        "agent": "team-definition-e5c35500e05eb20a1f314e4c5276a58e1a160b76c8bfbb3bc9f35beaba224801",
+        "kind": "agent",
+        "node_id": "team-node-9650e3a91a04bb76833a561f",
+        "process": "external:activation:d8671a05-7e85-418b-a745-26e4fb9ddc43"
+      },
+      "conn": "g1:6",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash",
+          "/usr/bin/dash",
+          "/axocoatl-exec-supervisor"
+        ],
+        "exe": "/opt/axocoatl/codex/bin/codex",
+        "exe_sha256": "fbbaec80443919f86dd63648a0b62759cf6f1d0e09310602fde96885e0bceb3e",
+        "gid": 1000,
+        "pid": 167,
+        "uid": 1000
+      },
+      "policy_revision": 1,
+      "port": 443,
+      "rule": "route#0",
+      "scope": "session",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 26,
+    "ts_ms": 1793059425886,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "credential": "codex-chatgpt",
+      "decision": "allow",
+      "host": "chatgpt.com",
+      "kind": "request",
+      "method": "POST",
+      "path": "/backend-api/codex/responses",
+      "rule": "route#0.rules[0]",
+      "seq_in_conn": 1
+    },
+    "seq": 27,
+    "ts_ms": 1793059425890,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "cookies_dropped": 3,
+      "down": 89122,
+      "kind": "response",
+      "ms": 3771,
+      "outcome": "completed",
+      "seq_in_conn": 1,
+      "status": 200,
+      "up": 68688
+    },
+    "seq": 28,
+    "ts_ms": 1793059429661,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "down": 93191,
+      "kind": "close",
+      "ms": 3778,
+      "outcome": "closed",
+      "up": 72793
+    },
+    "seq": 29,
+    "ts_ms": 1793059429664,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "58f01d37aa9a2b05"
+    },
+    "seq": 30,
+    "ts_ms": 1793059429701,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 31,
+    "ts_ms": 1793059452837,
+    "v": 1
+  }
+]

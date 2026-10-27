@@ -1,0 +1,439 @@
+gate: PASS  free disk at the start
+
+===== C1-service (1.5.0 at b222302f3263) =====
+gate: PASS  resume uses the checksum-verified installed candidate
+
+In Step 6 ("How should Axocoatl run?"), choose "Always on, starting at login" and agree to install it.
+gate: RUN   onboard --update: Step 6, the Always-On Service (interactive)
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261026-141912.log
+
+Step 0 · This computer
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 49 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5.
+Not found: codex.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  1. Claude Code (your Claude Pro or Max plan; claude found at
+     /opt/homebrew/bin/claude)
+  2. Codex (your ChatGPT plan)
+  3. A local model on this computer (Ollama, no account, needs 48 GB memory or
+     more)
+  4. A hosted model (OpenRouter credits)
+[?25lWho writes the code?:
+  1. Claude Code (your Claude Pro or Max plan; claude found at /opt/homebrew/b…
+  2. Codex (your ChatGPT plan)
+  3. A local model on this computer (Ollama, no account, needs 48 GB memory or…
+> 4. A hosted model (OpenRouter credits)
+[5A[2K[1B[2K[1B[2K[1B[2K[1B[2K[1B[5A[?25hWho writes the code?: A hosted model (OpenRouter credits)
+  Writer model: openrouter:qwen/qwen3-coder-30b-a3b-instruct (kept from your configuration)
+  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+Check the sandbox with one throwaway container? This pulls
+docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start
+from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2Kfrom, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A hosted writer and reviewer (OpenRouter)
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native
+Sessions do not support BYOK) [Y/n] [?25l[2KSessions do not support BYOK) yes
+[?25h  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists qwen/qwen3-coder-30b-a3b-instruct
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for qwen/qwen3-coder-30b-a3b-instruct that native Sessions can use now
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+
+Step 4 · The configuration
+  ✓ /Users/erick/Library/Application Support/Axocoatl/config.yaml already has this setup
+
+Step 5 · Check
+  ! Claude Code: not connected (claude-code-oauth is not stored)
+  ! Codex: not connected
+  ! Daemon: no daemon running; `axocoatl run` and the workbench need one
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b)
+  ! axocoatl run fix-claude-code (not connected: run `axocoatl connect claude-code`)
+  ! axocoatl run fix-codex (not connected: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead openrouter:qwen/qwen3-coder-30b-a3b-instruct)
+Ready: yes
+
+Step 6 · Start Axocoatl
+[?25lHow should Axocoatl run?:
+> In this terminal now (axocoatl dev)
+  Always on, starting at login (a launchd or systemd service)
+  I'll start it later
+[3A[2K[1B[2K[1B[2K[1B[3A  In this terminal now (axocoatl dev)
+> Always on, starting at login (a launchd or systemd service)
+  I'll start it later
+[4A[2K[1B[2K[1B[2K[1B[2K[1B[4AHow should Axocoatl run?: Always on, starting at login (a launchd or systemd service)
+[?25hInstall the Always-On Service (it starts Axocoatl at login and keeps it
+running)? [Y/n] [?25l[2Krunning)? yes
+[?25h✓ Always-On Service installed (launchd backend)
+  config: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  podman: /opt/homebrew/bin/podman
+  PATH=/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+  logs:   /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Start it with:  axocoatl service start
+If it was already running, load the new definition with:  axocoatl service restart
+Then open the workbench with the link from:  axocoatl url --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'
+✓ Always-On Service started — the daemon now runs 24/7
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+Run a first fix now on a small sample repository to prove the setup end
+to end? It costs about $0.01 on OpenRouter. [Y/n] [?25l[2Kto end? It costs about $0.01 on OpenRouter. no
+[?25h
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer openrouter:qwen/qwen3-coder-30b-a3b-instruct, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard --update: Step 6, the Always-On Service (interactive) (375.5s)
+gate: PASS  onboarding was answered live in the terminal
+gate: RUN   axocoatl service status (onboarding installed and started the Always-On Service (Step 6))
+Always-On Service (launchd backend)
+  installed: yes
+  running:   yes
+  at login:  yes
+  detail:    loaded
+  logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (onboarding installed and started the Always-On Service (Step 6)) (0.0s)
+gate: PASS  onboarding installed and started the Always-On Service (Step 6)
+gate: PASS  the service answers on port 8080
+gate: RUN   onboard --update --writer ollama --smoke-test (the configuration changes while the service runs) (interactive; every answer is in the transcript)
+Axocoatl setup
+Every command this runs is logged to /Users/erick/Library/Logs/Axocoatl/onboard-20261026-142527.log
+
+Step 0 · This computer
+This computer: macOS 26.6, Apple M5 Pro, 48 GB memory, 18 cores, 49 GB free.
+Found: Homebrew 7.0.10, Podman 6.1.4 (ready), Ollama 0.40.11 at http://localhost:11434 (cloud models off), claude 2.1.92, gh, git 2.39.5, a running Axocoatl 1.5.0 daemon, the Always-On Service (installed, /usr/local/bin/axocoatl).
+Not found: codex.
+Port 8080 is in use; Axocoatl will use the next free port.
+
+An Axocoatl configuration exists: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+
+Step 1 · Who writes the code
+  Writer: A local model on this computer (Ollama, no account, needs 48 GB memory or more) (--writer)
+  Reviewer model: openrouter:openai/gpt-oss-120b (kept from your configuration)
+Every fix run also needs a reviewer: a different model that only reads the change. Claude Code and Codex can write but cannot review.
+
+Step 2 · The sandbox (rootless Podman)
+Check the sandbox with one throwaway container? This pulls
+docker.io/library/alpine:3.20 (about 4 MB), the image Sessions start
+from, and runs it rootless with your user mapped in and no network. [Y/n] [?25l[2Kfrom, and runs it rootless with your user mapped in and no network. yes
+[?25hTrying to pull docker.io/library/alpine:3.20...
+Getting image source signatures
+Copying blob sha256:3f26bc2dec0b515f1c2818f6e13a8f1da1f88179a008445d4e587233386bff78
+Copying config sha256:ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+Writing manifest to image destination
+ab3fe4defd29ba6231229a4d41440ac8bde8218e85870e53876277faa24b35c4
+  ✓ Sandbox ready: Podman 6.1.4, applehv, rootless, 6 CPUs / 8 GiB
+
+Step 3 · A local writer and reviewer (Ollama)
+  ✓ Ollama 0.40.11 at http://localhost:11434, cloud models off (2 models installed)
+  Suggested: writer qwen3-coder:30b (from the models on this server that fit this computer).
+[?25lModel for the writer (Lead; Scout and the chat Assistant use it too):
+  gpt-oss:20b (20.9B, 13.8 GB)
+> qwen3-coder:30b (30.5B, 18.6 GB)
+  Another model (enter its name)
+[4A[2K[1B[2K[1B[2K[1B[2K[1B[4AModel for the writer (Lead; Scout and the chat Assistant use it too): qwen3-coder:30b (30.5B, 18.6 GB)
+[?25h  The reviewer runs on OpenRouter.
+  Native Sessions pay for OpenRouter with your OpenRouter credits, so Axocoatl can count what each call costs. BYOK ("bring your own key") is another provider's API key, such as OpenAI's or Anthropic's, added to your OpenRouter account at https://openrouter.ai/settings/integrations: OpenRouter then sends calls to that provider on your key and the provider bills you, so Axocoatl cannot count the cost, and native Sessions refuse it. A new OpenRouter account has no BYOK keys.
+Use OpenRouter credits, with no BYOK provider keys connected? (Native
+Sessions do not support BYOK) [Y/n] [?25l[2KSessions do not support BYOK) yes
+[?25h  OpenRouter key: the one you connected, stored as secret openrouter (never shown)
+  ✓ OpenRouter accepted the key
+  ✓ OpenRouter lists openai/gpt-oss-120b
+  ✓ OpenRouter has an endpoint for openai/gpt-oss-120b that native Sessions can use now
+  ✓ qwen3-coder:30b is installed
+  Loading qwen3-coder:30b once to read its context…
+  ✓ qwen3-coder:30b: 32768-token context, contract probes passed
+
+Step 4 · The configuration
+  Changes to /Users/erick/Library/Application Support/Axocoatl/config.yaml:
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     provider: openrouter
+    -     model: "qwen/qwen3-coder-30b-a3b-instruct"
+    +     provider: ollama
+    +     model: "qwen3-coder:30b"
+    -     sampling:
+    -       max_tokens: 2048
+    - # Writer: openrouter (axocoatl run fix)
+    + # Writer: ollama (axocoatl run fix)
+    -     writer: "openrouter:qwen/qwen3-coder-30b-a3b-instruct"
+    +     writer: "ollama:qwen3-coder:30b"
+Write these changes? The current file is kept as
+config.yaml.bak-20261026-142654 next to it. [Y/n] [?25l[2Kconfig.yaml.bak-20261026-142654 next to it. yes
+[?25h  ✓ Backed up to /Users/erick/Library/Application Support/Axocoatl/config.yaml.bak-20261026-142654
+  ✓ Configuration written: /Users/erick/Library/Application Support/Axocoatl/config.yaml
+  ✓ Data: /Users/erick/Library/Application Support/Axocoatl/data
+
+Step 5 · Check
+  ! Claude Code: not connected (claude-code-oauth is not stored)
+  ! Codex: not connected
+Ready for: axocoatl run fix, workbench Sessions
+  ✓ axocoatl run fix (writer ollama:qwen3-coder:30b, reviewer openrouter:openai/gpt-oss-120b)
+  ! axocoatl run fix-claude-code (not connected: run `axocoatl connect claude-code`)
+  ! axocoatl run fix-codex (not connected: run `axocoatl connect codex`)
+  ✓ workbench Sessions (Lead ollama:qwen3-coder:30b)
+Ready: yes
+
+Step 7 · A first run
+  Sample repository: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+The Always-On Service started before /Users/erick/Library/Application
+Support/Axocoatl/config.yaml changed, so the first run would use the old
+configuration. Restart it now (this ends any Session turn or run in
+progress)? [Y/n] [?25l[2Kprogress)? yes
+[?25h✓ Always-On Service restarted with its installed definition — the daemon now runs 24/7
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+  ✓ Using the daemon running on port 8080
+  $ axocoatl run fix --task 'Fix the bug: paging skips the last item' --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo --receipt /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --record /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/record.jsonl --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml' --model writer=ollama:qwen3-coder:30b --model reviewer=openrouter:openai/gpt-oss-120b
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+· run run-7a29e423-19f1-44dd-a52d-9fdbcc63b394 in Session ses-4d0a5b34-0e2f-4dbc-9edc-1ff534977ff1
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-7f16e24e-0f4d-4f18-b499-1213d1414f96 started (run)
+· turn turn-7f16e24e-0f4d-4f18-b499-1213d1414f96 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup none
+  openai/gpt-oss-120b on OpenRouter: 8 calls answered by endpoint coreweave/fp4 (CoreWeave)
+Usage: 64714 input + 1738 output tokens, $0.0007
+Network: 13 recorded events, 0 allowed and 0 refused connections, 0 route requests
+Record: run-7a29e423-19f1-44dd-a52d-9fdbcc63b394
+· record written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/record.jsonl
+· receipt written to /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json (key 40f14e2ddf0bef15, 1 file covered, 0 removed, judged_capture)
+  $ axocoatl receipt verify /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json --key "$(axocoatl receipt key)" --repo /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo
+receipt of run run-7a29e423-19f1-44dd-a52d-9fdbcc63b394, verdict pass
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+files: 1 covered and 0 removed match /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/repo (judged_capture)
+result: valid (exit 0)
+  ✓ First run passed (exit 0), its review passed, and its receipt verifies: /var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-70165af41e6c4febac73609919dd9cee/receipt.json
+
+Next, in your own repository (start Axocoatl first with `axocoatl dev` if it is not running):
+  cd ~/src/my-app
+  axocoatl run fix --task "Describe the bug"
+(writer ollama:qwen3-coder:30b, reviewer openrouter:openai/gpt-oss-120b come from your setup; --model ROLE=PROVIDER:MODEL overrides them)
+gate: PASS  onboard --update --writer ollama --smoke-test (the configuration changes while the service runs) (interactive; every answer is in the transcript) (182.5s)
+gate: PASS  onboarding was answered live in the terminal
+gate: PASS  onboarding restarted the service after the configuration changed (Step 7)
+gate: RUN   run fix on service-node-deps
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /Users/erick/axocoatl-gate-work/repos/service-node-deps
+· run run-43d63e61-3d9d-4417-970d-bc2005b0825e in Session ses-b48aea6f-2bd6-4a3d-a27c-37c98efe973e
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-562eb451-c48a-4cdd-80a0-5bc94f046816 started (run)
+· turn turn-562eb451-c48a-4cdd-80a0-5bc94f046816 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 7 calls answered by endpoint coreweave/fp4 (CoreWeave)
+Usage: 83336 input + 2683 output tokens, $0.0008
+Network: 33 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-43d63e61-3d9d-4417-970d-bc2005b0825e
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 40f14e2ddf0bef15, 2 files covered, 0 removed, judged_capture)
+gate: PASS  run fix on service-node-deps (78.9s)
+gate: PASS  run on service-node-deps chose a node image
+gate: PASS  run on service-node-deps ran setup (npm ci)
+gate: RUN   receipt verify on service-node-deps (documented command)
+receipt of run run-43d63e61-3d9d-4417-970d-bc2005b0825e, verdict pass
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+files: 2 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on service-node-deps (documented command) (0.0s)
+gate: RUN   record verify on service-node-deps
+valid: run run-43d63e61-3d9d-4417-970d-bc2005b0825e in Session ses-b48aea6f-2bd6-4a3d-a27c-37c98efe973e, written by Axocoatl 1.5.0, 54 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 33
+  run_event: 13
+  receipt: 1
+gate: PASS  record verify on service-node-deps (0.0s)
+gate: RUN   receipt matches the record on service-node-deps
+receipt of run run-43d63e61-3d9d-4417-970d-bc2005b0825e, verdict pass
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on service-node-deps (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on service-node-deps
+gate: PASS  a fix through the Always-On Service passed, its receipt and record verified
+gate: RUN   axocoatl service status (axocoatl service status: installed and running)
+Always-On Service (launchd backend)
+  installed: yes
+  running:   yes
+  at login:  yes
+  detail:    loaded
+  logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service status: installed and running) (0.0s)
+gate: PASS  axocoatl service status: installed and running
+gate: RUN   axocoatl service stop
+✓ Always-On Service stopped
+gate: PASS  axocoatl service stop (0.3s)
+gate: RUN   axocoatl service status (axocoatl service stop: the service is not running)
+Always-On Service (launchd backend)
+  installed: yes
+  running:   no
+  at login:  no
+  detail:    installed, not loaded
+  logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Open the workbench with the link from `axocoatl url --config CONFIG`, where CONFIG is the configuration the service was installed with.
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service stop: the service is not running) (0.0s)
+gate: PASS  axocoatl service stop: the service is not running
+gate: PASS  nothing answers on port 8080 after the service stopped
+gate: RUN   axocoatl service uninstall
+✓ Always-On Service uninstalled
+gate: PASS  axocoatl service uninstall (0.0s)
+gate: RUN   axocoatl service status (axocoatl service uninstall: not installed, its unit removed)
+Always-On Service (launchd backend)
+  installed: no
+  running:   no
+  at login:  no
+  detail:    not installed
+  logs:      /Users/erick/Library/Logs/Axocoatl/daemon.log
+
+Note: this is the Always-On *Service* (keeps the daemon process alive).
+Proactive Agents — agents that act on their own — are managed as Automations in Settings.
+gate: PASS  axocoatl service status (axocoatl service uninstall: not installed, its unit removed) (0.0s)
+gate: PASS  axocoatl service uninstall: not installed, its unit removed
+gate: PASS  free disk at the end
+C1-service: PASS (28/28 steps passed)
+gate: evidence: /Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-service-recovery-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-service.json
+gate: PASS  free disk at the start
+
+===== C1-recovery (1.5.0 at b222302f3263) =====
+gate: PASS  resume uses the checksum-verified installed candidate
+gate: PASS  axocoatl dev answers on port 8080 with the current configuration
+gate: RUN   podman machine stop
+Machine "podman-machine-default" stopped successfully
+gate: PASS  podman machine stop (3.6s)
+gate: PASS  the Podman machine is stopped before the run
+gate: RUN   run fix on recovery-node-deps
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /Users/erick/axocoatl-gate-work/repos/recovery-node-deps
+· run run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5 in Session ses-bdbfdd5b-d6e2-4968-b00c-084783158d2c
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+· note: setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-f03d332c-9a5f-4301-8369-62d42175814b started (run)
+· provider call retried for required-review: the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 22 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason "stop" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call
+· turn turn-f03d332c-9a5f-4301-8369-62d42175814b ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup npm ci --prefer-offline --no-audit --no-fund (detected; registries registry.npmjs.org open for it alone)
+  setup `npm ci --prefer-offline --no-audit --no-fund` (detected): exited 0 (1.5 s); 6 connections to registry.npmjs.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 9 calls answered by endpoint coreweave/fp4 (CoreWeave)
+Usage: 83331 input + 1767 output tokens, $0.0009, 1 provider retry
+Network: 33 recorded events, 6 allowed and 0 refused connections, 0 route requests
+Record: run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 40f14e2ddf0bef15, 1 file covered, 0 removed, judged_capture)
+gate: PASS  run fix on recovery-node-deps (76.6s)
+gate: PASS  run on recovery-node-deps chose a node image
+gate: PASS  run on recovery-node-deps ran setup (npm ci)
+gate: RUN   receipt verify on recovery-node-deps (documented command)
+receipt of run run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5, verdict pass
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+gate: PASS  receipt verify on recovery-node-deps (documented command) (0.0s)
+gate: RUN   record verify on recovery-node-deps
+valid: run run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5 in Session ses-bdbfdd5b-d6e2-4968-b00c-084783158d2c, written by Axocoatl 1.5.0, 55 section lines
+  manifest: 1
+  loadout: 1
+  outcome: 1
+  session: 1
+  team: 1
+  turn: 1
+  history: 1
+  network: 33
+  run_event: 14
+  receipt: 1
+gate: PASS  record verify on recovery-node-deps (0.0s)
+gate: RUN   receipt matches the record on recovery-node-deps
+receipt of run run-0adda6be-11c1-47e5-9984-4c4b48a5d5b5, verdict pass
+signature: valid, by trusted key 40f14e2ddf0bef15 (sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)
+gate: PASS  receipt matches the record on recovery-node-deps (0.0s)
+gate: PASS  no tool-call markup in the accepted output of the run on recovery-node-deps
+gate: PASS  a run with the machine stopped passed, its receipt and record verified
+gate: PASS  the run started the stopped machine
+gate: PASS  free disk at the end

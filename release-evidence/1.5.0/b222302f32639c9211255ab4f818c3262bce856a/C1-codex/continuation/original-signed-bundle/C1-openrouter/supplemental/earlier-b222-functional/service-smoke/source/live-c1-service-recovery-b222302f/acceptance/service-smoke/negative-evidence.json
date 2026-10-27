@@ -1,0 +1,32 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 24,
+      "payload": {
+        "call_id": "call-ac66c76c-ddf6-4dd5-abda-75907dc6f0c6",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "cause": "Unknown: exported record contains argument/result hashes and lengths, not raw tool arguments or error body. The reviewer completed and approved; exact error causes are not independently exposed."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 28,
+      "payload": {
+        "call_id": "call-dd3ba9df-1db8-4835-9b8b-98c5db5c0796",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "cause": "Unknown: exported record contains argument/result hashes and lengths, not raw tool arguments or error body. The reviewer completed and approved; exact error causes are not independently exposed."
+    }
+  ],
+  "recorded_baseline_exit": 1,
+  "retry_scope": "One accepted activation per role, no failure, one review round and no retry/refusal event in the exported streams; raw transport attempts are not independently visible."
+}

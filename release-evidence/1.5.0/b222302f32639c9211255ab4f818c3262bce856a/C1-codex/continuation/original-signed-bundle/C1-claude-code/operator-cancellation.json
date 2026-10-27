@@ -1,0 +1,20 @@
+{
+  "time": "2026-10-26T19:17:08.218997+00:00",
+  "operator": "Codex assistant",
+  "run_id": "run-8ff54b58-1904-4ddf-9193-3e983357cc38",
+  "session_id": "ses-1671c084-363e-45bb-84bb-6fd274fb251b",
+  "reason": "Agent-authored cat >> /dev/null blocked on stdin; background Bash task remained alive and attempt stopped making observable progress; configured external-program deadline 20:07:23.577Z was excessive for fixture",
+  "action": "SIGINT only to exact run CLI pid84673, invoking normal run cancellation and evidence export",
+  "artifact_result": "retain failed/cancelled attempt, no manual fix or retry",
+  "observed_result": {
+    "verdict": "interrupted",
+    "product_exit_code": 6,
+    "required_review": "not_run",
+    "required_checks": "not_run",
+    "receipt_coverage": "incomplete, writer uncovered",
+    "usage": "unknown, external writer did not return final usage",
+    "route_requests": 8,
+    "no_harness_deadlock_proven": true,
+    "finished_at": "2026-10-26T19:17:09.550Z"
+  }
+}

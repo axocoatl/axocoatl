@@ -1,0 +1,124 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "A-x86-refusal",
+  "tier": "A",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T13:58:41Z",
+  "finished_at": "2026-10-26T13:59:18.271Z",
+  "steps": [
+    {
+      "name": "start without axocoatl on PATH",
+      "status": "pass",
+      "required": true,
+      "detail": "HOME=/tmp/axo-gate.6AP6Zu/home"
+    },
+    {
+      "name": "scripted model server (gate stub reporting 0.40.6, cloud off)",
+      "status": "pass",
+      "required": true,
+      "detail": "http://127.0.0.1:42747"
+    },
+    {
+      "name": "install with the published command",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1,
+      "bytes_downloaded": 118,
+      "detail": "curl -fsSL https://axocoatl.ai/install.sh | sh"
+    },
+    {
+      "name": "installed binary is where the installer said",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl"
+    },
+    {
+      "name": "a new shell finds axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "bash -lc: /usr/local/bin/axocoatl; bash -ic: /usr/local/bin/axocoatl"
+    },
+    {
+      "name": "installed binary is the tarball's",
+      "status": "pass",
+      "required": true,
+      "detail": "396697b6cd99926e8688b86208ac13c92821d6a9ddcb649b168e009ecf019c60"
+    },
+    {
+      "name": "axocoatl --version names 1.5.0",
+      "status": "pass",
+      "required": true,
+      "detail": "axocoatl 1.5.0"
+    },
+    {
+      "name": "onboard refuses this machine (exit 1)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 4.3,
+      "bytes_downloaded": 1186
+    },
+    {
+      "name": "onboard names Podman 3.4.4",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "doctor --json is not ready",
+      "status": "pass",
+      "required": true,
+      "exit_code": 1,
+      "seconds": 1.3,
+      "bytes_downloaded": 3874
+    },
+    {
+      "name": "doctor fails Podman, naming Podman 3.4.4",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "nothing ran sudo or a package manager through PATH",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "nothing ran sudo by any path (system journal)",
+      "status": "pass",
+      "required": true,
+      "detail": "the journal shows no sudo command"
+    }
+  ],
+  "host": {
+    "os": "Linux",
+    "release": "ubuntu 22.04",
+    "kernel": "6.8.0-1064-azure",
+    "arch": "x86_64",
+    "runner": "github-hosted ubuntu22 20261023.322.3",
+    "memory_bytes": 16765411328,
+    "cpus": 4,
+    "user": "runner"
+  },
+  "tools": {
+    "podman": "3.4.4",
+    "git": "2.55.0",
+    "node": "v22.23.3",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "gate stub reporting 0.40.6"
+  },
+  "attachments": [
+    "A-x86-refusal/doctor-refusal.json",
+    "A-x86-refusal/install-command.txt",
+    "A-x86-refusal/logs/doctor---json-is-not-ready.log",
+    "A-x86-refusal/logs/guard.log",
+    "A-x86-refusal/logs/install-curl-urls.log",
+    "A-x86-refusal/logs/install.log",
+    "A-x86-refusal/logs/onboard-refuses-this-machine--exit-1-.log",
+    "A-x86-refusal/logs/onboarding/onboard-20261026-135912.log",
+    "A-x86-refusal/logs/stub-model-server.jsonl",
+    "A-x86-refusal/logs/stub-model-server.log",
+    "A-x86-refusal/transcript.txt"
+  ]
+}

@@ -1,0 +1,5 @@
+Refreshing checks status every 15 seconds. Press Ctrl+C to quit.
+
+receipt	pending	0	https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/actions/runs/40385751156/job/121793434082	
+receipt	pass	15s	https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/actions/runs/40385751156/job/121793434082	
+receipt	pass	15s	https://github.com/codeoperators/axocoatl-gate-150-recovery-20261026/actions/runs/40385751156/job/121793434082	

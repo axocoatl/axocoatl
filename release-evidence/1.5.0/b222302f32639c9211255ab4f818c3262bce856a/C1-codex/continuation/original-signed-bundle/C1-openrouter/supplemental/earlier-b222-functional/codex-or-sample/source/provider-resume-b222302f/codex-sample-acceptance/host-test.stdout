@@ -1,0 +1,44 @@
+
+> axocoatl-first-run@1.0.0 test
+> node --test
+
+TAP version 13
+# Subtest: splits items into full pages
+ok 1 - splits items into full pages
+  ---
+  duration_ms: 0.634541
+  type: 'test'
+  ...
+# Subtest: keeps the last item on a page of its own
+ok 2 - keeps the last item on a page of its own
+  ---
+  duration_ms: 0.073125
+  type: 'test'
+  ...
+# Subtest: keeps items when there are fewer than a full page
+ok 3 - keeps items when there are fewer than a full page
+  ---
+  duration_ms: 0.078959
+  type: 'test'
+  ...
+# Subtest: returns no pages for empty input
+ok 4 - returns no pages for empty input
+  ---
+  duration_ms: 0.0355
+  type: 'test'
+  ...
+# Subtest: refuses a page size below one
+ok 5 - refuses a page size below one
+  ---
+  duration_ms: 0.122209
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 39.423375

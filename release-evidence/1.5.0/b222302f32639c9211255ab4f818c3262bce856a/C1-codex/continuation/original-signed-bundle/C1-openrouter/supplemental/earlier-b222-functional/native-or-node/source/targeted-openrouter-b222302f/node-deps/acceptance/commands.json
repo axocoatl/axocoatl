@@ -1,0 +1,99 @@
+[
+  {
+    "name": "receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/receipt.json",
+      "--key",
+      "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/record.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:03.171296+00:00",
+    "end": "2026-10-26T14:19:03.177958+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "d1536fce0413b1d6252b5ea5f0194a1c959a7117b99667b484d6221a9494176f",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/record.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:03.178093+00:00",
+    "end": "2026-10-26T14:19:03.184037+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "836ddc394b84b8cff3191509a416a573f88ce3dd393136eb5efe02aebc72b203",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:03.184214+00:00",
+    "end": "2026-10-26T14:19:03.193352+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "host-setup",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "ci",
+      "--offline",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:03.193475+00:00",
+    "end": "2026-10-26T14:19:03.345146+00:00",
+    "exit_code": 1,
+    "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderr_sha256": "d2977c3d9a568244f6f9fc202abbc938a46308623ee94caa3ca2022be88dc575"
+  },
+  {
+    "name": "host-setup-online",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "ci",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:58.836973+00:00",
+    "end": "2026-10-26T14:19:59.188591+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "e37ab260c14eb4e9cf5cbd344c65b281feaca25b62ddca2b8607e4bfdaab609f",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+    "start": "2026-10-26T14:19:59.188803+00:00",
+    "end": "2026-10-26T14:19:59.561274+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "1ee8609fec674b061b791f769cf16a45de709580b32efb3a27801cd363b864b9",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

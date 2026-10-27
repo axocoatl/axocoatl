@@ -1,0 +1,1 @@
+axocoatl run fix-claude-code --task "Paging skips the last item" --receipt receipt.json --junit axocoatl-junit.xml --record run.axorecord.jsonl

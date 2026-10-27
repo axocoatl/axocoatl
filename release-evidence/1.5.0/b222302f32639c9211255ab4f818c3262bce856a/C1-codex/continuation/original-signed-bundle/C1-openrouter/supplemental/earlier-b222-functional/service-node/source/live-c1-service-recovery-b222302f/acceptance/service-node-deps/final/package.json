@@ -1,0 +1,11 @@
+{
+  "name": "newuser-node-deps",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "uvu test"
+  },
+  "devDependencies": {
+    "uvu": "0.5.6"
+  }
+}

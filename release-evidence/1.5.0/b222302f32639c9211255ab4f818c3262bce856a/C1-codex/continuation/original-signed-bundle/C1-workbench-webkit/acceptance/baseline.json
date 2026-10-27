@@ -1,0 +1,12 @@
+{
+  "base_commit": "a6e8722f65dae052ffa65881a6cadc1abefb18d6",
+  "note": "Baseline captured read-only while turn was active, using committed bytes; src/paginate.js was already dirty at that observation.",
+  "tracked_files": {
+    ".gitignore": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+    "README.md": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+    "package-lock.json": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+    "package.json": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+    "src/paginate.js": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+    "test/paginate.test.js": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0"
+  }
+}

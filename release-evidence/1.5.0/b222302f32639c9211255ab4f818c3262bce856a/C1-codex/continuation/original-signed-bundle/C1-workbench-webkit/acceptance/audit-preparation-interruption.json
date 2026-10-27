@@ -1,0 +1,4 @@
+{
+  "reason": "Initial guard expected only gate-preview-app.cjs but the concurrently active official gate had also created .gate-preview-requests.log. Both are explicitly documented as harness output. No tests or evidence snapshots had run before that guard.",
+  "test_invocations_before_correction": 0
+}

@@ -1,0 +1,35 @@
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /Users/erick/axocoatl-gate-work/repos/real-rust-axocoatl
+· run run-424e6efa-1d7f-44e6-bee9-a5052bf53c1e in Session ses-142ac1ad-e1ce-4872-8b5e-4c57fb748041
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+· note: setup `cargo fetch` (detected): exited 0 (4.4 s); 4 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-87e87008-41e5-4abf-bfe5-8476443302ff started (run)
+· provider call retried for required-review (HTTP 503): HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call
+· provider call retried for required-review: the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 54 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason "stop" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call
+· turn turn-87e87008-41e5-4abf-bfe5-8476443302ff ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by openrouter:openai/gpt-oss-120b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = openrouter:openai/gpt-oss-120b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-rust:0e5acf3d40e2 · toolchain rust (Cargo.toml at the repository root) · check cargo test (detected from the repository) · setup cargo fetch (detected; registries index.crates.io, static.crates.io, crates.io open for it alone)
+  setup `cargo fetch` (detected): exited 0 (4.4 s); 4 connections to index.crates.io, static.crates.io, crates.io allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+  openai/gpt-oss-120b on OpenRouter: 40 calls answered by endpoint coreweave/fp4 (CoreWeave); 1 call moved on from endpoint near-ai/fp4 (Near AI), which failed them before answering
+Usage: 1218637 input + 3812 output tokens, $0.0249, 2 provider retries
+Network: 63 recorded events, 4 allowed and 0 refused connections, 0 route requests
+Record: run-424e6efa-1d7f-44e6-bee9-a5052bf53c1e
+· JUnit written to junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to receipt.json (key 40f14e2ddf0bef15, 1 file covered, 0 removed, judged_capture)
+exit 0

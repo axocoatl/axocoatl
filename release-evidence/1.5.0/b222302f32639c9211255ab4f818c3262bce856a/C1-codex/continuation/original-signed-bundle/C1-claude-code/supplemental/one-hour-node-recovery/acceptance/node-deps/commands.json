@@ -1,0 +1,85 @@
+[
+  {
+    "name": "independent-receipt-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "receipt",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/receipt.json",
+      "--key",
+      "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+      "--repo",
+      "/Users/erick/axocoatl-gate-work/one-hour-verification-20261026-claude-node/node-deps",
+      "--record",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.axorecord.jsonl",
+      "--require-pass",
+      "--json"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/one-hour-verification-20261026-claude-node/node-deps",
+    "start": "2026-10-27T00:02:39.745888+00:00",
+    "status": "completed",
+    "end": "2026-10-27T00:02:39.752696+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "b0bedbcb4d806c80f83d7acff984da757db612364ddcb482a4238dc292a5ceb3",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "independent-record-verify",
+    "argv": [
+      "/usr/local/bin/axocoatl",
+      "record",
+      "verify",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/one-hour-verification-20261026-claude-node/node-deps",
+    "start": "2026-10-27T00:02:39.752855+00:00",
+    "status": "completed",
+    "end": "2026-10-27T00:02:39.759137+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "52ba6ca553c2706fc6a1b7c972a3592115edc001bb894c57b7b729a63b64a8b3",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "accepted-answers",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+      "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/supplemental-claude-node/claude-node-deps/run.axorecord.jsonl"
+    ],
+    "cwd": "/Users/erick/axocoatl-gate-work/one-hour-verification-20261026-claude-node/node-deps",
+    "start": "2026-10-27T00:02:39.759270+00:00",
+    "status": "completed",
+    "end": "2026-10-27T00:02:39.781662+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "runtime-version",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+      "--version"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/acceptance/node-deps/host-check",
+    "start": "2026-10-27T00:02:39.781924+00:00",
+    "status": "completed",
+    "end": "2026-10-27T00:02:39.791578+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "original-tests",
+    "argv": [
+      "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+      "test"
+    ],
+    "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/one-hour-verification-20261026/claude-node/acceptance/node-deps/host-check",
+    "start": "2026-10-27T00:02:39.812200+00:00",
+    "status": "completed",
+    "end": "2026-10-27T00:02:40.290772+00:00",
+    "exit_code": 0,
+    "stdout_sha256": "ea713ae1aa41bc545ef127652f503352cfc7e87190a0ec3f8bfd8dfab4a9fd31",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

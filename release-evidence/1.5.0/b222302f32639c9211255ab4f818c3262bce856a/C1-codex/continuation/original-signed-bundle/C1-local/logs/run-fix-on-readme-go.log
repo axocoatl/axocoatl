@@ -1,0 +1,63 @@
+· building the run's image localhost/axocoatl-recipe-go:6063b3e9fdc6 (go, from docker.io/library/golang:1.27.2-bookworm): about 300 MB to download, about 880 MB on disk, once on this computer; later runs reuse it
+STEP 1/8: FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61
+Trying to pull docker.io/library/golang@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61...
+Getting image source signatures
+Copying blob sha256:ed8596846564c78501630a9cfb5ea37bccebbeae1111d217c47835ed2572f772
+Copying blob sha256:bdc7363672c63abfefdedaf5e03be8e39cb662841d4f31237c4b7d7e3729f65c
+Copying blob sha256:2a02c40189e361a19e7cb07374fe9925f5c4f7db254ae2b9196348c27c286b03
+Copying blob sha256:4fd4b86f6eba05ede1422fdf209774d4fb36cfafce2fa8138b82406a3b5fa8be
+Copying blob sha256:c488414f4e10f9495a8ef36b033a81ae04a3d43955e64f351a4247848f292d26
+Copying blob sha256:99713dbe79ee22ead7509cd8c7c37d309206e5ddd834ba41611459b49e6ddc06
+Copying blob sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1
+Copying config sha256:8daab0ae6527cc929bebbfbce0d6e4c7ba363d6213264ffeb5d5bd559d4a03a7
+Writing manifest to image destination
+STEP 2/8: ENV GOPATH=     PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+--> 816145c8b715
+STEP 3/8: RUN rm -rf /go  && for command in sh git env grep tee rm mkdir mv cp cat head tail od wc find realpath ls rmdir test sha256sum base64 make; do       command -v "$command" >/dev/null || { echo "toolchain base lacks $command" >&2; exit 1; };     done
+--> 4cadda56cad9
+STEP 4/8: LABEL io.axocoatl.role=recipe       io.axocoatl.recipe.base=golang-1.27.2-bookworm
+--> 08880676cb7f
+STEP 5/8: ENV AXOCOATL_TOOLCHAIN=go     AXOCOATL_CACHE=/opt/axocoatl-cache     GOMODCACHE=/opt/axocoatl-cache/go/mod     GOPROXY=off     GOTOOLCHAIN=local
+--> ba0becc2c9a6
+STEP 6/8: RUN mkdir -p /opt/axocoatl-cache  && go version  && [ -z "$(go env GOPATH | grep -x /go)" ]
+go version go1.27.2 linux/arm64
+--> d88004e5c9bc
+STEP 7/8: LABEL io.axocoatl.toolchain=go       io.axocoatl.toolchain.version=go-1.27.2
+--> 7843dabf0d7a
+STEP 8/8: LABEL "io.axocoatl.role"="recipe" "io.axocoatl.recipes"="go" "io.axocoatl.recipe-digest"="6063b3e9fdc655be7776387d4368e64af54312c17ad69476691d854308b36d90"
+COMMIT localhost/axocoatl-recipe-go:6063b3e9fdc6
+--> 5a1a284380c1
+Successfully tagged localhost/axocoatl-recipe-go:6063b3e9fdc6
+5a1a284380c1bcec365f244ed4e82e631cffceedd95d34f6d10e5e7f8a552cb6
+· built localhost/axocoatl-recipe-go:6063b3e9fdc6 in 9 s (image id 5a1a284380c1)
+· checking the run (each Ollama model is loaded once and probed, then Podman is asked, and a stopped Podman machine is started when nothing else stops the run), then preparing the Session's environment
+· starting loadout fix in /Users/erick/axocoatl-gate-work/repos/readme-go
+· run run-712f671e-f4d4-4f77-9a62-449ffabb230e in Session ses-586043e8-79e9-4086-86e0-88400f0f6d3e
+· note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+· note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+· note: image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+· note: setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.7 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+· preparing: the Session's environment is ready
+· running: running loadout fix
+· applying_team: applying the loadout's team
+· running: the team is working on the task
+· turn turn-e73ad4df-52a2-4c51-99a9-f7acec52e888 started (run)
+· turn turn-e73ad4df-52a2-4c51-99a9-f7acec52e888 ended: completed
+· review: 1 review round; 0 adjudications, 0 missing
+· finishing: building the Outcome
+Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+Notes:
+  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download (detected; registries proxy.golang.org, sum.golang.org open for it alone)
+  setup `GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download` (detected): exited 0 (0.7 s); 1 connections to proxy.golang.org, sum.golang.org allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call
+Usage: 79002 input + 2679 output tokens, $0.0000
+Network: 27 recorded events, 1 allowed and 0 refused connections, 0 route requests
+Record: run-712f671e-f4d4-4f77-9a62-449ffabb230e
+· JUnit written to axocoatl-junit.xml
+· record written to run.axorecord.jsonl
+· receipt written to run.receipt.json (key 8a7a6b546e72ca24, 1 file covered, 0 removed, judged_capture)

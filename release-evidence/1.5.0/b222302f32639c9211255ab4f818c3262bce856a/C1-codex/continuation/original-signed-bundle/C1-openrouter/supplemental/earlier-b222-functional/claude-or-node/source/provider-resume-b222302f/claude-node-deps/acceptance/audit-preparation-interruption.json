@@ -1,0 +1,5 @@
+{
+  "reason": "Initial public-key comparison treated an OpenSSH-style public line as raw base64; corrected field parsing before any verification or original test command ran.",
+  "recorded_at": "2026-10-26T17:56:33.026702+00:00",
+  "test_invocations_before_correction": 0
+}

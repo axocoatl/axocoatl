@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="axocoatl" tests="3" failures="0" errors="0" skipped="0" time="2.948">
+  <properties>
+    <property name="axocoatl.run_id" value="run-0be7b95e-f9c7-4da6-b372-c5e0d250bfba"/>
+    <property name="axocoatl.session_id" value="ses-c269d208-b9de-471b-a9fe-cf1844053b40"/>
+    <property name="axocoatl.loadout" value="fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223"/>
+    <property name="axocoatl.verdict" value="pass"/>
+    <property name="axocoatl.exit_code" value="0"/>
+    <property name="axocoatl.usage" value="10282 input + 393 output tokens, $0.0000"/>
+  </properties>
+  <testsuite name="checks" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.check" name="tests">
+      <system-out>argv: sh -c npm run test</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="review" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.review" name="required-review">
+      <system-out>reviewer ollama:gpt-oss:20b (native), 1 of 3 rounds
+round 1: approve, 0 findings</system-out>
+    </testcase>
+  </testsuite>
+  <testsuite name="adjudications" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="findings" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="coverage" tests="0" failures="0" errors="0" skipped="0"/>
+  <testsuite name="run" tests="1" failures="0" errors="0" skipped="0">
+    <testcase classname="axocoatl.run" name="verdict">
+      <system-out>note: writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
+note: reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
+note: image localhost/axocoatl-recipe-node:3b267c748259 · toolchain node (package.json at the repository root) · check npm run test (detected from the repository) · setup yarn install --frozen-lockfile --prefer-offline (detected; registries registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com open for it alone)
+note: setup `yarn install --frozen-lockfile --prefer-offline` (detected): exited 0 (1.3 s); 8 connections to registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com allowed, 0 refused; the registries were closed; the Workspace's toolchain cache was made read-only again before the first model call</system-out>
+    </testcase>
+  </testsuite>
+</testsuites>

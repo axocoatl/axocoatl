@@ -1,0 +1,265 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "fixture": "node-deps",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T14:19:59.587087+00:00",
+  "repo": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+  "base_commit": "17d72f22beb93c7b621ab91c4a05f68ef9e948f0",
+  "run_id": "run-bf064cb5-3750-4b1b-be3a-cdbd3a462543",
+  "cli": {
+    "path": "/usr/local/bin/axocoatl",
+    "sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b"
+  },
+  "outcome": "accepted",
+  "artifact_change": {
+    "files": [
+      "src/paginate.js"
+    ],
+    "explanation": "The final page length now equals the remaining item count after its start, rather than a modulo that becomes zero for exact multiples. Ten items with page size5 now retain both full pages; partial pages, empty input and invalid size behavior remain covered by the unchanged original tests.",
+    "all_other_tracked_files_unchanged": true,
+    "original_tests_unchanged": true,
+    "hashes": {
+      ".gitignore": {
+        "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+        "unchanged": true
+      },
+      "README.md": {
+        "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+        "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+        "unchanged": true
+      },
+      "package-lock.json": {
+        "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+        "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+        "unchanged": true
+      },
+      "package.json": {
+        "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+        "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+        "unchanged": true
+      },
+      "src/paginate.js": {
+        "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+        "final_sha256": "2663d2ccd0172017ec854fdde793729bedb9861b5f7a5285ada8033e639517d0",
+        "unchanged": false
+      },
+      "test/paginate.test.js": {
+        "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+        "final_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+        "unchanged": true
+      }
+    }
+  },
+  "verification": {
+    "commands": [
+      {
+        "name": "receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/receipt.json",
+          "--key",
+          "ed25519 1rwMNj31df5Q1XbBu+LAMNwYaudS/xsHSUX+fNRAnQM= axocoatl@Mac-126.lan 40f14e2ddf0bef15",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/record.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:03.171296+00:00",
+        "end": "2026-10-26T14:19:03.177958+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "d1536fce0413b1d6252b5ea5f0194a1c959a7117b99667b484d6221a9494176f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/targeted-openrouter-b222302f/node-deps/record.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:03.178093+00:00",
+        "end": "2026-10-26T14:19:03.184037+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "836ddc394b84b8cff3191509a416a573f88ce3dd393136eb5efe02aebc72b203",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:03.184214+00:00",
+        "end": "2026-10-26T14:19:03.193352+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "host-setup",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "ci",
+          "--offline",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:03.193475+00:00",
+        "end": "2026-10-26T14:19:03.345146+00:00",
+        "exit_code": 1,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "d2977c3d9a568244f6f9fc202abbc938a46308623ee94caa3ca2022be88dc575"
+      },
+      {
+        "name": "host-setup-online",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "ci",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:58.836973+00:00",
+        "end": "2026-10-26T14:19:59.188591+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "e37ab260c14eb4e9cf5cbd344c65b281feaca25b62ddca2b8607e4bfdaab609f",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/targeted-b222302f-openrouter/repos/node-deps",
+        "start": "2026-10-26T14:19:59.188803+00:00",
+        "end": "2026-10-26T14:19:59.561274+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "1ee8609fec674b061b791f769cf16a45de709580b32efb3a27801cd363b864b9",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_test_invocations": 1,
+    "tests_added": 0,
+    "tracked_files_unchanged_by_audit": true,
+    "independent_baseline_rerun": false
+  },
+  "configuration": {
+    "agents": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "openrouter endpoint siliconflow/fp8 (SiliconFlow)",
+        "provider": "openrouter",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct"
+      }
+    ],
+    "review": {
+      "provider": "openrouter",
+      "model": "openai/gpt-oss-120b",
+      "runtime": "native",
+      "program_version": "openrouter endpoint coreweave/fp4 (CoreWeave)",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "checks": [
+      {
+        "name": "tests",
+        "state": "passed",
+        "exit_code": 0,
+        "timeout_ms": 180000,
+        "argv": [
+          "sh",
+          "-c",
+          "npm run test"
+        ],
+        "candidate_sha256": "620f32179684401b5528c5fa0da60e25278ac567bcda96aca86702d30c1afd0d"
+      }
+    ]
+  },
+  "usage": {
+    "input_tokens": 57563,
+    "output_tokens": 1301,
+    "cost_microunits": 3673,
+    "cost_usd": 0.003673,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "provider_retries": [
+    {
+      "role": "reviewer",
+      "sequence": 0,
+      "payload": {
+        "kind": "provider_retry",
+        "reason": "HTTP 503 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+      }
+    }
+  ],
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 12,
+      "payload": {
+        "call_id": "call-bc6fa07b-04fc-4652-aaad-ada7a49417e9",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 24,
+      "payload": {
+        "call_id": "call-320e7555-7f7c-457b-b9d4-a54fa95dd96e",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "read_file",
+        "result_bytes": 91,
+        "result_sha256": "7a01ee0639a7a34b4782a6faee772f14094d1d9e20ae77f361bd96bd6254c197"
+      },
+      "raw_cause": "Unknown; the exported record stores result length and hash, not the raw error body."
+    }
+  ],
+  "network": {
+    "events": 25,
+    "allowed_connections": 6,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "network_explanation": "No refused connections were recorded.",
+  "adjudications": [],
+  "limitations": [
+    "This audits the actual fixture artifact, not other release paths.",
+    "Raw tool errors and command arguments are not present in the public record; no unobserved cause is asserted.",
+    "No new inference, product source edit, daemon or service action."
+  ],
+  "evidence_hashes": {
+    "receipt.json": "6fac6742766726364a2476de9f1f0beb02cf76c2eaa464f627e96954a201af3f",
+    "record.jsonl": "9b579385068a4e9cac940d71d944183ad0b1aa9af21fcfd159c516e9a0e2e061",
+    "patch.diff": "3a68e11cd8bea484c531b9dd4c17bad86bf6cf289a298f8d0bfaaa391f485e15",
+    "network-events.json": "b8a6a0ccf0754af1f825e7ba108b99313e86f2df007e18e86a00ddced53c3ae1",
+    "negative-evidence.json": "e3eaf95f00f1aaeb641d6cdf44e7f823bc19263a6901608a37b4a97a8cd64cd2"
+  }
+}

@@ -1,0 +1,35 @@
+ M src/paginate.js
+ M test/paginate.test.js
+?? axocoatl-junit.xml
+?? run.axorecord.jsonl
+?? run.receipt.json
+diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..5268ea1 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,7 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page < count; page += 1) {
+     const start = page * size;
+-    const length = page < count - 1 ? size : items.length % size;
++    const length = page < count - 1 ? size : items.length - start;
+     pages.push(items.slice(start, start + length));
+   }
+   return pages;
+diff --git a/test/paginate.test.js b/test/paginate.test.js
+index 70c8674..37dfb33 100644
+--- a/test/paginate.test.js
++++ b/test/paginate.test.js
+@@ -14,6 +14,12 @@ test('the last page is full when the total is a multiple of the page size', () =
+   assert.equal(paginate(numbers(10), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]);
+ });
+ 
++test('the last page is full when the total is a multiple of the page size (edge case)', () => {
++  // This test specifically addresses the bug where the last item was skipped
++  // when total items = page size * N (exact multiple)
++  assert.equal(paginate(numbers(20), 5), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15], [16, 17, 18, 19, 20]]);
++});
++
+ test('no items make no pages', () => {
+   assert.equal(paginate([], 5), []);
+ });

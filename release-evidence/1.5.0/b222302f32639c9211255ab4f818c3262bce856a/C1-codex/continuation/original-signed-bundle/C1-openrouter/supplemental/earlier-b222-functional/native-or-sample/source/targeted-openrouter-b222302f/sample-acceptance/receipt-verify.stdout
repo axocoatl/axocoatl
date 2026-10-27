@@ -1,0 +1,36 @@
+{
+  "exit_code": 0,
+  "result": "valid",
+  "signature": "trusted",
+  "key_id": "sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d",
+  "run_id": "run-842e6816-8079-4b80-9281-fee1ebe578f1",
+  "verdict": "pass",
+  "statement_sha256": "sha256:e421943b0c8ed918a3a876bc75aa7bfdaa73fdf7eced4e61e2e1ed5f00165937",
+  "files": {
+    "repo": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/repo",
+    "covered": 1,
+    "removed": 0,
+    "source": "judged_capture",
+    "complete": true,
+    "mismatches": []
+  },
+  "record": {
+    "file": "/private/var/folders/2l/88kbqtmx6gj3mrlytncmb24h0000gn/T/axocoatl-first-run-03bf31481bb44759877a7b855e54be28/record.jsonl",
+    "problems": []
+  },
+  "statement": [
+    "Run run-842e6816-8079-4b80-9281-fee1ebe578f1 (fix@1), verdict pass, exit code 0",
+    "Signed by key 40f14e2ddf0bef15 (ed25519 sha256:40f14e2ddf0bef1500f07abecf1492683c456df25ca95b8ba85e5d027f8b717d)",
+    "Axocoatl 1.5.0, Session ses-93d3597d-6a16-400a-ae2c-ea7995e064b2, finished at 1793023636318 ms",
+    "Base commit c61bec99701456c1dc890926a543d57fea7f5bbd",
+    "Agent writer (writer): native openrouter endpoint siliconflow/fp8 (SiliconFlow), openrouter:qwen/qwen3-coder-30b-a3b-instruct",
+    "Check tests: passed, exit 0 (sh -c npm run test)",
+    "Review by openrouter:openai/gpt-oss-120b (openrouter endpoint near-ai/fp4 (Near AI)): approved (passed), 1 of 3 rounds, 0 findings",
+    "Files: 1 covered, 0 removed, as the required checks judged them",
+    "  src/paging.js  sha256:10d26263da431c78212ff560aede93f01019de9c9b9ec0194842cb71d6d5495a",
+    "Network policy (provisioning scope, revision 1): dl-cdn.alpinelinux.org:80,443 (preset alpine); deb.debian.org:80,443 (preset debian); security.debian.org:80,443 (preset debian); archive.ubuntu.com:80,443 (preset ubuntu); security.ubuntu.com:80,443 (preset ubuntu); ports.ubuntu.com:80,443 (preset ubuntu)",
+    "Network policy (session scope, revision 1): nothing allowed",
+    "Sandbox: podman, network egress, hardened workload",
+    "Resource caps: memory 2g, 2 CPUs, 512 processes"
+  ]
+}

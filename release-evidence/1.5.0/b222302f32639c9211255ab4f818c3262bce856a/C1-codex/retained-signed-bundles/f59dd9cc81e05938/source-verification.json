@@ -1,0 +1,20 @@
+{
+  "signature_valid": true,
+  "signer": "55371c0d1106a8f9",
+  "paths": {
+    "A-arm": true,
+    "A-x86-refusal": true,
+    "A-x86": true,
+    "B-arm": true,
+    "B-intel": true,
+    "C1-browser-webkit": true,
+    "C1-claude-code": true,
+    "C1-codex": false,
+    "C1-local": true,
+    "C1-openrouter": false,
+    "C1-real-repo": true,
+    "C1-recovery": true,
+    "C1-service": true,
+    "C1-workbench-webkit": true
+  }
+}

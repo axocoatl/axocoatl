@@ -1,0 +1,8 @@
+axocoatl-install: resolving latest release...
+axocoatl-install: downloading axocoatl-v1.5.0-aarch64-unknown-linux-gnu.tar.gz (v1.5.0)...
+axocoatl-install: checksum verified
+axocoatl-install: installed axocoatl v1.5.0 -> /usr/local/bin/axocoatl
+
+Next:  axocoatl onboard      # set up a writer and a reviewer, and Podman where it can (else it says how); it asks first
+       axocoatl doctor       # check the sandbox, the models and the daemon
+       axocoatl dev          # start the daemon; leave it running

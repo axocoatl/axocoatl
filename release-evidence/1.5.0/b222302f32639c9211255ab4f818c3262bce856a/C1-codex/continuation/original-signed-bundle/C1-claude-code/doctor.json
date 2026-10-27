@@ -1,0 +1,158 @@
+{
+  "ready": true,
+  "config": "/Users/erick/Library/Application Support/Axocoatl/config.yaml",
+  "sections": {
+    "sandbox": [
+      {
+        "name": "Podman",
+        "status": "ok",
+        "detail": "Podman 6.1.4 ready (machine podman-machine-default: applehv, rootless, 6 CPUs / 8 GiB; kernel 7.2.7-200.fc44.aarch64), needed for every Session and every axocoatl run",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "ok",
+        "detail": "macOS on Apple silicon, as the release gate verifies",
+        "fix": null
+      },
+      {
+        "name": "Sandbox network",
+        "status": "ok",
+        "detail": "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)",
+        "fix": null
+      },
+      {
+        "name": "Sandbox workload",
+        "status": "ok",
+        "detail": "Sandbox workload: image (commands run as the image's own user)",
+        "fix": null
+      }
+    ],
+    "models": [
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama 0.40.11 at http://localhost:11434, a version native Sessions accept",
+        "fix": null
+      },
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama cloud models disabled at http://localhost:11434 (~/.ollama/server.json)",
+        "fix": null
+      },
+      {
+        "name": "Model gpt-oss:20b",
+        "status": "ok",
+        "detail": "gpt-oss:20b: GGUF; 13.8 GB, fits in memory; 32768-token context, contract probes passed; 12.8 GB loaded, all in GPU memory",
+        "fix": null
+      }
+    ],
+    "writers": [
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "claude-code image built",
+        "fix": null
+      },
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "signed in (claude-code-oauth stored)",
+        "fix": null
+      },
+      {
+        "name": "Codex",
+        "status": "ok",
+        "detail": "not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "claude CLI",
+        "status": "ok",
+        "detail": "/opt/homebrew/bin/claude 2.1.92 (Claude Code)",
+        "fix": null
+      },
+      {
+        "name": "codex CLI",
+        "status": "ok",
+        "detail": "not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container",
+        "fix": null
+      },
+      {
+        "name": "gh",
+        "status": "ok",
+        "detail": "signed in (for `--keep pr`)",
+        "fix": null
+      },
+      {
+        "name": "Stored credentials",
+        "status": "ok",
+        "detail": "claude-code-oauth, receipt-signing-key",
+        "fix": null
+      }
+    ],
+    "daemon": [
+      {
+        "name": "Config",
+        "status": "ok",
+        "detail": "Config valid: /Users/erick/Library/Application Support/Axocoatl/config.yaml",
+        "fix": null
+      },
+      {
+        "name": "Data dir",
+        "status": "ok",
+        "detail": "Data dir writable: /Users/erick/Library/Application Support/Axocoatl/data",
+        "fix": null
+      },
+      {
+        "name": "Data dir ownership",
+        "status": "ok",
+        "detail": "Data dir ownership: recorded for this directory",
+        "fix": null
+      },
+      {
+        "name": "git",
+        "status": "ok",
+        "detail": "git 2.39.5 (the daemon runs git on your repositories)",
+        "fix": null
+      },
+      {
+        "name": "Daemon",
+        "status": "warn",
+        "detail": "no daemon running; `axocoatl run` and the workbench need one",
+        "fix": "Start it with `axocoatl dev` (or `axocoatl service start`)"
+      },
+      {
+        "name": "Webhooks",
+        "status": "ok",
+        "detail": "none (no outbound event egress)",
+        "fix": null
+      }
+    ]
+  },
+  "ready_for": [
+    {
+      "command": "axocoatl run fix-claude-code",
+      "ok": true,
+      "detail": "reviewer ollama:gpt-oss:20b",
+      "set_up": true,
+      "required": true
+    },
+    {
+      "command": "axocoatl run fix-codex",
+      "ok": false,
+      "detail": "not set up: run `axocoatl connect codex`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "workbench Sessions",
+      "ok": true,
+      "detail": "Lead ollama:gpt-oss:20b",
+      "set_up": true,
+      "required": true
+    }
+  ],
+  "steps_left": []
+}

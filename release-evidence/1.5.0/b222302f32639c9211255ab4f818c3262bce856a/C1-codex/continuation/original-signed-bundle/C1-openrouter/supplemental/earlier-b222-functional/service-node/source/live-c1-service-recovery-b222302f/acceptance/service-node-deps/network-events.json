@@ -1,0 +1,681 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793024911132,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793024911133,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-b48aea6f-2bd6-4a3d-a27c-37c98efe973e",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793024912949,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-b48aea6f-2bd6-4a3d-a27c-37c98efe973e",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793024913154,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-43d63e61-3d9d-4417-970d-bc2005b0825e",
+      "change": {
+        "command_id": "run-43d63e61-3d9d-4417-970d-bc2005b0825e:setup-allow:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "allow",
+        "ports": [
+          443
+        ]
+      },
+      "digest": "3e503cd00b26cfe08d9fef3c9023de20e6181585b301764042f9f4e2f75a803d",
+      "kind": "policy",
+      "revision": 2,
+      "rules": [
+        "registry.npmjs.org:443 (allowed for this Session)"
+      ],
+      "scope": "session",
+      "source": "session_allow"
+    },
+    "seq": 5,
+    "ts_ms": 1793024913824,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 6,
+    "ts_ms": 1793024913833,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:b22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:122",
+        "2606:4700::6810:a22",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.10.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:6",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 7,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:b22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:122",
+        "2606:4700::6810:a22",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.10.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:5",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 8,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:b22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:122",
+        "2606:4700::6810:a22",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.10.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:3",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 9,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:122",
+        "2606:4700::6810:922",
+        "2606:4700::6810:b22",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:a22",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.10.34",
+        "104.16.2.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:4",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 10,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:122",
+        "2606:4700::6810:a22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:b22",
+        "104.16.8.34",
+        "104.16.11.34",
+        "104.16.4.34",
+        "104.16.5.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:2",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 11,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "addrs": [
+        "2606:4700::6810:b22",
+        "2606:4700::6810:922",
+        "2606:4700::6810:622",
+        "2606:4700::6810:22",
+        "2606:4700::6810:822",
+        "2606:4700::6810:322",
+        "2606:4700::6810:722",
+        "2606:4700::6810:422",
+        "2606:4700::6810:222",
+        "2606:4700::6810:522",
+        "2606:4700::6810:122",
+        "2606:4700::6810:a22",
+        "104.16.3.34",
+        "104.16.8.34",
+        "104.16.10.34",
+        "104.16.9.34"
+      ],
+      "binding": {
+        "kind": "setup",
+        "setup_index": 0
+      },
+      "conn": "g1:1",
+      "conn_kind": "connect",
+      "decision": "allow",
+      "host": "registry.npmjs.org",
+      "kind": "open",
+      "peer": {
+        "ancestors": [
+          "/usr/bin/dash"
+        ],
+        "exe": "/usr/local/bin/node",
+        "exe_sha256": "0f8949d1028f6d61506b2d5bc57e7e6fe893d7b1997509b7847294fc9c616584",
+        "gid": 1000,
+        "pid": 26,
+        "uid": 1000
+      },
+      "policy_revision": 2,
+      "port": 443,
+      "rule": "session#rev2",
+      "scope": "session",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 12,
+    "ts_ms": 1793024914852,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "setup_done",
+      "token": "a7084db01ad8bccf"
+    },
+    "seq": 13,
+    "ts_ms": 1793024915076,
+    "v": 1
+  },
+  {
+    "event": {
+      "actor": "toolchain setup of loadout run run-43d63e61-3d9d-4417-970d-bc2005b0825e",
+      "change": {
+        "command_id": "run-43d63e61-3d9d-4417-970d-bc2005b0825e:setup-revoke:registry.npmjs.org",
+        "host": "registry.npmjs.org",
+        "op": "revoke",
+        "ports": []
+      },
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 3,
+      "rules": [],
+      "scope": "session",
+      "source": "session_revoke"
+    },
+    "seq": 14,
+    "ts_ms": 1793024915076,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:1",
+      "down": 14395,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 254,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 15,
+    "ts_ms": 1793024915077,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:3",
+      "down": 15110,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 253,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 16,
+    "ts_ms": 1793024915081,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:4",
+      "down": 10011,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 247,
+      "outcome": "revoked",
+      "up": 2202
+    },
+    "seq": 17,
+    "ts_ms": 1793024915082,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:6",
+      "down": 132142,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 245,
+      "outcome": "revoked",
+      "up": 2197
+    },
+    "seq": 18,
+    "ts_ms": 1793024915083,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:5",
+      "down": 8249,
+      "ip": "104.16.3.34",
+      "kind": "close",
+      "ms": 247,
+      "outcome": "revoked",
+      "up": 2192
+    },
+    "seq": 19,
+    "ts_ms": 1793024915084,
+    "v": 1
+  },
+  {
+    "event": {
+      "conn": "g1:2",
+      "down": 8085,
+      "ip": "104.16.8.34",
+      "kind": "close",
+      "ms": 253,
+      "outcome": "revoked",
+      "up": 2207
+    },
+    "seq": 20,
+    "ts_ms": 1793024915084,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-18b3cdc3dd88cffda84a9153492a1a02e045b7b6552000cbf4ae2faa752f224b",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-18b3cdc3dd88cffda84a9153492a1a02e045b7b6552000cbf4ae2faa752f224b:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "9bab72fae1ffeb81"
+    },
+    "seq": 21,
+    "ts_ms": 1793024936269,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "9bab72fae1ffeb81"
+    },
+    "seq": 22,
+    "ts_ms": 1793024936472,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-c8ef18bff23e44efdd22e89d4402f5d3daf2604b73410a541b85ad7fa9ba8c2d",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-c8ef18bff23e44efdd22e89d4402f5d3daf2604b73410a541b85ad7fa9ba8c2d:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "bc800a8ee0d36d2a"
+    },
+    "seq": 23,
+    "ts_ms": 1793024937704,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "bc800a8ee0d36d2a"
+    },
+    "seq": 24,
+    "ts_ms": 1793024937857,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-ce5b635c559ba313c7b225016cf500124b91bba581d2773735a28ac9ea38d13c",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-ce5b635c559ba313c7b225016cf500124b91bba581d2773735a28ac9ea38d13c:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "49312562f504ed12"
+    },
+    "seq": 25,
+    "ts_ms": 1793024938995,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "49312562f504ed12"
+    },
+    "seq": 26,
+    "ts_ms": 1793024939238,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-407e9b15abe2e2d7b6a511a6d31df039253f5baaf6c0aa6aee86f59f0b1720cd",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-407e9b15abe2e2d7b6a511a6d31df039253f5baaf6c0aa6aee86f59f0b1720cd:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "77e06d32d35e4060"
+    },
+    "seq": 27,
+    "ts_ms": 1793024952088,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "77e06d32d35e4060"
+    },
+    "seq": 28,
+    "ts_ms": 1793024952315,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-af73fe92037e60d2ac6ac2c65323bcdf528457663ca57ccb8b02d939be45ef55",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-af73fe92037e60d2ac6ac2c65323bcdf528457663ca57ccb8b02d939be45ef55:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "e9ebc77dc9b40b68"
+    },
+    "seq": 29,
+    "ts_ms": 1793024959912,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "e9ebc77dc9b40b68"
+    },
+    "seq": 30,
+    "ts_ms": 1793024960064,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:e64eece4-e3c8-47bd-be9d-75bbbbfb9d78",
+        "agent": "team-definition-abf6c291d6e91b8fce35df8a6f39a335cb12fbc9fec3e8ca383eb235bc45add4",
+        "invocation_id": "tool-b45a6aba22f0162998b56634802180e64834dd117b0a53af2d209405eddd9d29",
+        "kind": "agent",
+        "node_id": "team-node-22a97e5fd35238cdf3fe1373",
+        "process": "tool-b45a6aba22f0162998b56634802180e64834dd117b0a53af2d209405eddd9d29:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "3a355653c5812821"
+    },
+    "seq": 31,
+    "ts_ms": 1793024966854,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "3a355653c5812821"
+    },
+    "seq": 32,
+    "ts_ms": 1793024967038,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 33,
+    "ts_ms": 1793024989217,
+    "v": 1
+  }
+]

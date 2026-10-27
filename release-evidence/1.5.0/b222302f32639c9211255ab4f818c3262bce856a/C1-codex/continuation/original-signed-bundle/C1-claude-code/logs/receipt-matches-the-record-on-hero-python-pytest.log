@@ -1,0 +1,4 @@
+receipt of run run-37594920-dcc6-42d0-8863-c53853ab293b, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+record: run.axorecord.jsonl verifies and carries this receipt
+result: valid (exit 0)

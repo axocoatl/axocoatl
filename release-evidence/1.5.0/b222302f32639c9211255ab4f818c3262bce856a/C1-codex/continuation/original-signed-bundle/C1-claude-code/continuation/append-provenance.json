@@ -1,0 +1,20 @@
+{
+  "schema": "axocoatl.recovery.claude-append/1",
+  "prepared_at": "2026-10-27T00:56:50.503353+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "root_review": "Root accepted the Claude continuation and independent read-only review.",
+  "scope": "References are relocated only; no observed result or criterion is changed. Existing signed failure and all original bytes are retained.",
+  "source_bundle": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a",
+  "source_manifest_sha256": "aaa872c3d26b7ecb02916e98cf01de65dd6f15a75125827458aa818bbe4638e7",
+  "source_dsse_sha256": "8ec1d618a03ce2377b8d079b663dcda9849902190ceba683c190b4dd718481e1",
+  "source_file_count": 1769,
+  "composer_stage": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/resumed-four-gates-20261027/claude-completion",
+  "composer_manifest_sha256": "88f09d94352ceadc5a5c64980a3e9246ef32ed4330d8f25acd558afd587e3c20",
+  "composer_record_sha256": "43ec0c3008b9f6b321143113261c90d2091da1b32a080c39b44c3c88692e7271",
+  "original_claude_record_sha256": "ae67fac049fc9dae093bb60e2648a70229f56ab320d0c22c715c6b58b128a88b",
+  "active_record_reference_changes": "The original-signed-bundle prefix is removed, except the three archived original namespace members use retention-map overrides. Original composer output is preserved separately.",
+  "global_yaml_historical_hash_known": false,
+  "no_new_inference": true,
+  "unsigned": true,
+  "tracked_source_mutation": false
+}

@@ -1,0 +1,4 @@
+Axocoatl server starting on 127.0.0.1:8080
+  Sign in: run `axocoatl url --config '/Users/erick/Library/Application Support/Axocoatl/config.yaml'` for the browser sign-in link
+  IPC:    /Users/erick/.axocoatl/run/axocoatl.sock
+2026-10-26T19:06:35.383843Z  WARN axocoatl_actor::default_behavior: Model called a tool that was not declared; answering it with a tool error agent=review-conversation-5aba9fb4be743ebc68af69ccba195beb597353ce tool=search

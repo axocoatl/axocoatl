@@ -1,0 +1,55 @@
+{
+  "tool_errors": [],
+  "provider_retries": [],
+  "activation_streams_complete": false,
+  "counts_note": "Interrupted activation has no accepted stream; empty extracted error/retry lists do not establish zero errors.",
+  "denied_events": [
+    {
+      "event": {
+        "conn": "g1:7",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/settings",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 24,
+      "ts_ms": 1793041644816,
+      "v": 1
+    },
+    {
+      "event": {
+        "conn": "g1:8",
+        "decision": "deny",
+        "host": "api.anthropic.com",
+        "kind": "request",
+        "method": "GET",
+        "path": "/api/claude_code/policy_limits",
+        "reason": "route_denied",
+        "seq_in_conn": 1
+      },
+      "seq": 26,
+      "ts_ms": 1793041644858,
+      "v": 1
+    }
+  ],
+  "recorded_baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 293
+  },
+  "failed_activations": [
+    {
+      "role": "writer",
+      "state": "failed",
+      "failure": "content-efddda0c541ec6f7a34d91ad9291ecf42cc5c441ffc5f3932807317d9718e575",
+      "currently_accepted": false,
+      "event_counts": {},
+      "usage": null,
+      "events": []
+    }
+  ]
+}

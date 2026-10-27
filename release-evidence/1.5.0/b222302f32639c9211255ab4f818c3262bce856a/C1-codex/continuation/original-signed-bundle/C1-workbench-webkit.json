@@ -1,0 +1,176 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-workbench-webkit",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T17:59:50Z",
+  "finished_at": "2026-10-26T18:09:01.503Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "35340 MiB free; models cached: yes"
+    },
+    {
+      "name": "resume uses the checksum-verified installed candidate",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl; axocoatl 1.5.0; binary sha256 d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b; archive sha256 2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659; continued existing installation, no clean-install claim"
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "axocoatl url prints a sign-in link",
+      "status": "pass",
+      "required": true,
+      "detail": "(not recorded: it signs in)"
+    },
+    {
+      "name": "the sign-in link opened the workbench",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Did the link open the workbench in Safari, signed in?"
+    },
+    {
+      "name": "Open workspace refuses the home folder",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Choose Open workspace… with your home folder (/Users/erick). Was it refused?"
+    },
+    {
+      "name": "Open workspace accepts the repository",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Now open /Users/erick/axocoatl-gate-work/repos/workbench as the workspace. Was it accepted?"
+    },
+    {
+      "name": "New session starts",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Create a New session with 5173 in Exposed ports. Did it start?"
+    },
+    {
+      "name": "Team & budget is pre-filled and Apply works",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Open Team & budget. Were the limits pre-filled, and did Apply succeed without editing them?"
+    },
+    {
+      "name": "one turn edits a file",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Send one turn asking to fix the paging bug in src/paginate.js. Did the turn finish and change the file?"
+    },
+    {
+      "name": "Source Control lists the turn's change to src/paginate.js",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Open Source Control. Does it show 'Last turn N' (N of at least 1: the writer may also add or change a test) listing src/paginate.js?"
+    },
+    {
+      "name": "a commit from the workbench succeeds",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Commit the change from Source Control. Did it succeed?"
+    },
+    {
+      "name": "the commit is authored by this account's identity",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "no tool-call markup in the workbench Session's accepted answers",
+      "status": "pass",
+      "required": true,
+      "detail": "1 accepted answers in the Session hold no tool-call markup"
+    },
+    {
+      "name": "the Preview shows the Session's app in the workbench",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Does the Browser view show the page 'Axocoatl gate Preview'?"
+    },
+    {
+      "name": "the app received the Preview's request from the workbench's frame",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "Open full preview is disabled in Safari, and the workbench says why",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes at the terminal: Is 'Open full preview' greyed out, with a line under the address bar saying that in Safari Previews stay in this pane?"
+    },
+    {
+      "name": "a Preview address typed into a tab gets Axocoatl's refusal page",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes: Paste http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ into a new Safari tab. Does Safari show Axocoatl's page 'This Preview opens only in the workbench', and not the app?; the app received no request for a page of its own"
+    },
+    {
+      "name": "a redirect from another site to a Preview gets Axocoatl's refusal page",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes: Open http://gate-pages.localhost:63106/go?to=http://ses-f312fd01-051b-4735-8008-283888f6cfbe-p5173.localhost:8080/ in a new tab. Does Safari end on the same refusal page, and not the app?; the app received no request for a page of its own"
+    },
+    {
+      "name": "a Command-click inside the Preview gets Axocoatl's refusal page",
+      "status": "pass",
+      "required": true,
+      "detail": "the operator (erick) answered yes: Back in the workbench's Browser view, hold Command and click 'Open the next page' in the Preview. Did a tab open on Axocoatl's refusal page, and not on the app?; the app received no request for a page of its own"
+    },
+    {
+      "name": "a Domain=localhost cookie flood from another page leaves the workbench as the docs say",
+      "status": "pass",
+      "required": true,
+      "detail": "Safari sent 53 of the 60 planted cookies back (Path=/api); the operator (erick) answered yes: Reload the workbench tab (at 127.0.0.1). Is it still signed in, showing your Session, with no 'signed out' message?"
+    },
+    {
+      "name": "the gate's planted localhost cookies are expired",
+      "status": "pass",
+      "required": true,
+      "detail": "the fixture expired only its 60 named Domain=localhost cookies with Path=/api and Safari sent none back; the operator (erick) answered yes: Close the plant tab, then open http://gate-pages.localhost:63106/clear?path=/api: does it say Safari sends 0 of the planted cookies back? This page expires only the gate's test cookies. Is the workbench still signed in and working?; this is not general website-data recovery"
+    },
+    {
+      "name": "Ctrl+C stops axocoatl dev with exit 0",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "35188 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-workbench-webkit/answers.txt",
+    "C1-workbench-webkit/logs/dev.log",
+    "C1-workbench-webkit/logs/safari-pages.log",
+    "C1-workbench-webkit/resume-candidate.json",
+    "C1-workbench-webkit/transcript.txt"
+  ]
+}

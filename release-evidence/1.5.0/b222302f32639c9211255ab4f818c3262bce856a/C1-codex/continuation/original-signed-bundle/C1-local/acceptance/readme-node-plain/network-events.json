@@ -1,0 +1,151 @@
+[
+  {
+    "event": {
+      "digest": "8d986a287443262e3bf68b27cf6f95a8f76138a3fd09b476b9d1853f76d654e1",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [],
+      "scope": "session",
+      "source": "config"
+    },
+    "seq": 1,
+    "ts_ms": 1793040813217,
+    "v": 1
+  },
+  {
+    "event": {
+      "digest": "9956255f606e3d3ac64a9a63eb5a3bac31a62fffa1814d9f7d7c6b015552a95f",
+      "kind": "policy",
+      "revision": 1,
+      "rules": [
+        "dl-cdn.alpinelinux.org:80,443 (preset alpine)",
+        "deb.debian.org:80,443 (preset debian)",
+        "security.debian.org:80,443 (preset debian)",
+        "archive.ubuntu.com:80,443 (preset ubuntu)",
+        "security.ubuntu.com:80,443 (preset ubuntu)",
+        "ports.ubuntu.com:80,443 (preset ubuntu)"
+      ],
+      "scope": "provisioning",
+      "source": "config"
+    },
+    "seq": 2,
+    "ts_ms": 1793040813217,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-8a64b59d-bf2f-4ac2-9fd5-cb21c5575814",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "starting"
+    },
+    "seq": 3,
+    "ts_ms": 1793040815012,
+    "v": 1
+  },
+  {
+    "event": {
+      "container": "axo-egr-ses-8a64b59d-bf2f-4ac2-9fd5-cb21c5575814",
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "ready"
+    },
+    "seq": 4,
+    "ts_ms": 1793040815228,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:89168b15-32d5-4fb8-99a7-20c3b222be7e",
+        "agent": "team-definition-70b9cc74db70085db85600310346fd93479d04397052c667ef941c23cac2dccb",
+        "invocation_id": "tool-1388dde0dd6676b85be9870e02de4e22eddbb68d07f7481ca303873746c6621a",
+        "kind": "agent",
+        "node_id": "team-node-74e9e29adb1d272d40f5eef0",
+        "process": "tool-1388dde0dd6676b85be9870e02de4e22eddbb68d07f7481ca303873746c6621a:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "adceb1bc1f833ea7"
+    },
+    "seq": 5,
+    "ts_ms": 1793040830623,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "adceb1bc1f833ea7"
+    },
+    "seq": 6,
+    "ts_ms": 1793040830861,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:89168b15-32d5-4fb8-99a7-20c3b222be7e",
+        "agent": "team-definition-70b9cc74db70085db85600310346fd93479d04397052c667ef941c23cac2dccb",
+        "invocation_id": "tool-5c1c20924ddc6c5ae471554546f579a53be329e57c465fde85fec6d9303e46e7",
+        "kind": "agent",
+        "node_id": "team-node-74e9e29adb1d272d40f5eef0",
+        "process": "tool-5c1c20924ddc6c5ae471554546f579a53be329e57c465fde85fec6d9303e46e7:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "cfb942bb36fce670"
+    },
+    "seq": 7,
+    "ts_ms": 1793040840330,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "cfb942bb36fce670"
+    },
+    "seq": 8,
+    "ts_ms": 1793040840566,
+    "v": 1
+  },
+  {
+    "event": {
+      "binding": {
+        "activation_id": "activation:89168b15-32d5-4fb8-99a7-20c3b222be7e",
+        "agent": "team-definition-70b9cc74db70085db85600310346fd93479d04397052c667ef941c23cac2dccb",
+        "invocation_id": "tool-ef153051645632237ca7a72115a3cc030e8cf8d56fb37b28a1e375006544906c",
+        "kind": "agent",
+        "node_id": "team-node-74e9e29adb1d272d40f5eef0",
+        "process": "tool-ef153051645632237ca7a72115a3cc030e8cf8d56fb37b28a1e375006544906c:0"
+      },
+      "kind": "bind",
+      "scope": "session",
+      "token": "f556f06f4c8833fa"
+    },
+    "seq": 9,
+    "ts_ms": 1793040844657,
+    "v": 1
+  },
+  {
+    "event": {
+      "kind": "unbind",
+      "reason": "settled",
+      "token": "f556f06f4c8833fa"
+    },
+    "seq": 10,
+    "ts_ms": 1793040844787,
+    "v": 1
+  },
+  {
+    "event": {
+      "generation": 1,
+      "kind": "sidecar",
+      "state": "stopped"
+    },
+    "seq": 11,
+    "ts_ms": 1793040875850,
+    "v": 1
+  }
+]

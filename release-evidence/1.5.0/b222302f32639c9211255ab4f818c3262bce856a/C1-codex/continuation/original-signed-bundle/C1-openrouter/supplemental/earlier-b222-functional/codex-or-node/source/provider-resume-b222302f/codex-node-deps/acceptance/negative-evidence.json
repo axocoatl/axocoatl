@@ -1,0 +1,115 @@
+{
+  "tool_errors": [
+    {
+      "role": "reviewer",
+      "sequence": 9,
+      "payload": {
+        "call_id": "chatcmpl-tool-85eda49294853512",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 26,
+      "payload": {
+        "call_id": "chatcmpl-tool-baec5c2f9a68acd7",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 30,
+      "payload": {
+        "call_id": "chatcmpl-tool-88e0054ba8a0ae03",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 68,
+        "result_sha256": "148e9338ccc55a680b775abd6f5cec4f1d3b88c55b10eb0a2fe23c220505cdc2"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 34,
+      "payload": {
+        "call_id": "chatcmpl-tool-9cdc95c00f0523c2",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 42,
+      "payload": {
+        "call_id": "chatcmpl-tool-bbd78e7091bf6380",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "search",
+        "result_bytes": 144,
+        "result_sha256": "f9012c5cfbb1383389fc826ac35a6c47e14d1fcf7b1bd867da2a2cb346ff0fd1"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    },
+    {
+      "role": "reviewer",
+      "sequence": 46,
+      "payload": {
+        "call_id": "chatcmpl-tool-8fe40d474385cb7f",
+        "is_error": true,
+        "kind": "tool_result",
+        "name": "grep",
+        "result_bytes": 77,
+        "result_sha256": "a29b4215b6b38aacfca7218c7baac5bf1c3eb42ff6c19b3c06041c41bd183ea4"
+      },
+      "cause": "Unknown: public record retains the result length/hash, not its body or full arguments."
+    }
+  ],
+  "provider_retries": [],
+  "refused_connections": [],
+  "registry_revocations": [
+    {
+      "event": {
+        "actor": "toolchain setup of loadout run run-347b6716-0ea2-4bd5-aa3f-a94383145504",
+        "change": {
+          "command_id": "run-347b6716-0ea2-4bd5-aa3f-a94383145504:setup-revoke:registry.npmjs.org",
+          "host": "registry.npmjs.org",
+          "op": "revoke",
+          "ports": []
+        },
+        "digest": "3d761d88932ffab82279a9cd1316414f61a84406bb9f521fd34f7424ce8ac22f",
+        "kind": "policy",
+        "revision": 3,
+        "rules": [
+          "chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)"
+        ],
+        "scope": "session",
+        "source": "session_revoke"
+      },
+      "seq": 14,
+      "ts_ms": 1793037437534,
+      "v": 1
+    }
+  ],
+  "network_explanation": "No refused connections were recorded.",
+  "baseline_probe": {
+    "program": "npm",
+    "program_found": true,
+    "baseline_exit": 1,
+    "duration_ms": 298
+  }
+}

@@ -1,0 +1,394 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T19:19:30.364593+00:00",
+  "fixture": "node-deps",
+  "label": "hero-node-deps",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+  "base_commit": "d8c23eaba58dba12bad0f3f5b2857f12821b0daa",
+  "run_id": "run-8ff54b58-1904-4ddf-9193-3e983357cc38",
+  "result": "NOT_ACCEPTED_INTERRUPTED",
+  "gate_run": {
+    "verdict": "interrupted",
+    "exit_code": 6,
+    "review": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "verdict": "not_run",
+      "passed": false,
+      "rounds": 0,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "covered_files": {
+      "source": "workspace_at_finish",
+      "removed": [],
+      "complete": false,
+      "unattributed": [
+        "team-node-4da61d4aaa5c7272058428c6 (generation 1) in turn turn-613968b2-0883-48ea-9908-11e706fcecbb: its After capture is unavailable (Execution was stopped, revoked, or expired before this repository observation)"
+      ]
+    },
+    "not_covered": {
+      "count": 1,
+      "areas": [
+        "writer"
+      ]
+    },
+    "warnings": [
+      "receipt_incomplete"
+    ]
+  },
+  "artifact_review": "Production uses Array.slice end clamping to preserve full and partial pages. The model also added a unit test despite instructions to leave tests unchanged; the run was interrupted before required checks and review. Original tests pass independently, but this remains a negative gate result.",
+  "changed_files": [
+    "src/paginate.js",
+    "test/paginate.test.js"
+  ],
+  "original_tests_unchanged": false,
+  "all_other_tracked_files_unchanged": false,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "receipt.json",
+    "run.axorecord.jsonl"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    ".gitignore": {
+      "original_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "final_sha256": "4d56952b0fb13bf8f9b6c13a6d4c34a075bac3af447636a1df4335d7576e2f97",
+      "unchanged": true
+    },
+    "README.md": {
+      "original_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "final_sha256": "5bdce64e8c5b49579ba0dfc69d36bc3f48ed6637374b11671d321b036189a732",
+      "unchanged": true
+    },
+    "package-lock.json": {
+      "original_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "final_sha256": "fb4ee912596769ed6283f07e9d134fc051e1c8aa95572904310c2dc07b1d87de",
+      "unchanged": true
+    },
+    "package.json": {
+      "original_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "final_sha256": "8809e202333180485c672ec7353d486dae7fc27f6dcdb258256ff244c1e76b26",
+      "unchanged": true
+    },
+    "src/paginate.js": {
+      "original_sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "final_sha256": "838ae343f7e8c51bb3f5841fe9eb360ada8e32d5ca0be193051cce08beeae3ab",
+      "unchanged": false
+    },
+    "test/paginate.test.js": {
+      "original_sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "final_sha256": "bf9669539f1f3e50a8a7fd359793891606e11cf2c5c44d29f40c0a10fd51fe1a",
+      "unchanged": false
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "signed-interrupted-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+        "start": "2026-10-26T19:18:26.284045+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.290647+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "81e7a5c6e0601edc832b0736f5d14d6ca343b03aff08b595f5a3d331cb486454",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+        "start": "2026-10-26T19:18:26.290883+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.297694+00:00",
+        "exit_code": 6,
+        "stdout_sha256": "f736c32ab2292f4065a4917d269c5e438c22d2b64997e2a9bc3a2b752c40e129",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+        "start": "2026-10-26T19:18:26.297915+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.304490+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "6daad99de55c59c7966f9ebe3edd9225d7bcdadc902d1c4b2449bb9ad7889a9e",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-claude-code/hero-node-deps/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/hero-node-deps",
+        "start": "2026-10-26T19:18:26.304655+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.330252+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "fa78db9c5fcf9bcc3cfcb94ef58a1a70581603312b802a378939e3cc18eb6f22",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "--version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check",
+        "start": "2026-10-26T19:18:26.330503+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.342168+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "c42fcf0db5a550bda2f566fcdc21955df3e5a8ec3aeb90ac533f3776e7fce32a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/npm",
+          "test"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/hero-node-deps/host-check",
+        "start": "2026-10-26T19:18:26.362799+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:18:26.746282+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "20d9b828dc49d7d27fb1fc5178b6694fa77e1c84912fdec2957b923163d230e4",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_production_copy": true,
+    "original_tests_restored_in_host_copy_only": true,
+    "model_modified_tests_preserved_in_final": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "name": "tests",
+      "state": "not_run",
+      "stderr_tail": "",
+      "stdout_tail": "",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "claude-code",
+        "program_version": "2.1.292",
+        "provider": "anthropic",
+        "model": "sonnet",
+        "credential": "claude-code-oauth"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "verdict": "not_run",
+      "passed": false,
+      "rounds": 0,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "node",
+      "reason": "package.json at the repository root",
+      "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+      "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+      "recipes": [
+        "claude-code",
+        "node"
+      ],
+      "check": "npm run test",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "npm ci --prefer-offline --no-audit --no-fund",
+        "source": "detected",
+        "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+        "exit_code": 0,
+        "duration_ms": 1429,
+        "registry_hosts": [
+          "registry.npmjs.org"
+        ],
+        "allowed_connections": 6,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-d86694cf74f1badd5e6c7a81",
+      "probe": {
+        "program": "npm",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 293
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "node",
+      "test_command": "npm test",
+      "host_setup": "npm ci --ignore-scripts --no-audit --no-fund",
+      "image_contains": "node",
+      "setup_contains": "npm ci"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": false,
+    "reason": "The reviewer runs after the required Agents finish and the required checks pass.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [],
+    "state": "not_run"
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_microunits": 10000000,
+    "cost_usd": 10.0,
+    "complete": false,
+    "cost_known": false,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [],
+    "provider_retries": [],
+    "activation_streams_complete": false,
+    "counts_note": "Interrupted activation has no accepted stream; empty extracted error/retry lists do not establish zero errors.",
+    "denied_events": [
+      {
+        "event": {
+          "conn": "g1:7",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/settings",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 24,
+        "ts_ms": 1793041644816,
+        "v": 1
+      },
+      {
+        "event": {
+          "conn": "g1:8",
+          "decision": "deny",
+          "host": "api.anthropic.com",
+          "kind": "request",
+          "method": "GET",
+          "path": "/api/claude_code/policy_limits",
+          "reason": "route_denied",
+          "seq_in_conn": 1
+        },
+        "seq": 26,
+        "ts_ms": 1793041644858,
+        "v": 1
+      }
+    ],
+    "recorded_baseline_probe": {
+      "program": "npm",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 293
+    },
+    "failed_activations": [
+      {
+        "role": "writer",
+        "state": "failed",
+        "failure": "content-efddda0c541ec6f7a34d91ad9291ecf42cc5c441ffc5f3932807317d9718e575",
+        "currently_accepted": false,
+        "event_counts": {},
+        "usage": null,
+        "events": []
+      }
+    ]
+  },
+  "network": {
+    "events": 49,
+    "allowed_connections": 10,
+    "refused_connections": 0,
+    "route_requests": 8,
+    "routes": [
+      [
+        "api.anthropic.com",
+        8
+      ]
+    ]
+  },
+  "verification": {
+    "require_pass_receipt_exit": 6,
+    "signed_interrupted_receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Negative artifact assessment of an interrupted Claude attempt; original-suite result does not make the gate path pass. No inference retry performed.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "receipt.json": "2943bbecc199c416bdf929fed001f9b82baa44f634904464216f57779b90401a",
+    "run.axorecord.jsonl": "278d469d2504920a8111d6f9a90a92604fc2d6c98285f0abc164433979402582",
+    "patch.diff": "8d757f7904eb6f0061ce906db473ef2ea4e8de3ad73e3f83f8e486a4ee4e6f05",
+    "negative-evidence.json": "1143d1089f77bdce92a1f18ae40b0c3036fafdc929ecfa09efab2ae7a90ca211",
+    "activation-summary.json": "2041161ccb9c60713dd8fcac061e72bc81a610ba1cb5929e52fc595232f1dcbd",
+    "outcome.json": "ca69a3b3f886c2bcabccae820adb7cb56a1d4329db409fb90a373b078a84cb10",
+    "original-tests.stdout": "20d9b828dc49d7d27fb1fc5178b6694fa77e1c84912fdec2957b923163d230e4",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

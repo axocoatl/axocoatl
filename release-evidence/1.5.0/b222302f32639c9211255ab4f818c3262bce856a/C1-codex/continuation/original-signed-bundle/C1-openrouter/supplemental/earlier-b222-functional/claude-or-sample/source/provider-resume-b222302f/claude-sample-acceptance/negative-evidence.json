@@ -1,0 +1,100 @@
+[
+  {
+    "role": "reviewer",
+    "generation": 1,
+    "sequence": 0,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 1,
+    "sequence": 6,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 36 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 1,
+    "sequence": 11,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint coreweave/fp4 (CoreWeave) to endpoint deepinfra/bf16 (DeepInfra) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 1,
+    "sequence": 13,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 35 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 3,
+    "payload": {
+      "call_id": "chatcmpl-tool-8597b6d88d7929ec",
+      "is_error": true,
+      "kind": "tool_result",
+      "name": "print_tree",
+      "result_bytes": 148,
+      "result_sha256": "116a6ad028b48a99a45d69dbaf63d3e5542862d8fdd5001f96e52cf56bb65632"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 15,
+    "payload": {
+      "call_id": "chatcmpl-tool-85fe1aaa42ce1c96",
+      "is_error": true,
+      "kind": "tool_result",
+      "name": "print_tree",
+      "result_bytes": 148,
+      "result_sha256": "116a6ad028b48a99a45d69dbaf63d3e5542862d8fdd5001f96e52cf56bb65632"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 16,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint near-ai/fp4 (Near AI) to endpoint coreweave/fp4 (CoreWeave) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 21,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "HTTP 429 from openrouter; the call was sent again at once, from endpoint coreweave/fp4 (CoreWeave) to endpoint deepinfra/bf16 (DeepInfra) of the same model (openai/gpt-oss-120b), as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 23,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 35 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+    }
+  },
+  {
+    "role": "reviewer",
+    "generation": 2,
+    "sequence": 31,
+    "payload": {
+      "kind": "provider_retry",
+      "reason": "the model's response could not be used: the model's response held no answer and no tool call (it wrote only reasoning; 170 output tokens). Nothing from this response ran; OpenRouter ended it with finish_reason \"stop\" and 4 tools offered. Asking it once more with a note, as a new, separately reserved call"
+    }
+  }
+]

@@ -1,0 +1,177 @@
+{
+  "ready": true,
+  "config": "/tmp/axo-gate.cEXBa5/home/.config/axocoatl/config.yaml",
+  "sections": {
+    "sandbox": [
+      {
+        "name": "Podman",
+        "status": "ok",
+        "detail": "Podman 4.9.3 ready (rootless; kernel 6.17.0-1022-azure), needed for every Session and every axocoatl run",
+        "fix": null
+      },
+      {
+        "name": "Landlock",
+        "status": "ok",
+        "detail": "Landlock ABI 7",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "ok",
+        "detail": "Ubuntu 24.04.5 LTS, as the release gate verifies",
+        "fix": null
+      },
+      {
+        "name": "Platform",
+        "status": "warn",
+        "detail": "16 GB of memory: local models have not been verified below 48 GB",
+        "fix": null
+      },
+      {
+        "name": "Sandbox network",
+        "status": "ok",
+        "detail": "Sandbox network: bridge (local Session containers can make outbound connections; set sandbox.network: none for repositories you do not trust)",
+        "fix": null
+      },
+      {
+        "name": "Sandbox workload",
+        "status": "ok",
+        "detail": "Sandbox workload: image (commands run as the image's own user)",
+        "fix": null
+      }
+    ],
+    "models": [
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama 0.40.6 at http://127.0.0.1:35015, a version native Sessions accept",
+        "fix": null
+      },
+      {
+        "name": "Ollama",
+        "status": "ok",
+        "detail": "Ollama cloud models disabled at http://127.0.0.1:35015 (~/.ollama/server.json)",
+        "fix": null
+      },
+      {
+        "name": "Model gpt-oss:20b",
+        "status": "ok",
+        "detail": "gpt-oss:20b: GGUF; 1.1 GB, fits in memory; 32768-token context, contract probes passed; 1.1 GB loaded, all in GPU memory",
+        "fix": null
+      },
+      {
+        "name": "Model qwen3-coder:30b",
+        "status": "ok",
+        "detail": "qwen3-coder:30b: GGUF; 1.1 GB, fits in memory; 32768-token context, contract probes passed; 1.1 GB loaded, all in GPU memory",
+        "fix": null
+      }
+    ],
+    "writers": [
+      {
+        "name": "Claude Code",
+        "status": "ok",
+        "detail": "not set up (`axocoatl recipe build claude-code && axocoatl connect claude-code` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "Codex",
+        "status": "ok",
+        "detail": "not set up (`axocoatl connect codex` sets it up, and leaves your configuration as it is)",
+        "fix": null
+      },
+      {
+        "name": "claude CLI",
+        "status": "ok",
+        "detail": "not found; needed only to sign in with `axocoatl connect claude-code`",
+        "fix": null
+      },
+      {
+        "name": "codex CLI",
+        "status": "ok",
+        "detail": "not found; not needed: `axocoatl connect codex` runs the pinned Codex in a container",
+        "fix": null
+      },
+      {
+        "name": "gh",
+        "status": "warn",
+        "detail": "not signed in; `axocoatl run --keep pr` needs it",
+        "fix": "gh auth login"
+      }
+    ],
+    "daemon": [
+      {
+        "name": "Config",
+        "status": "ok",
+        "detail": "Config valid: /tmp/axo-gate.cEXBa5/home/.config/axocoatl/config.yaml",
+        "fix": null
+      },
+      {
+        "name": "Data dir",
+        "status": "ok",
+        "detail": "Data dir writable: /tmp/axo-gate.cEXBa5/home/.local/share/axocoatl",
+        "fix": null
+      },
+      {
+        "name": "Data dir ownership",
+        "status": "ok",
+        "detail": "Data dir ownership: recorded for this directory",
+        "fix": null
+      },
+      {
+        "name": "git",
+        "status": "ok",
+        "detail": "git 2.55.0 (the daemon runs git on your repositories)",
+        "fix": null
+      },
+      {
+        "name": "systemd user session",
+        "status": "ok",
+        "detail": "running (systemd --user); linger is on, so the Always-On Service keeps running after runner logs out",
+        "fix": null
+      },
+      {
+        "name": "Daemon",
+        "status": "warn",
+        "detail": "no daemon running; `axocoatl run` and the workbench need one",
+        "fix": "Start it with `axocoatl dev` (or `axocoatl service start`)"
+      },
+      {
+        "name": "Webhooks",
+        "status": "ok",
+        "detail": "none (no outbound event egress)",
+        "fix": null
+      }
+    ]
+  },
+  "ready_for": [
+    {
+      "command": "axocoatl run fix",
+      "ok": true,
+      "detail": "writer ollama:qwen3-coder:30b, reviewer ollama:gpt-oss:20b",
+      "set_up": true,
+      "required": true
+    },
+    {
+      "command": "axocoatl run fix-claude-code",
+      "ok": false,
+      "detail": "not set up: run `axocoatl recipe build claude-code && axocoatl connect claude-code`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "axocoatl run fix-codex",
+      "ok": false,
+      "detail": "not set up: run `axocoatl connect codex`",
+      "set_up": false,
+      "required": false
+    },
+    {
+      "command": "workbench Sessions",
+      "ok": true,
+      "detail": "Lead ollama:qwen3-coder:30b",
+      "set_up": true,
+      "required": true
+    }
+  ],
+  "steps_left": []
+}

@@ -1,0 +1,94 @@
+{
+  "adjudications": [],
+  "attention": [],
+  "checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "npm run test"
+      ],
+      "candidate_sha256": "9d45ec4dcfc1bc1cce2f002c51150f9bc182c53432a792d212fc4e1816a8b6e8",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "\n> axocoatl-first-run@1.0.0 test\n> node --test\n\n\u2714 splits items into full pages (0.58517ms)\n\u2714 keeps the last item on a page of its own (0.079625ms)\n\u2714 refuses a page size below one (0.165085ms)\n\u2139 tests 3\n\u2139 suites 0\n\u2139 pass 3\n\u2139 fail 0\n\u2139 cancelled 0\n\u2139 skipped 0\n\u2139 todo 0\n\u2139 duration_ms 38.230836\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "exit_code": 0,
+  "findings": [],
+  "finished_at_ms": 1793040762373,
+  "loadout": {
+    "builtin": true,
+    "digest": "54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223",
+    "id": "fix",
+    "kind": "fix",
+    "version": 1
+  },
+  "network": {
+    "allowed_connections": 0,
+    "events": 15,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "not_covered": [],
+  "notes": [
+    "image localhost/axocoatl-recipe-node:3b267c748259 \u00b7 toolchain node (package.json at the repository root) \u00b7 check npm run test (detected from the repository) \u00b7 setup none"
+  ],
+  "ollama_versions": {
+    "gpt-oss:20b": [
+      "0.40.11"
+    ],
+    "qwen3-coder:30b": [
+      "0.40.11"
+    ]
+  },
+  "review": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "9d45ec4dcfc1bc1cce2f002c51150f9bc182c53432a792d212fc4e1816a8b6e8",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "run_id": "run-496781e8-80a1-4c0a-b546-0f5eb4909a55",
+  "schema": "axocoatl.run-outcome/1",
+  "session_id": "ses-70616529-34d0-42e9-9088-c5fe35b5bc0f",
+  "started_at_ms": 1793040710997,
+  "task": "Fix the bug: paging skips the last item",
+  "turns": [
+    {
+      "purpose": "run",
+      "state": "completed",
+      "turn_id": "turn-16fca4e4-48c4-4207-b9f0-4dd620707b1d"
+    }
+  ],
+  "usage": {
+    "complete": true,
+    "cost_known": true,
+    "cost_microunits": 0,
+    "input_tokens": 57723,
+    "output_tokens": 1595,
+    "retries": 0
+  },
+  "verdict": "pass",
+  "warnings": [],
+  "workspace_id": "wsp-5ef9da1a-d12f-4b24-ba4e-5672df9fe6f8"
+}

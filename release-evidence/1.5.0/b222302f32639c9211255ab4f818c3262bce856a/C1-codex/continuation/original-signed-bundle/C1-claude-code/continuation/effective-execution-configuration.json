@@ -1,0 +1,290 @@
+{
+  "manifest": {
+    "credentials": {
+      "writer": "claude-code-oauth"
+    },
+    "dirty_paths": [],
+    "loadout": {
+      "builtin": true,
+      "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+      "id": "fix-claude-code",
+      "kind": "fix",
+      "version": 1
+    },
+    "loadout_text": "# Built-in loadout: fix-claude-code. The fix loadout with the Claude Code CLI\n# as its writer: the same required check, the same review by a different\n# model for up to three rounds, the same ADJUDICATIONS, in the same egress,\n# hardened Session. The writer is the pinned Claude Code from the\n# claude-code recipe image (`axocoatl recipe build claude-code`), whose\n# OAuth token `axocoatl connect claude-code` stores as claude-code-oauth; the\n# route Axocoatl adds sends it to api.anthropic.com, and the container holds\n# a placeholder. Claude Code brings its own tools, so the writer lists none.\n#\n# writer_model defaults to anthropic:sonnet, an alias Claude Code 2.1.292\n# resolves to claude-sonnet-5-5 (its bundled model catalog). The reviewer\n# has no default: it is a native Agent on another model (Ollama or\n# OpenRouter), and a reviewer on the writer's model is warned about.\n#\n# Budgets. Admission refuses a writer whose tokens cannot hold one model call\n# of its model: Claude Code can fill a 1M-token model's whole window in one\n# call, so the floor is 1,000,000 for sonnet, opus, fable and best (200,000\n# for haiku). Claude Code reports every input token of every request it\n# makes, cached context included, and a session re-reads its context on\n# each request, so one program run can report several million tokens. A\n# program run that reports more tokens than its grant still allows fails, so\n# tokens leaves room for the first run and the two revisions three review\n# rounds can ask for. The spending stop is cost_usd: Claude Code runs with\n# --max-budget-usd at what the grant still allows, and settles to the cost it\n# reports. The reviewer's budget is fix's.\nschema: axocoatl.loadout/1\nid: fix-claude-code\nversion: 1\nname: Fix with Claude Code\ndescription: >-\n  The Claude Code CLI makes the change inside the Session; the host runs the\n  required checks on the exact final files and a reviewer on a different\n  model must approve the result.\nkind: fix\nparams:\n  writer_model:\n    kind: model\n    default: anthropic:sonnet\n    description: anthropic:<model or alias> that Claude Code runs (default anthropic:sonnet)\n  reviewer_model:\n    kind: model\n    required: true\n    description: provider:model of the reviewer, a native Agent on Ollama or OpenRouter (use a different model than the writer)\nagents:\n  - id: writer\n    role: writer\n    runtime: claude-code\n    model: { param: writer_model }\n    instructions: >-\n      You own this change. Find the relevant code and tests, make the change,\n      run the project's check command and fix failures, then compare your diff\n      with the task. When the host sends you review findings, answer every\n      finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced\n      JSON array with one object per finding, {\"id\": \"F1\", \"decision\":\n      \"accept\" or \"reject\", \"reason\": \"...\"}. Reject only with a concrete\n      reason (the code that shows the finding is wrong). Fix each finding you\n      accept, run the checks again, and give your final answer. Leave no file\n      you created only for testing or debugging (scratch scripts, test binaries\n      such as `go test -c` output, build outputs, reports): delete them, then\n      run the project's check command one last time before your final answer.\nchecks:\n  - name: tests\n    run: { detected: true }\n    timeout: 3m\nreview:\n  model: { param: reviewer_model }\n  rounds: 3\n  tools: [read_file, list_dir, grep, glob]\n  adjudicate: true\n  instructions: >-\n    Review the change against the task and against every contract and edge\n    case the docs, comments and tests describe. Read the code the change\n    touches, not only the diff. Number each finding F1, F2, ... at the start\n    of its line, with file:line, what is wrong and what to change; report\n    only defects, not style. Give the verdict line the host asks for,\n    VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.\nbudgets:\n  agent: { activations: 4, invocations: 400, tokens: 20000000, cost_usd: 10 }\n  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }\n  wall_clock: 60m\nprompt: |\n  {task}\nsandbox:\n  network: egress\n  workload: hardened\nenvironment:\n  recipes: [claude-code]\n",
+    "options": {
+      "axocoatl_version": "1.5.0",
+      "check_command": null,
+      "environment": {
+        "cache_volume": "<per-attempt>",
+        "check": "npm run test",
+        "check_source": "detected from the repository",
+        "image": "localhost/axocoatl-recipe-claude-code-node:5520bc024263",
+        "image_id": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+        "probe": {
+          "baseline_exit": 1,
+          "duration_ms": "<per-attempt>",
+          "program": "npm",
+          "program_found": true
+        },
+        "reason": "package.json at the repository root",
+        "recipes": [
+          "claude-code",
+          "node"
+        ],
+        "setup": {
+          "allowed_connections": 6,
+          "command": "npm ci --prefer-offline --no-audit --no-fund",
+          "duration_ms": "<per-attempt>",
+          "exit_code": 0,
+          "refused_connections": 0,
+          "registry_hosts": [
+            "registry.npmjs.org"
+          ],
+          "script_sha256": "67ddbc474b1380ad724ec2f0d33c3dae473d632fa1e73d6a0509be5c345b431b",
+          "source": "detected"
+        },
+        "toolchain": "node"
+      },
+      "keep": "none",
+      "request_id": "<per-attempt>",
+      "setup_command": null
+    },
+    "params": {
+      "reviewer_model": "ollama:gpt-oss:20b",
+      "writer_model": "anthropic:sonnet"
+    },
+    "repo": "<per-attempt>",
+    "repo_head": "<per-attempt>",
+    "run_id": "<per-attempt>",
+    "schema": "axocoatl.run-manifest/1",
+    "session_id": "<per-attempt>",
+    "started_at_ms": "<per-attempt>",
+    "task": "Paging skips the last item",
+    "workspace_id": "<per-attempt>"
+  },
+  "loadout": {
+    "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+    "text": "# Built-in loadout: fix-claude-code. The fix loadout with the Claude Code CLI\n# as its writer: the same required check, the same review by a different\n# model for up to three rounds, the same ADJUDICATIONS, in the same egress,\n# hardened Session. The writer is the pinned Claude Code from the\n# claude-code recipe image (`axocoatl recipe build claude-code`), whose\n# OAuth token `axocoatl connect claude-code` stores as claude-code-oauth; the\n# route Axocoatl adds sends it to api.anthropic.com, and the container holds\n# a placeholder. Claude Code brings its own tools, so the writer lists none.\n#\n# writer_model defaults to anthropic:sonnet, an alias Claude Code 2.1.292\n# resolves to claude-sonnet-5-5 (its bundled model catalog). The reviewer\n# has no default: it is a native Agent on another model (Ollama or\n# OpenRouter), and a reviewer on the writer's model is warned about.\n#\n# Budgets. Admission refuses a writer whose tokens cannot hold one model call\n# of its model: Claude Code can fill a 1M-token model's whole window in one\n# call, so the floor is 1,000,000 for sonnet, opus, fable and best (200,000\n# for haiku). Claude Code reports every input token of every request it\n# makes, cached context included, and a session re-reads its context on\n# each request, so one program run can report several million tokens. A\n# program run that reports more tokens than its grant still allows fails, so\n# tokens leaves room for the first run and the two revisions three review\n# rounds can ask for. The spending stop is cost_usd: Claude Code runs with\n# --max-budget-usd at what the grant still allows, and settles to the cost it\n# reports. The reviewer's budget is fix's.\nschema: axocoatl.loadout/1\nid: fix-claude-code\nversion: 1\nname: Fix with Claude Code\ndescription: >-\n  The Claude Code CLI makes the change inside the Session; the host runs the\n  required checks on the exact final files and a reviewer on a different\n  model must approve the result.\nkind: fix\nparams:\n  writer_model:\n    kind: model\n    default: anthropic:sonnet\n    description: anthropic:<model or alias> that Claude Code runs (default anthropic:sonnet)\n  reviewer_model:\n    kind: model\n    required: true\n    description: provider:model of the reviewer, a native Agent on Ollama or OpenRouter (use a different model than the writer)\nagents:\n  - id: writer\n    role: writer\n    runtime: claude-code\n    model: { param: writer_model }\n    instructions: >-\n      You own this change. Find the relevant code and tests, make the change,\n      run the project's check command and fix failures, then compare your diff\n      with the task. When the host sends you review findings, answer every\n      finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced\n      JSON array with one object per finding, {\"id\": \"F1\", \"decision\":\n      \"accept\" or \"reject\", \"reason\": \"...\"}. Reject only with a concrete\n      reason (the code that shows the finding is wrong). Fix each finding you\n      accept, run the checks again, and give your final answer. Leave no file\n      you created only for testing or debugging (scratch scripts, test binaries\n      such as `go test -c` output, build outputs, reports): delete them, then\n      run the project's check command one last time before your final answer.\nchecks:\n  - name: tests\n    run: { detected: true }\n    timeout: 3m\nreview:\n  model: { param: reviewer_model }\n  rounds: 3\n  tools: [read_file, list_dir, grep, glob]\n  adjudicate: true\n  instructions: >-\n    Review the change against the task and against every contract and edge\n    case the docs, comments and tests describe. Read the code the change\n    touches, not only the diff. Number each finding F1, F2, ... at the start\n    of its line, with file:line, what is wrong and what to change; report\n    only defects, not style. Give the verdict line the host asks for,\n    VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.\nbudgets:\n  agent: { activations: 4, invocations: 400, tokens: 20000000, cost_usd: 10 }\n  reviewer: { activations: 3, invocations: 120, tokens: 1500000, cost_usd: 3 }\n  wall_clock: 60m\nprompt: |\n  {task}\nsandbox:\n  network: egress\n  workload: hardened\nenvironment:\n  recipes: [claude-code]\n"
+  },
+  "session": {
+    "check_command": "npm run test",
+    "created_at": "<per-attempt>",
+    "enabled_skills": [],
+    "environment": {
+      "effective_image": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+      "error": null,
+      "generation": 1,
+      "prepared_at": "<per-attempt>",
+      "resource_limits": {
+        "cpus": "2",
+        "memory": "2g",
+        "pids": 512
+      },
+      "runtime": {
+        "authority_fingerprint": null,
+        "backend": "podman",
+        "cleanup_confirmed": true,
+        "control_plane": null,
+        "data_plane_domain": null,
+        "id": "<per-attempt>",
+        "ownership_token": null,
+        "remote_root": null
+      },
+      "runtime_creation": null,
+      "setup_approved": false,
+      "setup_command": null,
+      "setup_results": [],
+      "setup_reviewed": true,
+      "state": "ready"
+    },
+    "exposed_ports": [],
+    "id": "<per-attempt>",
+    "image": "7cfed53676d89ffe133fd135d10da442e36e4fbf872ee09407c97bf71d9ce85f",
+    "last_active": "<per-attempt>",
+    "loadout": {
+      "loadout": {
+        "builtin": true,
+        "digest": "1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140",
+        "id": "fix-claude-code",
+        "kind": "fix",
+        "version": 1
+      },
+      "network": "egress",
+      "run_id": "<per-attempt>",
+      "workload": "hardened"
+    },
+    "mode": {
+      "agents": [],
+      "kind": "custom"
+    },
+    "name": "fix-claude-code · Paging skips the last item",
+    "post_create_commands": [],
+    "status": "active",
+    "working_dir": "<per-attempt>",
+    "workspace_id": "<per-attempt>"
+  },
+  "team": {
+    "approved": true,
+    "configuration_revision": 1,
+    "dependencies": [],
+    "history_version": "execution_v2",
+    "layout": [],
+    "required_checks": [
+      [
+        "sh",
+        "-c",
+        "npm run test"
+      ]
+    ],
+    "required_review": {
+      "inline": {
+        "definition": {
+          "source": "loadout fix-claude-code@1 sha256:1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140 review",
+          "tools": [
+            "read_file",
+            "list_dir",
+            "grep",
+            "glob"
+          ]
+        },
+        "instructions": "Review the change against the task and against every contract and edge case the docs, comments and tests describe. Read the code the change touches, not only the diff. Number each finding F1, F2, ... at the start of its line, with file:line, what is wrong and what to change; report only defects, not style. Give the verdict line the host asks for, VERDICT: APPROVE or VERDICT: CHANGES. Change nothing.",
+        "model": "gpt-oss:20b",
+        "name": "reviewer",
+        "provider": "ollama"
+      },
+      "limits": {
+        "activations": 3,
+        "cost_microunits": 3000000,
+        "invocations": 120,
+        "tokens": 1500000
+      },
+      "max_output_tokens": 8192,
+      "max_rounds": 3,
+      "template_id": "loadout-reviewer"
+    },
+    "reviewers": [
+      "scout",
+      "reviewer"
+    ],
+    "slots": [
+      {
+        "definition": {
+          "credential": "claude-code-oauth",
+          "runtime": "claude-code",
+          "source": "loadout fix-claude-code@1 sha256:1138220389de60099fc0bfddeb7ec9973a9f0d044fe89a5eafc35577d86aa140 agent writer",
+          "tools": []
+        },
+        "expires_at_ms": "<per-attempt>",
+        "instructions": "You own this change. Find the relevant code and tests, make the change, run the project's check command and fix failures, then compare your diff with the task. When the host sends you review findings, answer every finding in an ADJUDICATIONS block: a line ADJUDICATIONS, then a fenced JSON array with one object per finding, {\"id\": \"F1\", \"decision\": \"accept\" or \"reject\", \"reason\": \"...\"}. Reject only with a concrete reason (the code that shows the finding is wrong). Fix each finding you accept, run the checks again, and give your final answer. Leave no file you created only for testing or debugging (scratch scripts, test binaries such as `go test -c` output, build outputs, reports): delete them, then run the project's check command one last time before your final answer.",
+        "limits": {
+          "activations": 4,
+          "cost_microunits": 10000000,
+          "invocations": 400,
+          "tokens": 20000000
+        },
+        "max_output_tokens": null,
+        "model": "sonnet",
+        "name": "writer",
+        "provider": "claude-code",
+        "required": true,
+        "reset_history": true,
+        "slot_id": "writer",
+        "source_slot_id": null,
+        "template_id": null,
+        "tools": [
+          "bash"
+        ],
+        "writes": null
+      }
+    ],
+    "suggested_budget": {
+      "agent": {
+        "activations": 4,
+        "cost_microunits": 10000000,
+        "invocations": 400,
+        "tokens": 4000000
+      },
+      "expires_in_ms": 86400000,
+      "free_providers": [
+        "ollama"
+      ],
+      "from": "fix",
+      "helper": {
+        "activations": 3,
+        "cost_microunits": 3000000,
+        "invocations": 120,
+        "tokens": 1500000
+      }
+    },
+    "suggested_check": [
+      "sh",
+      "-c",
+      "npm run test"
+    ],
+    "templates": [
+      {
+        "expires_at_ms": null,
+        "instructions": "Answer only with tool calls until the change is made and checked; then write a short summary of what you changed. You own this change: find the relevant code and tests (if you have helpers, ask scout to find code you do not know), make the change, run the check command from the project instructions (AXOCOATL.md) or the tests and fix failures, then check your diff against the task (if you have helpers, ask reviewer to review it) and fix each defect found.",
+        "limits": null,
+        "max_output_tokens": 4096,
+        "model": "gpt-oss:20b",
+        "name": "Lead",
+        "provider": "ollama",
+        "required": true,
+        "reset_history": true,
+        "slot_id": "slot-lead",
+        "source_slot_id": null,
+        "template_id": "lead",
+        "writes": null
+      },
+      {
+        "expires_at_ms": null,
+        "instructions": "Answer the lead's question with file paths, line numbers and short evidence. Change nothing.",
+        "limits": null,
+        "max_output_tokens": 4096,
+        "model": "gpt-oss:20b",
+        "name": "Scout",
+        "provider": "ollama",
+        "required": true,
+        "reset_history": true,
+        "role": "Worker",
+        "slot_id": "slot-scout",
+        "source_slot_id": null,
+        "template_id": "scout",
+        "writes": []
+      },
+      {
+        "expires_at_ms": null,
+        "instructions": "Review the described change. Check it against the task and against every contract and edge case the docs, comments and tests describe, one by one. Report each defect with file:line, or say you found none. Change nothing.",
+        "limits": null,
+        "max_output_tokens": 4096,
+        "model": "gpt-oss:20b",
+        "name": "Reviewer",
+        "provider": "ollama",
+        "required": true,
+        "reset_history": true,
+        "role": "Worker",
+        "slot_id": "slot-reviewer",
+        "source_slot_id": null,
+        "template_id": "reviewer",
+        "writes": []
+      },
+      {
+        "expires_at_ms": null,
+        "instructions": "You are a helpful assistant.",
+        "limits": null,
+        "max_output_tokens": null,
+        "model": "gpt-oss:20b",
+        "name": "Assistant",
+        "provider": "ollama",
+        "required": true,
+        "reset_history": true,
+        "slot_id": "slot-assistant",
+        "source_slot_id": null,
+        "template_id": "assistant",
+        "writes": null
+      }
+    ]
+  }
+}

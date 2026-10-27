@@ -1,0 +1,298 @@
+{
+  "schema": "axocoatl.recovery.fixture-acceptance/1",
+  "source_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "assessed_at": "2026-10-26T19:03:57.890383+00:00",
+  "fixture": "go",
+  "label": "readme-go",
+  "repo": "/Users/erick/axocoatl-gate-work/repos/readme-go",
+  "base_commit": "67b98f5d3ff63b0b6522f9e91cce654dedf4ec9b",
+  "run_id": "run-712f671e-f4d4-4f77-9a62-449ffabb230e",
+  "result": "ACCEPTED",
+  "artifact_review": "The last-page branch now uses the remaining item count (len(items) minus start), fixing full final pages without changing partial pages or the nonpositive-size guard. Only pages.go changed; original tests and module files are unchanged.",
+  "changed_files": [
+    "pages.go"
+  ],
+  "original_tests_unchanged": true,
+  "all_other_tracked_files_unchanged": true,
+  "unexpected_untracked_files": [],
+  "gate_generated_outputs_excluded": [
+    "axocoatl-junit.xml",
+    "run.axorecord.jsonl",
+    "run.receipt.json"
+  ],
+  "template_baseline_mismatches": [],
+  "file_hashes": {
+    "README.md": {
+      "original_sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c",
+      "final_sha256": "6c3fd1344089c99d4815a83c1a68fb1b24b769eae0efec71b3d22c4a1b197a4c",
+      "unchanged": true
+    },
+    "go.mod": {
+      "original_sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0",
+      "final_sha256": "0db002b16277491aa13424a1aa56d32e34204f44d9b95daffbaba6fbda427fa0",
+      "unchanged": true
+    },
+    "go.sum": {
+      "original_sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec",
+      "final_sha256": "914c00c3fe0abb847abcdc66929e93e4cc62abccc7fb381563cc4c70dc9dafec",
+      "unchanged": true
+    },
+    "pages.go": {
+      "original_sha256": "f81e07d31890707518232eb0c8faad548cdfc38f7a283cb6f7fe8820a5a8e3af",
+      "final_sha256": "2d0192e1af685e7d728557b514809a5f446944997c15848c11c701cf29be587a",
+      "unchanged": false
+    },
+    "pages_test.go": {
+      "original_sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79",
+      "final_sha256": "321d924c9fbaf6dbbf9ed2f1e98e566387c6a7ebe575492830834af454800d79",
+      "unchanged": true
+    }
+  },
+  "host_test": {
+    "commands": [
+      {
+        "name": "independent-receipt-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "receipt",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.receipt.json",
+          "--key",
+          "ed25519 VgN/8kARHYDmhizXAA1M/coz0sgjrViPar31F3Rucaw= axocoatl@Mac-139.lan 8a7a6b546e72ca24",
+          "--repo",
+          "/Users/erick/axocoatl-gate-work/repos/readme-go",
+          "--record",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.axorecord.jsonl",
+          "--require-pass",
+          "--json"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-go",
+        "start": "2026-10-26T19:03:50.756456+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:03:50.764742+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "6a15443c6cd8978924e7345bb05212fb9ce98e428471a898e068bbebfc9a935b",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "independent-record-verify",
+        "argv": [
+          "/usr/local/bin/axocoatl",
+          "record",
+          "verify",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-go",
+        "start": "2026-10-26T19:03:50.764978+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:03:50.773548+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "f0b591434711ee87bfaf5ef724b5fcaa09277f1cdf915fdf97fed2aae670af24",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "accepted-answers",
+        "argv": [
+          "/Users/erick/.local/share/fnm/node-versions/v22.23.2/installation/bin/node",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/scripts/release-gate/record-answers.mjs",
+          "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-go/run.axorecord.jsonl"
+        ],
+        "cwd": "/Users/erick/axocoatl-gate-work/repos/readme-go",
+        "start": "2026-10-26T19:03:50.773723+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:03:50.801716+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "815d11ee5eb9c8ef0cd562f0bd4f9f42c4eb996a6c832ac4e163f8bd94a728d1",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "runtime-version",
+        "argv": [
+          "/opt/homebrew/bin/go",
+          "version"
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check",
+        "start": "2026-10-26T19:03:50.802000+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:03:50.829309+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "a3d12e3f8d79970b066e2e997bcea464edca36b9feff785b459c6b7a587c7077",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "original-tests",
+        "argv": [
+          "/opt/homebrew/bin/go",
+          "test",
+          "-p",
+          "1",
+          "./..."
+        ],
+        "cwd": "/Users/erick/.codex/worktrees/release-1-5-recovery/axocoatl/target/recovery-2026-10-25/live-c1-fresh-b222302f/acceptance/readme-go/host-check",
+        "start": "2026-10-26T19:03:50.829594+00:00",
+        "status": "completed",
+        "end": "2026-10-26T19:03:57.871010+00:00",
+        "exit_code": 0,
+        "stdout_sha256": "9bd0a7f1891c786cb797df1ad47443370340ea049d9a7acb7df6c1ce37f56bc2",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "original_suite_invocations": 1,
+    "exit_code": 0,
+    "exact_final_file_copy": true,
+    "independent_baseline_rerun": false
+  },
+  "recorded_host_checks": [
+    {
+      "argv": [
+        "sh",
+        "-c",
+        "go test ./..."
+      ],
+      "candidate_sha256": "7e52b33a059439a777045b12f08e1e5750d83c0ff26b1e5b1db307c2693b2dc5",
+      "exit_code": 0,
+      "name": "tests",
+      "state": "passed",
+      "stderr_tail": "",
+      "stdout_tail": "ok  \texample.com/newuser/pages\t(cached)\n",
+      "timeout_ms": 180000
+    }
+  ],
+  "configuration": {
+    "writer": [
+      {
+        "id": "writer",
+        "role": "writer",
+        "runtime": "native",
+        "program_version": "ollama 0.40.11",
+        "provider": "ollama",
+        "model": "qwen3-coder:30b"
+      }
+    ],
+    "reviewer": {
+      "provider": "ollama",
+      "model": "gpt-oss:20b",
+      "runtime": "native",
+      "program_version": "ollama 0.40.11",
+      "verdict": "approved",
+      "passed": true,
+      "rounds": 1,
+      "max_rounds": 3,
+      "findings": 0
+    },
+    "helpers": 0,
+    "host_required_checks": true,
+    "required_review": true,
+    "environment": {
+      "toolchain": "go",
+      "reason": "go.mod at the repository root",
+      "image": "localhost/axocoatl-recipe-go:6063b3e9fdc6",
+      "image_id": "5a1a284380c1bcec365f244ed4e82e631cffceedd95d34f6d10e5e7f8a552cb6",
+      "recipes": [
+        "go"
+      ],
+      "check": "go test ./...",
+      "check_source": "detected from the repository",
+      "setup": {
+        "command": "GOFLAGS=-modcacherw GOPROXY=https://proxy.golang.org go mod download",
+        "source": "detected",
+        "script_sha256": "6a234ad583d2bcac47a07e4a44a6a5d0ea7b20b1675ad582145c1484a0c55535",
+        "exit_code": 0,
+        "duration_ms": 662,
+        "registry_hosts": [
+          "proxy.golang.org",
+          "sum.golang.org"
+        ],
+        "allowed_connections": 1,
+        "refused_connections": 0
+      },
+      "cache_volume": "axo-tc-33834d69f7b30c219a1bef2a",
+      "probe": {
+        "program": "go",
+        "program_found": true,
+        "baseline_exit": 1,
+        "duration_ms": 5286
+      }
+    }
+  },
+  "environment_contract": {
+    "image_matches": true,
+    "setup_matches": true,
+    "fixture_expectation": {
+      "language": "go",
+      "test_command": "go test ./...",
+      "host_setup": null,
+      "image_contains": "go",
+      "setup_contains": "go mod download"
+    }
+  },
+  "review_detail": {
+    "max_rounds": 3,
+    "passed": true,
+    "reason": "The reviewer approved this result in round 1 of 3.",
+    "reviewer": {
+      "model": "gpt-oss:20b",
+      "provider": "ollama",
+      "runtime": "native"
+    },
+    "rounds": [
+      {
+        "candidate_sha256": "7e52b33a059439a777045b12f08e1e5750d83c0ff26b1e5b1db307c2693b2dc5",
+        "continued": false,
+        "findings": [],
+        "findings_text": "",
+        "passed": true,
+        "round": 1,
+        "verdict": "approve"
+      }
+    ],
+    "state": "approved"
+  },
+  "usage": {
+    "input_tokens": 79002,
+    "output_tokens": 2679,
+    "cost_microunits": 0,
+    "cost_usd": 0.0,
+    "complete": true,
+    "cost_known": true,
+    "cost_computed": false
+  },
+  "negative_evidence": {
+    "tool_errors": [],
+    "provider_retries": [],
+    "denied_events": [],
+    "recorded_baseline_probe": {
+      "program": "go",
+      "program_found": true,
+      "baseline_exit": 1,
+      "duration_ms": 5286
+    },
+    "failed_activations": []
+  },
+  "network": {
+    "events": 27,
+    "allowed_connections": 1,
+    "refused_connections": 0,
+    "route_requests": 0,
+    "routes": []
+  },
+  "verification": {
+    "receipt_exit": 0,
+    "record_exit": 0,
+    "markup_exit": 0,
+    "original_repo_unchanged_by_audit": true
+  },
+  "scope": "Actual artifact acceptance for this completed fresh local fixture; does not replace other required paths.",
+  "new_inference": false,
+  "source_config_or_runtime_changes": false,
+  "evidence_hashes": {
+    "run.receipt.json": "f6685f726d1cd8d112bb0e00021da70d4835b294f0afa7c21365732352e7467f",
+    "run.axorecord.jsonl": "0df7eb8fd90f88957ad96f1c4b709ab410bbd36751144e2477d5a70ab6cc3bfd",
+    "patch.diff": "dc686d290ecbf6c368893c0bc352208347ca919f702658addaca02f84d0861d5",
+    "negative-evidence.json": "51a606418fe31a929c136cc20c8256ed4c66999b827d09c8d5104b069e92e79b",
+    "activation-summary.json": "5ee0686c2364af504c7eb14feeba2db9e94bc38b9128de4f6ca36f298b0893e2",
+    "outcome.json": "82c1b97dada81068d6705a1e5e1fd7815966be314723d1a8f23689c4e9890c77",
+    "original-tests.stdout": "9bd0a7f1891c786cb797df1ad47443370340ea049d9a7acb7df6c1ce37f56bc2",
+    "original-tests.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

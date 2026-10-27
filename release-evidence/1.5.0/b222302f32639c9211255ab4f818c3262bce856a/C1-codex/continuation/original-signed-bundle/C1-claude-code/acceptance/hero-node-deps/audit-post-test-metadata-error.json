@@ -1,0 +1,7 @@
+{
+  "error": "KeyError: stream",
+  "stage": "Activation summary after original suite completed",
+  "reason": "Interrupted activation has no accepted stream field",
+  "test_rerun": false,
+  "repair": "Handle absent stream explicitly; finalize from existing outputs only."
+}

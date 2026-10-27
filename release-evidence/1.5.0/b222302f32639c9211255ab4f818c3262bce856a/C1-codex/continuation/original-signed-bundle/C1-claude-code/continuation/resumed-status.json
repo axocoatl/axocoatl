@@ -1,0 +1,29 @@
+{
+  "schema": "axocoatl.recovery.resumed-four-gates-status/1",
+  "as_of": "2026-10-27T00:56:50.503353+00:00",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "source": "Root task coordination at append preparation; pending states are not passing observations.",
+  "claude": {
+    "state": "verified_continuation",
+    "pass": true,
+    "fresh_rerun": false,
+    "original_failed_attempt_preserved": true,
+    "record": "C1-claude-code.json",
+    "assessment": "C1-claude-code/continuation/assessment.json",
+    "independent_review": "release_inventory found no blocker"
+  },
+  "linux": {
+    "state": "live_oauth",
+    "pass": null
+  },
+  "mac_openrouter": {
+    "state": "onboarding_live",
+    "pass": null
+  },
+  "codex": {
+    "state": "pending_fresh_gate",
+    "pass": null
+  },
+  "release_ready": false,
+  "signed": false
+}

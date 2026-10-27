@@ -1,0 +1,142 @@
+{
+  "schema": "axocoatl.release-evidence.path/1",
+  "path": "C1-real-repo",
+  "tier": "C",
+  "version": "1.5.0",
+  "commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "pass": true,
+  "started_at": "2026-10-26T14:36:18Z",
+  "finished_at": "2026-10-26T15:00:30.357Z",
+  "steps": [
+    {
+      "name": "free disk at the start",
+      "status": "pass",
+      "required": false,
+      "detail": "47251 MiB free; models cached: yes"
+    },
+    {
+      "name": "resume uses the checksum-verified installed candidate",
+      "status": "pass",
+      "required": true,
+      "detail": "/usr/local/bin/axocoatl; axocoatl 1.5.0; binary sha256 d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b; archive sha256 2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659; continued existing installation, no clean-install claim"
+    },
+    {
+      "name": "axocoatl dev answers on port 8080 with the current configuration",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "clone node-express at v5.1.0",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0.7,
+      "bytes_downloaded": 255271
+    },
+    {
+      "name": "node-express is at the pinned commit cd7d4397c398",
+      "status": "pass",
+      "required": true
+    },
+    {
+      "name": "run fix on node-express (verdict 0, 1 or 2, not infrastructure)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 601.5,
+      "bytes_downloaded": 50408278
+    },
+    {
+      "name": "receipt verify on node-express (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on node-express",
+      "status": "pass",
+      "required": true,
+      "detail": "3 accepted answers in the record (verdict checks_failed) hold no tool-call markup; no line the run added since cd7d4397c398 holds any"
+    },
+    {
+      "name": "clone rust-axocoatl at the candidate commit",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 1.3,
+      "bytes_downloaded": 27971
+    },
+    {
+      "name": "run fix on rust-axocoatl (verdict 0, 1 or 2, not infrastructure)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 844.7,
+      "bytes_downloaded": 185284306
+    },
+    {
+      "name": "receipt verify on rust-axocoatl (documented command)",
+      "status": "pass",
+      "required": true,
+      "exit_code": 0,
+      "seconds": 0,
+      "bytes_downloaded": 0
+    },
+    {
+      "name": "no tool-call markup in the accepted output of the run on rust-axocoatl",
+      "status": "pass",
+      "required": true,
+      "detail": "2 accepted answers in the record (verdict pass) hold no tool-call markup; no line the run added since b222302f3263 holds any"
+    },
+    {
+      "name": "a timed run on every pinned real repository ended with a verdict, its receipt verified",
+      "status": "pass",
+      "required": true,
+      "detail": "node-express, rust-axocoatl"
+    },
+    {
+      "name": "free disk at the end",
+      "status": "pass",
+      "required": false,
+      "detail": "35669 MiB free"
+    }
+  ],
+  "host": {
+    "os": "Darwin",
+    "release": "macOS 26.6",
+    "kernel": "25.6.0",
+    "arch": "arm64",
+    "runner": null,
+    "memory_bytes": 51539607552,
+    "cpus": 18,
+    "user": "erick"
+  },
+  "tools": {
+    "podman": "6.1.4",
+    "git": "2.39.5",
+    "node": "v22.23.2",
+    "axocoatl": "axocoatl 1.5.0",
+    "ollama": "0.40.11"
+  },
+  "attachments": [
+    "C1-real-repo/logs/clone-node-express-at-v5.1.0.log",
+    "C1-real-repo/logs/clone-rust-axocoatl-at-the-candidate-commit.log",
+    "C1-real-repo/logs/dev.log",
+    "C1-real-repo/logs/real-repos.log",
+    "C1-real-repo/logs/receipt-verify-on-node-express--documented-command-.log",
+    "C1-real-repo/logs/receipt-verify-on-rust-axocoatl--documented-command-.log",
+    "C1-real-repo/logs/run-fix-on-node-express--verdict-0--1-or-2--not-infrastructure-.log",
+    "C1-real-repo/logs/run-fix-on-rust-axocoatl--verdict-0--1-or-2--not-infrastructure-.log",
+    "C1-real-repo/node-express/junit.xml",
+    "C1-real-repo/node-express/receipt.json",
+    "C1-real-repo/node-express/run.axorecord.jsonl",
+    "C1-real-repo/real-repos.json",
+    "C1-real-repo/resume-candidate.json",
+    "C1-real-repo/rust-axocoatl/junit.xml",
+    "C1-real-repo/rust-axocoatl/receipt.json",
+    "C1-real-repo/rust-axocoatl/run.axorecord.jsonl",
+    "C1-real-repo/transcript.txt"
+  ]
+}
