@@ -39,6 +39,7 @@ const scripts = [
   'components/ax-theme-toggle.js', 'components/ax-cli-snippet.js',
   'components/ax-comparison-row.js', 'components/ax-product-film.js',
 ];
+if (existsSync(join(root, 'components/ax-verified-fix.js'))) scripts.push('components/ax-verified-fix.js');
 if (root === sourceRoot) scripts.push('scripts/build.mjs', 'scripts/validate.mjs', 'scripts/site-mode.mjs');
 
 const errors = [];

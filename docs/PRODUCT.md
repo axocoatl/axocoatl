@@ -7,10 +7,16 @@ product speaks and looks; `ARCHITECTURE.md` explains the runtime beneath it.
 ## One product
 
 Axocoatl runs coding agents unattended. Agents write the code; Axocoatl writes the
-receipt. Claude Code, Codex or a local model works in a sandbox its credential never
-enters; when it says it is done, the host runs the required checks on the exact final
-files and a different model reviews the change; every run ends with an exit code for CI
-and a receipt signed on this computer (positioning approved 2026-10-14, `BRAND.md`).
+receipt. Choose Claude Code, Codex, a local model or an OpenRouter model to make a
+change, and a different model to review it. The built-in fix loadouts run the writer
+in a sandbox, keep its model credential on the host, and have the host run required
+checks on the exact final files. An exit code reports the outcome; a signed receipt
+lets someone verify the recorded facts and covered files offline (receipt positioning
+approved 2026-10-14, claim scope clarified 2026-10-27; `BRAND.md`).
+Required review is a fix-loadout or configured-team contract, not a property of every
+loadout. Workbench turns and pre-admission refusals have no receipt. If signing or
+storage fails after an admitted run finishes, the Outcome records
+`receipt_unavailable` without changing its verdict; verify the receipt separately.
 Behind the receipt are three pillars, stated as evidence rather than as the pitch:
 isolation built in, a complete record of every step, and any model per Agent, local or
 hosted. Each of those is a mechanism, not an adjective: Session tools run in a
@@ -321,8 +327,9 @@ The built-in loadouts follow what was measured (`docs/CLAIMS.md`; the one-agent-
 and QA studies ran with Claude Code subagents, not through Axocoatl):
 
 - `fix`: one writer, the repository's check command as a required check, and a required
-  review by `reviewer_model`, up to 3 rounds. Axocoatl warns, in every surface, when the
-  reviewer runs the writer's model. The writer answers every review finding with accept
+  review by `reviewer_model`, up to 3 rounds. Onboarding requires different writer and
+  reviewer models. Runs refuse a same-model pair inherited from setup; explicitly
+  choosing both models permits it with a warning. The writer answers every review finding with accept
   or reject and a reason; each answer is an adjudication, recorded and shown, and an
   unanswered finding needs attention.
 - `fix-claude-code` and `fix-codex`: `fix` with the pinned Claude Code or Codex CLI as

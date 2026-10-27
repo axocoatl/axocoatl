@@ -8,7 +8,7 @@ class AxFooter extends HTMLElement {
           <div class="footer-grid">
             <div class="footer-col">
               <div class="footer-brand-row"><img src="/assets/favicon.png" alt="" width="28" height="28"><span>Axocoatl</span></div>
-              <p class="muted small">Run coding agents unattended. The host runs your checks, a different model reviews the change, and every run ends with a receipt signed on your computer. Open source, Apache-2.0.</p>
+              <p class="muted small">Run coding agents unattended. Fix loadouts require checks and review on the final files. Verify the signed receipt against keys you trust. Open source, Apache-2.0.</p>
             </div>
             <div class="footer-col">
               <h2>Product</h2>

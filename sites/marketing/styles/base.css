@@ -95,11 +95,26 @@ pre code { padding: 0; background: transparent; }
 .hero-actions, .cta-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--s-3); }
 .hero-note { display: inline-flex; align-items: center; gap: var(--s-2); color: var(--muted); font-family: var(--font-mono); font-size: var(--t-13); }
 .hero-note::before { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); content: ''; }
-/* The install line and one headless run, under the hero's lede. */
+/* One headless example follows the primary actions. Setup details live on Install. */
 .hero-run { display: grid; gap: var(--s-4); width: min(100%, 760px); min-width: 0; text-align: left; }
+.hero-run .code-pane { min-width: 0; }
 .hero-run .code-pane-head code { padding: 1px 4px; font-size: 1em; }
 .hero-run pre { font-size: var(--t-13); }
 .hero-run-note { max-width: none; color: var(--muted); font-size: var(--t-14); text-align: center; }
+
+
+/* Static evidence stays readable without JavaScript; controls only change the visible step. */
+ax-verified-fix { display: block; min-width: 0; }
+.verified-fix-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-2); margin-bottom: var(--s-4); }
+.verified-fix-step { min-width: 0; padding: 12px var(--s-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); color: var(--fg); text-align: left; cursor: pointer; }
+.verified-fix-step[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-2); box-shadow: inset 0 -2px var(--accent); }
+.verified-fix-panel { min-width: 0; padding: var(--s-5); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); }
+.verified-fix-panel + .verified-fix-panel { margin-top: var(--s-4); }
+.verified-fix-controls ~ .verified-fix-panel { margin-top: 0; }
+ax-verified-fix [hidden] { display: none !important; }
+.verified-fix-panel p, .verified-fix-panel pre { margin-top: var(--s-3); }
+.verified-fix-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.verified-fix-status { margin-top: var(--s-3); color: var(--muted); font-size: var(--t-13); }
 
 ax-product-film {
   display: block; width: min(100%, 1080px); min-width: 0; margin: var(--s-7) auto 0; text-align: left;
@@ -299,6 +314,8 @@ ax-cli-snippet[data-copied]::after { color: var(--accent); content: 'copied'; }
   .cta-strip { padding: var(--s-5); }
   .btn { width: 100%; }
   .hero-actions, .cta-actions { width: 100%; }
+  .verified-fix-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .verified-fix-panel { padding: var(--s-4); }
   table { display: block; overflow-x: auto; }
   .measured table { display: table; }
   .measured th, .measured td { padding: var(--s-3) var(--s-2); }

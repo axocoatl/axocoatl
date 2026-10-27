@@ -108,9 +108,9 @@ on OpenRouter, connect it once by signing in in the browser:
 `axocoatl connect openrouter --reviewer <vendor/model>` checks the model, stores the key
 OpenRouter issues without showing it and adds OpenRouter to your configuration (see
 [Configure OpenRouter](/configure/providers/#configure-openrouter)). Choose a model other
-than the writer's: one you name on the writer's model, through any provider, is warned
-about (`same_model_reviewer`), and one from your setup is refused (see
-[Choose the models](#choose-the-models)).
+than the writer's: a same-model pair, through any provider, is refused when either
+model is inherited from your setup. Explicitly naming both models permits it with a
+`same_model_reviewer` warning (see [Choose the models](#choose-the-models)).
 
 Every other flag of [`axocoatl run`](/reference/run/) applies: `--check "<command>"` when
 Axocoatl detects no check command in the repository, `--junit` and `--record`,
@@ -168,11 +168,13 @@ run both built-ins with their default models, from the recipe images, against a 
 model API: Claude Code's requests named `claude-sonnet-5-5`, and Codex's code mode ran
 its command in the Session.
 
-The reviewer comes from your setup or `--model reviewer=…`. The same-model check compares the reviewer's model with
-the writer's through whichever provider each runs: a reviewer on
-`openrouter:anthropic/claude-sonnet-5.5` is warned about for the default Claude Code
-writer, since `sonnet` runs `claude-sonnet-5-5`, and one on `openrouter:openai/gpt-6.1-sol`
-for the default Codex writer.
+The reviewer comes from your setup or `--model reviewer=…`. The same-model check
+compares models through whichever provider each runs: a reviewer on
+`openrouter:anthropic/claude-sonnet-5.5` matches the default Claude Code writer, since
+`sonnet` runs `claude-sonnet-5-5`; one on `openrouter:openai/gpt-6.1-sol` matches the
+default Codex writer. Onboarding requires different models. A matching pair is refused
+when either model comes from your setup; explicitly naming both models permits it
+with a warning. See [Models from your setup](/reference/run/#models-from-your-setup).
 
 ### Choose the Codex credential
 
@@ -663,11 +665,13 @@ The same-model reviewer check compares that model with the reviewer's, from the 
 from the finished turn and in Team and budget, through whichever provider each one runs:
 a reviewer on `openrouter:anthropic/claude-haiku-4.5` runs a Claude Code writer's
 `anthropic:claude-haiku-4-5`, and one on `openrouter:openai/gpt-5.5` a Codex writer's
-`openai:gpt-5.5`, so both are warned about (`same_model_reviewer`). The comparison ignores
+`openai:gpt-5.5`, so both match (`same_model_reviewer`). Loadout validation warns;
+run admission refuses a matching pair when either model is inherited from setup,
+while explicitly naming both models permits it with the warning. The comparison ignores
 case, `.` against `-`, a snapshot date such as `-20251001`, `-latest` and an OpenRouter
 `:variant` suffix. A Claude model is compared by its family and version: Claude Code's
 aliases count as the model they run (`anthropic:haiku` is `claude-haiku-4-5`, so a
-reviewer on `openrouter:anthropic/claude-haiku-4.5` is warned about; `best` and
+reviewer on `openrouter:anthropic/claude-haiku-4.5` matches; `best` and
 `opusplan` count as the model they run by default, `claude-fable-5-1` and
 `claude-sonnet-5-5`), a `[1m]` suffix is ignored, and the older order of a Claude id
 (`claude-3-5-haiku`) is the same model. Claude Code's `default`, which runs your

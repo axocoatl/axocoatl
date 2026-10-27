@@ -2,11 +2,12 @@
 
 Vanilla HTML, Web Components, and CSS. The public site tells one product story:
 run coding agents unattended; agents write the code, Axocoatl writes the receipt.
-Claude Code, Codex or a model you choose works in a sandbox its credential never
-enters, the host runs the checks on the final files, a different model reviews the
-change, and every run ends with an exit code for CI and a receipt signed on the
-user's computer. Isolation built in, a complete record, and any model, local or
-hosted, are the evidence behind the receipt, not the pitch (`BRAND.md`). A lead writes, read-only helpers answer and review, and opt-in required checks
+Claude Code, Codex or a model you choose works in a sandbox with its model credential
+kept on the host. Fix loadouts require checks and review on the final files; QA and
+audit use their own workflows. The daemon signs finished loadout outcomes, but a
+refusal before admission has no receipt and a signing failure is reported without
+changing the run verdict. Verify receipts separately. Isolation, the record and model
+choice are the evidence behind the receipt, not the pitch (`BRAND.md`). A lead writes, read-only helpers answer and review, and opt-in required checks
 and review decide when a turn is done, all inside one durable folder-anchored Session. Conversation, context, files,
 terminal, Preview, tools, history, and Git are the core work surface. Settings owns Agents, Skills, MCP servers, and Automations and
 shows each Agent's provider/model assignment. Normal onboarding writes one owner-only
@@ -32,7 +33,7 @@ and reduced-motion states.
 
 | Path | Purpose |
 |---|---|
-| `/` | The job and the receipt first: install, one `axocoatl run fix-claude-code --receipt` and `axocoatl receipt verify`, then a real receipt with what it proves and does not, Keep as PR and the verify-receipt Action; what a run does (sandbox, checks, review, exit codes, JUnit, record, Keep as PR) with an example summary, the built-in loadouts, Claude Code and Codex as the writer; then the mechanisms, what we measured, cross-model review with an optional demo video, and the browser workbench |
+| `/` | The job and receipt first: early Install and First verified fix actions, one run/verify command, a manually explorable actual 1.5 fixture result, receipt limits and verification, loadouts and mechanisms, qualified historical measurements, then a brief workbench entry. Setup details stay on Install and in the first-fix guide |
 | `/compare` | Mechanisms only: questions to ask of any setup (who runs the checks, who reviews, where the credential lives, network, record, CI, changes, spend) answered for a loadout run, and how that differs from running Claude Code or Codex directly, a devcontainer, or a parallel-agent workbench, without naming or describing other products beyond links to their own documentation |
 | `/concepts` | What the host enforces and where it stops (isolation, any model per Agent, a short measured summary), then Workspace, Session, Turn, sandboxed work surface, execution shapes, completion conditions and write scopes, Settings, workspace knowledge, events, compatibility MCP approval, optional Ways, and runtime boundaries |
 | `/why` | Why an agent's "done" is not evidence: the measured self-review result, the host deciding, the receipt, why a local binary, and when to use the workbench |
@@ -58,13 +59,32 @@ that payload; `source-bound` still runs the installer tests and `--release-bound
 and `marketing-deploy` therefore deploy the pending site. Delete `PENDING` with the
 recordings and the full film contract applies again.
 
-## Optional demo video
+## Optional evidence excerpts and video
 
-The homepage has one optional demo slot between `<!-- optional-demo: … -->` and
-`<!-- /optional-demo -->` markers. It names `assets/demo/cross-model-review.mp4` and
-`assets/demo/cross-model-review.jpg`. The build renders the slot and copies both files
-only when both exist; with neither it removes the slot, and with only one it fails.
-`.gitignore` keeps MP4 and JPEG files under `assets/demo/` tracked.
+The homepage uses the existing `<!-- optional-demo: … -->` slots independently of
+pending portfolio films. A slot renders and its declared assets are copied only
+when all exist; with none it is omitted, and a partial set fails the build.
+
+The `verified-fix-1.5` slot contains literal transcript and artifact excerpts from
+one accepted release-gate fixture. All four steps remain visible without JavaScript;
+`ax-verified-fix` adds manual step controls after initialization. This is not a screen
+recording, and execution time is omitted. Its provenance links the frozen release
+evidence, names the actual configuration, and preserves the recovered errors. The
+homepage's `pre[data-excerpt]` text must match `excerpts.json` exactly. Verify the
+selections against the frozen source without model calls or test reruns:
+
+```bash
+node assets/demo/verified-fix-1.5/verify-excerpts.mjs --repo ../..
+```
+
+`assets/demo/verified-fix-1.5/embed.html` is the source snippet; the build ships the
+inline homepage content, component, excerpts, provenance and verification script.
+Keep the snippet and homepage excerpts aligned when updating them.
+
+The separate historical video slot names `assets/demo/cross-model-review.mp4` and
+`assets/demo/cross-model-review.jpg`. It is explicitly labelled Axocoatl 1.1.0 and
+retains the benchmark's scope and limitations. `.gitignore` keeps MP4 and JPEG files
+under `assets/demo/` tracked.
 
 ## Deployment payload
 

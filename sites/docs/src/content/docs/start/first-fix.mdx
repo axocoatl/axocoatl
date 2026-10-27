@@ -1,0 +1,204 @@
+---
+title: Run your first fix
+description: Choose Claude Code, Codex, Ollama or OpenRouter, run a fix in your repository, and verify its outcome, changed files, record and signed receipt.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide runs one coding task from your shell. A **loadout** is the recipe for that
+run: its writer, checks, review and budgets. The three fix loadouts below run your
+repository's checks on the final files and require a reviewer to approve the result.
+You review the diff before committing.
+
+## Before you start
+
+- [Install Axocoatl](/start/install/) and confirm `axocoatl --version` works.
+- Use an existing Node.js, Python, Rust or Go repository with a working check command.
+  Start with a clean Git checkout or a disposable copy. The run can edit its files.
+- Allow the initial downloads: rootless Podman, its VM on macOS, the repository's
+  toolchain image and dependencies, and any local models you choose. Onboarding asks
+  before host setup changes; a run prepares its repository environment when started.
+- Choose a different model for the reviewer. Claude Code and Codex can write these
+  runs; reviewers run through Ollama or OpenRouter. Hosted calls consume the relevant
+  subscription allowance or credits. Set any provider-side spending limit before running.
+
+## 1. Choose and configure your writer
+
+In your **first terminal**, run the command for one writer. Keep the same tab selected
+when you reach the run command below. All four commands use `--start none`, so
+onboarding returns to the shell after setup. Its optional sample fix may briefly
+start a daemon; it stops that temporary daemon afterwards.
+
+<Tabs syncKey="first-fix-writer">
+  <TabItem label="Claude Code">
+    You need the host `claude` CLI and a Claude Pro or Max plan. Onboarding signs you
+    in through the browser, builds the writer's image, and sets up a local Ollama or
+    OpenRouter reviewer.
+
+    ```sh
+    axocoatl onboard --writer claude-code --start none
+    ```
+  </TabItem>
+  <TabItem label="Codex">
+    Onboarding signs you in with your ChatGPT plan and sets up an Ollama or
+    OpenRouter reviewer. The run below explicitly uses that ChatGPT credential.
+
+    ```sh
+    axocoatl onboard --writer codex --start none
+    ```
+  </TabItem>
+  <TabItem label="Ollama">
+    No model-provider account is needed. Onboarding offers local models that fit the
+    computer; its default writer/reviewer pair needs at least 48 GB of memory.
+    It installs or configures Ollama, disables its cloud models and checks the models.
+    See [local model requirements](/configure/providers/#configure-ollama).
+
+    ```sh
+    axocoatl onboard --writer ollama --start none
+    ```
+  </TabItem>
+  <TabItem label="OpenRouter">
+    Use an OpenRouter account with credits and no BYOK provider keys. Onboarding
+    connects it through browser sign-in and checks the writer and reviewer models
+    you choose. The resulting key stays in the secret store; YAML names it.
+
+    ```sh
+    axocoatl onboard --writer openrouter --start none
+    ```
+  </TabItem>
+</Tabs>
+
+Answer setup prompts after reading the proposed change. If onboarding reports steps
+left, resolve those before continuing. Onboarding configures this OS user; it does
+not create a project or Workspace. See [the setup reference](/start/onboard/) for
+existing installations, platform-specific prompts and the optional sample fix.
+
+## 2. Check setup and leave the daemon running
+
+Still in the first terminal, run:
+
+```sh
+axocoatl doctor
+```
+
+Resolve any failures. Then start the daemon:
+
+```sh
+axocoatl dev
+```
+
+**Leave this terminal open.** The daemon must keep running while the next terminal
+sends the task. If you already have a daemon or the Always-On Service running with
+this configuration, use it instead of starting a second one. After a configuration
+change, restart that existing daemon as [onboarding describes](/start/onboard/#step-7-a-first-run).
+
+## 3. Run one task in a second terminal
+
+Open a **second terminal**. Replace the repository path and task below with your own.
+Give the task a concrete result to check. Run the repository's existing tests first
+so you know its starting state.
+
+```sh
+cd /absolute/path/to/your/repository
+git status --short
+AXO_TASK='Replace this with one specific change and its acceptance criteria'
+AXO_EVIDENCE=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-first-fix.XXXXXX")
+printf 'Run evidence: %s\n' "$AXO_EVIDENCE"
+```
+
+The evidence directory is outside your repository, so reports do not become part of
+the Agent's change. Keep this second terminal open to retain these shell variables.
+Copy the evidence elsewhere if you need it after your system clears temporary files.
+
+Run **one** of these commands, matching the writer you configured:
+
+<Tabs syncKey="first-fix-writer">
+  <TabItem label="Claude Code">
+    ```sh
+    axocoatl run fix-claude-code --task "$AXO_TASK" \
+      --receipt "$AXO_EVIDENCE/receipt.json" \
+      --record "$AXO_EVIDENCE/run.axorecord.jsonl" \
+      --junit "$AXO_EVIDENCE/junit.xml"
+    AXO_EXIT=$?
+    ```
+  </TabItem>
+  <TabItem label="Codex">
+    ```sh
+    axocoatl run fix-codex --param credential=codex-chatgpt --task "$AXO_TASK" \
+      --receipt "$AXO_EVIDENCE/receipt.json" \
+      --record "$AXO_EVIDENCE/run.axorecord.jsonl" \
+      --junit "$AXO_EVIDENCE/junit.xml"
+    AXO_EXIT=$?
+    ```
+  </TabItem>
+  <TabItem label="Ollama">
+    ```sh
+    axocoatl run fix --task "$AXO_TASK" \
+      --receipt "$AXO_EVIDENCE/receipt.json" \
+      --record "$AXO_EVIDENCE/run.axorecord.jsonl" \
+      --junit "$AXO_EVIDENCE/junit.xml"
+    AXO_EXIT=$?
+    ```
+  </TabItem>
+  <TabItem label="OpenRouter">
+    ```sh
+    axocoatl run fix --task "$AXO_TASK" \
+      --receipt "$AXO_EVIDENCE/receipt.json" \
+      --record "$AXO_EVIDENCE/run.axorecord.jsonl" \
+      --junit "$AXO_EVIDENCE/junit.xml"
+    AXO_EXIT=$?
+    ```
+  </TabItem>
+</Tabs>
+
+These commands use the models onboarding saved. The run detects your repository's
+toolchain and check command. If it finds no check, add `--check "YOUR CHECK COMMAND"`
+to the chosen command; for example, `--check "npm test"` in a Node repository whose
+tests use that script. See [toolchains](/configure/toolchains/) for custom setup.
+
+## 4. Inspect the outcome and verify the receipt
+
+```sh
+printf 'Run exit code: %s\n' "$AXO_EXIT"
+git diff --stat
+git diff
+git status --short
+```
+
+A successful fix ends with **pass**, exit **0**: the required checks passed on the
+final result, the reviewer approved it, and any review findings sent back to the
+writer were answered. Other outcomes are useful evidence, not a passing fix:
+
+| Exit | What to inspect |
+| --- | --- |
+| `1` | Required checks failed; inspect their output and the diff. |
+| `2` | Needs attention; read the reason, such as an unfinished review or provider failure. |
+| `3`, `4`, `5` | A usage, daemon or infrastructure problem; follow the printed fix. |
+| `6`, `7` | The run was interrupted, or the Workspace is busy. |
+
+When a receipt was written, verify its signature, covered files and record against
+this computer's signing public key, and require a passing verdict:
+
+```sh
+axocoatl receipt verify "$AXO_EVIDENCE/receipt.json" \
+  --key "$(axocoatl receipt key)" --repo . \
+  --record "$AXO_EVIDENCE/run.axorecord.jsonl" --require-pass
+```
+
+The verifier exits 0 when those checks pass. A failed run's receipt can have a valid
+signature; `--require-pass` keeps that from being mistaken for success. A run refused
+before admission has no receipt, and a signing failure is reported as
+`receipt_unavailable`. See [receipts](/workbench/receipts/) for incomplete file coverage
+and other limits. A valid receipt does not prove that the code or the tests are correct.
+Read the diff and check it against your task before committing; these commands do not
+commit or open a pull request.
+
+## Continue working
+
+Keep the daemon running for another task, or stop it with Ctrl+C in the first terminal
+after the run finishes. [Always-On Service](/operate/service/) can manage it instead.
+To work interactively, use its sign-in link and [create a Session](/start/first-session/).
+Ordinary workbench Sessions use a native Ollama or OpenRouter Agent; Claude Code and
+Codex write the headless runs above. For a passing result you want to share, read
+[Keep as PR](/workbench/keep-as-pr/) and the
+[receipt-verifying GitHub Action](/workbench/receipts/#checking-pull-requests-in-github-actions).

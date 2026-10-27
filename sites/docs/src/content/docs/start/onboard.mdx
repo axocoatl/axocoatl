@@ -5,18 +5,49 @@ description: Set up the sandbox, the writer and reviewer models, and the user co
 
 import { Aside } from '@astrojs/starlight/components';
 
-After the installer, `axocoatl onboard` is the one setup command. It finds what this
-computer has, says what is missing, asks before each change to the computer, makes
-the change itself, and ends in one of two ways: ready (exit 0), or a numbered list of
-the steps still left (exit 1). It never prints a ready line after a failed check.
+After [installing the binary](/start/install/), use onboarding to configure Axocoatl
+for the current OS user. It checks this computer, offers the missing setup steps and
+asks before making host changes. It creates no project, Workspace, Session or repository.
+
+## Recommended setup
+
+In your first terminal, run these commands one at a time:
 
 ```sh
-axocoatl onboard
+axocoatl onboard --start none
+axocoatl doctor
 ```
 
-Onboarding configures Axocoatl for the current operating-system user. It does not
-create a project directory, Workspace, Session, or repository; you choose the folders
-Axocoatl can use later through **Open workspace…** in the browser app.
+Choose Claude Code, Codex, a local Ollama model or OpenRouter as the writer. Onboarding
+sets up its reviewer too. Complete any browser sign-in and read each proposed install
+or configuration change before answering. The optional sample fix exercises the setup
+on a temporary repository. Resolve any numbered steps left before continuing.
+
+`--start none` returns to your shell instead of leaving the daemon in the foreground.
+Once doctor is ready, start it explicitly:
+
+```sh
+axocoatl dev
+```
+
+Leave that terminal open. Use a **second terminal** for
+[your first fix](/start/first-fix/), or open the printed sign-in link to
+[create a workbench Session](/start/first-session/). If a daemon or service already runs
+with this configuration, use it instead of starting another. A configuration change
+requires restarting that existing daemon.
+
+Plain `axocoatl onboard` still offers [a start choice](#step-6-start-axocoatl); its
+default starts `dev` and keeps the terminal occupied. In that case, leave it running
+and open a second terminal for doctor and run commands. Do not start another `dev`.
+
+For Claude Code and Codex, the selected program writes headless `fix-claude-code` or
+`fix-codex` runs. An ordinary workbench Session uses a native Ollama or OpenRouter
+Agent; onboarding puts that team on the reviewer's model.
+
+The rest of this page is the setup reference. Jump to [Linux Podman setup](#step-2-the-sandbox),
+[local models](#step-3a-a-local-writer-and-reviewer-ollama),
+[running onboard again](#running-onboard-again), [doctor](#run-doctor), or
+[automation and dry runs](#without-a-terminal-and-dry-runs).
 
 ## How it asks
 
@@ -708,9 +739,15 @@ explicit configuration uses a `data/` directory beside the configuration file.
 
 ## Start the workbench
 
+If you used `--start none`, start the daemon now:
+
 ```sh
 axocoatl dev
 ```
+
+If onboarding already started `dev`, keep that terminal open and use the sign-in link
+it printed. If the Always-On Service is running, use `axocoatl url` for its link;
+neither case needs another daemon.
 
 The app is at `http://127.0.0.1:8080`, or the port onboarding wrote to `server.port`.
 `dev` holds the port before it starts; when another program already listens there,

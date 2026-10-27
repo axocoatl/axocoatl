@@ -136,8 +136,37 @@ Every finding had to come with an executable reproduction that a validator re-ra
 | An example `axocoatl run` summary: a `pages.py` fix "approved after 2 of 3 rounds by ollama:gpt-oss:20b", 412,907 input tokens | `README.md`, marketing home | It was written to show the format; no run printed it. | A summary labelled as the format, not a measurement (see Not measured). |
 | "A local writer. A stronger reviewer." and "a local writer can be reviewed by a stronger model" for the setup the commands use | marketing home, `README.md`, `llms.txt`, docs index card, `configure/cross-model-review` (also "Bigger local model", "Strong reviewer") | The commands' reviewer, `gpt-oss:20b`, is smaller than the 30B writer and unmeasured; only the gpt-oss 120B reviewer was measured (R2, R7). | "A different reviewer"; the measured 120B results keep their wording. |
 | "If the project stopped tomorrow, the executable you have would keep running" | marketing why page | 1.4.0 refused the Ollama Homebrew installed within days, because native Ollama Sessions accepted only the audited release line; 1.5.0 still refuses a new major Ollama release. | "Your receipts keep verifying offline with the executable you have" and the Ollama version policy as it is: 0.40.6 and later 0.x releases, a newer minor only through the contract probes, a new major release needing a newer Axocoatl. |
-| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | When it was withdrawn, no hosted CI runner had run `axocoatl run`. The 1.5.0 release gate's CI leg now runs it on GitHub's Ubuntu runners, but only against a scripted model server, so a CI job with real models is still not verified. Workbench turns get no receipt. | "From your shell"; "every `axocoatl run` that finishes". |
+| `axocoatl run` "from a shell or a CI job", and "every finished run gets a receipt" | docs index, `configure/loadouts`, marketing install, `README.md`, `llms.txt`, marketing home and concepts | When it was withdrawn, no hosted CI runner had run `axocoatl run`. The 1.5.0 release gate's CI leg now runs it on GitHub's Ubuntu runners, but only against a scripted model server, so a CI job with real models is still not verified. Workbench turns get no receipt. | "From your shell"; loadout receipts are verified separately. A pre-admission refusal has none; signing/storage failure records `receipt_unavailable` without changing the run verdict. |
 | A hosted reviewer through OpenRouter presented as part of the measured cross-model result | docs `configure/cross-model-review` (description and introduction), `understand/what-we-measured` ("How this maps to Axocoatl"), docs index card, `README.md` and `llms.txt` measured sections, marketing home and concepts pages | The measured cross-model result (R2, R7) used a local gpt-oss 120B reviewer. No OpenRouter reviewer was measured. | How to configure an OpenRouter reviewer stays documented; every page that cites the measured result says the reviewer was local and that OpenRouter reviewers were not measured. |
+
+## Public copy corrections (2026-10-27)
+
+The marketing and first-run documentation revision keeps the receipt positioning
+and changes no runtime behavior. Claims were checked against the released 1.5.0
+implementation:
+
+- `bootstrap_receipts.rs::seal_or_warn` records signing/storage failures separately
+  from a run's verdict. Public copy no longer promises a receipt for every run.
+- Required writer/check/reviewer behavior is scoped to the fix family; `qa` and
+  `audit` use their own roles and acceptance rules. Onboarding requires different
+  writer and reviewer models. Runs refuse a same-model pair inherited from setup;
+  explicitly choosing both models permits it with a warning.
+- Native context fitting can still return `ContextLimitExceeded` when protected
+  context cannot fit. Trimming is described as conditional, not a guarantee.
+- First-run examples use `onboard --start none` before doctor/dev; interactive
+  onboarding otherwise defaults to starting the foreground daemon itself.
+- Provider examples retain repository tools, introductory Agent examples do not
+  refer to an undefined planner, and source builds include an installation step.
+- The homepage's interactive 1.5 excerpt is one accepted local fixture run,
+  `run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3`, from the signed `C1-local`
+  `readme-node-deps` evidence on candidate `b222302f`. It shows literal task, diff,
+  check/review, original-test and receipt-verification output. The Qwen3-Coder 30B
+  writer and GPT-OSS 20B reviewer used no helpers; two recovered reviewer tool
+  errors remain disclosed. This is a functional example, not a recording, a timing
+  comparison or evidence that the reviewer improves quality. The source hashes,
+  frozen public links and offline verification are in
+  `sites/marketing/assets/demo/verified-fix-1.5/provenance.json`; the excerpt
+  verifier checks them against the frozen signed inventory.
 
 ## Not measured
 

@@ -1,0 +1,65 @@
+<ax-verified-fix aria-label="An actual Axocoatl 1.5 run, step by step">
+  <section class="verified-fix-panel" data-step="Request" id="verified-fix-request">
+    <h3>1. Request</h3>
+    <p>A small Node fixture dropped the final page when the item count was a multiple of the page size. The task ran with a local Qwen3-Coder 30B writer and a local GPT-OSS 20B required reviewer, with no helpers.</p>
+    <pre data-excerpt="request"><code>axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
+</code></pre>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt#L1">Recorded command</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Change" id="verified-fix-change">
+    <h3>2. Change</h3>
+    <p>Only <code>src/paginate.js</code> changed. The final page uses the full page size when the remainder is zero. The original tests and package files stayed unchanged.</p>
+    <pre data-excerpt="patch"><code>diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..df45ba8 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,7 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page &lt; count; page += 1) {
+     const start = page * size;
+-    const length = page &lt; count - 1 ? size : items.length % size;
++    const length = page &lt; count - 1 ? size : items.length % size || size;
+     pages.push(items.slice(start, start + length));
+   }
+   return pages;
+</code></pre>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff#L1">Actual patch</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Checks &amp; review" id="verified-fix-checks">
+    <h3>3. Checks &amp; review</h3>
+    <p>The host ran the required check, then the required reviewer approved the result in its first round.</p>
+    <pre data-excerpt="checks-review"><code>Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+</code></pre>
+    <p>An independent acceptance check then ran the four original tests once on the preserved final files:</p>
+    <pre data-excerpt="original-tests"><code>
+&gt; newuser-node-deps@0.1.0 test
+&gt; uvu test
+
+paginate.test.js
+• • • •   (4 / 4)
+
+  Total:     4
+  Passed:    4
+  Skipped:   0
+  Duration:  0.55ms
+
+</code></pre>
+    <p>The record retains two recovered reviewer tool errors and no provider retries. This example shows one completed repair; it is not a comparison of model quality.</p>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log#L16">Run outcome</a> · <a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout#L1">Independent original-test output</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Receipt" id="verified-fix-receipt">
+    <h3>4. Receipt</h3>
+    <p>The recorded verification checked the signing key and the covered file. A separate offline check also matched the receipt to the record and the preserved final file.</p>
+    <pre data-excerpt="receipt"><code>receipt of run run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+</code></pre>
+    <p>A valid signature binds the recorded facts to the trusted key. It does not guarantee that the change is correct.</p>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log#L1">Recorded receipt verification</a> · <a href="/assets/demo/verified-fix-1.5/provenance.json">Sources, hashes and limitations</a></p>
+  </section>
+</ax-verified-fix>

@@ -1,14 +1,42 @@
 ---
-title: Local verification
-description: Verify a source checkout, an Ollama-backed runtime, the embedded workbench, and the repository gates.
+title: Verification and release evidence
+description: Read the release gate and its evidence, or verify a source checkout, an Ollama-backed runtime, the embedded workbench and the repository gates.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-Use this procedure to prove the local runtime and browser app are connected to
-the build you intend to evaluate.
+For a first coding task, follow [Your first fix](/start/first-fix/). This page is
+for inspecting release evidence or verifying a development build.
 
-## Verify the installed path
+## Release evidence
+
+The 1.5.0 release gate requires each of these paths to pass on the release commit,
+starting from the published install command, and lists the steps each must show. The
+release workflow publishes nothing until the signed evidence holds every one of them;
+the only way past it is a logged override that only maintainers listed in the
+repository can start, and the release notes must then name the paths not run.
+
+| | |
+| --- | --- |
+| macOS, end to end | Apple silicon, with a person answering onboarding at the Mac, on an account that starts without Axocoatl, its data or stored credentials, without Podman or a Podman machine, and without Ollama or its settings (Ollama's downloaded models may stay): onboarding installs Podman and Ollama with Homebrew, creates the Podman machine, turns Ollama's cloud models off and ends ready with a passing first run. It signs in Claude Code, and Codex with a ChatGPT plan, in the browser, and connects OpenRouter through its browser sign-in without writing the key to the configuration |
+| Linux, end to end | An account that starts without Axocoatl, its data or stored credentials, or Podman, and whose subordinate ids the gate removes first (the gate's instructions make a new user with `adduser` in a new Ubuntu 24.04 VM): onboarding installs Podman with apt and adds a range of subordinate ids that overlaps no other user's, each with `sudo` after asking, connects OpenRouter through its browser sign-in for the OpenRouter models the runs use, and installs no Ollama |
+| Linux, in CI | Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with no terminal against a scripted model server (Podman already on the runner, no first-run sample), and `axocoatl run fix` |
+| Repositories | `fix` passes on Node.js (with and without dependencies), Python (pytest), Rust and Go repositories on each, with local models on the Mac; on the Mac, `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models pass on Node.js and Python, and `fix-claude-code` with `--keep pr` opens a pull request whose receipt the [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions) verifies ([how toolchains work](/configure/toolchains/)) |
+| Also on the Mac | The [Always-On Service](/operate/service/), chosen in onboarding, runs a passing fix, restarts when `onboard --update` changes the configuration, then stops and uninstalls (on Ubuntu, as a systemd user unit); a run with the Podman machine stopped starts it and passes; timed runs on real repositories each end with a verdict; the workbench in Safari goes from the sign-in link to a commit, shows a Session's Preview inside the workbench only (a Preview address opened in a tab, reached by a redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say when another page floods `localhost` with cookies |
+| Evidence | Each run on those repositories has its receipt and record verified (the `--keep pr` run, its receipt, by the verify-receipt Action), and each timed run on a real repository its receipt; each path's transcript, times, downloads and tool versions, the models, the system, its memory and the account, and who answered each question (the person, or for the workbench's questions up to the commit, a WebDriver driver in Safari), in the signed bundle under `release-evidence/1.5.0/` in the repository ([the gate](https://github.com/axocoatl/axocoatl/blob/main/docs/RELEASE_GATE.md)) |
+| Not yet verified | Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows. The gate checks neither the Mac's memory nor which local models onboarding chose there, so its runs verify local models only on the memory and models the evidence names |
+
+The table describes the release contract. Read the signed bundle for the actual
+operators, attempted runs, continuations and limitations; an account name alone does
+not identify who answered a prompt. Passing setup and fixture checks is functional
+evidence, not a model-quality comparison or a promise that an arbitrary task will pass.
+
+## Verify a development build
+
+Use the procedure below to check that the local runtime and browser app are connected
+to the build you intend to evaluate.
+
+### Verify the installed path
 
 ```sh
 which axocoatl
@@ -26,7 +54,7 @@ cargo build -p axocoatl-cli
 The root package is a benchmark placeholder; a generic root build is not the
 same proof as building `axocoatl-cli`.
 
-## Verify Ollama
+### Verify Ollama
 
 <Steps>
 
@@ -67,7 +95,7 @@ only from `podman info`, which shows the range Podman's pause process started wi
 Podman reached through `CONTAINER_HOST`, `CONTAINER_CONNECTION` or a remote connection
 is judged by its own `podman info`).
 
-## Start the embedded app
+### Start the embedded app
 
 ```sh
 AXOCOATL_DATA_DIR=/absolute/path/to/test-data \
@@ -75,7 +103,7 @@ AXOCOATL_DATA_DIR=/absolute/path/to/test-data \
 ```
 
 Open the `Sign in:` link the command prints (or run
-`axocoatl url --config axocoatl.example.yaml`). The `/` page it opens is the
+`AXOCOATL_DATA_DIR=/absolute/path/to/test-data ./target/debug/axocoatl url --config axocoatl.example.yaml`). The `/` page it opens is the
 product workbench. Confirm:
 
 1. the left rail and Session home load without a console error;
@@ -90,7 +118,7 @@ product workbench. Confirm:
 7. light, dark, narrow, and reduced-motion states remain usable for the changed
    workflow.
 
-## Run repository gates
+### Run repository gates
 
 From the source checkout:
 

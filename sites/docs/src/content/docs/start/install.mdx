@@ -1,6 +1,6 @@
 ---
 title: Install Axocoatl
-description: Install the release binary on macOS 11 or newer, on Linux, or inside WSL2 on Windows (not yet verified), or build the CLI from source. What the 1.5.0 release gate requires, what is not yet verified, what it needs and what it downloads.
+description: Install Axocoatl on macOS or Linux, check platform requirements and downloads, then configure a writer and reviewer for your first fix.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -11,21 +11,10 @@ distribution, not in PowerShell; there is no native Windows binary.
 The Linux archives target GNU libc 2.35 or newer. They do not run on
 musl-based distributions such as Alpine; use the Cargo or source path there.
 
-The 1.5.0 release gate requires each of these paths to pass on the release commit,
-starting from the published install command, and lists the steps each must show. The
-release workflow publishes nothing until the signed evidence holds every one of them;
-the only way past it is a logged override that only maintainers listed in the
-repository can start, and the release notes must then name the paths not run.
-
-| | |
-| --- | --- |
-| macOS, end to end | Apple silicon, with a person answering onboarding at the Mac, on an account that starts without Axocoatl, its data or stored credentials, without Podman or a Podman machine, and without Ollama or its settings (Ollama's downloaded models may stay): onboarding installs Podman and Ollama with Homebrew, creates the Podman machine, turns Ollama's cloud models off and ends ready with a passing first run. It signs in Claude Code, and Codex with a ChatGPT plan, in the browser, and connects OpenRouter through its browser sign-in without writing the key to the configuration |
-| Linux, end to end | An account that starts without Axocoatl, its data or stored credentials, or Podman, and whose subordinate ids the gate removes first (the gate's instructions make a new user with `adduser` in a new Ubuntu 24.04 VM): onboarding installs Podman with apt and adds a range of subordinate ids that overlaps no other user's, each with `sudo` after asking, connects OpenRouter through its browser sign-in for the OpenRouter models the runs use, and installs no Ollama |
-| Linux, in CI | Ubuntu 24.04 on x86_64 and arm64: the same install command, then onboarding with no terminal against a scripted model server (Podman already on the runner, no first-run sample), and `axocoatl run fix` |
-| Repositories | `fix` passes on Node.js (with and without dependencies), Python (pytest), Rust and Go repositories on each, with local models on the Mac; on the Mac, `fix-claude-code`, `fix-codex` and `fix` with OpenRouter models pass on Node.js and Python, and `fix-claude-code` with `--keep pr` opens a pull request whose receipt the [verify-receipt Action](/workbench/receipts/#checking-pull-requests-in-github-actions) verifies ([how toolchains work](/configure/toolchains/)) |
-| Also on the Mac | The [Always-On Service](/operate/service/), chosen in onboarding, runs a passing fix, restarts when `onboard --update` changes the configuration, then stops and uninstalls (on Ubuntu, as a systemd user unit); a run with the Podman machine stopped starts it and passes; timed runs on real repositories each end with a verdict; the workbench in Safari goes from the sign-in link to a commit, shows a Session's Preview inside the workbench only (a Preview address opened in a tab, reached by a redirect or Command-clicked gets Axocoatl's refusal page), and stays as the docs say when another page floods `localhost` with cookies |
-| Evidence | Each run on those repositories has its receipt and record verified (the `--keep pr` run, its receipt, by the verify-receipt Action), and each timed run on a real repository its receipt; each path's transcript, times, downloads and tool versions, the models, the system, its memory and the account, and who answered each question (the person, or for the workbench's questions up to the commit, a WebDriver driver in Safari), in the signed bundle under `release-evidence/1.5.0/` in the repository ([the gate](https://github.com/axocoatl/axocoatl/blob/main/docs/RELEASE_GATE.md)) |
-| Not yet verified | Intel Macs, Ubuntu 22.04, Debian 12, Fedora with SELinux, WSL2 on Windows. The gate checks neither the Mac's memory nor which local models onboarding chose there, so its runs verify local models only on the memory and models the evidence names |
+The verified end-to-end setup paths are Apple-silicon macOS and Ubuntu 24.04.
+Intel Macs, other Linux distributions and WSL2 are not yet verified end to end.
+See the [release evidence and platform coverage](/operate/verification/#release-evidence)
+for the tested paths and additional platform limits.
 
 ## Install the binary
 
@@ -48,7 +37,14 @@ repository can start, and the release notes must then name the paths not run.
     `/usr/local/bin` when writable and otherwise to `~/.local/bin`. When that
     directory is not on your `PATH`, it asks, on the terminal, before adding one line
     to the startup files your shell reads in a new terminal and a new login, and prints
-    that line when it cannot ask or you answer with end of input (Ctrl-D). The line adds
+    that line when it cannot ask or you answer with end of input (Ctrl-D). Open a new
+    terminal after accepting the change. In GitHub Actions it adds the directory to
+    `$GITHUB_PATH` for later steps in the job.
+
+    <details>
+      <summary>Install locations and shell setup</summary>
+
+    The PATH line adds
     the directory only when `PATH` does not have it. A file that has the installer's
     marked line, or its guarded `case` line, anywhere in it gets none, so installing again
     adds nothing. So does a file with the `export PATH` line 1.4.0 printed, fish's
@@ -63,8 +59,8 @@ repository can start, and the release notes must then name the paths not run.
     that are not interactive, as in Ubuntu's `~/.bashrc`, and other than an `exec` with
     only redirections; or a line the installer cannot follow), it says so and to move the
     line above that point, instead of saying new terminals find `axocoatl`.
-    In a GitHub Actions step it adds the directory to `$GITHUB_PATH` instead, for the
-    job's later steps.
+
+    </details>
 
     The macOS binaries are signed ad hoc, not with an Apple Developer ID, and are not
     notarized. The installer downloads with `curl`, which does not mark the archive
@@ -94,13 +90,20 @@ repository can start, and the release notes must then name the paths not run.
     cd axocoatl
     cargo build -p axocoatl-cli --release
     ./target/release/axocoatl --version
+    install -d "$HOME/.local/bin"
+    install -m 755 ./target/release/axocoatl "$HOME/.local/bin/axocoatl"
+    export PATH="$HOME/.local/bin:$PATH"
     ```
 
     The root package is not the CLI. Keep the explicit `-p axocoatl-cli`.
+    Building alone leaves the executable under `target/release`; the `install`
+    commands above put it on the current shell's PATH. They replace any executable
+    already at `~/.local/bin/axocoatl`. Add the PATH line to your shell's startup file
+    if that directory is not already available in new terminals.
   </TabItem>
 </Tabs>
 
-All three paths install one `axocoatl` executable. Cargo and source builds compile
+Each completed path supplies one `axocoatl` executable. Cargo and source builds compile
 the host application and include Axocoatl's prebuilt Linux process supervisor for
 its sandbox. There is no separate supervisor installation or startup download.
 The [supervisor source](https://github.com/axocoatl/axocoatl/tree/main/crates/axocoatl-exec)
@@ -114,16 +117,25 @@ axocoatl --version
 axocoatl --help
 ```
 
-If `axocoatl` is not found, the installer used `~/.local/bin` and did not add it to
-your `PATH`. Open a new terminal if you let it add the line; otherwise add the line it
-printed to the startup files it named (`~/.zprofile` for zsh on macOS; for bash on Linux
-`~/.bashrc` and `~/.profile`, or `~/.bash_profile` when you have one, and `~/.bashrc`
-alone when `~/.profile` adds `~/.local/bin` already, as Ubuntu's does), or set it for this
-shell only:
+If the command is not found, check the path for the method you used:
+
+- **Release installer:** use the location it printed (`/usr/local/bin` or
+  `~/.local/bin`). Open a new terminal if you let it add a PATH line; otherwise add
+  the line it printed to the startup files it named.
+- **Cargo:** the default location is `~/.cargo/bin`; use the install root Cargo
+  reported if you changed it. Open a shell with that directory on PATH.
+- **Source checkout:** finish the `install` and `export PATH` steps above, or invoke
+  the binary as `./target/release/axocoatl` from the checkout.
+
+For an executable installed in `~/.local/bin`, this updates the current shell only:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+To retain that path in new terminals, use the startup file for your shell (such as
+`~/.zprofile` for zsh on macOS). The release installer names the exact files it offers
+to update; the source-build commands do not edit them.
 
 `AXOCOATL_MODIFY_PATH=yes` makes the installer add the line without asking, and
 `AXOCOATL_MODIFY_PATH=no` stops it from asking:
@@ -147,8 +159,10 @@ not create a repository or Workspace.
 
 ## What it needs and downloads
 
-Every run has a writer, which changes the code, and a reviewer, a different model that
-only reads. `axocoatl onboard` sets up both, and Podman where it can install it
+The `fix`, `fix-claude-code` and `fix-codex` loadouts have a writer and a required
+reviewer. Onboarding chooses different models for them. Other loadouts, such as `qa`
+and `audit`, have different roles and completion rules. `axocoatl onboard` sets up the
+fix writer and reviewer, and Podman where it can install it
 ([below](#runtime-prerequisites)), and asks before each download or change.
 
 - **Writer.** Claude Code needs a Claude Pro or Max plan and the `claude` CLI on this
@@ -325,4 +339,6 @@ configured E2B Cloud backend is the separate remote option for workbench Session
 
 ## Next
 
-[Configure Axocoatl for this user and run doctor →](/start/onboard/)
+[Set up a writer and run your first fix →](/start/first-fix/)
+
+For the setup prompts and platform details, read [Onboard and doctor](/start/onboard/).

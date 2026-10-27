@@ -1,6 +1,6 @@
 ---
 title: Signed receipts
-description: Every axocoatl run that finishes gets a receipt signed with this computer's key. It says which files the run changed, what the host enforced, which models wrote and reviewed, and the verdict. Anyone can verify it offline against the keys they trust.
+description: Inspect a loadout run's signed statement of its changed files, enforced checks and verdict. Verify it offline against a trusted key, with the limits of admission, signing and file coverage explicit.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -9,8 +9,14 @@ When a [loadout run](/reference/run/) finishes, the daemon signs a **receipt**: 
 statement of what the run did and what the host observed, signed with an Ed25519 key that
 lives in this computer's data directory. You can hand the receipt to someone who did not
 watch the run, such as a reviewer of the pull request [Keep as PR](/workbench/keep-as-pr/)
-opens, and they can check it without trusting you, Axocoatl's servers (there are none
-involved) or the network.
+opens, and they can check its signature offline against a key they already trust.
+They still have to trust that key's operator for the facts the daemon recorded.
+
+A run refused before admission has no receipt. When signing fails, the outcome reports
+`receipt_unavailable`; a passing run alone does not establish that a receipt exists.
+Ordinary workbench turns do not issue run receipts. [Verify the receipt and its
+covered files](/start/first-fix/#4-inspect-the-outcome-and-verify-the-receipt) before
+relying on it.
 
 ## What it is
 

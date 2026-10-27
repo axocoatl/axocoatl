@@ -4,23 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Axocoatl — run coding agents unattended</title>
-  <meta name="description" content="Run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Claude Code, Codex or a local model works in a sandbox its credential never enters, the host runs your tests on the final files, a different model reviews the change, and every run ends with an exit code for CI and a receipt signed on your computer.">
+  <meta name="description" content="Run coding agents unattended. Fix runs combine sandboxed work, checks and required review on the final files, with an exit code and signed receipt to verify.">
   <meta name="theme-color" content="#3E7C5C">
   <link rel="canonical" href="https://axocoatl.ai/">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Axocoatl">
   <meta property="og:url" content="https://axocoatl.ai/">
   <meta property="og:title" content="Axocoatl — run coding agents unattended">
-  <meta property="og:description" content="Agents write the code. Axocoatl writes the receipt: the host runs your tests on the final files, a different model reviews the change, and every run ends with an exit code for CI and a receipt signed on your computer.">
+  <meta property="og:description" content="Agents write the code. Axocoatl writes the receipt. Fix runs require checks and review on the final files; verify the signed receipt against keys you trust.">
   <meta property="og:image" content="https://axocoatl.ai/assets/og-home.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Claude Code, Codex or a local model in a sandbox; the host runs your checks and a different model reviews; an exit code for CI and a signed receipt.">
+  <meta property="og:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Axocoatl — run coding agents unattended">
-  <meta name="twitter:description" content="Agents write the code. Axocoatl writes the receipt: the host runs your tests on the final files, a different model reviews the change, and every run ends with an exit code for CI and a receipt signed on your computer.">
+  <meta name="twitter:description" content="Agents write the code. Axocoatl writes the receipt. Fix runs require checks and review on the final files; verify the signed receipt against keys you trust.">
   <meta name="twitter:image" content="https://axocoatl.ai/assets/og-home.png">
-  <meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Claude Code, Codex or a local model in a sandbox; the host runs your checks and a different model reviews; an exit code for CI and a signed receipt.">
+  <meta name="twitter:image:alt" content="Axocoatl: run coding agents unattended. Agents write the code; Axocoatl writes the receipt. Fix runs combine a sandbox, host-run checks and a required review, with an exit code and signed receipt to verify.">
   <link rel="icon" type="image/png" href="/assets/favicon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -34,7 +34,7 @@
   <script type="module" src="/components/ax-cli-snippet.js"></script>
   <script type="module" src="/components/ax-product-film.js?v=20260818-narrative"></script>
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"macOS 11 or newer (the 1.5.0 release gate requires runs end to end on Apple silicon); GNU/Linux with glibc 2.35 or newer (the 1.5.0 release gate requires runs end to end on Linux, and in CI on Ubuntu 24.04 on x86_64 and arm64; Ubuntu 22.04, Debian 12 and Fedora with SELinux not yet verified); Windows inside WSL2 (not yet verified)","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Runs coding agents (Claude Code, Codex or a model you choose) unattended in a sandbox, has the host run the required checks on the final files and a review by a different model, and ends each run with an exit code for CI and a receipt signed on your computer."}
+  {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Axocoatl","url":"https://axocoatl.ai/","applicationCategory":"DeveloperApplication","operatingSystem":"macOS 11 or newer (the 1.5.0 release gate requires runs end to end on Apple silicon); GNU/Linux with glibc 2.35 or newer (the 1.5.0 release gate requires runs end to end on Linux, and in CI on Ubuntu 24.04 on x86_64 and arm64; Ubuntu 22.04, Debian 12 and Fedora with SELinux not yet verified); Windows inside WSL2 (not yet verified)","programmingLanguage":"Rust","license":"https://www.apache.org/licenses/LICENSE-2.0","description":"Runs coding agents (Claude Code, Codex or a model you choose) unattended in a sandbox. Built-in fix loadouts require host-run checks and review on the final files, with an exit code and signed receipt to verify."}
   </script>
 </head>
 <body>
@@ -45,28 +45,20 @@
       <span class="hero-note">Axocoatl v1.5 · Apache-2.0 · local-first</span>
       <h1>Run coding agents<br>unattended.</h1>
       <p class="hero-kicker">Agents write the code. Axocoatl writes the receipt.</p>
-      <p class="lede">Claude Code, Codex or a local model works in a sandbox its credential never enters. When it says it is done, the host runs your tests on the final files and a different model reviews the change. Every run ends with an exit code for CI and a receipt signed on your computer.</p>
-      <div class="hero-run">
-        <ax-cli-snippet>curl -fsSL https://axocoatl.ai/install.sh | sh</ax-cli-snippet>
-        <p class="hero-run-note">macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified). Then <code>axocoatl onboard</code> sets up the writer and a reviewer, and asks before each download or change. It installs Podman with Homebrew on an Apple-silicon Mac or with apt, dnf, pacman or zypper on Linux, and on a Mac then creates its machine; elsewhere it says what to install, and it refuses Ubuntu 22.04 and older.</p>
-        <div class="code-pane">
-          <div class="code-pane-head">one run with Claude Code as the writer · after <code>axocoatl onboard</code>, with <code>axocoatl dev</code> running</div>
-          <pre><code><span class="code-key">cd</span> ~/src/my-app
-<span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"Paging skips the last item"</span> \
-  --receipt receipt.json
-<span class="code-comment"># exit 0 pass · 1 checks failed · 2 needs attention</span>
-
-<span class="code-key">axocoatl receipt verify</span> receipt.json --key <span class="code-string">"$(axocoatl receipt key)"</span> --repo .
-<span class="code-comment"># exit 0: signed by this computer's key, and the files match</span></code></pre>
-        </div>
-        <p class="hero-run-note">Before you start: Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on this computer. Every run also needs a reviewer, a different model that only reads: a local one through Ollama, or a hosted one through OpenRouter. The run detects the repository's language from <code>package.json</code>, <code>pyproject.toml</code> or requirements, <code>go.mod</code> or <code>Cargo.toml</code>, runs in that language's official image and installs the dependencies with only the package registries open for that step; then the writer works. <a href="https://docs.axocoatl.ai/configure/toolchains/">Repository toolchains →</a> <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a></p>
-        <p class="hero-run-note">Local models only, once onboarding has set them up:</p>
-        <ax-cli-snippet>axocoatl run fix --task "Paging skips the last item"</ax-cli-snippet>
-        <p class="hero-run-note">On a Mac with 48 GB of memory, <code>qwen3-coder:30b</code> writes and <code>gpt-oss:20b</code> reviews (about 33 GB to download). With less memory, use OpenRouter for the reviewer (or both), or Claude Code or Codex as the writer. <a href="/install#what-it-needs">What it needs and downloads →</a></p>
-      </div>
+      <p class="lede">Claude Code, Codex or a model you choose works in a sandbox with its model credential kept on the host. For fix runs, choose a different reviewer: the host runs your checks and required review on the final files. Inspect the result and verify its signed receipt.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="/install">Install →</a>
-        <a class="btn btn-ghost" href="https://docs.axocoatl.ai/reference/run/">Read the docs</a>
+        <a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/first-fix/">First verified fix →</a>
+      </div>
+      <div class="hero-run">
+        <div class="code-pane">
+          <div class="code-pane-head">after onboarding · daemon running · from your repository</div>
+          <pre><code><span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"Fix the paging bug"</span> \
+  --receipt receipt.json
+<span class="code-key">axocoatl receipt verify</span> receipt.json \
+  --key <span class="code-string">"$(axocoatl receipt key)"</span> --repo . --require-pass</code></pre>
+        </div>
+        <p class="hero-run-note">Use <code>fix-codex</code> for Codex or <code>fix</code> for a local or OpenRouter writer. <a href="/install#what-it-needs">Requirements and setup →</a></p>
       </div>
 
       <ax-product-film
@@ -86,28 +78,81 @@
       </div>
     </section>
 
+    <!-- optional-demo: components/ax-verified-fix.js assets/demo/verified-fix-1.5/provenance.json assets/demo/verified-fix-1.5/excerpts.json assets/demo/verified-fix-1.5/verify-excerpts.mjs -->
+    <section class="container section section-rule" id="verified-fix" aria-labelledby="verified-fix-title">
+      <div class="section-head"><span class="eyebrow">From the 1.5 release evidence</span><h2 id="verified-fix-title">An actual run, step by step.</h2><p>One accepted repair of a small Node fixture, from the request to the checked files and signed receipt.</p></div>
+<ax-verified-fix aria-label="An actual Axocoatl 1.5 run, step by step">
+  <section class="verified-fix-panel" data-step="Request" id="verified-fix-request">
+    <h3>1. Request</h3>
+    <p>A small Node fixture dropped the final page when the item count was a multiple of the page size. The task ran with a local Qwen3-Coder 30B writer and a local GPT-OSS 20B required reviewer, with no helpers.</p>
+    <pre data-excerpt="request"><code>axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
+</code></pre>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt#L1">Recorded command</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Change" id="verified-fix-change">
+    <h3>2. Change</h3>
+    <p>Only <code>src/paginate.js</code> changed. The final page uses the full page size when the remainder is zero. The original tests and package files stayed unchanged.</p>
+    <pre data-excerpt="patch"><code>diff --git a/src/paginate.js b/src/paginate.js
+index 501ba48..df45ba8 100644
+--- a/src/paginate.js
++++ b/src/paginate.js
+@@ -12,7 +12,7 @@ function paginate(items, size) {
+   const pages = [];
+   for (let page = 0; page &lt; count; page += 1) {
+     const start = page * size;
+-    const length = page &lt; count - 1 ? size : items.length % size;
++    const length = page &lt; count - 1 ? size : items.length % size || size;
+     pages.push(items.slice(start, start + length));
+   }
+   return pages;
+</code></pre>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff#L1">Actual patch</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Checks &amp; review" id="verified-fix-checks">
+    <h3>3. Checks &amp; review</h3>
+    <p>The host ran the required check, then the required reviewer approved the result in its first round.</p>
+    <pre data-excerpt="checks-review"><code>Verdict: pass (exit 0)
+Loadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
+Checks:
+  tests            passed, exit 0
+Review: approved after 1 of 3 rounds by ollama:gpt-oss:20b
+</code></pre>
+    <p>An independent acceptance check then ran the four original tests once on the preserved final files:</p>
+    <pre data-excerpt="original-tests"><code>
+&gt; newuser-node-deps@0.1.0 test
+&gt; uvu test
+
+paginate.test.js
+• • • •   (4 / 4)
+
+  Total:     4
+  Passed:    4
+  Skipped:   0
+  Duration:  0.55ms
+
+</code></pre>
+    <p>The record retains two recovered reviewer tool errors and no provider retries. This example shows one completed repair; it is not a comparison of model quality.</p>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log#L16">Run outcome</a> · <a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout#L1">Independent original-test output</a></p>
+  </section>
+  <section class="verified-fix-panel" data-step="Receipt" id="verified-fix-receipt">
+    <h3>4. Receipt</h3>
+    <p>The recorded verification checked the signing key and the covered file. A separate offline check also matched the receipt to the record and the preserved final file.</p>
+    <pre data-excerpt="receipt"><code>receipt of run run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3, verdict pass
+signature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)
+files: 1 covered and 0 removed match . (judged_capture)
+result: valid (exit 0)
+</code></pre>
+    <p>A valid signature binds the recorded facts to the trusted key. It does not guarantee that the change is correct.</p>
+    <p><a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log#L1">Recorded receipt verification</a> · <a href="/assets/demo/verified-fix-1.5/provenance.json">Sources, hashes and limitations</a></p>
+  </section>
+</ax-verified-fix>
+      <p class="small muted" style="margin-top:var(--s-4)">Transcript and artifact excerpts. Execution time omitted; this is not a screen recording. <a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/assessment.json">Read the acceptance assessment</a> and its <a href="https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/negative-evidence.json">retained tool errors</a>.</p>
+    </section>
+    <script type="module" src="/components/ax-verified-fix.js"></script>
+    <!-- /optional-demo -->
+
     <section class="container section section-rule" id="receipt">
-      <div class="section-head"><span class="eyebrow">The receipt</span><h2>Hand the verdict to someone who didn't watch.</h2><p>When a run finishes, passing or not, the daemon signs a receipt with an Ed25519 key kept in your data directory. A reviewer, a teammate or a CI job can check it later, offline, against the keys they trust.</p></div>
-      <div class="stack">
-        <div class="code-pane">
-          <div class="code-pane-head">axocoatl receipt show receipt.json · a real receipt, from a fix-codex run on a test repository</div>
-          <pre><code><span class="code-comment">Not verified: this is what the receipt says. `axocoatl receipt verify` checks its signature against keys you trust.</span>
-Run run-4a7fef22-fef6-4d31-bbfd-af382a39b00a (fix-codex@1), verdict pass, exit code 0
-Signed by key 0f0872dcee0c7372 (ed25519 sha256:0f0872dcee0c737212544b3fc398b8b16f2e74b69be4158c21584bba5f1f2022)
-Axocoatl 1.4.0, Session ses-f2bb4e6b-ee53-4d7f-82f0-ea05cf9ccde0, finished at 1792003951385 ms
-Base commit 32249f12972e4e4e2ce6dbe3836aac004e31ef1e of https://github.com/example/ledger.git
-Agent writer (writer): codex 0.160.1, openai:gpt-6.1-sol
-Check tests: passed, exit 0 (sh -c node --test)
-Review by ollama:gpt-oss:axocoatl-review: approved (passed), 1 of 3 rounds, 0 findings
-Files: 1 covered, 0 removed, as the required checks judged them
-  src/paging.js  sha256:6f97547f891ab02d4fa3199671fd0b177fe034ecb76ddeb1b7d90f884fec29c4
-Network policy (session scope, revision 1): chatgpt.com:443 (route#0: 1 rule, credential codex-chatgpt, for agent, provider fetches refused)
-  route#0 chatgpt.com: model-call bodies checked, provider fetches refused
-Sandbox: podman, network egress, hardened workload
-Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211b</code></pre>
-        </div>
-        <p class="small muted">Printed by <code>axocoatl receipt show</code>, which reads a receipt without verifying it. One line is left out: the network policy of the provisioning scope, which lists the package mirrors the sandbox image may reach while it is set up.</p>
-      </div>
+      <div class="section-head"><span class="eyebrow">The receipt</span><h2>Hand the verdict to someone who didn't watch.</h2><p>When a run finishes, passing or not, the daemon signs a receipt with an Ed25519 key kept in your data directory. A reviewer, a teammate or a CI job can check it later, offline, against the keys they trust. A command refused before a run is admitted has no receipt; a signing failure is reported without changing the run verdict. Verify the receipt separately when you require one.</p></div>
       <ol class="step-list step-list-2 receipt-steps">
         <li><div><h3>What it holds</h3><p>The files the run changed, each with its SHA-256 as the required checks judged them. The sandbox and its network policy. Each check with its command and exit code. The review, with its model, verdict and rounds. The models that wrote and reviewed. The verdict and the exit code.</p></div></li>
         <li><div><h3>What it proves, and what it does not</h3><p>It proves which key signed which facts and, checked against a checkout, that the checkout has the files the receipt names. It does not prove that the change is correct, that the tests are good tests, or that the review was right. A key copied from your data directory signs as well as yours.</p></div></li>
@@ -118,34 +163,15 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
     </section>
 
     <section class="container section section-rule" id="run">
-      <div class="section-head"><span class="eyebrow">axocoatl run</span><h2>The host decides when it is done.</h2><p>A loadout is a YAML recipe for one run: its Agents (the model-driven workers) and their models, the checks that must pass, the reviewer, the network, the budgets and the prompt. <code>axocoatl run</code> hands one to the running daemon and waits for the verdict.</p></div>
+      <div class="section-head"><span class="eyebrow">axocoatl run</span><h2>The host decides when it is done.</h2><p>A loadout is a YAML recipe for one run: its Agents (the model-driven workers), models, checks or review, network, budgets and prompt. <code>axocoatl run</code> hands one to the running daemon and waits for the verdict. The steps below describe the built-in fix loadouts; QA and audit follow the workflows described below.</p></div>
       <ol class="step-list step-list-2">
         <li><div><h3>A sandbox with no direct network</h3><p>The daemon creates a Session for the repository (one durable work item: its conversation, the sandbox its tools run in, and its record) and runs its tools in a rootless Podman container as a non-root user. In a loadout run the container has no direct network access: it reaches the outside only through the daemon's egress proxy and routes, which decide and record every connection. By default a route to a model API reads each model call before it leaves, and refuses and records one that asks the provider to fetch a URL, search the web, run a tool itself or connect to an MCP server.</p></div></li>
         <li><div><h3>Checks on the final files</h3><p>After the writer finishes, the host runs the repository's check command on the exact final files, with a timeout. Whether the tests passed comes from the host, not from the model.</p></div></li>
-        <li><div><h3>Review by a different model</h3><p>A reviewer on the model you name reads the result in a fresh conversation with read-only tools, and approves or asks for changes, for up to 3 rounds. The writer must accept or reject every finding with a reason; a finding left unanswered makes the run need attention. A reviewer on the writer's own model gets a warning, not a refusal.</p></div></li>
+        <li><div><h3>Review by a different model</h3><p>A reviewer on the model you name reads the result in a fresh conversation with read-only tools, and approves or asks for changes, for up to 3 rounds. The writer must accept or reject every finding with a reason; a finding left unanswered makes the run need attention. Onboarding requires different models. <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Model overrides and their limits →</a></p></div></li>
         <li><div><h3>A verdict CI can read</h3><p>Exit code 0 means pass, 1 a check failed, 2 the run needs attention; 3 to 7 cover usage errors, an unreachable daemon, infrastructure, an interrupt, and another run or Session turn holding the repository. <code>--junit</code> writes the checks, review, answers and findings as JUnit. <code>--record</code> writes the whole run as one file that ends with its line count and SHA-256, which <code>axocoatl record verify</code> checks. The record is checksummed, not signed.</p></div></li>
         <li><div><h3>A signed receipt</h3><p>When the run finishes, passing or not, the daemon signs a receipt of the files it changed and what the host enforced. <code>--receipt</code> writes it. <a href="#receipt">What it holds and who can check it →</a></p></div></li>
         <li><div><h3>Keep as PR</h3><p>The changes stay in your working tree, uncommitted. <code>--keep branch</code> commits exactly the run's changed paths to a new branch with your <code>git</code>, with <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and refuses a path edited after the checks judged it; <code>--keep pr</code> also pushes that branch and opens a pull request with <code>gh</code> whose description carries the receipt. Your index, current branch and working tree stay as they were.</p></div></li>
       </ol>
-      <div class="stack run-summary">
-        <div class="code-pane">
-          <div class="code-pane-head">what a passing fix run prints · an example · standard output</div>
-          <pre><code><span class="code-key">Verdict:</span> pass (exit 0)
-<span class="code-key">Loadout:</span> fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223
-<span class="code-key">Checks:</span>
-  tests            passed, exit 0
-<span class="code-key">Review:</span> approved after 1 of 3 rounds by ollama:gpt-oss:20b
-<span class="code-key">Notes:</span>
-  writer_model = ollama:qwen3-coder:30b (from your setup: run.models.writer in the configuration)
-  reviewer_model = ollama:gpt-oss:20b (from your setup: run.models.reviewer in the configuration)
-  image localhost/axocoatl-recipe-go:6063b3e9fdc6 · toolchain go (go.mod at the repository root) · check go test ./... (detected from the repository) · setup none
-<span class="code-key">Usage:</span> 72252 input + 3003 output tokens, $0.0000
-<span class="code-key">Network:</span> 16 recorded events, 0 allowed and 0 refused connections, 0 route requests
-<span class="code-key">Record:</span> run-289c0a31-ef02-42ac-b7a9-d21e8767ddae</code></pre>
-        </div>
-        <p class="small muted">An example of the summary for a small Go repository whose check is <code>go test ./...</code>, with <code>qwen3-coder:30b</code> writing and <code>gpt-oss:20b</code> reviewing. It shows the format, not a measurement. Progress lines go to standard error. <a href="https://docs.axocoatl.ai/reference/run/">Every flag and exit code →</a></p>
-      </div>
-
       <div class="stack" id="loadouts" style="margin-top:var(--s-8)">
         <h3>Five loadouts ship built in.</h3>
         <div class="grid-3">
@@ -153,36 +179,7 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
           <article class="card"><span class="card-kicker">qa</span><h3>Explore an app</h3><p>One browser explorer. Each finding names a Playwright reproduction that the host re-runs on the build under test and, if you give one, a clean reference build: confirmed only when it fails on the first and passes on the second.</p></article>
           <article class="card"><span class="card-kicker">audit · opt-in</span><h3>Read a whole codebase</h3><p>A planner splits the scope into 2 to 8 areas, the host gives every file to one area, read-only workers read their areas in parallel, and an integrator merges the findings. Files nobody read are listed as not covered.</p></article>
         </div>
-        <p><a href="https://docs.axocoatl.ai/workbench/fix-qa-audit/">What each loadout runs, and why →</a></p>
-      </div>
-    </section>
-
-    <section class="container section section-rule" id="external-agents">
-      <div class="split reverse">
-        <div class="code-pane">
-          <div class="code-pane-head">Claude Code or Codex as the writer</div>
-          <pre><code><span class="code-comment"># choose Claude Code or Codex as the writer:</span>
-<span class="code-comment"># it builds the image, signs you in through</span>
-<span class="code-comment"># your browser and sets up a reviewer</span>
-<span class="code-key">axocoatl onboard</span>
-
-<span class="code-comment"># then, in a repository, with axocoatl dev running</span>
-<span class="code-key">axocoatl run fix-claude-code</span> --task <span class="code-string">"Paging skips the last item"</span>
-<span class="code-key">axocoatl run fix-codex</span> --task <span class="code-string">"Paging skips the last item"</span>
-
-<span class="code-comment"># or set it up by hand</span>
-<span class="code-key">axocoatl recipe build claude-code</span>
-<span class="code-key">axocoatl connect claude-code</span></code></pre>
-        </div>
-        <div class="stack">
-          <span class="eyebrow">External agents</span>
-          <h2>Claude Code and Codex, inside the sandbox.</h2>
-          <p>The built-in <code>fix-claude-code</code> and <code>fix-codex</code> run <code>fix</code> with the pinned Claude Code CLI or Codex CLI as the writer. It runs inside the Session container as the non-root writer user, not in your shell, and the host runs the same checks and review on what it leaves.</p>
-          <p>Claude Code needs a Claude Pro or Max plan and the <code>claude</code> CLI on your computer; Codex signs in with your ChatGPT plan. Both run in an image that adds the program to your repository's <a href="https://docs.axocoatl.ai/configure/toolchains/">toolchain</a>: the run detects the language from <code>package.json</code>, <code>pyproject.toml</code> or requirements, <code>go.mod</code> or <code>Cargo.toml</code>, installs the dependencies with only the package registries open for that step, and then the writer works, so the repository's own check, such as <code>npm test</code>, <code>pytest</code> or <code>go test ./...</code>, runs.</p>
-          <p>Its credential stays on your computer. <code>axocoatl connect claude-code</code> runs <code>claude setup-token</code> and captures its token through a terminal filter. An uncertain credential redraw is refused with nothing stored; <code>axocoatl connect codex</code> runs <code>codex login</code> in a throwaway container and stores your ChatGPT sign-in. The daemon adds the credential on the host to each model request the route allows, and the container holds a placeholder. Every model call is in the Session's network record, and the program's output is parsed into the Session record.</p>
-          <p>To change the model, the budgets or the checks, <a href="https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout">write your own loadout</a> with <code>runtime: claude-code</code> or <code>runtime: codex</code>.</p>
-          <a href="https://docs.axocoatl.ai/configure/external-agents/">Set up Claude Code or Codex →</a>
-        </div>
+        <p id="external-agents"><a href="https://docs.axocoatl.ai/start/first-fix/">Run your first verified fix →</a> · <a href="/install#external-agents">Set up Claude Code or Codex →</a> · <a href="https://docs.axocoatl.ai/workbench/fix-qa-audit/">Fix, QA and audit reference →</a></p>
       </div>
     </section>
 
@@ -190,14 +187,14 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
       <div class="section-head"><span class="eyebrow">What the receipt rests on</span><h2>Mechanisms, not promises.</h2><p>A receipt is worth what the host enforces whatever the model says: where tools run, who may write, which checks must pass, what a run may spend, and what gets recorded.</p></div>
       <div class="grid-3">
         <article class="card"><span class="card-kicker">Isolation built in</span><h3>Tools run in a sandbox</h3><p>Every Session's repository tools run in a rootless Podman container; the web and MCP tools run on the host. Read-only helpers get no file-writing tools, and the kernel blocks their shell from writing, creating, renaming or deleting repository files and from opening TCP connections (Landlock, Linux 6.7 or later); otherwise they get no shell. Loadout runs have no direct network access. Interactive Sessions use Podman's bridge network by default; set <code>network: none</code> for repositories you don't trust.</p></article>
-        <article class="card"><span class="card-kicker">A complete record</span><h3>The host decides, and keeps it</h3><p>Required checks run on the exact final files, by the host, not the model. A required review runs a read-only reviewer the host starts. Budgets you approve are charged with what each call actually used and carry across restarts. Every model call, tool call, budget decision and check stays in the Session, and every <code>axocoatl run</code> that finishes gets a receipt signed on your computer.</p></article>
-        <article class="card"><span class="card-kicker">Any model, per Agent</span><h3>Local or hosted</h3><p>Each Agent has its own provider and model: local models through Ollama, hosted models through OpenRouter, with budgets enforced on both, or the Claude Code or Codex CLI as a loadout's writer. A provider call that fails transiently, or a stream that ends early, is retried once, and a request that would overflow the context is trimmed instead of failing.</p></article>
+        <article class="card"><span class="card-kicker">A complete record</span><h3>The host decides, and keeps it</h3><p>Required checks run on the exact final files, by the host, not the model. A required review runs a read-only reviewer the host starts. Budgets you approve are charged with what each call actually used and carry across restarts. Every model call, tool call, budget decision and check stays in the Session, and the daemon signs finished loadout outcomes on your computer. If signing fails, the outcome records the warning; verify the receipt separately.</p></article>
+        <article class="card"><span class="card-kicker">Model choice, per Agent</span><h3>Local or hosted</h3><p>Native Agents use supported local models through Ollama or eligible hosted models through OpenRouter, with budgets enforced on both. Claude Code or Codex can be a fix loadout's writer. Native Agents retry a transient provider failure or a stream that ends early once, and trim older context where possible. If the remaining request cannot fit, Axocoatl reports the limit.</p></article>
       </div>
       <p><a href="/concepts/#isolation">How the boundaries work, and where they stop →</a> · <a href="/compare">How this differs from running an agent directly →</a></p>
     </section>
 
     <section class="container section section-rule" id="measured">
-      <div class="section-head"><span class="eyebrow">What we measured</span><h2>A different reviewer helped.</h2><p>Measured through Axocoatl 1.1.0, with a plain agent loop for comparison, on small local models: 6 Python maintenance tasks, 25 withheld tests, one run per task. A stronger, different reviewer helped a small local writer; a second look from the same model didn't. It is one small benchmark, not a claim that Axocoatl makes agents better.</p></div>
+      <div class="section-head"><span class="eyebrow">What we measured</span><h2>A different reviewer helped.</h2><p>Measured through Axocoatl 1.1.0, with a plain agent loop for comparison, on small local models: 6 Python maintenance tasks, 25 withheld tests, one run per task. A stronger, different reviewer helped a small local writer; a second look from the same model didn't. It is one small benchmark, not a claim that Axocoatl makes agents better. The measured reviewer ran locally; reviewers through OpenRouter have not been measured in that comparison.</p></div>
       <!-- measured: axocoatl-1.1.0 2026-10-01 -->
       <div class="measured">
         <table>
@@ -217,34 +214,7 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
     </section>
 
     <section class="container section section-rule" id="cross-model-review">
-      <div class="split reverse">
-        <div class="code-pane">
-          <div class="code-pane-head">config.yaml · a different reviewer in the workbench</div>
-          <pre><code><span class="code-key">agents</span>:
-  - id: lead
-    name: Lead
-    provider: ollama
-    model: <span class="code-string">qwen3-coder:30b</span>
-    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-  - id: reviewer
-    name: Reviewer
-    provider: ollama   <span class="code-comment"># or openrouter</span>
-    model: <span class="code-string">gpt-oss:20b</span>   <span class="code-comment"># gpt-oss:120b: about 96 GB</span>
-    role: worker
-    tools: [read_file, list_dir, grep, glob]
-    writes: []         <span class="code-comment"># read-only</span>
-
-<span class="code-comment"># Team &amp; budget → Required review → Reviewer</span></code></pre>
-        </div>
-        <div class="stack">
-          <span class="eyebrow">Cross-model review</span>
-          <h2>A local writer. A different reviewer.</h2>
-          <p>Headless, <code>axocoatl run fix</code> takes the reviewer's model as <code>--model reviewer=…</code>. In the browser workbench, give a reviewer template a different model, on the same machine or through OpenRouter, and make it the team's required reviewer. After the lead finishes and your checks pass, the host starts the reviewer in a fresh conversation on the exact result. Requested changes go back to the lead; the turn completes only when the reviewer approves.</p>
-          <p>The reviewer measured above was gpt-oss 120B, running locally. <code>gpt-oss:20b</code>, the reviewer that fits a 48 GB Mac, has not been measured, and neither have reviewers through OpenRouter.</p>
-          <p>Reviewers raise false alarms too, so the <code>fix</code> writer answers each finding with accept or reject and a reason instead of changing code for every one.</p>
-          <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Set up cross-model review →</a>
-        </div>
-      </div>
+      <div class="section-head"><span class="eyebrow">Historical recording · Axocoatl 1.1.0</span><h2>The measured review, on screen.</h2><p>The benchmark used a local gpt-oss 120B reviewer. Neither gpt-oss 20B nor reviewers through OpenRouter have been measured in that comparison. Reviewers can raise false alarms; a fix writer must answer each finding with a reason. <a href="https://docs.axocoatl.ai/configure/cross-model-review/">Configure a reviewer →</a></p></div>
       <!-- optional-demo: assets/demo/cross-model-review.mp4 assets/demo/cross-model-review.jpg -->
       <figure class="demo-video">
         <video controls playsinline preload="none" poster="/assets/demo/cross-model-review.jpg" src="/assets/demo/cross-model-review.mp4" aria-label="A local lead's change reviewed by gpt-oss 120B in an Axocoatl Session"></video>
@@ -254,46 +224,8 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
     </section>
 
     <section class="container section section-rule" id="workbench">
-      <div class="split reverse">
-        <div class="code-pane">
-          <div class="code-pane-head">one Turn · when the team requires it</div>
-          <pre><code><span class="code-comment">request + approved limits</span>
-       │
-       ▼
-     <span class="code-key">lead</span> ── delegate ──▶ <span class="code-key">helper</span>
-       │  ◀──── answer ────   <span class="code-comment">read-only</span>
-       │
-   edits files
-       │
-       ▼
-<span class="code-key">required checks</span>   <span class="code-comment">host · exact tree</span>
-       ▼
-<span class="code-key">required review</span>   <span class="code-comment">host · fresh reviewer</span>
-       │  changes → lead · next round
-       ▼
-<span class="code-comment">complete · or needs attention</span></code></pre>
-        </div>
-        <div class="stack">
-          <span class="eyebrow">In the browser workbench</span>
-          <h2>The lead writes. Everything else reads.</h2>
-          <p>The same daemon serves a workbench in your browser for work you want to watch. A new Session starts with one Agent, the lead, under limits you approve in Team &amp; budget. You can let it delegate to read-only helpers: Scout answers questions about the code, Reviewer reviews a change. Each helper starts in an empty conversation and hands one answer back. Helpers cost extra tokens; one Agent is the cheaper choice for small tasks.</p>
-          <p>Add required checks and the host runs them after the Agents finish, between two captures of the repository. Add a required review and the host runs a read-only reviewer on the result for a bounded number of rounds. The turn completes only when both pass on the exact final tree.</p>
-          <a href="/concepts/#checks-review">See how a turn completes →</a>
-        </div>
-      </div>
-    </section>
-
-    <section class="container section section-rule">
-      <div class="section-head">
-        <span class="eyebrow">One durable work surface</span>
-        <h2>The record sits beside the repository.</h2>
-        <p>Each Session keeps its conversation, its Turns (one accepted request each), Agent activity and budget decisions, while Files, Terminal, Preview, and Source Control show the repository as it is now.</p>
-      </div>
-      <div class="grid-3">
-        <article class="card"><span class="card-kicker">Turn</span><h3>Accept first</h3><p>Each Turn records its request and context before the Agent starts. Output, tool evidence, failure, cancellation, and interruption remain attached to the Session.</p></article>
-        <article class="card"><span class="card-kicker">History</span><h3>Search and export</h3><p>Completed, failed, stopped and interrupted work stays in the Session's History. Search it, or export a Session as Markdown or JSON.</p></article>
-        <article class="card"><span class="card-kicker">Git</span><h3>Review the change</h3><p>Filter Source Control to the latest attributed Turn, inspect paths and hunks, then stage and commit when the result holds up. Axocoatl does not commit for you.</p></article>
-      </div>
+      <div class="section-head"><span class="eyebrow">Work interactively</span><h2>The same work, in your browser.</h2><p>The same daemon serves a workbench: one folder-anchored Session keeps chat beside Files, Terminal, Preview and Source Control. Start with one lead under limits you approve. Helpers, required checks and required review are opt-in; helpers cost extra tokens. History retains completed, failed and interrupted work. Review the Git changes and commit deliberately.</p><p><a href="https://docs.axocoatl.ai/workbench/session/">Open a workspace Session →</a> · <a href="/concepts/#checks-review">Checks and review →</a> · <a href="https://docs.axocoatl.ai/workbench/ways/">Explore several ways →</a></p></div>
+      <p class="small muted">Onboarding configures the current OS user and creates no project. Podman supplies the local sandbox. Hosted providers, integrations, downloads and the optional remote sandbox use the network; local-first is not an offline guarantee. <a href="/install">Requirements and installation →</a></p>
       <ax-product-film
         film="durable-turn"
         src="/assets/films/v1.5.0/durable-turn.mp4"
@@ -305,32 +237,9 @@ Statement sha256:1dd71a95732b324fb5e930bc95da5661d786d27e62bea8e8d7916bb61994211
     </section>
 
     <section class="container section section-rule">
-      <div class="split reverse">
-        <div class="code-pane">
-          <div class="code-pane-head">one local entry point · macOS, Linux, or inside WSL2 (not yet verified)</div>
-          <pre><code><span class="code-key">curl</span> -fsSL \
-  https://axocoatl.ai/install.sh | sh
-
-<span class="code-key">axocoatl onboard</span>   <span class="code-comment"># a writer, a reviewer, Podman where it can</span>
-<span class="code-key">axocoatl doctor</span>
-<span class="code-key">axocoatl dev</span>
-
-<span class="code-comment"># open the sign-in link it prints,</span>
-<span class="code-comment"># or use axocoatl run in another shell</span></code></pre>
-        </div>
-        <div class="stack">
-          <span class="eyebrow">Your machine or your infrastructure</span>
-          <h2>One executable. Your browser.</h2>
-          <p>Install one <code>axocoatl</code> executable. It starts the local Rust daemon, which runs <code>axocoatl run</code> and serves the workbench to the browser you already use; the workbench assets are embedded. Podman is the local sandbox requirement. When <code>axocoatl onboard</code> finds no Podman, it installs it after asking: with Homebrew on an Apple-silicon Mac, with apt on Ubuntu 24.04 or newer, and with dnf, pacman or zypper on other Linux distributions (not yet verified). On an Intel Mac, an Apple-silicon Mac without Homebrew or another Linux it says what to install, and on an Ubuntu release older than 24.04 it says to use 24.04 or newer. Docker is not supported; Podman can run alongside it. Run it on a laptop, or as a service on a machine you control.</p>
-          <p>Configure Axocoatl once for the current OS user; onboarding creates no project. Hosted providers, integrations, downloads, and E2B Cloud are explicit network paths, and the first daemon start downloads an 87 MB embedding model from huggingface.co. Local-first is the default, not an offline guarantee.</p>
-        </div>
-      </div>
-    </section>
-
-    <section class="container section section-rule">
       <div class="cta-strip">
         <div><h2>Run it on a real repository.</h2><p>Install Axocoatl, pick a writer and a different reviewer, let the host's checks decide when the work is done, and keep the receipt.</p></div>
-        <div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://github.com/axocoatl/axocoatl">View the source →</a></div>
+        <div class="cta-actions"><a class="btn btn-primary" href="/install">Install →</a><a class="btn btn-ghost" href="https://docs.axocoatl.ai/start/first-fix/">First verified fix →</a></div>
       </div>
     </section>
   </main>

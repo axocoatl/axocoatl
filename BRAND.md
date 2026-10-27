@@ -6,7 +6,7 @@ page, doc, or post conflicts with current product fact, fix the fact source and 
 file together. The goal is consistency that compounds: every page reinforces every
 other page, and a year from now we still sound like ourselves.
 
-Last updated: 2026-10-14 (positioning, §2).
+Last updated: 2026-10-27 (claim scope and first-run copy; receipt positioning retained).
 
 ---
 
@@ -35,10 +35,10 @@ the copy is wrong.
 > **Run coding agents unattended.**
 > **Agents write the code. Axocoatl writes the receipt.**
 >
-> Claude Code, Codex or a local model works in a sandbox its credential never enters.
-> When it says it is done, the host runs your tests on the final files and a different
-> model reviews the change. Every run ends with an exit code for CI and a receipt signed
-> on your computer.
+> Choose Claude Code, Codex, a local model or an OpenRouter model to make the change,
+> and a different model to review it. The built-in fix loadouts have the host run your
+> checks on the final files. An exit code reports the outcome; a signed receipt lets
+> someone who did not watch verify the recorded facts and covered files offline.
 
 Approved by the maintainer on 2026-10-14, replacing "the harness you can trust to run
 coding agents on your own machine or infrastructure". Lead with the job (running coding
@@ -51,8 +51,14 @@ each with its SHA-256 as the required checks judged it, the sandbox and network 
 the checks, the review, the models and the verdict. It does not prove that the change
 is correct, that the tests are good tests or that the review was right, and a key
 copied from a data directory signs as well as the original. Never call a receipt
-"tamper-proof", "proof the code works" or a guarantee; say what it holds and who signed
-it.
+"tamper-proof", "proof the code works" or a guarantee; say what it holds and which key signed
+it. Do not promise that every run has a receipt: pre-admission refusals have none,
+workbench turns do not produce one, and signing/storage failure records
+`receipt_unavailable` without changing the run verdict. Likewise, required checks
+and review describe the fix family or an explicitly configured team, not every
+loadout. QA and audit have their own acceptance rules. Onboarding requires different
+writer and reviewer models. Runs refuse a same-model pair inherited from setup;
+explicitly choosing both models permits it with a warning.
 
 The three pillars are the evidence behind the receipt. They stay below the fold, as
 evidence, not as the pitch; every page should reinforce one or more, each with its

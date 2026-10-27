@@ -12,6 +12,10 @@ Axocoatl project; **Open workspace…** authorizes an existing folder after the
 app starts. Start with one Agent and a disposable or clean Git repository until
 you know the tool and sandbox behavior you want.
 
+This guide uses the workbench's native Ollama or OpenRouter Agents. If you configured
+Claude Code or Codex to write, [Your first fix](/start/first-fix/) runs that program
+headless; the workbench team onboarding created uses your reviewer's native model.
+
 ## Before you open the folder
 
 Run the repository's own checks once and inspect Git:
@@ -28,10 +32,12 @@ metadata, but the repository remains the authority.
 
 <Steps>
 
-1. Start the runtime with `axocoatl dev` from any directory and open the
-   `Sign in:` link it prints. It uses the current user's configuration and data
-   root. To print the link again, run `axocoatl url`; the browser keeps the
-   sign-in for 30 days. The first screen checks what a Session needs, as
+1. After [onboarding with `--start none`](/start/onboard/#recommended-setup) and a
+   ready doctor result, start `axocoatl dev` from any directory and leave that terminal
+   open. If onboarding already started it, or the Always-On Service runs, use that
+   daemon instead of starting another. Open its `Sign in:` link. It uses the current
+   user's configuration and data root. To print the link again, run `axocoatl url`;
+   the browser keeps the sign-in for 30 days. The first screen checks what a Session needs, as
    `axocoatl doctor` does: while something fails, a checklist names each step
    left with its exact command (Podman's machine, the Ollama version and cloud
    mode, a model to pull), and the status pill in the rail reads **N setup steps

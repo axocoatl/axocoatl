@@ -34,7 +34,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Axocoatl',
-      description: 'Run coding agents unattended. Agents write the code; Axocoatl writes the receipt: the host runs your checks on the final files, a different model reviews the change, and every run ends with an exit code for CI and a receipt signed on your computer.',
+      description: 'Install Axocoatl, set up a writer and reviewer, run a first fix, and inspect its checks, changed files and signed receipt. Guides for headless runs and the repository workbench.',
       disable404Route: true,
       favicon: '/favicon.png',
       customCss: ['./src/styles/tokens.css', './src/styles/overrides.css'],
@@ -76,6 +76,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'index' },
             { label: 'Install', slug: 'start/install' },
             { label: 'Onboard and doctor', slug: 'start/onboard' },
+            { label: 'Your first fix', slug: 'start/first-fix' },
             { label: 'Your first Session', slug: 'start/first-session' },
           ],
         },
@@ -131,7 +132,7 @@ export default defineConfig({
             { label: 'Security', slug: 'operate/security' },
             { label: 'Resource sizing', slug: 'operate/resources' },
             { label: 'Troubleshooting', slug: 'operate/troubleshooting' },
-            { label: 'Local verification', slug: 'operate/verification' },
+            { label: 'Verification and release evidence', slug: 'operate/verification' },
           ],
         },
         {

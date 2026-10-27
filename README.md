@@ -3,34 +3,49 @@
 **Run coding agents unattended, and let the host decide when they are done.**
 Agents write the code. Axocoatl writes the receipt.
 
-Claude Code, Codex or a local model works in a sandbox its model credential never
-enters. When it says it is done, the host runs your tests on the final files and a
-different model reviews the change. You get an exit code for CI, a checksummed record of
-every step, and a receipt signed on your computer of the files the run changed and what the
-host enforced. One open-source Rust executable; no Axocoatl account or telemetry.
+Choose Claude Code, Codex, a local model or an OpenRouter model to make a change,
+and a different model to review it. The built-in fix loadouts run the writer in a
+sandbox, keep its model credential on the host, and have the host run your checks
+on the final files. An exit code reports the outcome; a signed receipt lets someone
+who did not watch verify the recorded facts and covered files offline.
+One open-source Rust executable; no Axocoatl account or telemetry.
 
 [![CI](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml/badge.svg)](https://github.com/axocoatl/axocoatl/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/axocoatl-cli.svg)](https://crates.io/crates/axocoatl-cli) [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-```bash
-curl -fsSL https://axocoatl.ai/install.sh | sh   # macOS, Linux, or inside WSL2 on Windows (not PowerShell; WSL2 not yet verified)
-axocoatl onboard   # set up a writer and a reviewer for this OS user, and Podman where it can install it (else it says what to do); it asks before each change
-axocoatl doctor    # check the sandbox, the models, the writers and the daemon
-axocoatl dev       # start the daemon and leave it running
+In the first terminal:
 
-cd ~/src/my-app    # then, in another shell
-# With a local or OpenRouter writer; with Claude Code or Codex, run fix-claude-code or fix-codex
-axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
-  --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json
-axocoatl receipt verify run.receipt.json --key "$(axocoatl receipt key)" --repo .
+```bash
+curl -fsSL https://axocoatl.ai/install.sh | sh
+axocoatl onboard --start none  # configure the writer, reviewer and sandbox
+axocoatl doctor
+axocoatl dev                   # leave this terminal running
 ```
 
-Onboarding installs Podman after asking where it can: with Homebrew on an Apple-silicon
-Mac, and with apt, dnf, pacman or zypper (using `sudo`) on Linux. Before an apt install,
-it asks separately to refresh the package lists with `sudo apt-get update`. On an
-Apple-silicon Mac without Homebrew it points to the podman.io installer, on an Intel Mac to the Podman 5.8
-package, and on another Linux distribution it names what to install; Ubuntu 22.04 and
-older are refused, since their Podman is too old. On a Mac it then creates and starts
-the Podman machine, after asking.
+In a second terminal, from the repository you want to change:
+
+```bash
+cd ~/src/my-app
+AXO_EVIDENCE=$(mktemp -d "${TMPDIR:-/tmp}/axocoatl-first-fix.XXXXXX")
+# Local or OpenRouter writer; choose the corresponding external loadout otherwise.
+axocoatl run fix --task "Paging skips the last item when the total is a multiple of the page size" \
+  --junit "$AXO_EVIDENCE/junit.xml" --record "$AXO_EVIDENCE/run.axorecord.jsonl" \
+  --receipt "$AXO_EVIDENCE/receipt.json"
+axocoatl receipt verify "$AXO_EVIDENCE/receipt.json" \
+  --key "$(axocoatl receipt key)" --repo . \
+  --record "$AXO_EVIDENCE/run.axorecord.jsonl" --require-pass
+```
+
+Follow [Your first verified fix](https://docs.axocoatl.ai/start/first-fix/) for the
+Claude Code, Codex, local and OpenRouter setup choices and expected result. Evidence
+stays outside the repository; inspect the diff and commit deliberately.
+`--start none` lets onboarding return before doctor and dev. Without it, onboarding
+can start the daemon itself; do not start a second copy.
+
+Onboarding asks before installing Podman and, on macOS, creating its virtual machine.
+The verified end-to-end setup paths are Apple-silicon macOS and Ubuntu 24.04;
+other platforms are not yet verified end to end. See the
+[installation guide](https://docs.axocoatl.ai/start/install/) for requirements,
+platform limits and manual setup options.
 
 Run the loadout that matches the writer you chose in onboarding: `axocoatl run fix` for a
 local or OpenRouter writer, `axocoatl run fix-claude-code` or `axocoatl run fix-codex`,
@@ -91,14 +106,15 @@ Record: run-289c0a31-ef02-42ac-b7a9-d21e8767ddae
   [write your own loadout](https://docs.axocoatl.ai/configure/external-agents/#write-your-own-loadout).
 
 <p align="center">
-  <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: run coding agents unattended. Claude Code, Codex or a local model in a sandbox; the host runs your checks on the final files; a different model reviews the change; an exit code for CI and a checksummed record." width="760">
+  <img src="sites/marketing/assets/og-home.png" alt="Axocoatl: run coding agents unattended. Agents write the code. Axocoatl writes the receipt." width="760">
 </p>
 
 ## What a run does
 
 A **loadout** is a YAML recipe for one run: its Agents (the model-driven workers) and
-their models, the required checks with their timeouts, a required reviewer, the network,
-the budgets and the prompt. `axocoatl run` hands one to the running daemon, which runs
+their models, the checks with their timeouts, the review policy, the network,
+the budgets and the prompt. Checks and review depend on the loadout: the fix family
+requires both, while QA and audit have different acceptance rules. `axocoatl run` hands one to the running daemon, which runs
 it in a **Session**: one durable work item with its conversation, the sandbox its tools
 run in, and its record.
 
@@ -118,7 +134,8 @@ run in, and its record.
   to fetch a URL, search the web, run a tool itself or connect to an MCP server. Your
   global defaults do not change.
 - **The host decides.** Required checks run on the exact final files, by the host. A
-  reviewer on the writer's own model is warned about, not refused. A finding left
+  different reviewer model is required during onboarding. Runs refuse a same-model
+  pair inherited from setup; explicitly choosing both models permits it with a warning. A finding left
   unanswered, a check that did not run, or anything not covered makes the run need
   attention; nothing passes by default.
 - **A verdict for CI.** Exit codes: 0 pass, 1 checks failed, 2 needs attention, 3 usage,
@@ -126,14 +143,18 @@ run in, and its record.
   the checks, review, adjudications, findings and coverage. `--record` writes the whole
   run as one JSON Lines file ending with its line count and SHA-256, which
   `axocoatl record verify` checks; it is checksummed, not signed.
-- **A signed receipt.** Every `axocoatl run` that finishes, passing or not, gets a receipt
-  signed with an Ed25519 key kept in your data directory (workbench turns get none): an in-toto statement in a DSSE envelope that
+- **A signed receipt.** On completion of an admitted loadout run, passing or not, the
+  daemon signs a receipt with an Ed25519 key kept in your data directory (workbench
+  turns get none): an in-toto statement in a DSSE envelope that
   lists the files the run changed with their SHA-256 (as the required checks judged them,
   when they ran), the sandbox and network policy, the checks, the review, the models and
   the verdict. `--receipt` writes it. `axocoatl receipt verify` checks it offline against
   the keys you trust (`axocoatl receipt key` prints yours) and, with `--repo`, against the
   files in a checkout. It proves which key signed which facts, not that the change is
-  correct.
+  correct. If signing or storage fails, the Outcome reports `receipt_unavailable`
+  without changing the run's verdict. A request refused before admission has no
+  receipt. Check the receipt separately; a passing verdict alone does not establish
+  that a receipt exists.
 - **Keep as PR.** `--keep branch` commits exactly the run's changed paths to a new branch
   with your `git`, without touching your checkout, with `Axocoatl-Run` and
   `Axocoatl-Receipt` trailers; a path edited after the checks judged it is refused.
@@ -239,7 +260,8 @@ and every public number with its evidence is in [`docs/CLAIMS.md`](docs/CLAIMS.m
   are not retried. A call OpenRouter refused before generating anything is counted at
   $0, so the usage stays exact. An Ollama stream that ends early is retried once, older tool output
   is replaced by a short placeholder in later requests, and a request that would
-  overflow the context window is trimmed instead of failing.
+  overflow the context window is trimmed where possible. If protected context still
+  cannot fit, the activation reports a context-limit error.
 
 Axocoatl adds no product telemetry and needs no Axocoatl account.
 
@@ -256,7 +278,7 @@ The execution contracts below describe the 1.5.0 source tree. The installer and
 for versioned changes.
 
 ```bash
-axocoatl onboard   # configure Axocoatl for this OS user
+axocoatl onboard --start none  # configure this OS user; start the daemon below
 axocoatl doctor    # check your environment
 axocoatl dev       # start the daemon and the one app
 # Open the "Sign in:" link it prints (http://127.0.0.1:8080/?token=…).

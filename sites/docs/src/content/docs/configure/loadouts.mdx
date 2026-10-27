@@ -258,10 +258,13 @@ reason. In a `fix` loadout, `adjudicate` (default `true`) records each answer as
 adjudication, and an unanswered finding makes the run need attention; with `false`, or in
 a `custom` loadout, the answers are not recorded or checked.
 
-When the reviewer's model is the writer's model, validation warns
-(`same_model_reviewer`), and the warning is repeated in the API, Settings, Team and
-budget, the run output and the record. It is a warning, not a refusal. See
-[why](/workbench/fix-qa-audit/#fix).
+When the reviewer's model is the writer's model, loadout validation warns
+(`same_model_reviewer`). Run admission also checks where the models came from:
+onboarding requires different models, and a run refuses a same-model pair when either
+model is inherited from your setup. Explicitly naming both models permits that pair
+with the warning, repeated in the API, Settings, Team and budget, run output and record.
+See [Models from your setup](/reference/run/#models-from-your-setup) and
+[why a different reviewer matters](/workbench/fix-qa-audit/#use-a-different-model-to-review).
 
 ### Parameters
 

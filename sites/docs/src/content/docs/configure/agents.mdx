@@ -11,6 +11,12 @@ Workers never run on their own: a legacy Coordinator runs them, and in a native 
 can delegate tasks to approved Worker templates. Sessions and Automations refer to templates by
 stable `id`.
 
+For a new setup, keep [the team onboarding creates](#the-default-team). In a Session,
+review and apply its [Team & budget](#native-authority-and-budgets), then add
+[required checks](#required-checks) or a [required review](#required-review) when you
+want those to gate completion. The YAML reference below is for changing templates;
+it does not replace that Session approval.
+
 ## Define an Agent
 
 ```yaml
@@ -23,12 +29,7 @@ agents:
       Work inside the authorized repository. Make small verified changes and
       report the commands used to check them.
     tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
-    depends_on: [planner]
     role: autonomous
-    token_budget:
-      per_execution: 20000
-      per_call: 8192
-      overflow_policy: abort
     sampling:
       temperature: 0
       max_tokens: 4096
@@ -93,8 +94,10 @@ agents:
 ```
 
 `axocoatl onboard` with Ollama writes the same team on models installed on your server:
-Lead and Scout on the Lead model, and Reviewer on a different, larger model when one is
-installed. See [Configure Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
+Lead and Scout on the Lead model, and Reviewer on a different model that fits. It
+prefers an installed gpt-oss model, even when smaller than the writer, otherwise a
+larger alternative; when no installed pair fits, it offers its memory-based defaults.
+See [Configure Axocoatl](/start/onboard/#step-3a-a-local-writer-and-reviewer-ollama).
 
 A new Session selects the first Agent that is not a Worker, here Lead, and runs it alone.
 When its team is that one Agent, Team & budget offers every Worker with `writes: []` as its

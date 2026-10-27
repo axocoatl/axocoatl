@@ -5,71 +5,22 @@ description: Configure native Ollama and OpenRouter profiles, compatibility adap
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Each Agent selects a provider and model. Credentials and provider endpoints
-live under `providers:` in the active YAML configuration. `axocoatl onboard`
-creates the current user's configuration; it does not create a project or a
-repository-level `.env` file.
+For a new setup, use [onboarding](/start/onboard/#recommended-setup) to configure
+the writer and reviewer. It checks the selected models and stores the configuration
+for the current OS user, without creating a project or a `.env` file.
 
-## Provider adapters
-
-| `provider:` | Adapter |
+| What you want to run | Use |
 | --- | --- |
-| `ollama` | Ollama at a configured local or remote endpoint |
-| `openai` | OpenAI, or an OpenAI-compatible endpoint via `base_url` |
-| `anthropic` | Anthropic Messages API |
-| `gemini` | Google Gemini |
-| `mistral` | Mistral Chat API |
-| `openrouter` | OpenRouter through its OpenAI-compatible endpoint |
+| A native workbench Agent or a `fix` writer/reviewer on this computer | [Local Ollama](#configure-ollama), with the version and model requirements below |
+| A native workbench Agent or a `fix` writer/reviewer using hosted credits | [OpenRouter](#configure-openrouter), with an eligible model and credits-only account |
+| Claude Code or Codex as a fix writer | [External agents](/configure/external-agents/); their reviewer still uses Ollama or OpenRouter |
+| An existing compatibility Session | [Compatibility hosted providers](#configure-a-compatibility-hosted-provider) or [compatible endpoints](#use-a-compatibility-endpoint) |
 
-The onboarding wizard offers Ollama and OpenRouter for native Sessions.
-OpenAI, Anthropic, Gemini, and Mistral are configured manually for their
-supported compatibility paths.
-
-New data roots use native Session execution, whose enforced budget boundary supports
-reviewed local Ollama profiles and eligible OpenRouter-credit profiles. The remaining
-adapters serve their existing compatibility paths; an API-compatible endpoint alone
-does not establish native budget enforcement.
-
-## Configure a compatibility hosted provider
-
-The direct Anthropic example below configures compatibility execution. For a new
-native Session, use [OpenRouter](#configure-openrouter) or [Ollama](#configure-ollama)
-instead. OpenRouter's key comes from a browser sign-in, `axocoatl connect openrouter`,
-and stays in Axocoatl's secret store; the configuration only names it. For manual
-compatibility configuration, the environment-placeholder form below keeps the key out
-of YAML; its value must be present in the process that starts Axocoatl. A key can also
-live in the secret store: store it with `axocoatl secret set <name>` and write
-`api_key_secret: <name>` in place of `api_key`.
-
-The following is the equivalent manual YAML form:
-
-```yaml
-agents:
-  - id: coder
-    name: Coder
-    provider: anthropic
-    model: claude-sonnet-4-6
-
-providers:
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-```
-
-For the placeholder form, export the value in the environment that starts
-Axocoatl:
-
-```sh
-export ANTHROPIC_API_KEY=replace-me
-```
-
-Axocoatl interpolates `${NAME}` before parsing YAML and wraps configured secret
-fields so debug formatting does not reveal them. That does not protect a
-secret committed in plaintext, exposed by shell history, or logged by an
-external server.
-
-Axocoatl does not create or load a `.env` file. Use process-environment or
-service-manager injection when you choose a placeholder rather than the
-owner-only user configuration.
+Each Agent selects its provider and model. Provider endpoints and credential
+references live under `providers:` in YAML; a secret-store reference keeps the key
+itself out of that file. New data roots use native Session execution. Direct OpenAI,
+Anthropic, Gemini and Mistral adapters remain compatibility paths; an API-compatible
+endpoint alone does not establish native budget enforcement.
 
 ## Configure OpenRouter
 
@@ -150,6 +101,7 @@ agents:
     name: Coder
     provider: openrouter
     model: anthropic/claude-sonnet-5.5
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
     sampling:
       max_tokens: 4096
       reasoning_effort: medium   # optional; the model's own default otherwise
@@ -405,8 +357,9 @@ small requests to your server with that context and the settings every call uses
   A call to a tool it was not offered beside that one is no failure: a Session answers
   such a call with a tool error and the model goes on.
 
-Each probe samples with the same fixed seed at the model's own settings, so it gives the
-same answer every time it runs on your server. A model that fails one is refused on that
+Each probe uses a fixed seed at the model's own settings. This made the measured
+repeats on Ollama 0.40.8 consistent; it is not a guarantee that every model or runtime
+will always produce the same answer. A model that fails one is refused on that
 server for every Agent and every run, with or without tools, and the error names the
 guarantee that failed. A probe Ollama does not answer (an error status, or an answer that
 ends before its final record, as when the model's runner stopped) refuses nothing: the
@@ -426,6 +379,7 @@ agents:
     name: Local coder
     provider: ollama
     model: qwen3-coder:30b
+    tools: [read_file, list_dir, grep, glob, write_file, edit_file, bash]
 
 providers:
   ollama:
@@ -525,6 +479,67 @@ and `axocoatl doctor` warns about it for an Agent that lists tools.
 
 Response text from other providers stays text, because Axocoatl cannot safely
 invent their native call ids, signatures or content-block sequence.
+
+## Provider adapters
+
+| `provider:` | Adapter |
+| --- | --- |
+| `ollama` | Ollama at a configured local or remote endpoint |
+| `openai` | OpenAI, or an OpenAI-compatible endpoint via `base_url` |
+| `anthropic` | Anthropic Messages API |
+| `gemini` | Google Gemini |
+| `mistral` | Mistral Chat API |
+| `openrouter` | OpenRouter through its OpenAI-compatible endpoint |
+
+The onboarding wizard offers Ollama and OpenRouter for native Sessions.
+OpenAI, Anthropic, Gemini, and Mistral are configured manually for their
+supported compatibility paths.
+
+New data roots use native Session execution, whose enforced budget boundary supports
+reviewed local Ollama profiles and eligible OpenRouter-credit profiles. The remaining
+adapters serve their existing compatibility paths; an API-compatible endpoint alone
+does not establish native budget enforcement.
+
+## Configure a compatibility hosted provider
+
+The direct Anthropic example below configures compatibility execution. For a new
+native Session, use [OpenRouter](#configure-openrouter) or [Ollama](#configure-ollama)
+instead. OpenRouter's key comes from a browser sign-in, `axocoatl connect openrouter`,
+and stays in Axocoatl's secret store; the configuration only names it. For manual
+compatibility configuration, the environment-placeholder form below keeps the key out
+of YAML; its value must be present in the process that starts Axocoatl. A key can also
+live in the secret store: store it with `axocoatl secret set <name>` and write
+`api_key_secret: <name>` in place of `api_key`.
+
+The following is the equivalent manual YAML form:
+
+```yaml
+agents:
+  - id: coder
+    name: Coder
+    provider: anthropic
+    model: claude-sonnet-4-6
+
+providers:
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+```
+
+For the placeholder form, export the value in the environment that starts
+Axocoatl:
+
+```sh
+export ANTHROPIC_API_KEY=replace-me
+```
+
+Axocoatl interpolates `${NAME}` before parsing YAML and wraps configured secret
+fields so debug formatting does not reveal them. That does not protect a
+secret committed in plaintext, exposed by shell history, or logged by an
+external server.
+
+Axocoatl does not create or load a `.env` file. Use process-environment or
+service-manager injection when you choose a placeholder rather than the
+owner-only user configuration.
 
 ## Use a compatibility endpoint
 

@@ -5,6 +5,15 @@ All notable changes to Axocoatl are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+- Simplify the marketing homepage and first-run documentation around a verified
+  fix and its signed receipt. Separate installation from the release evidence,
+  document one daemon start, and provide complete provider and Agent examples.
+- Scope review and receipt claims to their actual contracts, describe context-limit
+  failures, and align the README and search-facing copy with the sites.
+
 ## [1.5.0] - 2026-10-22
 
 ### Workbench first run

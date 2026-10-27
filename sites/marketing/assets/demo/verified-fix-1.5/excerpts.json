@@ -1,0 +1,55 @@
+{
+  "schema": "axocoatl.actual-run-excerpts/1",
+  "excerpts": [
+    {
+      "id": "request",
+      "source": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt",
+      "lines": [
+        1,
+        1
+      ],
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "text": "axocoatl run fix --task \"Paging skips the last item when the total is a multiple of the page size\" --junit axocoatl-junit.xml --record run.axorecord.jsonl --receipt run.receipt.json\n"
+    },
+    {
+      "id": "patch",
+      "source": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff",
+      "lines": [
+        1,
+        13
+      ],
+      "sha256": "121d2af3e44c8dd0f57cafd2d6b9843e560d030040f87d38f051276f4bb6a6a1",
+      "text": "diff --git a/src/paginate.js b/src/paginate.js\nindex 501ba48..df45ba8 100644\n--- a/src/paginate.js\n+++ b/src/paginate.js\n@@ -12,7 +12,7 @@ function paginate(items, size) {\n   const pages = [];\n   for (let page = 0; page < count; page += 1) {\n     const start = page * size;\n-    const length = page < count - 1 ? size : items.length % size;\n+    const length = page < count - 1 ? size : items.length % size || size;\n     pages.push(items.slice(start, start + length));\n   }\n   return pages;\n"
+    },
+    {
+      "id": "checks-review",
+      "source": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log",
+      "lines": [
+        16,
+        20
+      ],
+      "sha256": "9b17d46449a734ef0552c910e21743167d9a922036457a05fb02ec9d72f2c978",
+      "text": "Verdict: pass (exit 0)\nLoadout: fix@1 sha256:54394b32ef032e2d879b089d8f049733119e6b04f54da026bcb7ecc2e2c94223\nChecks:\n  tests            passed, exit 0\nReview: approved after 1 of 3 rounds by ollama:gpt-oss:20b\n"
+    },
+    {
+      "id": "original-tests",
+      "source": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout",
+      "lines": [
+        1,
+        12
+      ],
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "text": "\n> newuser-node-deps@0.1.0 test\n> uvu test\n\npaginate.test.js\n\u2022 \u2022 \u2022 \u2022   (4 / 4)\n\n  Total:     4\n  Passed:    4\n  Skipped:   0\n  Duration:  0.55ms\n\n"
+    },
+    {
+      "id": "receipt",
+      "source": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+      "lines": [
+        1,
+        4
+      ],
+      "sha256": "da17e0c70b587cf30379aa541c0b35c6f4b08ea707fbcc55cac1eeaa3cb71e39",
+      "text": "receipt of run run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3, verdict pass\nsignature: valid, by trusted key 8a7a6b546e72ca24 (sha256:8a7a6b546e72ca24e944f33eb63cacb9da417ca2be68283e117bce9642d015ce)\nfiles: 1 covered and 0 removed match . (judged_capture)\nresult: valid (exit 0)\n"
+    }
+  ]
+}

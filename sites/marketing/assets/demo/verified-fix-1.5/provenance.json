@@ -1,0 +1,183 @@
+{
+  "schema": "axocoatl.actual-run-excerpt-provenance/1",
+  "presentation": "Literal transcript and artifact excerpts from one completed run; not a screen recording. Execution time omitted. No new inference.",
+  "source_repository": "axocoatl/axocoatl",
+  "frozen_evidence_commit": "19e3c89ca7b4d02cd742bccd671f7274e68b95d7",
+  "candidate_commit": "b222302f32639c9211255ab4f818c3262bce856a",
+  "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+  "archive_sha256": "2a9fc208948c630efab48d2f58875eb0c8f6dd24baec005479f691bdc532d659",
+  "run_id": "run-a2c57675-d55d-4abb-9993-d0c27d4a6fd3",
+  "base_commit": "68d9ff19dc93376d23ce2c064caf8cd8002e43ec",
+  "actual_run_seconds": 120.6,
+  "configuration": {
+    "writer": "ollama:qwen3-coder:30b",
+    "reviewer": "ollama:gpt-oss:20b",
+    "runtime": "native",
+    "ollama_version": "0.40.11",
+    "helpers": 0,
+    "required_checks": [
+      "npm run test"
+    ],
+    "required_review": true,
+    "review_rounds": 1
+  },
+  "artifact": {
+    "assessment": "ACCEPTED",
+    "changed_files": [
+      "src/paginate.js"
+    ],
+    "original_tests_unchanged": true,
+    "other_tracked_files_unchanged": true,
+    "unexpected_untracked_files": [],
+    "independent_original_tests": {
+      "passed": 4,
+      "failed": 0,
+      "invocations": 1
+    },
+    "patch": "The final page keeps a full page when the item count is an exact multiple of the page size."
+  },
+  "negative_evidence": {
+    "recovered_reviewer_tool_errors": 2,
+    "tool_names": [
+      "search",
+      "grep"
+    ],
+    "raw_causes": "Not inferred from public result hashes and lengths.",
+    "provider_retries": 0,
+    "baseline_check_exit": 1,
+    "failed_activations": []
+  },
+  "privacy": {
+    "selections": "Only the task, code diff, check/review outcome, original-test output and receipt verification are displayed.",
+    "excluded": "Absolute local paths, local account and host names, auth/onboarding transcripts, raw model/tool content and credential material.",
+    "transformations": "None within the selected line ranges. HTML escapes only; public run and signing-key identifiers retained for attribution.",
+    "links": "Frozen public evidence bundle; no raw record copied into the marketing site."
+  },
+  "offline_reverification": {
+    "checked_at": "2026-10-27T09:23:41.609067+00:00",
+    "binary_sha256": "d25cd64f70da4d17eb781d223aeab553f4180d074dbb29af302b23492ce31d1b",
+    "receipt_exit": 0,
+    "receipt_result": "valid",
+    "signature": "trusted",
+    "covered_files": 1,
+    "file_mismatches": [],
+    "record_problems": [],
+    "record_exit": 0,
+    "receipt_stdout_sha256": "51c900a472cbb37bbe251961b9659cd0b30d8305ad94be0de5a91e56e8c02c4e",
+    "record_stdout_sha256": "7783548ecfc261482e6c29a6897a34d4a4172093103713b27ae9a31b5ccdbf86",
+    "scope": "Read-only verification against the preserved accepted final files and record. No model calls or test reruns.",
+    "receipt_options": [
+      "receipt",
+      "verify",
+      "<preserved receipt>",
+      "--keys",
+      "<preserved trusted public key>",
+      "--repo",
+      "<preserved final files>",
+      "--record",
+      "<preserved record>",
+      "--require-pass",
+      "--json"
+    ]
+  },
+  "sources": [
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt",
+      "sha256": "869829ea2e35d34b4fa8d7c93f2d298ea898087e96273254649bbe40b601b05c",
+      "bytes": 182,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/command.txt"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff",
+      "sha256": "121d2af3e44c8dd0f57cafd2d6b9843e560d030040f87d38f051276f4bb6a6a1",
+      "bytes": 491,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/patch.diff"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log",
+      "sha256": "cc663a7e31194a4ef41b969d7cb863babd4c2114264b9473b3ffdceffeb990d1",
+      "bytes": 2839,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.log"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout",
+      "sha256": "91b5f3b45ac1aa40916797b2151114fe9a020ab1a654f5762ebe595927f44e10",
+      "bytes": 154,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original-tests.stdout"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log",
+      "sha256": "da17e0c70b587cf30379aa541c0b35c6f4b08ea707fbcc55cac1eeaa3cb71e39",
+      "bytes": 273,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/logs/receipt-verify-on-readme-node-deps--documented-command-.log"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/assessment.json",
+      "sha256": "eef0517ba395b4907cf714b21f2e99f3379e50820b1d44489449cd5e90ce38ff",
+      "bytes": 12731,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/assessment.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/negative-evidence.json",
+      "sha256": "b11fd835c997daf82898a04e3093aa6efb6104d0dcc3fa56e429050df860fa2e",
+      "bytes": 1020,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/negative-evidence.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/src/paginate.js",
+      "sha256": "fb03080e3ebb45509bbab50e765a3447eb61f91d983721e5f5635668410fd1e6",
+      "bytes": 605,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/src/paginate.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/src/paginate.js",
+      "sha256": "a010054ab3170d2de1b39d739d5a82dce7b3b6c68952f1ed7d7cf2df5454369b",
+      "bytes": 613,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/src/paginate.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/original/test/paginate.test.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/test/paginate.test.js",
+      "sha256": "63d237e069a60a0e8fe9a3c019f6509afce32182fb56b57af69f5f02056952f0",
+      "bytes": 745,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/readme-node-deps/final/test/paginate.test.js"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.receipt.json",
+      "sha256": "6d96d422d6946c480c410be883a27c862e1540c490bb926a12f3de75f1b01575",
+      "bytes": 4704,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.receipt.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl",
+      "sha256": "6979771b1d6b5db565ca06c035f7c4455f844f20b97e3bb72abe3cf2355428d8",
+      "bytes": 529295,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/readme-node-deps/run.axorecord.jsonl"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local.json",
+      "sha256": "9029f9a753b670cebb033c13b9b61907fdca57b7ec7a77f46a64f2dea7e4e0a5",
+      "bytes": 14942,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/final-verification/mac-provenance.json",
+      "sha256": "adcafd3dc0e288c451d2c6d907bec75e8670533c0f13f2ddd52d8a1cdcbfbb04",
+      "bytes": 1706,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/final-verification/mac-provenance.json"
+    },
+    {
+      "path": "release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/local-sample/assessment.json",
+      "sha256": "4ce730e4b9cd8661f2b42ecd1d714209a743fe4a08ec9b0df0ef743c4ddf2477",
+      "bytes": 11759,
+      "url": "https://github.com/axocoatl/axocoatl/blob/19e3c89ca7b4d02cd742bccd671f7274e68b95d7/release-evidence/1.5.0/b222302f32639c9211255ab4f818c3262bce856a/C1-local/acceptance/local-sample/assessment.json"
+    }
+  ],
+  "excerpts_sha256": "75f0f42feb009952f0b172dac8e443c1cb83877a570ea15466c21f397618b8ad",
+  "verification_instructions": "Run node verify-excerpts.mjs for packaged asset hashes; add --repo /path/to/axocoatl to compare every literal excerpt and source hash with the signed inventory at the frozen evidence commit. This never contacts a provider."
+}
