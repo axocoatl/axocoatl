@@ -55,9 +55,44 @@ For this release the bounded body is 467 bytes, SHA-256
 - Original workflow's publishing status: failed at draft creation; preserved.
 - Recovery helper checks: size/Unicode boundaries, exact extraction parity,
   source/attempt/job/artifact binding failures, and workflow publication invariants.
-- Recovery publication and live-site checks: pending at this control commit.
+- Recovery publication and live-site checks: passed; completion evidence follows.
 
 Completion requires the recovery workflow to succeed, all four archives and
 checksums to be public, all 22 exact crate versions to be non-yanked with proved
 checksums/index state, the public release to be stable/latest, and both custom
 domains to serve their frozen-source deployment payloads.
+
+## Published result
+
+[Recovery run 40454462239](https://github.com/axocoatl/axocoatl/actions/runs/40454462239)
+completed successfully from publication-control commit
+`869ad241f675a0e5f1cd97865fe5cb6622a34e91`.
+[Axocoatl 1.5.0](https://github.com/axocoatl/axocoatl/releases/tag/v1.5.0)
+was published at 2026-10-27 05:32:01 UTC (October 26, 10:32 PM PDT),
+release ID `425060896`. The frozen product tag remains unchanged.
+
+The final public API and download checks verified the stable/latest release,
+exact bounded notes, all four platform archives and their four checksum files,
+and all 22 non-yanked crate versions. The publication workflow also proved the
+crate checksums through registry API and sparse-index responses.
+
+Both frozen-source site deployments succeeded:
+
+- Marketing: <https://116c0f28.axocoatl-marketing.pages.dev>
+- Documentation: <https://99355788.axocoatl-docs.pages.dev>
+
+The custom-domain homepage and changelog, documentation homepage and install
+page, and installer all returned HTTP 200. The public installer is byte-identical
+to both its deployment and frozen source, SHA-256
+`9e0adcbead672c87a287f0267d0c06f58e9a87ede9e2ce1a24e4774926399334`.
+
+The initial raw HTML comparison failed and is retained as such. Examination of
+the saved responses proved the only differences on all four HTML paths: the
+custom domain adds one 367-byte Cloudflare analytics script, and removes one pair
+of `email_off` comment markers on each page except the marketing changelog.
+Removing exactly those observed edge transformations leaves byte-identical HTML
+for every checked path. The script and following newline have SHA-256
+`62dd494351ede212709991565f73b3e551b7c59d9d33264c58b1eac0d8f945b8`.
+No site content, hosting settings, or frozen release artifacts were changed to
+satisfy this comparison. The original failed publication run remains failed;
+the separate recovery run establishes completed publication.
