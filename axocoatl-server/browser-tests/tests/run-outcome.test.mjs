@@ -208,6 +208,42 @@ test('the panel shows a cost the run does not know as what was reserved, never a
   } finally { await context.close(); }
 });
 
+test('receipt verification wording preserves judged and fallback file-source distinctions', async () => {
+  const context = await newAuthorizedContext(browser), page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  let source = 'judged_capture';
+  await page.route('**/run-outcome-fixture', (route) => route.fulfill({ contentType: 'text/html', body:
+    `<!doctype html><html><body><ax-run-outcome run-id="${RUN}"></ax-run-outcome><script type="module" src="/ui/run-outcome.js"></script></body></html>` }));
+  await page.route(`**/api/runs/${RUN}`, (route) => route.fulfill({ json: {
+    run_id: RUN, session_id: 'ses-1', loadout: 'qa@1', state: 'finished', phase: 'finishing', started_at_ms: 1, outcome,
+    receipt: { key_id: `sha256:${'1a2b3c4d5e6f7a8b'.repeat(4)}`, files: 3, removed: 0, source,
+      complete: true, statement_sha256: `sha256:${'e'.repeat(64)}` } } }));
+  try {
+    await page.goto(`${runtime.baseUrl}/run-outcome-fixture`);
+    const panel = page.locator('ax-run-outcome');
+    await panel.locator('p.receipt').waitFor();
+    for (const [fileSource, description] of [
+      ['judged_capture', 'as the required checks judged them'],
+      ['after_capture', 'as the last writer left them'],
+      ['workspace_at_finish', 'as read when the run finished'],
+    ]) {
+      source = fileSource;
+      await panel.evaluate((element) => element.refresh());
+      assert.equal(await panel.locator('p.receipt').textContent(),
+        `Signed by key 1a2b3c4d5e6f7a8b: 3 files covered ${description}.`);
+      const section = panel.locator('section[data-section="receipt"]');
+      const explanation = await section.locator('p.muted').textContent();
+      assert.match(explanation, /which trusted key signed these facts and whether the covered files match their recorded hashes/);
+      assert.match(explanation, /The receipt identifies the file source and any exceptions/);
+      assert.match(explanation, /does not prove that the change is correct/);
+      assert.doesNotMatch(explanation, /files are the ones judged/);
+      assert.equal(await section.locator('a.receipt-download').getAttribute('href'), `/api/runs/${RUN}/receipt`);
+    }
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
 test('a run without a receipt says why: the signing failure, or an older run', async () => {
   const context = await newAuthorizedContext(browser), page = await context.newPage();
   const errors = [];

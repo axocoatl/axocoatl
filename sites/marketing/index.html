@@ -61,8 +61,8 @@
       <ax-product-film
         class="product-film-hero"
         film="session-workbench"
-        src="/assets/films/v1.5.0/session-workbench.mp4"
-        poster="/assets/films/v1.5.0/session-workbench.jpg"
+        src="/assets/films/v1.5.1/session-workbench.mp4"
+        poster="/assets/films/v1.5.1/session-workbench.jpg"
         label="An Axocoatl Session with conversation and repository tools"
         caption="Conversation stays central while Files, Source Control, Preview, and Terminal open around the same Session."
         preload="metadata"
@@ -122,7 +122,7 @@
     <section class="container section section-rule" id="receipt">
       <div class="section-head"><span class="eyebrow">The receipt</span><h2>Hand the verdict to someone who didn't watch.</h2><p>When a run finishes, passing or not, the daemon signs a receipt with an Ed25519 key kept in your data directory. A reviewer, a teammate or a CI job can check it later, offline, against the keys they trust. A command refused before a run is admitted has no receipt; a signing failure is reported without changing the run verdict. Verify the receipt separately when you require one.</p></div>
       <ol class="step-list step-list-2 receipt-steps">
-        <li><div><h3>What it holds</h3><p>The files the run changed, each with its SHA-256 as the required checks judged them. The sandbox and its network policy. Each check with its command and exit code. The review, with its model, verdict and rounds. The models that wrote and reviewed. The verdict and the exit code.</p></div></li>
+        <li><div><h3>What it holds</h3><p>Hashes of the covered files, their capture timing and any coverage limits. The sandbox and its network policy. Each check with its command and exit code. The review, with its model, verdict and rounds. The models that wrote and reviewed. The verdict and the exit code.</p></div></li>
         <li><div><h3>What it proves, and what it does not</h3><p>It proves which key signed which facts and, checked against a checkout, that the checkout has the files the receipt names. It does not prove that the change is correct, that the tests are good tests, or that the review was right. A key copied from your data directory signs as well as yours.</p></div></li>
         <li><div><h3>Verify it offline</h3><p><code>axocoatl receipt verify</code> needs no daemon, no Podman and no network. It checks the signature against the key lines you trust (<code>axocoatl receipt key</code> prints this computer's) and, with <code>--repo</code>, every covered file in a checkout. Exit 0 means a trusted key signed it and the files match; 1 not a receipt, or a signature that does not verify; 2 a key you did not give as trusted; 4 a file that differs.</p></div></li>
         <li><div><h3>In the pull request and in CI</h3><p><code>--keep pr</code> commits the files the receipt covers to a new branch, with <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and opens a pull request whose description carries the receipt. In GitHub Actions, <code class="wrap"><!--email_off-->axocoatl/axocoatl/actions/verify-receipt@v1.4.0<!--/email_off--></code> reads the trusted keys from the base branch, never the pull request, and fails a receipt signed by a key the base branch does not list, one that does not cover every changed file, and by default one whose run did not pass. With <code>require-receipt: false</code>, as in the docs' example, a pull request without a receipt passes with a notice; by default it fails.</p></div></li>
@@ -207,8 +207,8 @@
       <p class="small muted">Onboarding configures the current OS user and creates no project. Podman supplies the local sandbox. Hosted providers, integrations, downloads and the optional remote sandbox use the network; local-first is not an offline guarantee. <a href="/install">Requirements and installation →</a></p>
       <ax-product-film
         film="durable-turn"
-        src="/assets/films/v1.5.0/durable-turn.mp4"
-        poster="/assets/films/v1.5.0/durable-turn.jpg"
+        src="/assets/films/v1.5.1/durable-turn.mp4"
+        poster="/assets/films/v1.5.1/durable-turn.jpg"
         label="An active Axocoatl Session turn reconnecting after reload and ending in History"
         caption="Reloading reconnects to the exact active turn. Stop preserves an honest cancelled state in History."
         pending="omit"

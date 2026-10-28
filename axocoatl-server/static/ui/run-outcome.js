@@ -239,7 +239,8 @@ export class AxRunOutcome extends HTMLElement {
     actions.append(link, el('span', 'muted mono', receipt.statement_sha256 || ''));
     section.append(actions, el('p', 'muted',
       'Check it with axocoatl receipt verify FILE --keys TRUSTED_KEYS --repo CHECKOUT, where TRUSTED_KEYS is a file of the receipt keys you trust. '
-      + 'It proves which key signed these facts and that the covered files are the ones judged, not that the change is correct.'));
+      + 'It verifies which trusted key signed these facts and whether the covered files match their recorded hashes. '
+      + 'The receipt identifies the file source and any exceptions; it does not prove that the change is correct.'));
   }
 
   #render() {

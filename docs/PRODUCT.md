@@ -319,18 +319,21 @@ failed, 2 needs attention, 3 usage, 4 daemon unavailable, 5 infrastructure, 6
 interrupted. It can write JUnit and a single-file record bundle, and Keep as PR commits a
 passing run to a new branch and, opt-in, opens a pull request with host `git` and `gh`.
 
-Every finished loadout run, whatever its verdict, gets a signed receipt (workbench turns
-get none): a small statement of
-which files it changed (each with the SHA-256 of its content as the required checks
-judged it, in a repository of any size, up to 10,000 changed paths), what the host
+After an admitted loadout run finishes, whatever its verdict, the daemon attempts to
+sign a receipt (workbench turns get none): a small statement of
+the covered files and their SHA-256 hashes, where those hashes were captured and any
+coverage limits, what the host
 enforced (sandbox, network policy, checks, review, adjudications), which programs and
 models wrote and reviewed, and the verdict, signed with an Ed25519 key kept in this
 computer's data directory. `axocoatl run --receipt` writes it, the Run outcome panel
 downloads it, the record bundle and the pull request Keep opens carry it, and Keep
 commits only the files it covers. Anyone can check it offline with `axocoatl receipt
-verify` against the public key lines they trust and a checkout. A receipt proves who
-signed which facts and that the covered files are the ones judged; it does not prove that
-the change is correct.
+verify` against the public key lines they trust and a checkout. Verification establishes
+which key signed the facts and whether the covered files match the recorded hashes.
+The receipt distinguishes captures from the checked tree, the last writer's tree and
+files read at finish, including individual paths read after a capture. It does not
+prove that the change is correct. Signing or storage failure records
+`receipt_unavailable` without changing the run verdict.
 
 The built-in loadouts follow what was measured (`docs/CLAIMS.md`; the one-agent-or-several
 and QA studies ran with Claude Code subagents, not through Axocoatl):

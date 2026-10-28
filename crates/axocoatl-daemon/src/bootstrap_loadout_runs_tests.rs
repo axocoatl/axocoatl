@@ -1725,6 +1725,34 @@ async fn receipts_child_body() {
          changes themselves. The verdict and exit code are unchanged."
     );
 
+    // A crash after signing a passing Outcome but before committing it,
+    // followed by a key failure during recovery, must not expose that old
+    // pass as the receipt of the recovered error.
+    let interrupted = receipt_manifest(&session, &repo, &head);
+    store.create(&interrupted).unwrap();
+    let mut staged_outcome = ended_outcome(&interrupted, "before crash".into(), Vec::new());
+    staged_outcome.verdict = axocoatl_session::run_outcome::RunVerdict::Pass;
+    staged_outcome.exit_code = exit_code::PASS;
+    daemon
+        .seal_loadout_run(&interrupted.run_id, &staged_outcome)
+        .await
+        .unwrap();
+    let interrupted_dir = daemon
+        .data_root
+        .path()
+        .join(axocoatl_session::run_record::RUN_RECORD_DIR)
+        .join(&interrupted.run_id);
+    let staged_receipt = std::fs::read(interrupted_dir.join("receipt.dsse.json")).unwrap();
+    let quarantined_receipt = interrupted_dir.join(format!(
+        "receipt.unavailable.{}.dsse.json",
+        axocoatl_session::receipt::sha256_hex(&staged_receipt)
+    ));
+    assert!(matches!(
+        check_signature(&open_receipt(&staged_receipt).unwrap(), &[public]),
+        SignatureCheck::Trusted { .. }
+    ));
+    assert!(store.outcome(&interrupted.run_id).unwrap().is_none());
+
     // A key that cannot be read: the run keeps its verdict and says why it
     // has no receipt; the API says so too.
     crate::secret_store::set_secret(
@@ -1733,6 +1761,46 @@ async fn receipts_child_body() {
         b"not-a-key",
     )
     .unwrap();
+    daemon.recover_loadout_runs().await;
+    let recovered = store.outcome(&interrupted.run_id).unwrap().unwrap();
+    assert_eq!(
+        recovered.verdict,
+        axocoatl_session::run_outcome::RunVerdict::Error
+    );
+    assert_eq!(recovered.exit_code, exit_code::INFRASTRUCTURE);
+    assert!(recovered
+        .warnings
+        .iter()
+        .any(|warning| warning.code == "receipt_unavailable"));
+    assert_eq!(std::fs::read(&quarantined_receipt).unwrap(), staged_receipt);
+    assert!(!interrupted_dir.join("receipt.dsse.json").exists());
+    assert!(matches!(
+        daemon.loadout_run_receipt(&interrupted.run_id),
+        Err(DaemonError::NotFound(message)) if message.contains("--rotate")
+    ));
+    assert!(daemon
+        .loadout_run(&interrupted.run_id)
+        .await
+        .unwrap()
+        .receipt
+        .is_none());
+    let mut recovered_bundle = Vec::new();
+    daemon
+        .write_record_bundle(&interrupted.run_id, &mut recovered_bundle)
+        .await
+        .unwrap();
+    assert!(
+        axocoatl_session::record_bundle::verify_bundle(recovered_bundle.as_slice())
+            .unwrap()
+            .receipt
+            .is_none()
+    );
+    // The finished error is immutable, so another recovery does not alter
+    // its Outcome or the quarantined bytes.
+    daemon.recover_loadout_runs().await;
+    assert_eq!(store.outcome(&interrupted.run_id).unwrap(), Some(recovered));
+    assert_eq!(std::fs::read(&quarantined_receipt).unwrap(), staged_receipt);
+
     let broken = receipt_manifest(&session, &repo, &head);
     store.create(&broken).unwrap();
     let mut outcome = ended_outcome(&broken, "the environment failed".into(), Vec::new());

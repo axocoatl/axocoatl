@@ -174,6 +174,26 @@ implementation:
   Captions do not present the Agent's test claim as a host-enforced check or add a
   receipt to an ordinary Session.
 
+## Receipt capture wording correction (2026-10-28)
+
+General receipt descriptions must not say all covered file hashes came from the tree
+the checks judged. `run_attribution.rs::receipt_files` selects a judged capture, an
+after capture or a workspace-at-finish read. Individual `files.read_at_finish` paths
+can also differ in capture timing. Verification compares covered files with the
+signed digests; the receipt's source and coverage fields describe what those digests
+represent. Marketing, README, product guidance and the receipt documentation now
+state that boundary. The published paging demonstration has complete
+`judged_capture` coverage with no paths read at finish; its recorded result is unchanged.
+
+The same review reproduced a separate restart-recovery defect in the released
+runtime: a staged passing receipt could remain visible beside a recovered error
+Outcome when resealing failed. The local correction retains staged bytes privately
+and suppresses receipt reads whenever the final Outcome records
+`receipt_unavailable`, including legacy records. The 1.5.1 implementation contains
+this correction;
+the original demonstrated receipt's valid signature and covered-file result do not
+establish that restart behavior was correct.
+
 ## Not measured
 
 These are supported and documented, and have no measurement. Public pages do not make

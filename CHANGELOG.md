@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-28
+
+### Fixed
+- Do not expose a staged receipt after restart recovery fails to sign its final
+  outcome. Retain earlier receipt bytes privately for diagnosis, and suppress
+  legacy stale receipts when the recorded outcome says `receipt_unavailable`.
+  Repeated recovery attempts retain each distinct receipt without overwriting
+  earlier evidence or blocking finalization.
+
+### Changed
+- The receipt view distinguishes files hashed at finish from the checked-file
+  snapshot, including fallback receipts whose hashes were captured later.
+
 ### Documentation
+- Clarify that receipt file hashes retain their capture timing and coverage limits;
+  fallback receipts and paths read at finish do not establish the checked file contents.
 - Lead the websites and first-run guides with the browser dashboard: actual 1.5
   screenshots, a recorded tour of a completed run, and the workspace-to-chat-to-diff
   journey. Keep terminal examples in setup and headless reference documentation.

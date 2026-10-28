@@ -89,7 +89,8 @@ Ways when the task calls for them. Helpers and review cost extra tokens. [Sessio
 
 For unattended fixes, choose a writer and a different reviewer. The host runs
 required checks on the final files. The receipt records the verdict, models,
-checks, review and covered file hashes; it proves which key signed those facts,
+checks, review and covered file hashes, including capture timing and coverage limits;
+it proves which key signed those facts,
 not that the code is correct. Signing or storage failure reports
 `receipt_unavailable`; pre-admission refusals have no receipt.
 [Receipts →](https://docs.axocoatl.ai/workbench/receipts/) ·

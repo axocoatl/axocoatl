@@ -235,6 +235,22 @@ fn complete_lines(bytes: &[u8]) -> (impl Iterator<Item = &[u8]>, usize) {
     )
 }
 
+/// Content-addressed so successive interrupted finishes retain each staged
+/// receipt without blocking the recovered error or replacing earlier evidence.
+fn unavailable_receipt_file(bytes: &[u8]) -> String {
+    format!(
+        "receipt.unavailable.{}.dsse.json",
+        crate::receipt::sha256_hex(bytes)
+    )
+}
+
+fn receipt_unavailable(outcome: &RunOutcome) -> bool {
+    outcome
+        .warnings
+        .iter()
+        .any(|warning| warning.code == crate::receipt::RECEIPT_UNAVAILABLE)
+}
+
 impl RunRecordStore {
     /// Open (creating when missing) `{data root}/loadout-runs/`.
     pub fn open(data_root: &SecureDir) -> Result<Self, RunRecordError> {
@@ -445,6 +461,25 @@ impl RunRecordStore {
                 "run {run_id} has ended already; its Outcome is written once"
             )));
         }
+        if receipt_unavailable(outcome) && dir.has_exact_file(RECEIPT_FILE)? {
+            // A crash may leave a signed receipt before its Outcome reached
+            // disk. If recovery could not seal its new Outcome, that earlier
+            // receipt must not become the finished run's receipt. Preserve it
+            // separately before publishing the Outcome, including on retries.
+            let staged = dir.read_limited(RECEIPT_FILE, MAX_RECEIPT_BYTES)?;
+            let retained = unavailable_receipt_file(&staged);
+            if dir.has_exact_file(&retained)? {
+                if dir.read_limited(&retained, MAX_RECEIPT_BYTES)? != staged {
+                    return Err(RunRecordError::Invalid(format!(
+                        "run {run_id} already retains a different unavailable receipt"
+                    )));
+                }
+                dir.remove_file(RECEIPT_FILE)?;
+                dir.sync_all()?;
+            } else {
+                dir.rename_leaf_to(RECEIPT_FILE, &dir, &retained)?;
+            }
+        }
         dir.atomic_write(OUTCOME_FILE, &bytes)?;
         dir.sync_all()?;
         Ok(())
@@ -482,7 +517,15 @@ impl RunRecordStore {
     /// not finished or when it has none (its signing failed).
     pub fn receipt(&self, run_id: &str) -> Result<Option<Vec<u8>>, RunRecordError> {
         let dir = self.run_dir(run_id)?;
-        if !dir.has_exact_file(OUTCOME_FILE)? || !dir.has_exact_file(RECEIPT_FILE)? {
+        if !dir.has_exact_file(OUTCOME_FILE)? {
+            return Ok(None);
+        }
+        let outcome: RunOutcome =
+            serde_json::from_slice(&dir.read_limited(OUTCOME_FILE, MAX_OUTCOME_BYTES)?)?;
+        // Older versions could finish after a failed reseal without moving a
+        // staged receipt aside. The recorded failure remains authoritative;
+        // neither the API nor a record bundle may present those stale bytes.
+        if receipt_unavailable(&outcome) || !dir.has_exact_file(RECEIPT_FILE)? {
             return Ok(None);
         }
         Ok(Some(dir.read_limited(RECEIPT_FILE, MAX_RECEIPT_BYTES)?))
@@ -720,6 +763,116 @@ mod tests {
         store.finish(&other, &outcome(&manifest)).unwrap();
         assert_eq!(store.receipt(&other).unwrap(), None);
         assert!(store.write_receipt(&other, b"{}\n").is_err());
+    }
+
+    #[test]
+    fn failed_resealing_preserves_the_staged_receipt_without_publishing_it() {
+        let (dir, root, store) = store();
+        let id = run_id();
+        let manifest = manifest(&id);
+        store.create(&manifest).unwrap();
+        let staged = b"an earlier finish's signed receipt";
+        store.write_receipt(&id, staged).unwrap();
+        let mut done = outcome(&manifest);
+        done.verdict = RunVerdict::Error;
+        done.exit_code = exit_code::INFRASTRUCTURE;
+        done.warnings.push(RunWarning {
+            code: crate::receipt::RECEIPT_UNAVAILABLE.into(),
+            message: "the signing key could not be read".into(),
+        });
+        store.finish(&id, &done).unwrap();
+        store.finish(&id, &done).unwrap();
+        assert_eq!(store.outcome(&id).unwrap(), Some(done));
+        assert_eq!(store.receipt(&id).unwrap(), None);
+        let run = dir.path().join(RUN_RECORD_DIR).join(&id);
+        assert!(!run.join(RECEIPT_FILE).exists());
+        assert_eq!(
+            std::fs::read(run.join(unavailable_receipt_file(staged))).unwrap(),
+            staged
+        );
+        assert!(store.write_receipt(&id, staged).is_err());
+        assert_eq!(
+            RunRecordStore::open(&root).unwrap().receipt(&id).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_unavailable_receipt_from_an_older_finish_is_not_served_or_rewritten() {
+        let (dir, _root, store) = store();
+        let id = run_id();
+        let manifest = manifest(&id);
+        store.create(&manifest).unwrap();
+        let mut done = outcome(&manifest);
+        done.warnings.push(RunWarning {
+            code: crate::receipt::RECEIPT_UNAVAILABLE.into(),
+            message: "the signing key could not be read".into(),
+        });
+        store.finish(&id, &done).unwrap();
+        // An older daemon could have left this pair on disk. A read must
+        // retain the historical evidence while refusing to serve it.
+        let path = dir.path().join(RUN_RECORD_DIR).join(&id).join(RECEIPT_FILE);
+        std::fs::write(&path, b"stale receipt").unwrap();
+        assert_eq!(store.receipt(&id).unwrap(), None);
+        assert_eq!(std::fs::read(path).unwrap(), b"stale receipt");
+        assert_eq!(store.outcome(&id).unwrap(), Some(done));
+    }
+
+    #[test]
+    fn successive_interrupted_finishes_keep_each_receipt_and_finish_the_error() {
+        for earlier in [b"same receipt".as_slice(), b"earlier receipt".as_slice()] {
+            let (dir, _root, store) = store();
+            let id = run_id();
+            let manifest = manifest(&id);
+            store.create(&manifest).unwrap();
+            let staged = b"same receipt";
+            store.write_receipt(&id, staged).unwrap();
+            let run = dir.path().join(RUN_RECORD_DIR).join(&id);
+            // A previous recovery quarantined a receipt but its Outcome
+            // never reached disk. A later finish may have signed new bytes.
+            std::fs::write(run.join(unavailable_receipt_file(earlier)), earlier).unwrap();
+            let mut done = outcome(&manifest);
+            done.warnings.push(RunWarning {
+                code: crate::receipt::RECEIPT_UNAVAILABLE.into(),
+                message: "the signing key could not be read".into(),
+            });
+            store.finish(&id, &done).unwrap();
+            assert_eq!(
+                std::fs::read(run.join(unavailable_receipt_file(earlier))).unwrap(),
+                earlier
+            );
+            assert_eq!(
+                std::fs::read(run.join(unavailable_receipt_file(staged))).unwrap(),
+                staged
+            );
+            assert!(!run.join(RECEIPT_FILE).exists());
+            assert_eq!(store.outcome(&id).unwrap(), Some(done));
+            assert_eq!(store.receipt(&id).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn a_corrupt_quarantine_entry_is_not_overwritten() {
+        let (dir, _root, store) = store();
+        let id = run_id();
+        let manifest = manifest(&id);
+        store.create(&manifest).unwrap();
+        let staged = b"staged receipt";
+        store.write_receipt(&id, staged).unwrap();
+        let run = dir.path().join(RUN_RECORD_DIR).join(&id);
+        let retained = run.join(unavailable_receipt_file(staged));
+        std::fs::write(&retained, b"unexpected bytes").unwrap();
+        let mut done = outcome(&manifest);
+        done.warnings.push(RunWarning {
+            code: crate::receipt::RECEIPT_UNAVAILABLE.into(),
+            message: "the signing key could not be read".into(),
+        });
+        let error = store.finish(&id, &done).unwrap_err();
+        assert!(error.to_string().contains("different unavailable receipt"));
+        assert_eq!(std::fs::read(retained).unwrap(), b"unexpected bytes");
+        assert_eq!(std::fs::read(run.join(RECEIPT_FILE)).unwrap(), staged);
+        assert_eq!(store.outcome(&id).unwrap(), None);
+        assert_eq!(store.receipt(&id).unwrap(), None);
     }
 
     #[test]

@@ -47,7 +47,7 @@
 
     <section class="container-narrow section section-rule" id="receipt">
       <div class="stack"><span class="eyebrow">Then it hands you a receipt</span><h2>Evidence someone else can check.</h2>
-        <p>When the run finishes, passing or not, the daemon signs a receipt with a key kept on your computer. It lists the files the run changed, each with its SHA-256 as the checks judged it, and the sandbox and network policy, the checks, the review, the models and the verdict.</p>
+        <p>When the run finishes, passing or not, the daemon signs a receipt with a key kept on your computer. It lists the covered files and their SHA-256 hashes, when they were captured and any coverage limits, plus the sandbox and network policy, the checks, the review, the models and the verdict.</p>
         <ul class="fact-list">
           <li>Keep as PR commits those files to a new branch, with <code>Axocoatl-Run</code> and <code>Axocoatl-Receipt</code> trailers, and opens a pull request whose description carries the receipt.</li>
           <li>In GitHub Actions, the verify-receipt Action reads the trusted keys from the base branch, never from the pull request, and fails a receipt signed by a key the base branch does not list or one that does not cover every changed file. A pull request without a receipt fails by default, or passes with a notice when the workflow sets <code>require-receipt: false</code>.</li>
@@ -78,16 +78,16 @@
       <!-- /optional-demo -->
       <ax-product-film
         film="workspace-sessions-turns"
-        src="/assets/films/v1.5.0/workspace-sessions-turns.mp4"
-        poster="/assets/films/v1.5.0/workspace-sessions-turns.jpg"
+        src="/assets/films/v1.5.1/workspace-sessions-turns.mp4"
+        poster="/assets/films/v1.5.1/workspace-sessions-turns.jpg"
         label="An Axocoatl Workspace with two Sessions and a completed Turn restored after switching Sessions"
         caption="One authorized Workspace groups durable Sessions. Switching away and back restores the selected Session and its accepted Turn."
         pending="omit"
       ></ax-product-film>
       <ax-product-film
         film="git-last-turn"
-        src="/assets/films/v1.5.0/git-last-turn.mp4"
-        poster="/assets/films/v1.5.0/git-last-turn.jpg"
+        src="/assets/films/v1.5.1/git-last-turn.mp4"
+        poster="/assets/films/v1.5.1/git-last-turn.jpg"
         label="A kept Axocoatl Way shown as uncommitted paths and hunks in Source Control Last turn"
         caption="Keep returns one checked result to the primary checkout without committing it. Last turn scopes the Git review before any optional staging."
         pending="omit"

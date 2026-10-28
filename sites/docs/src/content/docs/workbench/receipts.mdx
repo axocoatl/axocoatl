@@ -12,6 +12,10 @@ watch the run, such as a reviewer of the pull request [Keep as PR](/workbench/ke
 opens, and they can check its signature offline against a key they already trust.
 They still have to trust that key's operator for the facts the daemon recorded.
 
+The receipt identifies when its file hashes were captured and any coverage limits.
+Some receipts or individual paths use files read at finish rather than the tree the
+checks ran on; inspect `files.source` and `files.read_at_finish` as described below.
+
 A run refused before admission has no receipt. When signing fails, the outcome reports
 `receipt_unavailable`; a passing run alone does not establish that a receipt exists.
 Ordinary workbench turns do not issue run receipts. [Verify the receipt and its

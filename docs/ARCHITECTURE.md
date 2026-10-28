@@ -928,6 +928,14 @@ against the trusted keys of the base commit (read with `gh api`, never from the 
 requires the receipt to cover every file the pull request changes; it is tested
 locally against a stand-in for GitHub's API and was run on a real pull request.
 
+If a crash leaves a staged receipt but recovery cannot seal its new Outcome,
+`RunRecordStore::finish` retains the staged bytes privately as
+`receipt.unavailable.<sha256>.dsse.json` before writing the Outcome. Identical bytes
+deduplicate; distinct interrupted finishes retain distinct files. Those files are
+diagnostic evidence, not the finished run's receipt. Reads also suppress a legacy
+`receipt.dsse.json` when its recorded Outcome carries `receipt_unavailable`, so the
+receipt API, status summary and record bundle cannot expose that stale receipt.
+
 **Keep as PR.** For a passing run, host `git` commits exactly the run's attributed paths
 through a temporary `GIT_INDEX_FILE` seeded from HEAD (`update-index`, `write-tree`,
 `commit-tree -p HEAD`, `update-ref` of a new branch), refusing paths that were dirty before the run,

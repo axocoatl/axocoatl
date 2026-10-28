@@ -46,8 +46,8 @@ agents unattended) and own one word nobody else owns: the receipt. Do not lead w
 adjective or a category: "sandboxed", "any model", "harness" and "trust" describe how,
 not what for. Trust is earned by mechanisms we can name, never by adjectives.
 
-**What a receipt proves.** Which key signed which facts: the files the run changed,
-each with its SHA-256 as the required checks judged it, the sandbox and network policy,
+**What a receipt proves.** Which key signed which facts: the covered files and their
+SHA-256 hashes, their capture source and any coverage limits, the sandbox and network policy,
 the checks, the review, the models and the verdict. It does not prove that the change
 is correct, that the tests are good tests or that the review was right, and a key
 copied from a data directory signs as well as the original. Never call a receipt

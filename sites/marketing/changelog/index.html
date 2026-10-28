@@ -116,6 +116,24 @@
     <section class="container container-narrow" style="padding-bottom: var(--s-10);">
 
       <article class="release">
+        <span class="release-tag">v1.5.1</span>
+        <span class="release-date">2026-10-28</span>
+        <h2>Receipt recovery keeps the recorded outcome consistent.</h2>
+        <p>If a crash leaves a receipt before the run's outcome is saved, and signing
+          fails during recovery, Axocoatl now retains that earlier receipt privately
+          instead of presenting it as the recovered run's receipt. The failed outcome
+          and its <code>receipt_unavailable</code> warning remain visible.</p>
+        <ul>
+          <li>Repeated recovery attempts preserve each distinct earlier receipt.
+              The API, dashboard status and record bundle also suppress stale receipts
+              in records written by older versions.</li>
+          <li>The dashboard and documentation explain when covered file hashes were
+              captured and any coverage limits. A receipt verifies the signer and
+              recorded hashes; it does not establish that the code is correct.</li>
+        </ul>
+      </article>
+
+      <article class="release">
         <span class="release-tag">v1.5.0</span>
         <span class="release-date">2026-10-22</span>
         <h2>Native Sessions run on Ollama 0.40, and a restored data directory starts again.</h2>
