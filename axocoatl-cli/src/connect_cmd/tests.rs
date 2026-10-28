@@ -813,6 +813,14 @@ async fn a_token_reusing_an_ordinary_screen_cell_is_stored_without_exposure() {
 async fn a_closed_token_rewrite_is_hidden_and_exits_without_storing_a_credential() {
     for replacement in ['9', 's'] {
         let fixture = Fixture::new("replay");
+        // Column 33 is random hex. Repainting a 9 with 9 is unchanged, so
+        // ensure this fixture actually changes the credential cell.
+        let replacement = if replacement == '9' && fixture.token.as_bytes()[32] == b'9' {
+            '8'
+        } else {
+            replacement
+        };
+        assert_ne!(fixture.token.as_bytes()[32], replacement as u8);
         let before = format!("\x1b[2J\x1b[H{}", ink_model::PROMPT);
         let after = format!(
             "\x1b[H\x1b[33m{}\x1b[0m!\x1b[1;33H\x1b[33m{replacement}\x1b[{}G\x1b[0m!",
